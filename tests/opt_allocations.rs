@@ -313,6 +313,56 @@ fn report_release_allocation_counts() {
         );
     }
 
+    // Completed compound checkpoints exercise fingerprint allocation traffic
+    // through the public API. Parsing, durable setup and directory construction
+    // stay outside the counter; resume still validates and reads real journals.
+    let checkpoint_root = tempfile::tempdir().unwrap();
+    for (name, calls, count) in [
+        ("checkpoint_resume_1", false, 1),
+        ("checkpoint_resume_64", false, 64),
+        ("checkpoint_resume_1000", false, 1000),
+        ("checkpoint_resume_reusable256", true, 256),
+    ] {
+        let mut source = if calls {
+            format!("define a program named worker\n  accept payload as text with default \"{}\"\n  then encode payload as json\n", "x".repeat(1024))
+        } else {
+            String::new()
+        };
+        source.push_str("repeat 0 times\n");
+        source.push_str(&if calls {
+            "  run program worker\n".repeat(count)
+        } else {
+            "  then encode 42 as json\n".repeat(count)
+        });
+        let program = parser::parse(&source).unwrap();
+        let source_path = checkpoint_root.path().join(format!("{name}.program"));
+        std::fs::write(&source_path, source).unwrap();
+        let options = runtime::RunOptions {
+            inputs: BTreeMap::new(),
+            working_directory: checkpoint_root.path().into(),
+            cache_directory: None,
+            trace: false,
+            max_output_bytes: 32,
+            command_timeout: None,
+        };
+        let mut checkpoint = runtime::CheckpointOptions {
+            directory: checkpoint_root.path().join(name),
+            program_path: source_path,
+            resume: false,
+            retry_uncertain: false,
+        };
+        let result = runtime::run_checkpointed(&program, &registry, &options, &checkpoint).unwrap();
+        assert!(result.output.is_empty());
+        assert_eq!(result.launched_processes, 0);
+        checkpoint.resume = true;
+        operations.insert(
+            name,
+            measure(|| {
+                runtime::run_checkpointed(&program, &registry, &options, &checkpoint).unwrap()
+            }),
+        );
+    }
+
     // JSON construction, serialization, environment access, and file output
     // all occur with allocation counting disabled.
     let report = serde_json::json!({
@@ -323,7 +373,7 @@ fn report_release_allocation_counts() {
             "allocation_bytes": "allocation_requested_bytes sums Layout::size() for alloc and alloc_zeroed calls",
             "reallocation_bytes": "reallocation_requested_bytes sums each realloc new_size request",
             "excluded": "deallocation calls, net live bytes, peak live bytes, and peak RSS are not counted",
-            "inputs": "paths, source strings, registry used by clone/argv, invocation, 256 list values, and parsed JSON-selection program/options with 4 MiB padding are prepared before measurement",
+            "inputs": "paths, source strings, registry used by clone/argv, invocation, 256 list values, parsed JSON-selection program/options with 4 MiB padding, and completed compound checkpoints are prepared before measurement",
             "reporting": "JSON construction, serialization, environment lookup, and report file writing happen after counting is disabled"
         },
         "operations": operations

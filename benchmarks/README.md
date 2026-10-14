@@ -1,3 +1,35 @@
+# Compound checkpoint fingerprints
+
+The [checkpoint fingerprint report](performance-2026-10-14-checkpoint-fingerprints.json)
+compares `9d56b25` with a temporary serialization buffer reused across a node's
+steps. Length framing, serialized bytes, input line normalization, executable
+content identities and durable writes remain unchanged. The old serializer is
+retained as a test oracle; baseline-created checkpoints resume on the candidate,
+completed saves stay skipped, and changed completed nodes are rejected.
+
+Three alternating release rounds measured fingerprint medians 13–14% lower for
+64/1,000 JSON steps and about 5% lower for reusable calls. These exclude parsing
+and journal I/O. The public API's completed 1,000-step resume allocation probe
+measured 1,066 to 65 allocation requests and 132,916 to 4,788 requested bytes.
+The reusable-call case also reduced reallocation requests from 798 to 33. Three
+repeats had identical counts; all other allocation controls matched exactly.
+This is allocation traffic, not measured peak memory or RSS.
+
+Fresh completed-checkpoint CLI medians stayed within 1.2%, and native buffered
+input controls within 1.1%; no whole-task speedup is claimed. An unchanged cron
+microcontrol varied +9.02%, retained as variation. A separate profile using the
+same baseline binary for both labels shows native spawning and persistence
+dominate short scripts; it is not an optimization comparison. No persistence
+guarantee was weakened to improve those timings.
+
+`checkpoint_compounds.py` measures completed resume with replay, mutation and
+exact-output oracles. The ignored `runtime::resume::bench::checkpoint_fingerprints`
+test isolates semantic fingerprint work; `opt_allocations` counts public resume
+allocation traffic separately. Raw samples and source/input/catalog/harness/binary
+hashes are retained. These are local macOS warm-cache observations, without a
+cold-cache, other-platform or Bash performance claim. Keep timing runs separate
+from builds and tests.
+
 # Managed-live state handoff
 
 The [live-state report](performance-2026-10-14-live-state.json) compares

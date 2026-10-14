@@ -2,6 +2,9 @@
 use super::*;
 use checkpoint::Journal;
 use std::collections::HashMap;
+
+#[cfg(test)]
+mod bench;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
@@ -140,7 +143,9 @@ fn node_fingerprint_with_digests(
 ) -> Result<String> {
     let mut hash = Sha256::new();
     hash_field(&mut hash, b"execute-node-semantics-v1");
+    let mut serialized = Vec::with_capacity(128);
     for step in &program.steps[start..end] {
+        serialized.clear();
         if let StepKind::CallProgram {
             call,
             inputs,
@@ -156,18 +161,19 @@ fn node_fingerprint_with_digests(
                     input
                 })
                 .collect();
-            hash_field(
-                &mut hash,
-                &serde_json::to_vec(&StepKind::CallProgram {
+            serde_json::to_writer(
+                &mut serialized,
+                &StepKind::CallProgram {
                     call: call.clone(),
                     inputs,
                     end: *end,
                     connection: *connection,
-                })?,
-            );
+                },
+            )?;
         } else {
-            hash_field(&mut hash, &serde_json::to_vec(&step.kind)?);
+            serde_json::to_writer(&mut serialized, &step.kind)?;
         }
+        hash_field(&mut hash, &serialized);
         if let StepKind::Invoke { call, .. } = &step.kind {
             manifest_identity(
                 &mut hash,

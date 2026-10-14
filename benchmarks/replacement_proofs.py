@@ -170,6 +170,16 @@ def run_case(binary, folder, program, *, expected_code, expected_bytes=None,
             child.stdout.close()
 
 
+def make_middle_failure(folder):
+    # Drain the bounded fixture before failing so the producer cannot race this
+    # stage with SIGPIPE. The probe tests this stage's exact failure identity.
+    fault = folder/'middle failure fixture.py'
+    fault.write_text('import sys\nsys.stdin.buffer.read()\nraise SystemExit(1)\n')
+    (folder/'manifests/fail-stage.json').write_text(json.dumps({
+        'name': 'fail-stage', 'binary': sys.executable, 'accepts_stdin': True,
+        'arguments': [{'literal': '-I'}, {'literal': str(fault)}]}))
+
+
 def make_fixture(path, count):
     chunk = RECORD * 4096
     expected = hashlib.sha256()
@@ -251,9 +261,7 @@ def main():
             (folder/'manifests/fault.json').write_text(json.dumps({
                 'name': 'fault', 'binary': sys.executable,
                 'arguments': [{'literal': '-I'}, {'literal': str(fault)}]}))
-            (folder/'manifests/fail-stage.json').write_text(json.dumps({
-                'name': 'fail-stage', 'binary': shutil.which('false'),
-                'accepts_stdin': True, 'arguments': []}))
+            make_middle_failure(folder)
             tail = f'stream from tail with flags ["-n", "+1", "-f"] and path {json.dumps(str(events))}\npipe to cat\n'
             blocked_fixture = fixture
             if fixture.stat().st_size < 4*1024*1024:
@@ -271,7 +279,8 @@ def main():
                 ('producer-exit-seven', 'stream from fault\npipe to cat\nshow each line\n',
                  dict(expected_code=args.native_failure_code, stderr_contains=b'fixture-status-7')),
                 ('middle-stage-failure', f'stream from cat with path {json.dumps(str(events))}\npipe to fail-stage\npipe to cat\nshow each line\n',
-                 dict(expected_code=1, expected_spawns=3)),
+                 dict(expected_code=1, expected_spawns=3, expected_bytes=b'',
+                      stderr_contains=b'applet "fail-stage" failed')),
                 ('oversized-record-rejected', f'stream from cat with path {json.dumps(str(oversized))}\nshow each line\n',
                  dict(expected_code=1, expected_spawns=1, stderr_contains=b'record exceeds')),
             ]

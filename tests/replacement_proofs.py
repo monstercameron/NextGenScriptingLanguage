@@ -67,6 +67,24 @@ class ProofContracts(unittest.TestCase):
             import hashlib
             self.assertEqual(actual_hash, hashlib.sha256(expected).hexdigest())
 
+    def test_middle_failure_has_exact_status_stage_and_no_output(self):
+        with tempfile.TemporaryDirectory(prefix='execute middle failure ') as tmp:
+            folder = Path(tmp)
+            shutil.copytree(ROOT/'manifests', folder/'manifests')
+            proof.make_middle_failure(folder)
+            source = ('stream from cat with path "input.bin"\n'
+                      'pipe to fail-stage\npipe to cat\nshow each line\n')
+            for payload in [b'one\x00\n\xfftwo\n', b'x' * (1024 * 1024)]:
+                (folder/'input.bin').write_bytes(payload)
+                for _ in range(3):
+                    proof.run_case(BINARY, folder, source, expected_code=1,
+                                   expected_spawns=3, expected_bytes=b'',
+                                   stderr_contains=b'applet "fail-stage" failed')
+            # A different nonzero status is not interchangeable with this proof.
+            with self.assertRaises(AssertionError):
+                proof.run_case(BINARY, folder, source, expected_code=141,
+                               expected_spawns=3)
+
 
 if __name__ == '__main__':
     unittest.main()

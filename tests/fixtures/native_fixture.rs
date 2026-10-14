@@ -61,6 +61,16 @@ fn main() {
             std::fs::write(p, n.to_string()).unwrap();
             print!("{n}");
         }
+        "stderr-flood" => {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            let bytes = [b'e'; 8192];
+            let mut sink = std::io::stderr().lock();
+            while std::time::Instant::now() < until {
+                if sink.write_all(&bytes).is_err() {
+                    break;
+                }
+            }
+        }
         "flood" => {
             let bytes = [b'x'; 32768];
             for _ in 0..128 {

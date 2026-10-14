@@ -27,7 +27,9 @@ impl Drop for Children {
 fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
     if let Some(reader) = child.stderr.as_mut() {
         let mut buffer = [0u8; 8192];
-        loop {
+        // A continuously writable stderr must yield to stdout, status,
+        // cancellation and deadline checks in the supervising loop.
+        for _ in 0..16 {
             match available(reader.as_raw_handle())? {
                 None => {
                     child.stderr = None;

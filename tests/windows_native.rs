@@ -385,3 +385,35 @@ fn unicode_file_uri_and_batch_rejection_are_explicit() {
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8_lossy(&result.stderr).contains("explicit cmd.exe"));
 }
+
+#[test]
+fn captured_stderr_flood_cannot_starve_native_deadlines() {
+    let folder = tempfile::tempdir().unwrap();
+    let program = flow::parser::parse(&native(&["stderr-flood"])).unwrap();
+    let options = flow::runtime::RunOptions {
+        inputs: Default::default(),
+        working_directory: folder.path().to_path_buf(),
+        cache_directory: None,
+        trace: false,
+        max_output_bytes: 1024,
+        command_timeout: Some(Duration::from_millis(150)),
+    };
+    let started = Instant::now();
+    let result = flow::runtime::run_with_context(
+        &program,
+        &flow::manifest::Registry::default(),
+        &options,
+        Default::default(),
+        Vec::new(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("stderr flood exceeded its deadline"),
+    };
+    assert!(format!("{error:#}").contains("timed out"));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "stderr monopolized the supervisor"
+    );
+}

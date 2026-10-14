@@ -1,3 +1,32 @@
+# Managed-live state handoff
+
+The [live-state report](performance-2026-10-14-live-state.json) compares
+`6685426` with a change that removes a full copy of incoming live-node state
+immediately before the runtime overwrites that copy. The runtime still returns
+the final working directory, bindings and output together; failed nodes publish
+no success state. The live document's transaction and capacity checks remain.
+
+Three alternating release rounds measured private runtime-entry medians 16–93%
+lower with 64 KiB–4 MiB bindings and 10–47% lower with pipeline bytes of those
+sizes. These exclude caller input construction and RPC. Two separate managed-app
+runs, with 12 and 20 paired samples, include RPC, execution and state publication
+for 32 JSON nodes: 1 MiB bindings measured about 4% lower, and 4 MiB bindings
+7.5–7.9% lower. Small-state cases were approximately flat. Every trial checks
+exact final bindings, bytes, cursor and zero child-process launches.
+
+Fresh CLI controls stayed within 1%. Unchanged microcontrols varied: a short
+parse was +3.99%, then -0.41% on repeat; cron matching was -10.07%, then -18.98%.
+Those are retained as variation, not gains. A separate compact-index experiment
+was rejected: it saved requested allocation bytes but made large-input parsing
+consistently 3.7–3.8% slower. Its preceding faster implementation remains.
+
+`live_execution.py` measures the full managed path; the ignored
+`runtime::live::tests::live_state_handoff` release test measures its private entry.
+Raw samples and source/input/catalog/harness/binary hashes are retained. These
+are local macOS warm-cache measurements, with no allocation, peak memory, RSS,
+other-platform or Bash performance claim. Run benchmarks without concurrent
+builds or tests.
+
 # Typed-input lookup scaling
 
 The [input-interface report](performance-2026-10-14-input-lookup.json) compares

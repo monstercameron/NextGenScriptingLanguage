@@ -1,6 +1,9 @@
 //! Opt-in execution adapter for live control. Ordinary runs retain their fast path.
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone)]
 pub(crate) struct NodeState {
     pub cwd: PathBuf,
@@ -22,13 +25,20 @@ pub(crate) fn execute_node(
     let signals = Signals::with_cancellation(cancelled, true)?;
     let options = RunOptions {
         inputs: Default::default(),
-        working_directory: state.cwd.clone(),
+        working_directory: state.cwd,
         cache_directory: options.cache_directory.clone(),
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
     };
-    let mut final_state = state.clone();
+    // run_finite_state replaces this slot on success; errors publish no state.
+    // Copying the incoming bindings and bytes here only to discard them can
+    // duplicate megabytes for every managed node.
+    let mut final_state = NodeState {
+        cwd: PathBuf::new(),
+        bindings: BTreeMap::new(),
+        data: Vec::new(),
+    };
     let result = run_finite_state(
         node,
         registry,

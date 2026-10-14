@@ -1,3 +1,39 @@
+# Native stream framing
+
+The [stream-framing report](performance-2026-10-14-stream-framing.json) compares
+`3a07fe5` with borrowing complete newline-terminated records from the native
+read buffer. Fragmented records still use the pending buffer. Failed callbacks
+retain the complete failed record, and size checks, record quotas, EOF bytes,
+backpressure, cancellation and deadlines keep their previous behavior.
+
+Three alternating release rounds measured private framing medians about 53%
+lower for complete 8-byte records and 4% lower for 1–8 KiB records. Tiny
+3-byte fragments measured 9% lower after refinement; 8 KiB fragments stayed
+flat. These operations process 256 KiB through a synchronous counting callback;
+they exclude process startup, native I/O and downstream work.
+
+Two real native `cat` repeats, each with 20 measured paired CLI runs per
+record size, stayed within 2%. Exact binary output, including NUL, invalid UTF-8,
+CR and an unterminated tail, matches the independent input fixture. Every
+preserved trace contains one real `/bin/cat` spawn and successful exit. The
+harness includes startup, catalog loading, framing and writes to `/dev/null`;
+it does not establish a broad task-latency or per-record service improvement.
+
+More than 5,000 comparisons against the original framer check exact emitted
+bytes, errors, retained pending bytes, counts and retry finishes. The initial
+candidate made tiny fragments 9% slower; its source and measurements remain
+separate from the final candidate. A stale core-test artifact rejected the catalog before candidate timing; that
+failed pairing is excluded. The corrected comparison uses the explicit executable
+from Cargo's current build output. Failed attempts remain in the session evidence.
+
+Five fresh CLI controls stay within 0.8%; unrelated runtime API controls vary
+by -3.3% to -0.3%. An unchanged cron microcontrol is 2–3 ns slower in two
+repeats, with its cause unestablished. Other core controls stay within 1.2%.
+The native executable shrinks by 32 bytes; WASM is byte-identical. Allocation
+traffic, peak memory, RSS, cold I/O and Linux/Windows performance were not
+measured. Raw paired samples and source, input, output, catalog, harness and
+binary hashes are retained. Keep timing separate from builds and stress.
+
 # Widget publication JSON
 
 The [publication report](performance-2026-10-14-ui-publication.json) compares

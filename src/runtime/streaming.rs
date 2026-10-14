@@ -31,16 +31,21 @@ impl<'a> LineSink<'a> {
             records: 0,
         }
     }
+    fn emit_record(emit: &mut Emit<'_>, bytes: &[u8], signals: &Signals) -> Result<()> {
+        check_deadline(signals.deadline)?;
+        if signals.cancelled.load(Ordering::Relaxed) {
+            bail!("workflow cancelled by signal");
+        }
+        emit(bytes, &signals.cancelled, signals.deadline)?;
+        check_deadline(signals.deadline)?;
+        if signals.cancelled.load(Ordering::Relaxed) {
+            bail!("workflow cancelled by signal");
+        }
+        Ok(())
+    }
+
     fn emit_pending(&mut self, signals: &Signals) -> Result<bool> {
-        check_deadline(signals.deadline)?;
-        if signals.cancelled.load(Ordering::Relaxed) {
-            bail!("workflow cancelled by signal");
-        }
-        (self.emit)(&self.pending, &signals.cancelled, signals.deadline)?;
-        check_deadline(signals.deadline)?;
-        if signals.cancelled.load(Ordering::Relaxed) {
-            bail!("workflow cancelled by signal");
-        }
+        Self::emit_record(self.emit, &self.pending, signals)?;
         self.pending.clear();
         self.records += 1;
         Ok(self.limit.is_some_and(|limit| self.records >= limit))
@@ -51,9 +56,27 @@ impl<'a> LineSink<'a> {
             if part.len() > self.max_record_bytes.saturating_sub(self.pending.len()) {
                 bail!("stream record exceeds {} bytes", self.max_record_bytes);
             }
-            self.pending.extend_from_slice(part);
-            if part.last() == Some(&b'\n') && self.emit_pending(signals)? {
-                return Ok(true);
+            if part.last() != Some(&b'\n') {
+                self.pending.extend_from_slice(part);
+                continue;
+            }
+            if self.pending.is_empty() {
+                // The callback is synchronous, so complete records can borrow
+                // the current read buffer. Preserve the failed record exactly
+                // as the buffered path does if any callback/check fails.
+                if let Err(error) = Self::emit_record(self.emit, part, signals) {
+                    self.pending.extend_from_slice(part);
+                    return Err(error);
+                }
+                self.records += 1;
+                if self.limit.is_some_and(|limit| self.records >= limit) {
+                    return Ok(true);
+                }
+            } else {
+                self.pending.extend_from_slice(part);
+                if self.emit_pending(signals)? {
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
@@ -276,5 +299,220 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(emitted, b"one\n");
         assert!(format!("{:#}", result.unwrap_err()).contains("failed"));
+    }
+}
+
+#[cfg(test)]
+mod framing_evidence {
+    use super::*;
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use std::{collections::BTreeMap, hint::black_box};
+
+    pub(super) struct LegacySink<'a> {
+        emit: &'a mut Emit<'a>,
+        limit: Option<usize>,
+        max_record_bytes: usize,
+        pending: Vec<u8>,
+        records: usize,
+    }
+
+    impl<'a> LegacySink<'a> {
+        pub(super) fn new(
+            emit: &'a mut Emit<'a>,
+            limit: Option<usize>,
+            max_record_bytes: usize,
+        ) -> Self {
+            Self {
+                emit,
+                limit,
+                max_record_bytes,
+                pending: Vec::new(),
+                records: 0,
+            }
+        }
+        fn emit_pending(&mut self, signals: &Signals) -> Result<bool> {
+            check_deadline(signals.deadline)?;
+            if signals.cancelled.load(Ordering::Relaxed) {
+                bail!("workflow cancelled by signal");
+            }
+            (self.emit)(&self.pending, &signals.cancelled, signals.deadline)?;
+            check_deadline(signals.deadline)?;
+            if signals.cancelled.load(Ordering::Relaxed) {
+                bail!("workflow cancelled by signal");
+            }
+            self.pending.clear();
+            self.records += 1;
+            Ok(self.limit.is_some_and(|limit| self.records >= limit))
+        }
+
+        pub(super) fn push(&mut self, bytes: &[u8], signals: &Signals) -> Result<bool> {
+            for part in bytes.split_inclusive(|byte| *byte == b'\n') {
+                if part.len() > self.max_record_bytes.saturating_sub(self.pending.len()) {
+                    bail!("stream record exceeds {} bytes", self.max_record_bytes);
+                }
+                self.pending.extend_from_slice(part);
+                if part.last() == Some(&b'\n') && self.emit_pending(signals)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+
+        pub(super) fn finish(&mut self, signals: &Signals) -> Result<()> {
+            if !self.pending.is_empty() {
+                self.emit_pending(signals)?;
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct Observation {
+        output: Vec<Vec<u8>>,
+        steps: Vec<(std::result::Result<bool, String>, Vec<u8>, usize)>,
+    }
+
+    fn observe(
+        chunks: &[&[u8]],
+        limit: Option<usize>,
+        max: usize,
+        mode: usize,
+        legacy: bool,
+    ) -> Observation {
+        let mut signals =
+            Signals::with_cancellation(Arc::new(AtomicBool::new(mode == 3)), false).unwrap();
+        if mode == 4 {
+            signals.deadline = Some(Instant::now() - Duration::from_secs(1));
+        }
+        let mut output = Vec::new();
+        let mut emit = |bytes: &[u8], cancel: &AtomicBool, _: Option<Instant>| {
+            output.push(bytes.to_vec());
+            if output.len() == 2 && mode == 1 {
+                bail!("fixture callback failure");
+            }
+            if output.len() == 2 && mode == 2 {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            Ok(())
+        };
+        let mut steps = Vec::new();
+        macro_rules! observe_sink {
+            ($sink:expr) => {{
+                let mut sink = $sink;
+                for chunk in chunks {
+                    let result = sink.push(chunk, &signals).map_err(|e| format!("{e:#}"));
+                    steps.push((result, sink.pending.clone(), sink.records));
+                }
+                for _ in 0..2 {
+                    signals.cancelled.store(false, Ordering::Relaxed);
+                    signals.deadline = None;
+                    let result = sink
+                        .finish(&signals)
+                        .map(|()| false)
+                        .map_err(|e| format!("{e:#}"));
+                    steps.push((result, sink.pending.clone(), sink.records));
+                }
+            }};
+        }
+        if legacy {
+            observe_sink!(LegacySink::new(&mut emit, limit, max));
+        } else {
+            observe_sink!(LineSink::new(&mut emit, limit, max));
+        }
+        Observation { output, steps }
+    }
+
+    #[test]
+    fn borrowed_record_framing_matches_legacy_failures_and_bytes() {
+        let mut cases = 0;
+        for input in [
+            b"".as_slice(),
+            b"\n",
+            b"a\n\nlast",
+            b"a\0\n\xff\r\nlast\nignored\n",
+            b"1234567\n12345678\nend",
+        ] {
+            for split in 0..=input.len() {
+                let chunks = [&input[..split], &input[split..]];
+                for max in [0, 1, 3, 8, 8192] {
+                    for limit in [None, Some(0), Some(1), Some(3)] {
+                        for mode in 0..5 {
+                            assert_eq!(observe(&chunks, limit, max, mode, false), observe(&chunks, limit, max, mode, true), "input={input:?} split={split} max={max} limit={limit:?} mode={mode}");
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 5000);
+    }
+
+    #[test]
+    #[ignore = "explicit paired release performance measurements"]
+    fn stream_record_framing() {
+        let signals = Signals::with_cancellation(Arc::new(AtomicBool::new(false)), false).unwrap();
+        let mut results = BTreeMap::new();
+        for (name, record_size, chunk_size, tail) in [
+            ("complete_8", 8, 32768, false),
+            ("complete_1k", 1024, 32768, false),
+            ("complete_8k", 8192, 32768, false),
+            ("fragmented_8", 8, 3, false),
+            ("fragmented_8k", 8192, 4096, false),
+            ("unterminated_8k", 8192, 32768, true),
+        ] {
+            let mut input = vec![b'x'; 256 * 1024];
+            for index in (record_size - 1..input.len()).step_by(record_size) {
+                input[index] = b'\n';
+            }
+            if tail {
+                *input.last_mut().unwrap() = b'z';
+            }
+            let run = || {
+                let mut bytes = 0;
+                let mut records = 0;
+                let mut emit = |part: &[u8], _: &AtomicBool, _: Option<Instant>| {
+                    black_box(part);
+                    bytes += part.len();
+                    records += 1;
+                    Ok(())
+                };
+                let mut sink = LineSink::new(&mut emit, None, 65536);
+                for chunk in input.chunks(chunk_size) {
+                    assert!(!sink.push(black_box(chunk), &signals).unwrap());
+                }
+                sink.finish(&signals).unwrap();
+                let count = sink.records;
+                drop(sink);
+                (bytes, records, count)
+            };
+            assert_eq!(
+                run(),
+                (
+                    input.len(),
+                    input.len() / record_size,
+                    input.len() / record_size
+                )
+            );
+            let mut raw = Vec::new();
+            for batch in 0..40 {
+                let start = Instant::now();
+                for _ in 0..5 {
+                    black_box(run());
+                }
+                if batch >= 8 {
+                    raw.push(start.elapsed().as_secs_f64() * 1e9 / 5.0);
+                }
+            }
+            let mut sorted = raw.clone();
+            sorted.sort_by(f64::total_cmp);
+            results.insert(name,json!({"p50_ns":(sorted[15]+sorted[16])/2.0,"p95_ns":sorted[30],"raw_batch_average_ns":raw,"bytes":input.len(),"record_bytes":record_size,"chunk_bytes":chunk_size,"input_sha256":format!("{:x}",Sha256::digest(&input))}));
+        }
+        let report = json!({"method":"Private native stream framing: 256KiB fixed bytes per operation, synchronous counting callback, no child/IO. Input and cancellation setup/hash excluded; sink creation, framing, checks, callback, destruction included. Eight warmup and32 measured batches, five ops each. Warm process; not native IO latency or throughput.","results":results});
+        fs::write(
+            std::env::var("OPT_BENCH_REPORT").unwrap(),
+            serde_json::to_vec_pretty(&report).unwrap(),
+        )
+        .unwrap();
     }
 }

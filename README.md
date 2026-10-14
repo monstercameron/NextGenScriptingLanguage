@@ -2,7 +2,7 @@
 
 [Explore the Execute site →](https://monstercameron.github.io/NextGenScriptingLanguage/)
 
-Production tracking: [Bash and Omarchy acceptance gates](docs/production-readiness.md), [pinned command inventory](docs/omarchy-inventory.json), and [initial isolated interface ports](examples/omarchy-ports/README.md). Source 0.9.0-dev remains a candidate; packaged 0.8.0 is unchanged.
+Production tracking: [Bash and Omarchy acceptance gates](docs/production-readiness.md), [pinned command inventory](docs/omarchy-inventory.json), and [initial isolated interface ports](examples/omarchy-ports/README.md). Source 0.9.0-rc.1 is a multi-platform release candidate; historical packaged 0.8.0 is unchanged. See [releases and installation](docs/releases.md).
 
 **English for the glue. Unix for the work.**
 
@@ -25,12 +25,13 @@ The goal is a small language that people can read and agents can compose: reuse
 the tools that already do the work, and make the connections explicit. The syntax
 is deterministic; running a program requires no LLM, API key, or model inference.
 
-**0.8.0 · macOS + Linux · Rust · [MIT](LICENSE)**
+**0.9.0-rc.1 candidate · macOS + Linux + native Windows · x64 + ARM64 · Rust · [MIT](LICENSE)**
 
-The packaged runtime is 0.8.0; the working source is 0.9.0-dev. Building it includes pending
-stdin, discovery, status, conditional, JSON, reusable-program and explicit model
-applet features. See
-[release and source status](#release-and-source-status) before choosing a binary.
+The source candidate includes stdin, discovery, status, conditions, JSON, reusable
+programs and explicit model applets, plus a native Windows runtime.
+[Versioned releases](https://github.com/monstercameron/NextGenScriptingLanguage/releases)
+provide archives, Linux DEB/RPM packages and sandboxed Flatpak bundles after their
+platform checks pass. See [installation and release policy](docs/releases.md).
 
 [Quickstart](#quickstart) · [Language](#the-language-in-one-minute) ·
 [Live services](#one-file-several-lifetimes) · [Terminal apps](#terminal-apps-with-control-flow-you-can-read) ·
@@ -47,9 +48,12 @@ export PATH="$PWD/target/release:$PATH"
 execute --version
 ```
 
-The package also includes `bin/execute`, built for Apple Silicon macOS. On that
-platform, use `export PATH="$PWD/bin:$PATH"` to try it without building. Linux and
-other architectures build from source. Individual programs require their native
+The repository also retains the historical 0.8.0 `bin/execute` for Apple Silicon.
+For the current candidate, build from source or use a matching
+[release download](https://github.com/monstercameron/NextGenScriptingLanguage/releases).
+Keep both runtime binaries and the applet catalog together when extracting an
+archive. Windows uses native `.exe` files, without WSL; see
+[Windows semantics](docs/windows.md). Individual programs require their native
 tools; the example below uses standard macOS/Linux utilities. JSON utilities and
 the CPU monitor additionally need `jq`; the GitHub tracker needs authenticated `gh`.
 
@@ -511,11 +515,12 @@ includes source/binary hashes and paired latency reports. The preceding
 lifecycle-stress evidence for that historical version.
 
 Tests use owned temporary workspaces and bounded subprocesses. The calendar case
-can wait up to 75 seconds for a real minute. macOS and Ubuntu CI are configured;
-native Linux runtime validation has not been performed on this development host.
-Linux-target Clippy passed before the model adapter was added. The current
-HTTP/TLS dependency needs a Linux C cross-compiler for local cross-checks; native
-Ubuntu CI remains the validation route for this source candidate.
+can wait up to 75 seconds for a real minute. Native macOS and Ubuntu CI run the
+Unix suites. Native Windows x64 and ARM64 runners exercise real PE executables,
+binary pipes, Job Object cleanup, checkpoint/cache, services, widgets and live
+named-pipe CRUD. Platform results apply to their exact commit; inspect
+[Actions](https://github.com/monstercameron/NextGenScriptingLanguage/actions)
+for the current candidate. Windows does not run Unix-tool-dependent fixtures.
 
 ## Release and source status
 
@@ -529,6 +534,7 @@ Ubuntu CI remains the validation route for this source candidate.
 | Same-file finite definitions/calls with local scope | Pending | Available |
 | Typed environment/positional inputs and native CLI exit statuses | Pending | Available |
 | Jev classification/judgment/scoring and OpenAI generation/extraction | Pending | Available through model applets |
+| Native Windows x64/ARM64 runtime | Unavailable | Candidate with native CI |
 | External modules, jobs, GUI backends and dedicated AI syntax | Roadmap | Roadmap |
 
 `bin/execute` and existing VSIX packages retain their recorded release contents.
@@ -543,6 +549,8 @@ retain the remaining gaps.
 | Guide | What it covers |
 | --- | --- |
 | [Thesis and progress](docs/thesis-progress.md) | Full project objective, implemented capabilities, and unfinished requirements |
+| [Releases and packages](docs/releases.md) | SemVer, six native targets, installers, checksums and publication gates |
+| [Native Windows](docs/windows.md) | Jobs, byte pipes, Unicode, named-pipe control and platform differences |
 | [Contributing](CONTRIBUTING.md) | Setup, shared checks, source map, safe fixtures and evidence policy |
 | [VS Code extension](editors/vscode/README.md) | Installable highlighting, editor support, snippets, and grammar tests |
 | [Language and runtime](docs/language.md) | Syntax, values, pipes, manifests, scheduling, limits, cache, and recovery |

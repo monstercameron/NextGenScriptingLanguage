@@ -36,6 +36,15 @@ def smoke(executable, helper, manifests):
 
         if run("--version").decode().strip() != "execute " + version():
             raise ValueError("installed version differs from source")
+        helper_version = (
+            subprocess.check_output([str(helper), "--version"], cwd=folder, timeout=20)
+            .decode()
+            .strip()
+        )
+        if helper_version != "execute-model " + version():
+            raise ValueError("installed helper version differs from source")
+        if run("model", "--version").decode().strip() != helper_version:
+            raise ValueError("delegated helper version differs")
         result = subprocess.run(
             [str(helper), "--help"],
             cwd=folder,

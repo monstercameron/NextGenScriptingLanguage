@@ -2,6 +2,10 @@ use std::io;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.as_slice() == ["--version"] {
+        println!("execute-model {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if args.as_slice() == ["--help"] {
         println!("{}", flow::models::help());
         return;

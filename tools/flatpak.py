@@ -94,6 +94,11 @@ def main():
     ).strip()
     if output != "execute " + value:
         raise ValueError("Flatpak executable version mismatch: " + output)
+    helper_version = subprocess.check_output(
+        ["flatpak", "run", APP + "//" + branch, "model", "--version"], text=True
+    ).strip()
+    if helper_version != "execute-model " + value:
+        raise ValueError("Flatpak helper version mismatch")
     result = subprocess.check_output(
         ["flatpak", "run", APP + "//" + branch, "model", "--help"]
     )

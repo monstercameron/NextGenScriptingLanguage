@@ -274,3 +274,19 @@ fn refusal_is_a_static_sanitized_failure() {
     assert_eq!(stderr.trim(), "execute-model: refusal");
     assert!(!stderr.contains("private"));
 }
+
+#[test]
+fn helper_and_cli_delegation_report_the_same_release_version_without_input() {
+    for (executable, args) in [
+        (env!("CARGO_BIN_EXE_execute-model"), vec!["--version"]),
+        (env!("CARGO_BIN_EXE_execute"), vec!["model", "--version"]),
+    ] {
+        let output = Command::new(executable).args(args).output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            output.stdout,
+            format!("execute-model {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
+        );
+        assert!(output.stderr.is_empty());
+    }
+}

@@ -1,0 +1,266 @@
+{
+  "version": "0.9.0-rc.4",
+  "tag": "v0.9.0-rc.4",
+  "source_commit": "2ac19f143190192d34611604677de750e17cc525",
+  "release_url": "https://github.com/monstercameron/NextGenScriptingLanguage/releases/tag/v0.9.0-rc.4",
+  "release_id": 412971394,
+  "published_at": "2026-10-14T17:03:02Z",
+  "packages": 12,
+  "assets": 13,
+  "all_downloads_match_server_digests": true,
+  "checksum_manifest_matches_all_packages": true,
+  "github_attestation_identity_verified": {
+    "repository": "monstercameron/NextGenScriptingLanguage",
+    "workflow": ".github/workflows/release.yml",
+    "source_ref": "refs/tags/v0.9.0-rc.4",
+    "source_commit": "2ac19f143190192d34611604677de750e17cc525",
+    "hosted_runners_only": true,
+    "all_13_subject_digests_match": true
+  },
+  "sha256": {
+    "SHA256SUMS": "17dfb87b9edf0adc5ceb64e6d6dea1f0cbcf75ea06d5a08ebdbd49472d5105ee",
+    "execute-0.9.0-rc.4-1.aarch64.rpm": "0c6ddbe695e01e5803ea40d7979e0e9e62208aefdcc61e30199e90c041c9d206",
+    "execute-0.9.0-rc.4-1.x86_64.rpm": "6c2f40e21d24329ea21c6257602cdd0264982dcd257af1e06e9a3496a71e7391",
+    "execute-0.9.0-rc.4-linux-arm64.flatpak": "589f24ce036657e216264d98c3a3cc8ef70d5d2052a8bca566d2e27e41c315b8",
+    "execute-0.9.0-rc.4-linux-arm64.tar.gz": "f4a936c18e628a9b8ad488c705aaa2530ad1c28de3c294080bd31836e7c26518",
+    "execute-0.9.0-rc.4-linux-x64.flatpak": "ad7a03b9f1a5cca9b9e1c407f6d866809c3cdca3787eeb966ebbfbdd10a1b68a",
+    "execute-0.9.0-rc.4-linux-x64.tar.gz": "f8c86f825785f8831b52ffd284e163510f6e66da6c14d68fb96000c342afd4a8",
+    "execute-0.9.0-rc.4-macos-arm64.tar.gz": "7b56d0ed8de224dc6026c8ce09554b40432c261ae0bb94ddf508412ceb45d84c",
+    "execute-0.9.0-rc.4-macos-x64.tar.gz": "3564ad624535cc2ecf0e66bca1c8434f7bae668fddf6291afeb08d4ccfddb3b6",
+    "execute-0.9.0-rc.4-windows-arm64.zip": "ae9705a44e31d71505b2bca9d75fcc0ddd930253e1aa5b02a54b5114c812680f",
+    "execute-0.9.0-rc.4-windows-x64.zip": "8e1bc315eb28a9239fe0d5ae34c0a8b3063c82d89ee40e2682c1b3aeac346902",
+    "execute_0.9.0-rc.4_amd64.deb": "20aea040cd0e00b3badef4ba79f7e6857ea6277cb69d10059685bb2159a60f17",
+    "execute_0.9.0-rc.4_arm64.deb": "18b4bacf8ebc18a6910d4e8ca45a2b4a30a489ec550857d8acf6d6f8cb48abda"
+  },
+  "binaries": {
+    "x86_64-unknown-linux-musl/execute": {
+      "sha256": "83182dd6a46ae8d78cbeb4b520617696e8379fa2220b6113ef29f319df40f607",
+      "bytes": 3327072
+    },
+    "x86_64-unknown-linux-musl/execute-model": {
+      "sha256": "17e8b86d9951e392e40ee7aa02b1713d504b3c022befe5ee4c9934c49f851dd9",
+      "bytes": 3224592
+    },
+    "aarch64-unknown-linux-musl/execute": {
+      "sha256": "f342cf771253a36523b76610485b539c1a4ff451f7afdc7250cb0383d2f84fbd",
+      "bytes": 2888256
+    },
+    "aarch64-unknown-linux-musl/execute-model": {
+      "sha256": "3a6179160b4e7c874f6cddddd886eeaf7a635c7734975de2ce96ce1749c2e7de",
+      "bytes": 2822648
+    },
+    "x86_64-apple-darwin/execute": {
+      "sha256": "5bbbb37056aa2434b05b807b8053fc52c1d9e2a3c0abd8345907a4dab54b802e",
+      "bytes": 3044152,
+      "imports": [
+        "/usr/lib/libiconv.2.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ]
+    },
+    "x86_64-apple-darwin/execute-model": {
+      "sha256": "b0c77dd9b8f70a6997cd7c8ca7422a9826e8f8e555179e5e731991d0bf497ccf",
+      "bytes": 2874464,
+      "imports": [
+        "/usr/lib/libiconv.2.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ]
+    },
+    "aarch64-apple-darwin/execute": {
+      "sha256": "327f410460fd4da0a06ca2367a91ea941c11a9412cc56355da2215728d4adc27",
+      "bytes": 2852640,
+      "imports": [
+        "/usr/lib/libiconv.2.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ]
+    },
+    "aarch64-apple-darwin/execute-model": {
+      "sha256": "01cf1cba5c796daa371a94982c21bbfb79b2379bc62a1c495eed2c36205279d4",
+      "bytes": 2702992,
+      "imports": [
+        "/usr/lib/libiconv.2.dylib",
+        "/usr/lib/libSystem.B.dylib"
+      ]
+    },
+    "x86_64-pc-windows-msvc/execute": {
+      "sha256": "d759466e745c7f54b64b0cea52e99af880aeee836891df9914d284b3640093fd",
+      "bytes": 3402240,
+      "imports": [
+        "kernel32.dll",
+        "bcryptprimitives.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "advapi32.dll",
+        "ntdll.dll",
+        "KERNEL32.dll",
+        "USER32.dll"
+      ]
+    },
+    "x86_64-pc-windows-msvc/execute-model": {
+      "sha256": "ca6663b64d8230c89d267b6f368c2a686beb2de6aa1f34b6f7e6513422376517",
+      "bytes": 1663488,
+      "imports": [
+        "kernel32.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "bcryptprimitives.dll",
+        "advapi32.dll",
+        "crypt32.dll",
+        "secur32.dll",
+        "ntdll.dll",
+        "KERNEL32.dll",
+        "WS2_32.dll"
+      ]
+    },
+    "aarch64-pc-windows-msvc/execute": {
+      "sha256": "a13a0a4cda427ab63907dc3e3e9317853863fa676bd99efac9a1b6919a0fc8bb",
+      "bytes": 2952192,
+      "imports": [
+        "kernel32.dll",
+        "bcryptprimitives.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "advapi32.dll",
+        "ntdll.dll",
+        "KERNEL32.dll",
+        "USER32.dll"
+      ]
+    },
+    "aarch64-pc-windows-msvc/execute-model": {
+      "sha256": "4de440258a5b05db8af3a7c5d9056dd941e791e32aa432183afec84fa7ecc7ca",
+      "bytes": 1523200,
+      "imports": [
+        "kernel32.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "bcryptprimitives.dll",
+        "advapi32.dll",
+        "crypt32.dll",
+        "secur32.dll",
+        "ntdll.dll",
+        "KERNEL32.dll",
+        "WS2_32.dll"
+      ]
+    }
+  },
+  "macos_arm64_downloaded_archive_smoke": "passed",
+  "release_workflow": {
+    "run_id": 38601559108,
+    "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38601559108",
+    "conclusion": "success",
+    "jobs": [
+      {
+        "name": "version",
+        "conclusion": "success"
+      },
+      {
+        "name": "checks / Unix (macos-15)",
+        "conclusion": "success"
+      },
+      {
+        "name": "checks / Unix (ubuntu-24.04)",
+        "conclusion": "success"
+      },
+      {
+        "name": "checks / Native Windows (windows-11-arm)",
+        "conclusion": "success"
+      },
+      {
+        "name": "checks / Release contracts and workflow lint",
+        "conclusion": "success"
+      },
+      {
+        "name": "checks / Native Windows (windows-2022)",
+        "conclusion": "success"
+      },
+      {
+        "name": "build / Package (x86_64-apple-darwin)",
+        "conclusion": "success"
+      },
+      {
+        "name": "build / Package (aarch64-pc-windows-msvc)",
+        "conclusion": "success"
+      },
+      {
+        "name": "build / Package (aarch64-apple-darwin)",
+        "conclusion": "success"
+      },
+      {
+        "name": "build / Package (x86_64-unknown-linux-musl)",
+        "conclusion": "success"
+      },
+      {
+        "name": "build / Package (aarch64-unknown-linux-musl)",
+        "conclusion": "success"
+      },
+      {
+        "name": "build / Package (x86_64-pc-windows-msvc)",
+        "conclusion": "success"
+      },
+      {
+        "name": "build / Flatpak (aarch64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "build / Flatpak (x86_64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "publish",
+        "conclusion": "success"
+      }
+    ]
+  },
+  "native_test_cohorts": {
+    "Unix (macos-15)": {
+      "rust_passed": 409,
+      "ignored": 14
+    },
+    "Unix (ubuntu-24.04)": {
+      "rust_passed": 408,
+      "ignored": 14
+    },
+    "Native Windows (windows-2022)": {
+      "rust_passed": 88,
+      "ignored": 0
+    },
+    "Native Windows (windows-11-arm)": {
+      "rust_passed": 88,
+      "ignored": 0
+    }
+  },
+  "release_contract_tests": {
+    "passed": 11,
+    "optimized_python_passed": 11
+  },
+  "other_validation": [
+    "150 useful Unix workflows with private fixtures",
+    "100 model workflows / 295 offline cases on Unix",
+    "21 editor tests on each Unix runner",
+    "native command comparison and bounded stream/lifecycle smoke checks",
+    "DEB installation on native Ubuntu x64/ARM64",
+    "RPM installation in native Fedora 43 containers",
+    "Flatpak installation and real sandbox execution on x64/ARM64"
+  ],
+  "limits": [
+    "Release candidate; not full Bash or Omarchy compatibility",
+    "No Apple Developer ID notarization or Authenticode certificates configured",
+    "Windows tests cover native PE execution, headless widgets and IPC; not every terminal or third-party CLI",
+    "Flatpak runs in its declared home/network sandbox, without an automatic host escape",
+    "Existing latency measurements describe their recorded earlier hashes; no new speed claim",
+    "Normalized archives do not imply independently reproducible compiler output"
+  ],
+  "unpublished_attempts": [
+    {
+      "tag": "v0.9.0-rc.1",
+      "result": "draft only, removed after preserving evidence",
+      "fix": "Authenticated listing and numeric-ID access for drafts; retain safe asset filenames on GitHub"
+    },
+    {
+      "tag": "v0.9.0-rc.2",
+      "result": "cancelled before upload",
+      "fix": "Keep package metadata tildes out of download filenames"
+    },
+    {
+      "tag": "v0.9.0-rc.3",
+      "result": "cancelled before publication",
+      "fix": "Statically link MSVC CRT and enforce PE import-table checks"
+    }
+  ],
+  "published_retry_verification": "Real published bytes compared through the publisher read-only branch; only a release download was allowed, with no remote writes."
+}

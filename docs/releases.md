@@ -111,6 +111,14 @@ locked Rust dependencies and native hosted runners. Archive timestamps and
 ownership are normalized to the source commit. This does not claim fully
 reproducible compiler output or identical signatures across independent builds.
 
+The first published multi-platform candidate is **[0.9.0-rc.4](https://github.com/monstercameron/NextGenScriptingLanguage/releases/tag/v0.9.0-rc.4)**. Its complete [validation receipt](release-validation-0.9.0-rc.4.json)
+records the source commit, every package digest, native test cohorts and verified
+GitHub signing identity. Earlier unpublished candidate tags retain the fixes and
+failed-attempt evidence; their draft release was cleaned up.
+
+For interrupted publication, rerun failed jobs so they reuse the tested artifacts.
+A fresh rebuild may differ and must never replace a published version.
+
 The native checks use Unix utility suites on Linux/macOS and real PE fixtures
 on Windows. Package validation is also available through GitHub's **Package
 validation** workflow before tagging. Inspect the linked run for the exact

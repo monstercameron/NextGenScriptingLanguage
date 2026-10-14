@@ -18,8 +18,18 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: editors/vscode
       - run: make check
+      - run: make unix-smoke
       - run: make proof-smoke
       - run: npm run package
         working-directory: editors/vscode
         env:
           EXECUTE_TEST_BINARY: ${{ github.workspace }}/target/release/execute
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-proofs-${{ matrix.os }}
+          path: |
+            target/unix-matrix.json
+            target/proof-smoke.json
+          if-no-files-found: warn
+          retention-days: 14

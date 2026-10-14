@@ -2,7 +2,7 @@ CARGO ?= cargo
 PYTHON ?= python3
 NPM ?= npm
 
-.PHONY: check rust-check build proof-smoke
+.PHONY: check rust-check build proof-smoke unix-smoke
 
 # Keep this sequence shared by local development and macOS/Linux CI.
 check: rust-check
@@ -27,3 +27,7 @@ build:
 # Functional streaming/lifecycle check, not a timing benchmark or stress proof.
 proof-smoke: build
 	$(PYTHON) benchmarks/replacement_proofs.py --binary target/release/execute --stream-bytes 1048576 --lifecycle-repetitions 1 --native-failure-code 7 --report target/proof-smoke.json
+
+# Native command contracts on the runner host, not Arch/Omarchy desktop acceptance.
+unix-smoke: build
+	$(PYTHON) benchmarks/unix_matrix.py --binary target/release/execute --samples 1 --warmups 0 --report target/unix-matrix.json

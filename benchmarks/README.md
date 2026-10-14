@@ -877,3 +877,9 @@ Use `--native-failure-code 7` for source 0.9; the harness defaults to packaged
 0.8's generic failure code 1 so historical release checks remain explicit.
 This is functional integration evidence, not the full 10,000-cycle gate,
 Linux parity, memory-scaling proof or a timing benchmark.
+
+`make unix-smoke` runs the real 110-case command matrix on the current host.
+Native macOS and Ubuntu CI run this target and retain its JSON plus the
+streaming/lifecycle smoke report as `native-proofs-<os>` artifacts for 14 days.
+These are functional checks with descriptive timing only; Ubuntu is not an
+Arch/Omarchy desktop and CI load is not controlled for performance comparisons.

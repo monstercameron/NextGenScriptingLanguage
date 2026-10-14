@@ -1,3 +1,25 @@
+# Known-input preflight performance
+
+The [paired preflight report](performance-2026-10-14-preflight-parameters.json)
+compares `c95495b` with a candidate that borrows literal-only calls during
+known-input preflight and resolves reference-containing parameter maps once.
+Called reusable-program validation measured 42–74% lower medians across three
+alternating release-executable rounds; unused-definition controls stayed within
+2%. Other core controls stayed within about 2%.
+
+Three fresh-CLI repeats (120, 160 and 240 samples per variant) measured 6.3–6.7%
+lower medians for checking 1,000 literal-argument commands with a declared input,
+4.2–4.4% for mixed argument lists, and 2.6–2.9% for scalar references. Whole-list
+references and ordinary execution workloads were approximately flat. The no-input
+control changed +0.5%, +3.6% and -0.4% across the repeats; the noisy repeat remains
+in the report. These are local warm-cache macOS observations, not universal gains.
+
+`preflight_parameters.py` compares identical static-check sources and resolved
+plans. Preserve matching release test executables before and after a change,
+then use `paired_core.py --baseline BASE_TEST --candidate NEW_TEST --test
+reusable_definition_validation --output DIR` for the in-process comparison.
+Never run timing comparisons alongside builds or stress tests.
+
 # Reusable definition validation performance
 
 The [October 14 paired report](performance-2026-10-14-definition-validation.json)

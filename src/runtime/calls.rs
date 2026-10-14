@@ -151,12 +151,25 @@ pub(super) fn preflight(
         values: &BTreeMap<String, Value>,
         types: &BTreeMap<String, InputType>,
     ) -> Result<()> {
-        let mut resolved = call.clone();
-        resolved.parameters = call
-            .parameters
-            .iter()
-            .map(|(name, value)| (name.clone(), known(value, values)))
-            .collect();
+        // Literal arguments already are the resolved values. Only calls that
+        // reference bindings need an owned invocation, with each value copied
+        // once rather than cloning the original map before replacing it.
+        let resolved = if call.parameters.values().any(contains_reference) {
+            Cow::Owned(Invocation {
+                operation: call.operation.clone(),
+                direct: call.direct,
+                parameters: call
+                    .parameters
+                    .iter()
+                    .map(|(name, value)| (name.clone(), known(value, values)))
+                    .collect(),
+                binding: call.binding.clone(),
+                cache: call.cache,
+                status_binding: call.status_binding.clone(),
+            })
+        } else {
+            Cow::Borrowed(call)
+        };
         registry
             .resolve_call(call)?
             .validate_with_types(&resolved, types)

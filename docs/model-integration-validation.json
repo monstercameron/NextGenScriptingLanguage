@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "status": "local validation passed; remote CI pending",
+  "at_utc": "2026-10-14T13:23:57.263763+00:00",
+  "feature_commit": "9526402925f454f9384659370960f27b0aca5e67",
+  "scope": "Pending source candidate based on packaged0.8.0; installed immutable releases unchanged. Generic Rust applet mechanics with .program application control flow.",
+  "delegation": "GPT-6 Luna max subagents, per explicit human request.",
+  "implemented": [
+    "execute-model binary and execute model CLI alias",
+    "TypeSafe Jev classify/judge/score and OpenAI generate/extract manifests",
+    "execute.model/1 normalized results and explicit typed routing",
+    "Strict supported-schema subset including nullable fields, numeric equality, bounds and multiples",
+    "Explicit private env file or process credentials; bounded HTTPS transport, no redirects/proxy inheritance, sanitized errors",
+    "Conservative checkpoint uncertainty after failed model calls and restore of completed results",
+    "Fixture request matching; presence-based offline guard before credentials/network",
+    "100 runnable programs with typed live switch, input fixtures and exact output artifacts",
+    "Output path alias protection; citation/root/quote and selected domain checks"
+  ],
+  "tests": {
+    "command": "make check",
+    "rust_passed": 399,
+    "rust_failed": 0,
+    "rust_ignored_opt_in_probes": 14,
+    "live_scenarios": 56,
+    "existing_utilities": 150,
+    "existing_utility_alternates": 146,
+    "model_workflows": 100,
+    "model_fixture_cases": 295,
+    "model_network_isolation": "macos-sandbox-exec",
+    "editor_tests": 20,
+    "model_catalog_contract_tests": 14,
+    "optimized_python_catalog_tests": 14,
+    "functional_proof_smoke": "1MiB stream plus7 lifecycle probes"
+  },
+  "performance": {
+    "report": "model-integration-validation/model-adapter-repeat.json",
+    "baseline_sha256": "e02bb889359125968eeb1e9fceee3073c159b926334bdf122e1ac296a3d60e7a",
+    "candidate_sha256": "207907d6a98907909f680a5d9bf92e6caa79a662aa28aaf66f6f891af1ea042e",
+    "helper_sha256": "684d428b66d43b6488b8877ca891edd1260d6d26a46d0a430a2921c4c8973ec5",
+    "paired_native_configurations": 8,
+    "samples_per_variant_per_run": 80,
+    "runs": 2,
+    "native_measured_pairs": 1280,
+    "warmups_excluded": true,
+    "conclusion": "Native controls similar in both runs; no speedup claimed. Offline fixture applet median2.94–2.98ms; .program fixture median6.09–6.32ms. Process-launch timing includes Python launch/wait and filesystem caching, excludes network/inference. Full catalog compatibility strips only the new uncertainty field on both variants because the old parser rejects it."
+  },
+  "live_provider_validation": {
+    "report": "model-integration-validation/live-smokes.json",
+    "scope": "One earlier bounded synthetic .program request per provider, no retries. Exact earlier binary/helper hashes retained. Connectivity and contract checks only; not model-quality, calibration or latency benchmarks.",
+    "jev": "Expected storage label returned; resolved jev-1.13.0",
+    "openai": "Expected ready text returned by gpt-6-luna"
+  },
+  "adversarial_fixes": [
+    "Empty fixture cannot fall through to live transport",
+    "Duplicate keys rejected in input, fixture, provider response and extracted JSON",
+    "Confident negative label must not trigger positive action/generation",
+    "Failed API requests retain uncertain outcome; completed requests not replayed",
+    "No PATH fallback for missing bundled helper",
+    "076 citation roots require a path boundary; out-of-scope data routes to review before inference",
+    "Generated evidence quotes must be nonempty; source/report alias collisions refused",
+    "Exact represented-number schema comparisons replace epsilon and f64-collapse errors",
+    "Nullable schema unions work through a real extraction workflow"
+  ],
+  "verification_limits": [
+    "Native macOS local validation; Ubuntu/macOS remote CI still pending at receipt creation.",
+    "Local Linux-target Clippy blocked by missing x86_64-linux-gnu-gcc for ring; no cross-build success claimed.",
+    "Fixtures validate contracts and routing, not semantic model accuracy or 100 live inference runs.",
+    "100 idea catalog includes future retrieval/preprocessing concepts beyond the concrete program files.",
+    "Finite floating-point parsing is retained for fractions/exponents; arbitrary-precision source decimals are not implemented.",
+    "Batch named Jev questions, token streaming, embeddings, failover and automatic retries/cache remain future work.",
+    "No Bash replacement, desktop-platform completion or10/10 rating claimed."
+  ],
+  "environment": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "python": "3.9.6"
+  },
+  "installed_execute_sha256": "c081006721eb427a97e0eec6644a1f913ae894639aef15b36a1178a13e6d0100",
+  "source_sha256": {
+    "Cargo.toml": "12f2c477325fcd3278b7de379adff50c01ef89dca1cca26d879a08661edb8088",
+    "Cargo.lock": "2e37946b52faf0ba41409cc61be7a35e74e3042eb1fdc961ddfc24f52c724571",
+    "src/lib.rs": "fffaf9a8aceb18310c39f2463c7fe2f87726f3bcea7b775eabce27231f4997b3",
+    "src/main.rs": "e5a022b2a33ce3cb8e5a0e9c314edba6981174cf6050608315957db29f400070",
+    "src/models.rs": "987456372f24e1e27eaa0033de0c7373b53881d13f761dea34dfbe13a7fbbc27",
+    "src/bin/execute-model.rs": "a7be45e384c868630bd83a434d65576fa03274f313e1bb8990ae196b0275ed4e",
+    "src/manifest.rs": "4c5cc0eaa649c19cad6b2db016b7b46af93ea9facc05015c1ef0d7156708eda8",
+    "src/runtime.rs": "a7b0d77134c27b8be293e176c9df0ef3c40ef589bf81b91616901023c2df8bde",
+    "src/runtime/resume.rs": "c53834097eab4cc29bf29ad8d81e76880ed0c04f7a09e6d3f1762eac50048c6a",
+    "tests/models.rs": "93e405c7d1a9ba4c85f160a5325927af26a2862d23ded29307b75a109852aa2f",
+    "tests/model_cli.rs": "7c821a486c778175468d514e2e9ecb66318ea77073c49c80f27faab334a86ca1",
+    "tests/model_control.rs": "4212aed76d0cf94105bd3947503e84215931e8c547518eb107cc6fe7d09b57d2",
+    "tests/model_workflows.rs": "b638ae1cc71ed099749c6115e0c869163ca93b62ce757be48343f0b8bb663767",
+    "tests/model_catalog.py": "f5dcb9e0dd7f42af90465e9867278ed1ed801c32429055b10af0ed3167ec838d",
+    "examples/models/run.py": "84add02ae1444268d7ddbe1ccb4dcb9a8ae0cf66ea184fb1c38f80bbbd28b1f4",
+    "examples/models/catalog.json": "4b26a1639a3d226de96088e8774e35e687cff50d5704262c13f58737fed4a2c9",
+    "benchmarks/model_adapter.py": "8fc9eadb756a85c790aad77cde5b14b2cb0a1bc780ab3faa3e969be383082ac7",
+    "manifests/jev.classify.json": "098e97d987b9bfc81bdad8227ce14528209f11506b4d8d649a5351f9c2bd9423",
+    "manifests/jev.judge.json": "bd5dccd3153a503af5c59963a52676969bc9d5793de3c43268249c653fc88127",
+    "manifests/jev.score.json": "76601821cf98022a7003028bb7185cb116b53fb101857777403d91001b4d55f3",
+    "manifests/llm.ask.json": "652f07f014c12e04892d773e7812812dd95b7c5ebf790571d0d405c3c5a0f13d",
+    "manifests/llm.extract.json": "58b9b9afada23d708c3e3f382d0952faf3c9065c13b732f0ea171c9b72164155"
+  },
+  "primary_contracts": [
+    "https://api.typesafe.ai/openapi.json",
+    "https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses"
+  ]
+}

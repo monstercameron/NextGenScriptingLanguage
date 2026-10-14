@@ -818,3 +818,32 @@ The campaign's `reusable-programs/` directory retains the first feature run,
 before/after binding comparisons, the final feature comparison, all interpreter
 binaries, preimages and five/sixteen-level finite nesting proofs. These are
 same-file finite scopes, not imported modules or lifecycle-owned child services.
+
+# Model adapter overhead (source candidate)
+
+`model_adapter.py` compares eight ordinary native configurations against a
+pre-adapter release binary and measures fixture-only model startup separately.
+Save a known baseline binary, then run from the repository root:
+
+```sh
+cargo build --locked --release
+python3 benchmarks/model_adapter.py --project . --baseline /path/to/baseline-execute --report target/model-adapter.json
+```
+
+The harness uses 80 measured samples per variant, eight excluded warmups,
+alternating baseline/candidate order and exact independent stdout/status oracles.
+Run it without concurrent builds, tests or benchmarks. The full compatible
+catalog removes the new `uncertain_on_failure` field from both variants because
+the old parser rejects it; the native controls never call a model. Minimal
+controls use one unused manifest. These are warm process-launch measurements
+including Python subprocess launch/wait, rather than isolated interpreter/pipe
+latency or cold-start tests. Fixture model runs are descriptive, not paired, and
+never call a provider.
+
+The two local runs found similar native medians, with no speedup claimed. The
+offline applet median was 2.94–2.98 ms; a fixture call through `.program` was
+6.09–6.32 ms. See the [validation receipt](../docs/model-integration-validation.json),
+[first run](../docs/model-integration-validation/model-adapter-first.json) and
+[repeat](../docs/model-integration-validation/model-adapter-repeat.json) for exact
+hashes, raw samples, p95 values and limits. Earlier single synthetic live calls
+only verified connectivity; their elapsed observations are not API benchmarks.

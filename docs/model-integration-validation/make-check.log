@@ -1,0 +1,746 @@
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+    Checking execute v0.8.0 (/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.86s
+cargo test --locked --release -- --test-threads=1
+   Compiling execute v0.8.0 (/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow)
+    Finished `release` profile [optimized] target(s) in 56.46s
+     Running unittests src/lib.rs (target/release/deps/flow-d7f648a2ed083fa1)
+
+running 137 tests
+test live::peer_tests::real_socket_credentials_are_checked_in_both_directions ... ok
+test live::state::capacity_tests::byte_array_listener_records_keep_utf8_semantics ... ok
+test live::state::capacity_tests::rejected_record_transitions_preserve_exact_document ... ok
+test live::state::capacity_tests::serialization_errors_are_propagated_and_enqueue_rolls_back ... ok
+test live::state::capacity_tests::serialized_budget_counts_escaping_bytes_and_exact_boundaries ... ok
+test live::worker::tests::interval_wait_never_delays_a_future_tick_or_spins_before_its_deadline ... ok
+test manifest::tests::cat_path_is_optional_and_is_passed_as_a_positional_argument ... ok
+test manifest::tests::catalog_resolves_canonical_names_and_phrases ... ok
+test manifest::tests::catches_missing_and_mistyped_invocation_parameters ... ok
+test manifest::tests::cd_builtin_rejects_non_path_argument_mappings ... ok
+test manifest::tests::list_item_references_are_deferred_until_values_are_resolved ... ok
+test manifest::tests::opt_manifest_borrowed_argv_matches_owned_for_all_scalar_and_spread_values ... ok
+test manifest::tests::optional_parameter_must_be_guarded_by_its_own_condition ... ok
+test manifest::tests::references_only_defer_for_string_destinations ... ok
+test manifest::tests::rejects_nul_in_binary_literals_and_string_values ... ok
+test manifest::tests::rejects_unknown_fields_bad_mappings_and_duplicate_aliases ... ok
+test manifest::tests::unix_cli_manifests_build_plain_argv_and_resolve_tail_alias ... ok
+test manifest::tests::validates_references_then_builds_conditional_spread_argv_without_shell_expansion ... ok
+test models::unit_tests::canonical_numeric_identity_handles_const_enum_and_unique_items ... ok
+test models::unit_tests::duplicate_key_state_is_rejected_instead_of_forwarded_as_text ... ok
+test models::unit_tests::endpoint_policy_rejects_credentials_queries_fragments_and_remote_http ... ok
+test models::unit_tests::extraction_schema_is_checked_locally_and_rejects_unsupported_keywords ... ok
+test models::unit_tests::fixture_requires_a_full_semantic_match_and_returns_raw_response ... ok
+test models::unit_tests::jev_choice_requires_a_requested_label_and_complete_probabilities ... ok
+test models::unit_tests::jev_semantic_request_has_stable_defaults_and_sorted_label_values ... ok
+test models::unit_tests::multiple_of_uses_exact_decimal_divisibility ... ok
+test models::unit_tests::nullable_type_unions_validate_values_and_container_keywords ... ok
+test models::unit_tests::numeric_bounds_use_exact_decimal_comparison ... ok
+test models::unit_tests::offline_mode_rejects_live_calls_but_allows_fixture_calls ... ok
+test models::unit_tests::openai_response_request_has_store_off_and_a_bounded_default ... ok
+test models::unit_tests::unique_json_rejects_duplicate_keys_at_every_depth ... ok
+test parser::tests::allows_keyword_command_names_and_parameter_named_cache ... ok
+test parser::tests::borrowed_word_errors_keep_the_same_token_text ... ok
+test parser::tests::chained_cd_setup_is_allowed_before_a_trigger ... ok
+test parser::tests::escaped_json_strings_keep_serde_decoding_and_owned_values ... ok
+test parser::tests::keeps_builtin_cd_as_setup_before_listener_trigger ... ok
+test parser::tests::malformed_escape_keeps_later_lexical_error_precedence_and_line_number ... ok
+test parser::tests::parsed_plain_string_values_are_owned_after_source_is_dropped ... ok
+test parser::tests::parses_every_and_cron_triggers_with_body_line_numbers ... ok
+test parser::tests::parses_lists_booleans_references_and_connections ... ok
+test parser::tests::parses_readable_sample_and_keeps_source_lines ... ok
+test parser::tests::parses_stdin_and_applet_listeners ... ok
+test parser::tests::plain_unicode_json_string_tokens_borrow_and_keep_debug_format ... ok
+test parser::tests::raw_json_controls_fall_back_to_the_same_malformed_string_error ... ok
+test parser::tests::rejects_bad_syntax_with_line_number ... ok
+test parser::tests::rejects_boolean_words_as_result_bindings ... ok
+test parser::tests::rejects_duplicate_parameters_and_control_blocks ... ok
+test parser::tests::rejects_excessively_nested_lists_without_recursing_unboundedly ... ok
+test parser::tests::rejects_invalid_trigger_blocks_and_durations ... ok
+test parser::tests::shared_token_arena_preserves_blank_and_comment_line_positions ... ok
+test parser::tests::strings_keep_keywords_comments_and_escapes_as_literals ... ok
+test parser::tests::tokenization_preserves_multibyte_words_and_quoted_values ... ok
+test parser::tests::tokenizer_words_borrow_the_original_utf8_source ... ok
+test runtime::argv_construction_tests::opt_runtime_borrows_only_uncached_literal_arguments ... ok
+test runtime::argv_construction_tests::opt_runtime_command_construction_benchmark_raw_samples ... ignored, opt-in in-process argv construction timing; this never spawns a process
+test runtime::checkpoint::tests::begin_execution_persist_failure_restores_idle_service_snapshot ... ok
+test runtime::checkpoint::tests::begin_node_persist_failure_restores_completed_prefix ... ok
+test runtime::checkpoint::tests::checkpoint_file_open_rejects_symlinks_and_special_files_without_blocking ... ok
+test runtime::checkpoint::tests::complete_node_persist_failure_preserves_prefix_and_uncertain_intent ... ok
+test runtime::checkpoint::tests::completed_node_preserves_non_utf8_unix_working_directory ... ok
+test runtime::checkpoint::tests::completing_a_resumed_node_invalidates_the_preloaded_snapshot ... ok
+test runtime::checkpoint::tests::corrupt_blob_is_reported ... ok
+test runtime::checkpoint::tests::corrupt_journal_is_reported ... ok
+test runtime::checkpoint::tests::existing_blob_reuse_streams_and_still_detects_corruption ... ok
+test runtime::checkpoint::tests::fail_persist_failure_restores_running_uncertain_intent ... ok
+test runtime::checkpoint::tests::failed_completion_persistence_keeps_durable_in_flight_intent ... ok
+test runtime::checkpoint::tests::finish_persist_failure_restores_running_completed_prefix ... ok
+test runtime::checkpoint::tests::finite_journal_restores_completed_snapshot_and_refuses_implicit_reuse ... ok
+test runtime::checkpoint::tests::interrupted_unsafe_node_requires_explicit_retry ... ok
+test runtime::checkpoint::tests::interruption_without_unsafe_in_flight_node_needs_no_override ... ok
+test runtime::checkpoint::tests::known_failure_allows_explicit_resume_without_uncertain_override ... ok
+test runtime::checkpoint::tests::lock_is_exclusive_and_identity_must_match ... ok
+test runtime::checkpoint::tests::missing_resume_and_oversized_snapshot_are_rejected ... ok
+test runtime::checkpoint::tests::persisted_checksum_matches_canonical_journal_data ... ok
+test runtime::checkpoint::tests::removing_an_uncertain_tail_requires_explicit_resume_and_retry ... ok
+test runtime::checkpoint::tests::service_execution_resets_per_event_journal_and_returns_idle ... ok
+test runtime::checkpoint::tests::service_finish_collects_old_event_blobs_but_keeps_current_snapshot ... ok
+test runtime::child_observer_tests::kernel_creates_kqueue_close_on_exec ... ok
+test runtime::child_observer_tests::runtime_observer_preserves_host_sigchld_ignore ... ignored, isolated process-wide SIGCHLD disposition check
+test runtime::input_writer_drop_tests::dropping_input_writer_does_not_join_while_pipe_reader_is_retained ... ok
+test runtime::input_writer_drop_tests::joined_input_writer_observes_deadline_and_cancellation_with_a_retained_reader ... ok
+test runtime::opt_manifest_binary_path_tests::opt_manifest_binary_path_benchmark_raw_samples ... ignored, opt-in PATH lookup timing; metadata is warmed and no process is launched
+test runtime::opt_manifest_binary_path_tests::opt_manifest_binary_path_preserves_misses_permissions_and_late_hit ... ok
+test runtime::opt_manifest_binary_path_tests::opt_manifest_binary_path_preserves_path_entry_spelling_and_os_bytes ... ok
+test runtime::opt_manifest_binary_path_tests::opt_manifest_slash_binary_keeps_direct_lookup_and_metadata_error ... ok
+test runtime::opt_manifest_path_cache_tests::opt_manifest_cache_key_benchmark_raw_samples ... ignored, opt-in in-process cache-key timing; uses a temporary file and never spawns
+test runtime::opt_manifest_path_cache_tests::opt_manifest_cache_key_matches_legacy_bytes_for_unicode_and_os_environment ... ok
+test runtime::opt_manifest_path_cache_tests::opt_manifest_path_value_borrows_literal_and_one_level_string_reference ... ok
+test runtime::resume::tests::binary_digest_reuse_preserves_fingerprint_and_is_scoped_to_one_pass ... ok
+test runtime::resume::tests::environment_hash_is_order_independent_and_uses_last_duplicate_value ... ok
+test runtime::resume::tests::prefix_digest_reuse_preserves_identities_paths_and_fresh_validation ... ok
+test runtime::service::tests::disabled_trace_does_not_construct_event_payload ... ok
+test runtime::service::tests::record_limit_counts_newline_and_carries_partial_record_length ... ok
+test runtime::service::tests::record_segments_include_newlines_and_allow_chunk_continuation ... ok
+test runtime::service::tests::skips_missed_intervals_without_drifting_phase ... ok
+test runtime::stdio::tests::concurrent_writes_keep_deadlines_and_restore_blocking_mode ... ok
+test runtime::stdio::tests::empty_write_still_observes_cancellation_and_deadline ... ok
+test runtime::stdio::tests::full_descriptor_write_times_out_and_restores_flags ... ok
+test runtime::stdio::tests::poll_wait_is_bounded_by_the_command_deadline ... ok
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+test runtime::streaming::tests::final_record_callback_cancellation_does_not_become_limit_success ... ok
+test runtime::streaming::tests::line_sink_checks_limit_before_emitting_and_counts_unterminated_eof ... ok
+test runtime::streaming::tests::line_sink_preserves_binary_split_lines_and_ignores_after_limit ... ok
+test schedule::tests::matches_highest_minute_bit_and_both_sunday_spellings ... ok
+test schedule::tests::matches_lists_ranges_steps_and_sunday_aliases ... ok
+test schedule::tests::rejects_bad_field_count_steps_bounds_and_ranges ... ok
+test schedule::tests::restricted_day_fields_use_or_and_wildcard_fields_keep_and_semantics ... ok
+test stream::tests::parses_source_pipeline_limit_and_terminal_sink_without_changing_invocations ... ok
+test stream::tests::recognizes_a_stream_after_comments_and_blank_lines ... ok
+test stream::tests::requires_one_final_sink_and_a_positive_optional_limit ... ok
+test ui::app::tests::application_error_display_requires_a_script_handler ... ok
+test ui::app::tests::bar_scale_uses_the_largest_value_even_when_below_one ... ok
+test ui::app::tests::bars_accept_fractional_values_and_reject_invalid_data_without_partial_update ... ok
+test ui::app::tests::benchmark_large_rows_dispatch_changed_and_unchanged ... ignored, explicit release benchmark, not a regression assertion
+test ui::app::tests::benchmark_large_snapshot_projection ... ignored, explicit release benchmark, not a regression assertion
+test ui::app::tests::benchmark_large_table_viewport ... ignored, explicit release benchmark, not a regression assertion
+test ui::app::tests::benchmark_ui_dispatch_32_widgets_32_literals ... ignored, explicit release benchmark, not a regression assertion
+test ui::app::tests::benchmark_ui_dispatch_large_field_projection ... ignored, explicit release benchmark, not a regression assertion
+test ui::app::tests::benchmark_ui_operations ... ignored, explicit release benchmark, not a regression assertion
+test ui::app::tests::control_sequences_are_removed_from_plain_views ... ok
+test ui::app::tests::final_field_projection_preserves_formats_raw_result_and_link_payload ... ok
+test ui::app::tests::final_rows_projection_keeps_result_text_and_link_payload ... ok
+test ui::app::tests::graph_renders_zero_flat_and_increasing_counts_and_small_screen ... ok
+test ui::app::tests::incoming_json_keeps_repository_histories_separate_and_bounded ... ok
+test ui::app::tests::invalid_dynamic_text_field_update_is_atomic ... ok
+test ui::app::tests::missing_required_port_defers_entire_handler_and_unused_ports_do_not_block ... ok
+test ui::app::tests::pending_worker_and_post_worker_send_share_a_snapshot_despite_draft_edits ... ok
+test ui::app::tests::quit_is_a_script_action_and_closes_before_later_queued_work ... ok
+test ui::app::tests::rows_validation_stays_atomic_and_ordered_and_later_json_actions_still_work ... ok
+test ui::app::tests::script_writes_update_native_bindings_and_subsequent_widget_reads ... ok
+test ui::app::tests::shortcut_control_flow_changes_with_only_the_program_text ... ok
+test ui::app::tests::snapshot_projection_matches_legacy_for_unicode_control_and_multiple_components ... ok
+test ui::app::tests::table_cow_cells_match_legacy_for_json_types_and_controls ... ok
+test ui::app::tests::table_viewport_render_matches_full_row_render ... ok
+test ui::app::tests::timer_runs_only_when_due_and_headless_skips_ticks ... ok
+test ui::app::tests::widget_snapshot_tracks_prior_script_writes_within_handler ... ok
+test ui::syntax::borrowed_token_tests::parsed_screen_owns_values_after_source_is_dropped ... ok
+
+test result: ok. 127 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out; finished in 2.25s
+
+     Running unittests src/main.rs (target/release/deps/execute-401d12170af771eb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/execute-model.rs (target/release/deps/execute_model-d4120ee1d2348e7c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adversarial.rs (target/release/deps/adversarial-a47dbd6a3c40f65e)
+
+running 8 tests
+test cd_and_folder_directive_can_both_set_up_a_service ... ok
+test command_and_parameter_names_can_overlap_modifier_keywords ... ok
+test external_command_named_cd_cannot_masquerade_as_service_setup ... ok
+test generic_wc_cache_is_rejected_before_an_earlier_save ... ok
+test impossible_reference_types_fail_before_an_earlier_save ... ok
+test literal_nul_path_is_rejected_before_an_earlier_save ... ok
+test plain_tail_uses_unix_defaults_and_exits ... ok
+test symlink_applet_identity_is_preserved_for_commands_and_listeners ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running tests/check_json.rs (target/release/deps/check_json-47bfa3bb8221c9b9)
+
+running 5 tests
+test failures_in_all_execution_forms_are_structured_without_side_effects ... ok
+test human_errors_and_option_rejection_remain_unchanged ... ok
+test json_file_uri_preserves_non_utf8_path_bytes ... ok
+test read_manifest_and_input_errors_share_the_same_framed_protocol ... ok
+test valid_check_json_is_static_and_deterministic_with_missing_inputs_and_tools ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/cli.rs (target/release/deps/cli-7494d835055f3b24)
+
+running 44 tests
+test applet_listener_processes_two_source_records ... ok
+test cached_step_is_reported_on_second_run_and_saved_output_is_stable ... ok
+test cd_cannot_pipe_to_or_from_an_applet_and_validation_prevents_prior_save ... ok
+test cd_prelude_sets_working_directory_for_listener_handlers ... ok
+test cd_to_missing_directory_stops_before_a_later_save ... ok
+test cd_updates_only_workflow_directory_for_later_pwd_and_ls ... ok
+test changed_input_misses_the_sequential_stage_cache ... ok
+test check_and_explain_do_not_run_or_save_workflow_steps ... ok
+test check_rejects_missing_required_parameter_before_execution ... ok
+test closed_stdout_is_a_normal_error_for_cli_and_live_responses ... ok
+test direct_program_invocation_runs_by_default_and_explicit_run_is_supported ... ok
+test every_trigger_stops_after_the_requested_run_count ... ok
+test file_uri_preserves_literal_plus_and_non_utf8_unix_filename_bytes ... ok
+test file_uri_runs_the_same_script_and_supports_localhost_and_percent_escapes ... ok
+test help_and_unknown_options_are_handled ... ok
+test help_and_version_cannot_replace_required_option_values ... ok
+test installed_symlink_resolves_manifest_bundle_without_the_build_checkout ... ok
+test invalid_or_remote_file_uris_fail_with_specific_diagnostics ... ok
+test invalid_utf8_cli_argument_is_a_normal_error_instead_of_a_panic ... ok
+test large_file_streams_through_a_native_pipe_group_with_backpressure ... ok
+test nonzero_stage_stops_the_pipeline ... ok
+test output_limit_fails_without_emitting_partial_stdout ... ok
+test oversized_native_pipe_group_does_not_save_partial_output ... ok
+test percent_encoded_non_utf8_workflow_path_is_handled_without_panicking ... ok
+test process_group_tests::exits_promptly_and_kills_background_child_after_applet_parent_exits ... ok
+test process_group_tests::invalid_listener_body_prevents_source_applet_launch ... ok
+test process_group_tests::listener_cache_key_tracks_the_current_event_binding ... ok
+test process_group_tests::malformed_cron_check_does_not_start_an_applet ... ok
+test process_group_tests::sigterm_cancels_listener_and_kills_source_and_body_groups ... ok
+test process_group_tests::sigterm_cancels_listener_when_service_stdout_pipe_is_full ... ok
+test process_group_tests::sigterm_cancels_scheduled_service_and_terminates_its_applet_group ... ok
+test process_group_tests::sigterm_cancels_scheduled_service_when_trace_stderr_pipe_is_full ... ok
+test process_group_tests::stdin_listener_emits_a_final_record_without_a_newline ... ok
+test process_group_tests::stdin_listener_emits_two_records_before_stdin_closes ... ok
+test process_group_tests::stdin_listener_rejects_an_oversized_record ... ok
+test quoted_message_with_shell_syntax_is_printed_literally ... ok
+test reads_file_pipes_to_uppercase_and_counts_three_lines ... ok
+test service_limits_must_be_positive_and_are_run_only_options ... ok
+test terminal_named_output_can_feed_a_later_parameter ... ok
+test trigger_limits_are_rejected_when_the_workflow_cannot_use_them ... ok
+test upstream_pipe_failure_prevents_a_later_save ... ok
+test validation_rejects_cache_inside_a_pipe_group ... ok
+test validation_rejects_undefined_variables ... ok
+test whole_program_validation_prevents_an_earlier_save ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+
+     Running tests/conditions.rs (target/release/deps/conditions-e5937c66401d2da8)
+
+running 20 tests
+test a_result_from_every_branch_can_supply_a_later_native_parameter ... ok
+test both_branches_are_statically_validated_before_any_effect ... ok
+test both_nested_checkpoint_paths_commit_and_resume_without_native_replay ... ok
+test checkpoint_pins_absent_tools_in_unselected_branches_without_running_them ... ok
+test completed_conditionals_restore_a_common_binding_and_ignore_comment_line_shifts ... ok
+test conditional_cd_works_ordinary_but_checkpoint_mode_rejects_it_before_effects ... ok
+test conditional_traces_report_decision_without_operand_values ... ok
+test false_branch_leaves_unselected_reads_writes_and_missing_binaries_untouched ... ok
+test inherited_stdin_can_pass_through_a_skipped_block_without_materializing ... ok
+test intervals_and_listener_handlers_use_the_same_branch_engine ... ok
+test malformed_blocks_and_excessive_nesting_are_rejected ... ok
+test malformed_public_ast_offsets_fail_validation_without_execution_or_panics ... ok
+test partial_conditional_effects_require_explicit_uncertain_retry ... ok
+test pure_cache_entries_inside_selected_branches_reuse_normal_cache_contracts ... ok
+test readonly_validation_preserves_definite_data_and_folder_ordering ... ok
+test scalar_equality_negation_and_nested_branches_run_only_selected_native_commands ... ok
+test selected_native_failure_and_timeout_never_execute_otherwise_as_recovery ... ok
+test selected_pipelines_keep_native_bytes_and_backpressure ... ok
+test status_capture_controls_program_branches_and_common_result_bindings ... ok
+test undeclared_host_values_require_matching_scalar_types_at_runtime ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+     Running tests/cpu.rs (target/release/deps/cpu-3f04a80729e92246)
+
+running 7 tests
+test cpu_terminal_refresh_timer_and_quit ... ok
+test failed_or_malformed_ps_output_does_not_display_fabricated_values ... ok
+test installed_ps_and_jq_produce_a_valid_real_cpu_snapshot ... ok
+test invalid_bar_declarations_fail_before_any_process_query ... ok
+test large_ps_output_is_drained_and_empty_output_is_valid ... ok
+test real_jq_selects_ten_numeric_cpu_values_and_routes_identical_records ... ok
+test top_n_and_initial_load_are_changed_by_program_text_alone ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.60s
+
+     Running tests/direct_commands.rs (target/release/deps/direct_commands-1a58dbfec21af88b)
+
+running 10 tests
+test direct_argv_preserves_empty_unicode_and_shell_looking_arguments ... ok
+test direct_calls_mix_with_manifest_adapters_and_use_distinct_checkpoint_identities ... ok
+test direct_cli_runs_without_a_wrapper_and_explicit_missing_catalog_still_fails ... ok
+test direct_commands_retain_timeout_cancellation_and_failure_semantics ... ok
+test direct_explain_is_inspectable_and_never_executes ... ok
+test direct_listener_keeps_its_producer_and_runs_native_handlers ... ok
+test direct_pipeline_preserves_binary_bytes_without_a_catalog ... ok
+test direct_stream_starts_each_stage_once_and_forwards_final_partial_record ... ok
+test direct_validation_prevents_prior_effects_and_rejects_invalid_arguments ... ok
+test quoted_relative_executable_with_spaces_and_named_arguments_work ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/inspection.rs (target/release/deps/inspection-c24b110191e45c0e)
+
+running 6 tests
+test discovers_all_noninteractive_lifetimes_without_waiting_or_launching_producers ... ok
+test discovers_required_inputs_and_native_json_defaults_without_probing_tools ... ok
+test inspect_accepts_file_uris_and_live_schema_exposes_declared_type_restrictions ... ok
+test invalid_interfaces_and_execution_options_fail_without_partial_json_or_effects ... ok
+test screen_ports_are_distinct_from_root_cli_inputs_and_open_handlers_never_run ... ok
+test supplied_values_override_defaults_without_losing_the_declared_contract ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/ladder.rs (target/release/deps/ladder-08731f0c4d8745cc)
+
+running 3 tests
+test one_hundred_fifty_useful_programs_pass_in_isolated_fixtures ... ok
+test retained_negative_and_recovery_regressions_pass ... ok
+test utility_runner_contracts_pass ... ....
+----------------------------------------------------------------------
+Ran 4 tests in 0.046s
+
+OK
+ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 57.51s
+
+     Running tests/live.rs (target/release/deps/live-078de7f115b2b2c2)
+
+running 1 test
+test live_control_end_to_end ... ........................................................
+----------------------------------------------------------------------
+Ran 56 tests in 12.032s
+
+OK
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.14s
+
+     Running tests/model_cli.rs (target/release/deps/model_cli-028f3a045b21dd2c)
+
+running 3 tests
+test missing_bundled_applet_does_not_fall_back_to_a_path_version ... ok
+test model_manifest_contracts_reject_known_invalid_inputs_before_earlier_effects ... ok
+test model_subcommand_exposes_the_bundled_applet_without_credentials ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/model_control.rs (target/release/deps/model_control-22bf02ca4ff99f37)
+
+running 19 tests
+test cancelled_native_model_call_closes_socket_requires_retry_and_completed_resume_skips_it ... ok
+test duplicate_keys_are_rejected_in_fixture_provider_and_extracted_json ... ok
+test duplicate_keys_in_json_input_are_not_silently_reinterpreted_as_text ... ok
+test empty_fixture_is_rejected_instead_of_falling_through_to_live_transport ... ok
+test empty_process_credential_falls_back_to_explicit_file_without_exposing_it ... ok
+test explicit_dotenv_secret_is_not_echoed_when_owned_server_rejects_request ... ok
+test fixture_mismatch_fails_closed_before_loopback_or_credential_lookup ... ok
+test fixture_replay_never_reads_env_file_or_contacts_loopback ... ok
+test jev_rejects_unknown_choices_invalid_confidence_and_incomplete_probability_vectors ... ok
+test live_request_timeout_is_enforced_by_helper ... ok
+test loopback_redirect_is_rejected_without_following_destination ... ok
+test malformed_endpoint_components_are_rejected_before_any_loopback_request ... ok
+test malformed_utf8_and_oversized_input_fail_without_provider_calls ... ok
+test model_generated_shell_syntax_stays_a_literal_argv_value ... ok
+test openai_incomplete_and_schema_invalid_responses_fail_closed ... ok
+test ordinary_model_applet_failure_requires_retry_and_successful_checkpoint_is_not_replayed ... ok
+test provider_transport_ignores_proxy_environment_and_uses_only_the_explicit_endpoint ... ok
+test response_byte_limit_is_enforced_on_owned_loopback_body ... ok
+test valid_utf8_nul_state_is_fixture_matched_and_json_escaped ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.73s
+
+     Running tests/model_workflows.rs (target/release/deps/model_workflows-c84af9bee017c9a6)
+
+running 5 tests
+test all_one_hundred_model_workflows_pass_with_local_fixtures ... ok
+test knowledge_example_refuses_empty_generated_evidence_quotes ... ok
+test knowledge_example_rejects_sibling_reference_prefixes_before_inference ... ok
+test model_catalog_validation_regressions_pass ... ok
+test model_examples_refuse_report_paths_that_alias_evidence ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.61s
+
+     Running tests/models.rs (target/release/deps/models-0e67bd4fefeb1e48)
+
+running 4 tests
+test extraction_rejects_near_multiple_values_without_epsilon ... ok
+test offline_environment_blocks_fixture_omitted_requests_before_credentials ... ok
+test provider_fixtures_normalize_each_supported_operation ... ok
+test refusal_is_a_static_sanitized_failure ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/native_status.rs (target/release/deps/native_status-e336e740926cd440)
+
+running 9 tests
+test capture_preserves_named_manifest_calls_and_output_limits ... ok
+test completed_status_binding_is_restored_and_command_is_not_repeated ... ok
+test invalid_status_uses_fail_before_prior_effects ... ok
+test listener_handlers_capture_each_native_exit_status ... ok
+test native_status_is_an_integer_and_retains_complete_stdout_for_success_and_failure ... ok
+test ordinary_failure_still_fails_with_structured_native_status ... ok
+test parser_preserves_parameter_named_keep_and_old_serialization ... ok
+test signals_timeout_spawn_and_cancel_are_never_converted_to_exit_status ... ok
+test status_capture_is_not_a_stream_or_listener_source_option ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+     Running tests/opt_allocations.rs (target/release/deps/opt_allocations-234d512154417862)
+
+running 1 test
+test report_release_allocation_counts ... ignored, explicit release-only allocation measurements
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/opt_child_wakeup.rs (target/release/deps/opt_child_wakeup-91f129cb9ddb7f71)
+
+running 2 tests
+test independent_contexts_receive_their_own_child_exit_wakeups ... ok
+test rapid_child_exits_do_not_lose_notifications_or_wait_forever ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+     Running tests/opt_core_bench.rs (target/release/deps/opt_core_bench-f909b1cb8f437bb8)
+
+running 1 test
+test core_operations ... ignored, explicit release performance measurements
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/opt_diagnostics_poll.rs (target/release/deps/opt_diagnostics_poll-a52fea40e6cf84d0)
+
+running 6 tests
+test closed_stderr_on_live_stdout_remains_cancellable ... ok
+test closed_stderr_on_live_stdout_remains_subject_to_timeout ... ok
+test every_pipeline_stage_can_fill_stderr_before_writing_stdout ... ok
+test large_failure_stderr_keeps_the_bounded_diagnostic_prefix ... ok
+test large_owned_stderr_is_drained_before_stdout_completion ... ok
+test profile_captured_one_mib_stderr_against_quiet_worker ... ignored, manual headless run_with_context timing profile
+
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.74s
+
+     Running tests/opt_local_child_observer.rs (target/release/deps/opt_local_child_observer-1ad761da7ba53c8d)
+
+running 5 tests
+test closed_stdout_does_not_hide_later_child_failure ... ok
+test closed_stdout_live_child_observes_external_cancellation_and_is_reaped ... ok
+test closed_stdout_live_child_still_times_out_and_is_reaped ... ok
+test concurrent_groups_use_independent_observers ... ok
+test fast_exit_is_collected_after_immediate_registration ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.97s
+
+     Running tests/opt_manifest_regressions.rs (target/release/deps/opt_manifest_regressions-c710b14221742eb2)
+
+running 4 tests
+test opt_manifest_large_spread_with_optional_nested_spread_preserves_argv_order ... ok
+test opt_manifest_list_type_errors_keep_precedence_over_nul_errors ... ok
+test opt_manifest_parameter_deserialization_stays_strict_and_keeps_serialize_shape ... ok
+test opt_manifest_unknown_and_required_errors_keep_their_order ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/opt_services_checkpoint_listener.rs (target/release/deps/opt_services_checkpoint_listener-03641da22e613f9b)
+
+running 2 tests
+test failed_next_event_snapshot_write_prevents_handler_side_effects ... ok
+test fresh_checkpointed_listener_keeps_each_record_and_binding ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/opt_small_input.rs (target/release/deps/opt_small_input-be63e75299d8bc15)
+
+running 7 tests
+test cancellation_still_kills_a_child_after_small_input_prefill ... ok
+test empty_input_stays_null_and_ignored_input_does_not_block ... ok
+test nonzero_exit_after_stdout_eof_is_reported ... ok
+test output_limit_error_precedes_a_later_nonzero_exit_after_stdout_eof ... ok
+test prefetched_input_flows_through_a_live_pipe_group ... ok
+test small_and_threaded_inputs_preserve_bytes_and_eof ... ok
+test stdout_eof_does_not_finish_a_still_running_child ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+     Running tests/opt_stdin_prefill.rs (target/release/deps/opt_stdin_prefill-e243bd377dbefb35)
+
+running 5 tests
+test benchmark_run_with_context_cat_payloads ... ignored, manual raw run_with_context stdin payload latency samples
+test cancellation_reaps_child_during_moderate_input_command ... ok
+test moderately_sized_input_is_safe_when_child_ignores_stdin ... ok
+test stdin_payload_sizes_round_trip_through_cat ... ok
+test timeout_reaps_child_during_moderate_input_command ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.32s
+
+     Running tests/program_inputs.rs (target/release/deps/program_inputs-e4e3d79218331a6b)
+
+running 16 tests
+test boolean_and_integer_inputs_remain_typed_in_manifest_parameters ... ok
+test check_and_explain_describe_required_inputs_without_requesting_values ... ok
+test cli_text_defaults_and_override_are_literal_and_preserve_empty_values ... ok
+test completed_checkpoint_requires_the_same_effective_input_values ... ok
+test declaration_order_defaults_and_types_are_checked_before_execution ... ok
+test input_defaults_and_overrides_work_in_listener_sources_and_handlers ... ok
+test interval_inputs_survive_fresh_handler_contexts ... ok
+test invalid_inputs_are_rejected_before_any_program_effects ... ok
+test known_input_values_are_checked_against_manifest_constraints_before_effects ... ok
+test library_context_supplies_declared_values_and_rejects_wrong_runtime_types ... ok
+test malformed_input_diagnostics_keep_one_line_number_and_actionable_cause ... ok
+test migrated_utilities_use_cli_paths_instead_of_the_absent_original_files ... ok
+test required_file_and_integer_inputs_feed_native_commands_and_parameters ... ok
+test scalar_inputs_and_literals_format_as_single_native_argv_items ... ok
+test stream_headers_accept_declared_values_with_original_line_numbers ... ok
+test text_list_inputs_supply_argv_without_joining_or_splitting ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/resume.rs (target/release/deps/resume-0a4b94fad26bba85)
+
+running 16 tests
+test active_checkpoint_is_exclusively_locked ... ok
+test checkpoint_blob_directory_symlinks_are_rejected_for_fresh_and_resume ... ok
+test checkpoint_directory_symlinks_are_rejected_without_touching_the_target ... ok
+test checkpointed_failure_resumes_suffix_without_repeating_saved_effect ... ok
+test checkpointed_fresh_runs_can_reuse_cached_transform_results ... ok
+test checkpointed_listener_replays_failed_record_before_reopening_stdin ... ok
+test comments_and_line_number_changes_do_not_invalidate_completed_nodes ... ok
+test completed_checkpoint_resumes_without_repeating_output_and_fresh_run_wont_replace_it ... ok
+test failed_native_pipe_group_restarts_from_frozen_read_input ... ok
+test resume_refuses_a_corrupted_checkpoint_blob ... ok
+test resume_rejects_a_changed_binary_in_a_completed_node ... ok
+test resume_rejects_changes_to_a_completed_prefix ... ok
+test resume_restores_working_directory_and_named_binding ... ok
+test retry_uncertain_is_resume_only_and_resume_requires_checkpoint ... ok
+test scheduled_pending_tick_is_resumed_before_waiting_for_a_new_interval ... ok
+test uncertain_in_flight_invocation_requires_explicit_retry ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.12s
+
+     Running tests/reusable_programs.rs (target/release/deps/reusable_programs-12cafd738b2f0f97)
+
+running 15 tests
+test checkpointed_child_cd_is_rejected_before_effects ... ok
+test checkpoints_skip_complete_calls_pin_body_semantics_and_require_uncertain_retry ... ok
+test child_cwd_changes_are_local_and_restore_before_caller_commands ... ok
+test inspect_reports_defined_program_interfaces_and_old_program_serialization_is_compatible ... ok
+test known_inputs_and_call_defaults_validate_before_earlier_side_effects ... ok
+test listeners_and_intervals_call_the_same_finite_programs ... ok
+test local_inputs_defaults_outputs_and_native_commands_are_real ... ok
+test malformed_calls_and_unused_bodies_fail_before_any_effect ... ok
+test native_cache_inside_a_program_is_shared_across_calls ... ok
+test native_failures_and_deadlines_keep_call_context_and_shared_supervision ... ok
+test nested_calls_and_conditions_rebase_offsets_and_keep_all_local_names_private ... ok
+test read_stdin_in_a_called_program_uses_call_bytes_and_preserves_binary_transport ... ok
+test recursion_nesting_bad_definitions_and_expansion_amplification_are_bounded ... ok
+test scoped_preflight_retains_derived_integer_status_types_with_declared_root_inputs ... ok
+test typed_json_lists_and_repeated_parameter_names_do_not_prop_drill_implicitly ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/robustness.rs (target/release/deps/robustness-149c5d6c250dcac5)
+
+running 4 tests
+test seeded_cron_mutations_and_extreme_steps_never_panic ... ok
+test seeded_manifest_mutations_fail_without_panicking ... ok
+test seeded_program_mutations_never_panic_in_any_parser ... ok
+test seeded_strings_keep_exact_argv_boundaries_and_reject_nul ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/stdin.rs (target/release/deps/stdin-a50a034863ecd8b9)
+
+running 12 tests
+test check_explain_and_inspect_never_read_a_quiet_stdin_pipe ... ok
+test completed_checkpoint_reuses_captured_input_without_reading_replacement_stdin ... ok
+test existing_file_bindings_named_stdin_and_from_keep_their_meaning ... ok
+test inherited_stdin_capture_preserves_shared_descriptor_flags ... ok
+test interrupted_stdin_checkpoint_requires_explicit_retry_before_consuming_again ... ok
+test managed_programs_reject_process_stdin_without_opening_a_control_socket ... ok
+test named_stdin_is_text_and_can_supply_literal_native_arguments ... ok
+test native_stages_consume_more_input_than_the_finite_output_limit ... ok
+test preserves_arbitrary_binary_stdin_and_capture_boundaries ... ok
+test quiet_stdin_captures_observe_deadlines_and_signals ... ok
+test services_and_screen_handlers_reject_process_stdin_before_prior_effects ... ok
+test two_program_files_compose_through_an_ordinary_unix_pipe ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+     Running tests/streaming.rs (target/release/deps/streaming-ab7d28821eaba928)
+
+running 7 tests
+test blocked_stdout_remains_deadline_bounded_and_cancellable ... ok
+test check_and_unsupported_resume_checkpoint_max_runs_and_headless_do_not_launch_source ... ok
+test finite_file_to_tr_preserves_binary_bytes_at_exact_total_output_limit ... ok
+test mac_tail_and_unbuffered_tr_stream_appended_rows_then_reap_tail_at_limit ... ok
+test middle_stage_failure_does_not_emit_records_after_the_failure ... ok
+test slow_stdout_consumer_backpressures_a_persistent_source_and_stream_ignores_total_limit ... ok
+test stream_framing_counts_records_preserves_eof_bytes_and_enforces_record_bounds ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.60s
+
+     Running tests/structured_json.rs (target/release/deps/structured_json-b887f52653ea792a)
+
+running 13 tests
+test checkpoint_restores_structured_values_and_all_branch_result_types ... ok
+test cli_json_inputs_inspection_and_input_checkpoint_identity_are_real ... ok
+test invalid_known_json_input_selection_fails_before_earlier_native_side_effects ... ok
+test json_numbers_and_nul_survive_encoding_but_are_not_implicitly_native_scalars ... ok
+test json_pointers_cover_arrays_escapes_root_empty_keys_and_null ... ok
+test json_stdin_and_nested_reference_encoding_keep_literal_boundaries ... ok
+test malformed_syntax_names_types_and_branch_bindings_are_rejected_before_effects ... ok
+test malformed_trailing_invalid_utf8_and_excessive_depth_json_are_rejected ... ok
+test missing_keys_null_wrong_types_and_invalid_array_indexes_fail_before_later_effects ... ok
+test native_output_fields_keep_types_for_arguments_and_conditions ... ok
+test ordinary_object_keys_are_never_internal_number_tags ... ok
+test parse_preserves_exact_input_bytes_and_encoding_is_explicit_and_bounded ... ok
+test scheduled_and_listener_handlers_reuse_the_same_structured_instructions ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/timeout.rs (target/release/deps/timeout-9ca104c54d99d0e5)
+
+running 3 tests
+test invalid_command_timeout_is_rejected_before_any_effect ... ok
+test timed_out_effect_is_uncertain_and_requires_explicit_retry_even_after_repair ... ok
+test timeout_kills_owned_worker_with_closed_stdout_and_live_pipe ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.23s
+
+     Running tests/ui.rs (target/release/deps/ui-18e048de9295bde4)
+
+running 13 tests
+test check_and_explain_validate_without_launching_gh ... ok
+test errors_are_bounded_and_never_turn_missing_stars_into_zero ... ok
+test failing_error_handler_terminates_instead_of_recursively_retrying ... ok
+test failure_recovery_through_a_button_cannot_recursively_retry_itself ... ok
+test headless_rejects_run_limit_before_starting_workers ... ok
+test headless_reports_missing_inputs_without_partial_handler_effects ... ok
+test headless_tracker_maps_argv_and_renders_real_chart_widgets ... ok
+test invalid_interfaces_and_widget_types_prevent_every_command ... ok
+test invalid_shortcuts_and_button_cycles_fail_before_launching_gh ... ok
+test removing_initial_refresh_from_program_prevents_the_gh_call ... ok
+test result_projections_share_one_command_result_and_keep_legacy_json_syntax ... ok
+test static_text_contract_failures_prevent_preceding_commands ... ok
+test terminal_interaction_restoration_and_worker_cancellation ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.59s
+
+   Doc-tests flow
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+cargo build --locked --release
+    Finished `release` profile [optimized] target(s) in 0.13s
+python3 tests/model_catalog.py
+test_catalog_accepts_nonempty_fixture_contract_and_preserves_numeric_id (__main__.ModelCatalogTests) ... ok
+test_duplicate_numeric_ids_are_rejected (__main__.ModelCatalogTests) ... ok
+test_each_run_gets_a_private_empty_env_file (__main__.ModelCatalogTests) ... ok
+test_every_model_call_requires_a_fixture_and_rejects_empty_live_fallbacks (__main__.ModelCatalogTests) ... ok
+test_fixture_path_must_resolve_inside_its_numbered_bundle (__main__.ModelCatalogTests) ... ok
+test_full_catalog_mode_requires_exactly_one_hundred_workflows (__main__.ModelCatalogTests) ... ok
+test_launcher_blocks_network_access (__main__.ModelCatalogTests) ... ok
+test_missing_and_empty_fixtures_are_rejected_before_execution (__main__.ModelCatalogTests) ... ok
+test_output_path_traversal_is_rejected (__main__.ModelCatalogTests) ... ok
+test_program_path_traversal_is_rejected (__main__.ModelCatalogTests) ... ok
+test_runner_environment_has_no_inherited_credentials_or_proxy (__main__.ModelCatalogTests) ... ok
+test_timeout_kills_descendants_after_process_group_leader_exits (__main__.ModelCatalogTests) ... ok
+test_wrong_expected_output_file_is_a_runtime_failure (__main__.ModelCatalogTests) ... ok
+test_wrong_expected_stdout_is_a_runtime_failure (__main__.ModelCatalogTests) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 2.132s
+
+OK
+python3 -O tests/model_catalog.py
+test_catalog_accepts_nonempty_fixture_contract_and_preserves_numeric_id (__main__.ModelCatalogTests) ... ok
+test_duplicate_numeric_ids_are_rejected (__main__.ModelCatalogTests) ... ok
+test_each_run_gets_a_private_empty_env_file (__main__.ModelCatalogTests) ... ok
+test_every_model_call_requires_a_fixture_and_rejects_empty_live_fallbacks (__main__.ModelCatalogTests) ... ok
+test_fixture_path_must_resolve_inside_its_numbered_bundle (__main__.ModelCatalogTests) ... ok
+test_full_catalog_mode_requires_exactly_one_hundred_workflows (__main__.ModelCatalogTests) ... ok
+test_launcher_blocks_network_access (__main__.ModelCatalogTests) ... ok
+test_missing_and_empty_fixtures_are_rejected_before_execution (__main__.ModelCatalogTests) ... ok
+test_output_path_traversal_is_rejected (__main__.ModelCatalogTests) ... ok
+test_program_path_traversal_is_rejected (__main__.ModelCatalogTests) ... ok
+test_runner_environment_has_no_inherited_credentials_or_proxy (__main__.ModelCatalogTests) ... ok
+test_timeout_kills_descendants_after_process_group_leader_exits (__main__.ModelCatalogTests) ... ok
+test_wrong_expected_output_file_is_a_runtime_failure (__main__.ModelCatalogTests) ... ok
+test_wrong_expected_stdout_is_a_runtime_failure (__main__.ModelCatalogTests) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 1.978s
+
+OK
+python3 tests/unix_bench.py
+..
+----------------------------------------------------------------------
+Ran 2 tests in 0.054s
+
+OK
+python3 tests/unix_matrix.py
+........
+----------------------------------------------------------------------
+Ran 8 tests in 0.237s
+
+OK
+python3 -O tests/unix_matrix.py
+........
+----------------------------------------------------------------------
+Ran 8 tests in 0.231s
+
+OK
+EXECUTE_PROOF_BINARY="/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow/target/release/execute" python3 tests/replacement_proofs.py
+.....
+----------------------------------------------------------------------
+Ran 5 tests in 0.457s
+
+OK
+EXECUTE_TEST_BINARY="/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow/target/release/execute" npm --prefix editors/vscode test
+
+> execute-program@0.2.0 test
+> node --test test/*.test.cjs
+
+Tokenized 282 real programs / 6491 lines
+✔ registers a declarative .program language without an activation entrypoint (8.323875ms)
+✔ highlights native stages, dotted and multiword applets, parameters and bindings (9.287709ms)
+✔ quoted executable calls preserve function, string, parameter and binding scopes (6.294958ms)
+✔ keyword-shaped applets, parameter names and references retain their role (0.72875ms)
+✔ top-level program inputs distinguish types, defaults and values from component ports (1.518334ms)
+✔ strings are literal and JSON escapes are distinct from comments and keywords (1.299583ms)
+✔ comments and malformed single-line strings never leak into subsequent code (0.833292ms)
+✔ numbers, booleans and list punctuation use distinct scopes (1.833459ms)
+✔ highlights lifetime declarations and stream directives (1.027958ms)
+✔ highlights components, all nine widget types, ports, and UI event actions (1.206417ms)
+✔ unsupported control blocks are not advertised as implemented syntax (0.220833ms)
+✔ editor configuration uses two-space blocks and only real syntactic brackets (0.408791ms)
+✔ all real .program files tokenize with bounded lines and closed line states (429.34275ms)
+✔ complete snippet defaults pass the actual execute check without running commands (52.00975ms)
+✔ large single-line strings and malformed lists recover within the tokenization budget (46.935667ms)
+✔ finite stdin is an I/O directive and keeps its optional result binding (0.165625ms)
+✔ native status capture distinguishes stdout, integer status and keep parameters (0.274ms)
+✔ scalar conditions preserve operand roles and indent their branches (0.179583ms)
+✔ structured JSON operations highlight types, pointers, sources and bindings (0.149125ms)
+✔ reusable program calls distinguish the program and its explicit parameters (0.192583ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 654.798

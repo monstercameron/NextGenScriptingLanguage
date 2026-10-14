@@ -169,3 +169,7 @@ The adapter implements one classification, judgment, score, generation, or
 extraction per call. Batched named Jev questions, embeddings, streaming tokens,
 provider failover, and automatic tool execution are future work. Model results
 are data; executing any suggested command requires an explicit `.program` step.
+
+The [validation receipt](model-integration-validation.json) records source hashes,
+fixture and adversarial coverage, bounded live connectivity checks, and measured
+offline startup overhead. Historical installed artifacts are unchanged.

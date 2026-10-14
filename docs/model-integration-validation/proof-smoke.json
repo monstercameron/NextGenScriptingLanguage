@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "created_utc": "2026-10-14T13:17:52.355044+00:00",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "binary_sha256": "207907d6a98907909f680a5d9bf92e6caa79a662aa28aaf66f6f891af1ea042e",
+  "harness_sha256": "35e8fc7092688d59d51180d41ad634eba4d6006f18226c14eadf05590c3068c4",
+  "catalog_sha256": {
+    "awk.json": "e32db563605d84a0873bc51088579825f56ed182b895208278d46d96131e30a6",
+    "cat.json": "483117c32690b423ab88e9443cc7ce0787545f07833576d678b1d0472f19ab3a",
+    "cd.json": "8c4e620938ddea3864a46a53238bb1c30c6e95e2cf144e3ab762cdc4c461fb3a",
+    "comm.json": "a0df36e3df87572400171ad0745dde3f4d1bf841aba734ac066aaaf0cb4907ab",
+    "count.lines.json": "9e8c2e8b0a096004a90754c4604b6873e04535f2817cc38b28fdab9631959349",
+    "cut.json": "2eb43493685ece1d739fb1225e40743178cbcb361dc2676470ac22c4bf4eb350",
+    "false.json": "5bf291319570f954bcf54b2847243eaca0c214c6d844c3f4fc5816ec005c6338",
+    "gh.repo.json": "821dd80054f78029446e963d5ee30375a8c2ec5dc8dab0c8411bafcea837a2bc",
+    "git.commit.json": "70e8272197c5974bd76d41e57ea0dde8046927487629fc4cd6a498fa23ff023a",
+    "grep.json": "aa8192ddb8685b19f4a9e49ad87d489d6dcfc946331037328e00721f16869a74",
+    "head.json": "3dcacca6166792ff647dc52a7273f0c102683cb012cad8b1f05fc2a2325f5b07",
+    "jev.classify.json": "098e97d987b9bfc81bdad8227ce14528209f11506b4d8d649a5351f9c2bd9423",
+    "jev.judge.json": "bd5dccd3153a503af5c59963a52676969bc9d5793de3c43268249c653fc88127",
+    "jev.score.json": "76601821cf98022a7003028bb7185cb116b53fb101857777403d91001b4d55f3",
+    "join.json": "949355922238c8acdd020aef386d560aa9f61f8d2a773c959edd2957770e22d8",
+    "jq.json": "2f6585cff672a91e630833a4b3fc7bc61c9a59d82e5478d926a509d5154f1792",
+    "jq.ps.json": "9097df3bdb45dd6c9724acb3377ea0cb8bd068aacd0c55257f95c0f02037c50e",
+    "llm.ask.json": "652f07f014c12e04892d773e7812812dd95b7c5ebf790571d0d405c3c5a0f13d",
+    "llm.extract.json": "58b9b9afada23d708c3e3f382d0952faf3c9065c13b732f0ea171c9b72164155",
+    "ls.json": "3c193cb2c0f1397e6600ddf3de9b8219110a26d5ae5661281c5263f50b74d17d",
+    "mkdir.json": "05ff3c97d1b4c03994f3f3d1d3cf0cf868c6b865cf1722501cc240c25a4ec61a",
+    "paste.json": "955fd7e57a08fe72518dcb58d2087e2ec005c8ddbdc9145212a9ca927cf59e09",
+    "printf.json": "abe61c4481c94396e230406897d253ff8ba0f9c854fb09ecc098b85870b0237e",
+    "ps.json": "b245d02a68d61d316bd67cdc0b2c01225ed4b36c0257767f31e627dc50136475",
+    "pwd.json": "c7b13a3ffd7b935da4d2b79b9c971ac3e979e43f8d6417c4d917a498217bb50c",
+    "sed.json": "68e5079957c0da4370e423db3afdc0e799e34f6c2d47603fa37213ce99df8397",
+    "sort.json": "6d953c33eed06e702c5781290d76929b8e19d62d283b999321e42de19d779b50",
+    "tail.follow.json": "2529d2e3820b04ee7593562dd1aad88e891c256056089f368df5141a6ffcf401",
+    "tail.json": "85587f636af5879c435e51eb46fb302f51f0475701ce4c7374a58e27d3678f8d",
+    "tr.json": "b093a6aa91b7657ea4890279f9c3e97e2738114d31f9232ed0501b780ca78c5e",
+    "uniq.json": "157054ba866d610e03826a7f652bac52529195ccffca9b26f60a041e74f9b246",
+    "upper.json": "40f30b92942374f4694d90a33b24a856de99e79f875261b3e9a2f83c563ad0b5",
+    "wc.json": "be82bb3ac877a6eb53d3b2c699b1de84dcc6fd1d7cb9b05b784edc45d7786579"
+  },
+  "registered_applets": 33,
+  "requested": {
+    "stream_bytes": 1048576,
+    "lifecycle_cycles": 1
+  },
+  "bulk": [
+    {
+      "status": "passed",
+      "bytes": 1048576,
+      "sha256": "db7e0964bd2ce84610af064d8fcab428917a3d401d1f7ad6b8af7c8b684a13bb",
+      "native_launches": 2,
+      "exit_code": 0,
+      "command_high_water_rss_bytes": 3047424,
+      "wall_ms": 12.892,
+      "input_bytes": 1048576
+    }
+  ],
+  "lifecycle": [
+    {
+      "status": "passed",
+      "bytes": 16,
+      "sha256": "5eb73680fa5ca1b559fa80325a65e0ff000422c206bb62d4955f2ea5cc7caa60",
+      "native_launches": 2,
+      "exit_code": 0,
+      "command_high_water_rss_bytes": 2981888,
+      "wall_ms": 6.492,
+      "case": "tail-three-binary-records",
+      "cycle": 1
+    },
+    {
+      "status": "passed",
+      "bytes": 21,
+      "sha256": "7186221f6d596ba95b57a710f2c689edf7f9393ad6bd877daef8ee298bd0b68b",
+      "native_launches": 2,
+      "exit_code": 1,
+      "command_high_water_rss_bytes": 3031040,
+      "wall_ms": 67.212,
+      "case": "tail-ctrl-c",
+      "cycle": 1
+    },
+    {
+      "status": "passed",
+      "bytes": 21,
+      "sha256": "7186221f6d596ba95b57a710f2c689edf7f9393ad6bd877daef8ee298bd0b68b",
+      "native_launches": 2,
+      "exit_code": 1,
+      "command_high_water_rss_bytes": 3031040,
+      "wall_ms": 108.653,
+      "case": "tail-timeout",
+      "cycle": 1
+    },
+    {
+      "status": "passed",
+      "bytes": 65536,
+      "sha256": "34534b559a440b96e4d31fba185fd09e7472702182ed70fda929fff9fe4e8135",
+      "native_launches": 2,
+      "exit_code": 1,
+      "command_high_water_rss_bytes": 3047424,
+      "wall_ms": 63.674,
+      "case": "blocked-consumer-cancel",
+      "cycle": 1
+    },
+    {
+      "status": "passed",
+      "bytes": 8,
+      "sha256": "95aebb28195b8d737effe0df18d71d39c8d8ba6569286fd3930fbc9f9767181e",
+      "native_launches": 2,
+      "exit_code": 1,
+      "command_high_water_rss_bytes": 11845632,
+      "wall_ms": 50.823,
+      "case": "producer-exit-seven",
+      "cycle": 1
+    },
+    {
+      "status": "passed",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_launches": 3,
+      "exit_code": 1,
+      "command_high_water_rss_bytes": 3063808,
+      "wall_ms": 7.994,
+      "case": "middle-stage-failure",
+      "cycle": 1
+    },
+    {
+      "status": "passed",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_launches": 1,
+      "exit_code": 1,
+      "command_high_water_rss_bytes": 3145728,
+      "wall_ms": 6.554,
+      "case": "oversized-record-rejected",
+      "cycle": 1
+    }
+  ],
+  "limits": [
+    "Local Mac/Linux host only; not Omarchy or full Unix parity.",
+    "One observed run per bulk size; wall times include tracing, hashing, and observation.",
+    "wait4 ru_maxrss is command high-water usage; not summed simultaneous process-tree RSS.",
+    "No cold-cache claim, hard realtime claim, or proof of arbitrary input sizes.",
+    "No SIGKILL/crash containment claim; escaped groups remain outside supervision.",
+    "Fixture generation and expected hash calculation occur before the measured invocation."
+  ]
+}

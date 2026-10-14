@@ -1,0 +1,45 @@
+{
+  "at_utc": "2026-10-14T12:49:06.281894+00:00",
+  "method": "Two explicit synthetic provider requests through real .program native model applets, one each Jev and OpenAI. No private user inputs, no retries, bounded HTTP/native time and byte/token limits. Credentials read privately from the explicitly selected .env; not logged. These are connectivity/contract smoke tests, not accuracy, latency, or model-quality benchmarks.",
+  "binary_sha256": "c274040abeedf45ee609d71e53b031cb4f407008c15672e0d9967293638ba0c0",
+  "helper_sha256": "e2f67abf981405222e9f78b25a1d293ac121e6c4b562d1229c92c37c372fe656",
+  "results": {
+    "jev": {
+      "exit_code": 0,
+      "elapsed_seconds_observed": 0.279408917,
+      "source_sha256": "368a478eeb54833a1fdab945ce4b52ab366eb0961923400015258853a36e4be4",
+      "stdout_bytes": 233,
+      "protocol": "execute.model/1",
+      "provider": "jev",
+      "model": "jev-1.13.0",
+      "kind": "classify",
+      "transport": "https",
+      "usage": {
+        "input_tokens": 339,
+        "output_tokens": 31,
+        "total_tokens": 370
+      },
+      "label": "storage",
+      "accepted": true,
+      "confidence_percent": 100,
+      "synthetic_expected_label": true
+    },
+    "openai": {
+      "exit_code": 0,
+      "elapsed_seconds_observed": 3.56294425,
+      "source_sha256": "514c66e797c3fbeb71763ebdf94738d4f524a0f0063b6efb5d782f7cb7b976cb",
+      "stdout_bytes": 189,
+      "protocol": "execute.model/1",
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "kind": "generate",
+      "transport": "https",
+      "usage": {
+        "input_tokens": 56,
+        "output_tokens": 5,
+        "total_tokens": 61
+      },
+      "synthetic_expected_text": true
+    }
+  }
+}

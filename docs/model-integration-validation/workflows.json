@@ -1,0 +1,5052 @@
+{
+  "execute_version": "execute 0.8.0",
+  "binary_sha256": "207907d6a98907909f680a5d9bf92e6caa79a662aa28aaf66f6f891af1ea042e",
+  "model_helper_sha256": "684d428b66d43b6488b8877ca891edd1260d6d26a46d0a430a2921c4c8973ec5",
+  "catalog_path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow/examples/models/catalog.json",
+  "catalog_sha256": "4b26a1639a3d226de96088e8774e35e687cff50d5704262c13f58737fed4a2c9",
+  "platform": "darwin",
+  "network_isolation": "macos-sandbox-exec",
+  "workflows_run": 100,
+  "workflows_passed": 100,
+  "cases_run": 295,
+  "cases_passed": 295,
+  "scope": "full-100",
+  "method": "local fixture-only model cases; execute-model offline guard enabled; exact stdout and declared file oracles; child environment excludes credentials; network sandbox status is reported separately; no provider quality claim; bounded execution time and output capture",
+  "results": [
+    {
+      "id": 1,
+      "ordinal": "001",
+      "title": "Build an evidence-linked incident timeline",
+      "file": "001-incident-timeline.program",
+      "source_sha256": "1af0dc3989c4b6118d133d439d50340b7312a40b21fd8d7c7cb7d75c05ff5e5a",
+      "fixture_bytes": 4866,
+      "fixture_sha256": "e3edbc8c4b07b6a4631b713aa4c5f5dbec3b9b4b9db4f66ae4db00d91700bfdc",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 229.977,
+          "stdout_bytes": 668,
+          "stdout_sha256": "325999cab01317620d23012c0e10e0a34e46b2113b2be2281ef784e577895c06",
+          "outputs": {
+            "out/incident-timeline.json": {
+              "bytes": 668,
+              "sha256": "325999cab01317620d23012c0e10e0a34e46b2113b2be2281ef784e577895c06"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 36.52,
+          "stdout_bytes": 644,
+          "stdout_sha256": "2cc2e6a7159b0791b2f1303ffd7f39001ff1c13074220e3cc8aea567d14149ff",
+          "outputs": {
+            "out/incident-timeline.json": {
+              "bytes": 644,
+              "sha256": "2cc2e6a7159b0791b2f1303ffd7f39001ff1c13074220e3cc8aea567d14149ff"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 30.46,
+          "stdout_bytes": 606,
+          "stdout_sha256": "382507262f5cf7005c37a738c460bf7516ebbe469b373a6296a21ee86899d135",
+          "outputs": {
+            "out/incident-timeline.json": {
+              "bytes": 606,
+              "sha256": "382507262f5cf7005c37a738c460bf7516ebbe469b373a6296a21ee86899d135"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 2,
+      "ordinal": "002",
+      "title": "Select runbook sections for an alert bundle",
+      "file": "002-runbook-selection.program",
+      "source_sha256": "e3c9187f61b2097d33a1310db4d9ab3f97b41f6266e31a8729a41454b1408a23",
+      "fixture_bytes": 4439,
+      "fixture_sha256": "fff7a989289c125352c6e2282cf334cffb4b15e088bd160393d0f47a687e0cdc",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 35.636,
+          "stdout_bytes": 580,
+          "stdout_sha256": "3940a7b4193efec11d0f09968219e14cf34fd6e011447472b40246562a2b4cdc",
+          "outputs": {
+            "out/runbook-selection.json": {
+              "bytes": 580,
+              "sha256": "3940a7b4193efec11d0f09968219e14cf34fd6e011447472b40246562a2b4cdc"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 26.293,
+          "stdout_bytes": 584,
+          "stdout_sha256": "eedfe332bfcec713bced5ce18b877edb32a3ee89a92d80aa122e3c7f3da174b5",
+          "outputs": {
+            "out/runbook-selection.json": {
+              "bytes": 584,
+              "sha256": "eedfe332bfcec713bced5ce18b877edb32a3ee89a92d80aa122e3c7f3da174b5"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 26.346,
+          "stdout_bytes": 546,
+          "stdout_sha256": "9e9d42828e23066113981ee7c162d27a81132ab5d98b76c09c7244d363a52a6a",
+          "outputs": {
+            "out/runbook-selection.json": {
+              "bytes": 546,
+              "sha256": "9e9d42828e23066113981ee7c162d27a81132ab5d98b76c09c7244d363a52a6a"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 3,
+      "ordinal": "003",
+      "title": "Review deployment risk from change evidence",
+      "file": "003-deployment-risk.program",
+      "source_sha256": "5ade00dd3ab63d91fd6d88b1c0d89b96d68203ad3862bd11ed070467085ae982",
+      "fixture_bytes": 4044,
+      "fixture_sha256": "594792f51f98f66835a990987d350460f8868bf1e6ad9e3c5c46f64e00a470ee",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 34.85,
+          "stdout_bytes": 532,
+          "stdout_sha256": "ba5aeb612f0d22b217efabb338e698be62eec4db72ab5a2f2e0066b2fe09ed97",
+          "outputs": {
+            "out/deployment-risk.json": {
+              "bytes": 532,
+              "sha256": "ba5aeb612f0d22b217efabb338e698be62eec4db72ab5a2f2e0066b2fe09ed97"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 27.109,
+          "stdout_bytes": 507,
+          "stdout_sha256": "b2f687f56d2354db6f01884072c14a03dec0b49ee2ebf362bddc418c0b6d0536",
+          "outputs": {
+            "out/deployment-risk.json": {
+              "bytes": 507,
+              "sha256": "b2f687f56d2354db6f01884072c14a03dec0b49ee2ebf362bddc418c0b6d0536"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 25.863,
+          "stdout_bytes": 469,
+          "stdout_sha256": "b05f8a12ac296da64f43edd0132ba9d2f586ad2b58147dc711d121c2031deb07",
+          "outputs": {
+            "out/deployment-risk.json": {
+              "bytes": 469,
+              "sha256": "b05f8a12ac296da64f43edd0132ba9d2f586ad2b58147dc711d121c2031deb07"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 4,
+      "ordinal": "004",
+      "title": "Compare degradation episodes against a healthy baseline",
+      "file": "004-degradation-baseline.program",
+      "source_sha256": "db5ea92390c462cabb111b7fc3fc91f95658f4a3048ddd800cc5c4f3e9ff17f3",
+      "fixture_bytes": 3833,
+      "fixture_sha256": "0c95be728336aeef596eb9349965d486adfaa8ccf37069de54f7aa14f6117219",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 34.479,
+          "stdout_bytes": 541,
+          "stdout_sha256": "23932b63b759c540037128af6cc31dd35bbd3a4405ef47562a6609f21d506c83",
+          "outputs": {
+            "out/degradation-baseline.json": {
+              "bytes": 541,
+              "sha256": "23932b63b759c540037128af6cc31dd35bbd3a4405ef47562a6609f21d506c83"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 28.399,
+          "stdout_bytes": 514,
+          "stdout_sha256": "3c69065ec5841c0e7f8ceb32c243e92416d2a52261df1224b2c7b2aa508ab99c",
+          "outputs": {
+            "out/degradation-baseline.json": {
+              "bytes": 514,
+              "sha256": "3c69065ec5841c0e7f8ceb32c243e92416d2a52261df1224b2c7b2aa508ab99c"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 27.822,
+          "stdout_bytes": 476,
+          "stdout_sha256": "cfe15b85ededccdcbb19de54f79629dfd97251a005a91c42c5a0c497de29cb69",
+          "outputs": {
+            "out/degradation-baseline.json": {
+              "bytes": 476,
+              "sha256": "cfe15b85ededccdcbb19de54f79629dfd97251a005a91c42c5a0c497de29cb69"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 5,
+      "ordinal": "005",
+      "title": "Prepare a rollback eligibility review packet",
+      "file": "005-rollback-review.program",
+      "source_sha256": "bcad7aeee7841c56fd43349e184c7729afadffafea1c6a9699bd1768a02ca15b",
+      "fixture_bytes": 5509,
+      "fixture_sha256": "f5adf94ceb934d4f084f06389538a389fcb6c0a1338897478b5046c4c68f14a4",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 35.597,
+          "stdout_bytes": 752,
+          "stdout_sha256": "cdc26e2963c1a5629f3ee21cd7cb547d7cbfeb2d3aa7717dad9298a91fe4f19d",
+          "outputs": {
+            "out/rollback-review.json": {
+              "bytes": 752,
+              "sha256": "cdc26e2963c1a5629f3ee21cd7cb547d7cbfeb2d3aa7717dad9298a91fe4f19d"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 28.81,
+          "stdout_bytes": 755,
+          "stdout_sha256": "6652540cdd605054004751881528b4525b2036a26c9c187bc75d4c9767f2bf19",
+          "outputs": {
+            "out/rollback-review.json": {
+              "bytes": 755,
+              "sha256": "6652540cdd605054004751881528b4525b2036a26c9c187bc75d4c9767f2bf19"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 27.58,
+          "stdout_bytes": 717,
+          "stdout_sha256": "713d1f8b324df16463f8d8b6ebcafcf130967ba39a0f27821a677d1b85eee166",
+          "outputs": {
+            "out/rollback-review.json": {
+              "bytes": 717,
+              "sha256": "713d1f8b324df16463f8d8b6ebcafcf130967ba39a0f27821a677d1b85eee166"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 6,
+      "ordinal": "006",
+      "title": "Map change records to service dependency impacts",
+      "file": "006-dependency-impact.program",
+      "source_sha256": "8f7577e893f116292cd10af032c8ad50148c71880d99a1ae6eb5ef34f856782d",
+      "fixture_bytes": 3690,
+      "fixture_sha256": "93b022aa765d91b3f63294780c2db0e9cc23998f4cfbd2892bfc2b87d1c39c70",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 36.349,
+          "stdout_bytes": 468,
+          "stdout_sha256": "f87a54ded7215de4467a2b36739a2cf98caa8382c21be7240b3303d67527e2dc",
+          "outputs": {
+            "out/dependency-impact.json": {
+              "bytes": 468,
+              "sha256": "f87a54ded7215de4467a2b36739a2cf98caa8382c21be7240b3303d67527e2dc"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 28.548,
+          "stdout_bytes": 458,
+          "stdout_sha256": "3df0ef69be0549934f3c99a3876c13c4f86da778fb8b31f840ba3dcfb0aeb237",
+          "outputs": {
+            "out/dependency-impact.json": {
+              "bytes": 458,
+              "sha256": "3df0ef69be0549934f3c99a3876c13c4f86da778fb8b31f840ba3dcfb0aeb237"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 27.153,
+          "stdout_bytes": 420,
+          "stdout_sha256": "2f15a52362a922064f31f9b231754e037193fbc0a292e5f7a87c911893cd7797",
+          "outputs": {
+            "out/dependency-impact.json": {
+              "bytes": 420,
+              "sha256": "2f15a52362a922064f31f9b231754e037193fbc0a292e5f7a87c911893cd7797"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 7,
+      "ordinal": "007",
+      "title": "Review candidate duplicate alerts for safe grouping",
+      "file": "007-duplicate-alert-review.program",
+      "source_sha256": "b61984a3f187afd47b952547c0cc029cc89d4ba5dfcacfbaec6f43ab44198854",
+      "fixture_bytes": 4060,
+      "fixture_sha256": "c6a77bcb3db59e62e1381208867c3ba66b79fd19764ccc944e957b143426267b",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 37.502,
+          "stdout_bytes": 587,
+          "stdout_sha256": "e86e40347f4335614e5bcfad86d2ec88fb963699761cac723bb48f9de073e9ea",
+          "outputs": {
+            "out/duplicate-alert-review.json": {
+              "bytes": 587,
+              "sha256": "e86e40347f4335614e5bcfad86d2ec88fb963699761cac723bb48f9de073e9ea"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 28.418,
+          "stdout_bytes": 569,
+          "stdout_sha256": "3cddd7fab73bf5854d6972dfafcaa9bd8f6d9d444f6f00876b0b732ae0faec7d",
+          "outputs": {
+            "out/duplicate-alert-review.json": {
+              "bytes": 569,
+              "sha256": "3cddd7fab73bf5854d6972dfafcaa9bd8f6d9d444f6f00876b0b732ae0faec7d"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 27.516,
+          "stdout_bytes": 534,
+          "stdout_sha256": "8b6f8704fb091a370faae56b5e6fc2b9c8754d5fc750e1dbabef7d5d8590709f",
+          "outputs": {
+            "out/duplicate-alert-review.json": {
+              "bytes": 534,
+              "sha256": "8b6f8704fb091a370faae56b5e6fc2b9c8754d5fc750e1dbabef7d5d8590709f"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 8,
+      "ordinal": "008",
+      "title": "Assemble a cross-shift handoff from local evidence",
+      "file": "008-shift-handoff.program",
+      "source_sha256": "d540575db60176cb5f95d0195cf9049d1f0b37893d0631b31990469fba076418",
+      "fixture_bytes": 4412,
+      "fixture_sha256": "47d93845fe0846204292501d7891ccf38a9ac5626c9ccef6118c4f442a80c62d",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 35.403,
+          "stdout_bytes": 594,
+          "stdout_sha256": "14b837d5d184e703716efe058cbc74ab83508fea71f1a18f008f0c8041061947",
+          "outputs": {
+            "out/shift-handoff.json": {
+              "bytes": 594,
+              "sha256": "14b837d5d184e703716efe058cbc74ab83508fea71f1a18f008f0c8041061947"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 27.207,
+          "stdout_bytes": 550,
+          "stdout_sha256": "a00c062a52fb94e9e923bdee6a2a807758be52b046796616882aa78e9c13f5bf",
+          "outputs": {
+            "out/shift-handoff.json": {
+              "bytes": 550,
+              "sha256": "a00c062a52fb94e9e923bdee6a2a807758be52b046796616882aa78e9c13f5bf"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 28.261,
+          "stdout_bytes": 512,
+          "stdout_sha256": "99101fe05944f8fb96b3cf97793521bc60f9b32c1eb822ebba9d5f99ceaa5a71",
+          "outputs": {
+            "out/shift-handoff.json": {
+              "bytes": 512,
+              "sha256": "99101fe05944f8fb96b3cf97793521bc60f9b32c1eb822ebba9d5f99ceaa5a71"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 9,
+      "ordinal": "009",
+      "title": "Explain an SLO excursion with bounded hypotheses",
+      "file": "009-slo-excursion.program",
+      "source_sha256": "b0aafecc5ec53c9e1318bd1a1eb63d981330903c38616d36584af3d6b5d33f76",
+      "fixture_bytes": 4743,
+      "fixture_sha256": "f7221f902e28bb8b7ea8fcaf05520be333664fd5249496b6eec4c1ec38ad384f",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 37.207,
+          "stdout_bytes": 609,
+          "stdout_sha256": "6236c12fdb8ed8d511e6a6177c0f4708a62cbbdde0c5285a92e86f55b015c3f8",
+          "outputs": {
+            "out/slo-excursion.json": {
+              "bytes": 609,
+              "sha256": "6236c12fdb8ed8d511e6a6177c0f4708a62cbbdde0c5285a92e86f55b015c3f8"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 29.001,
+          "stdout_bytes": 558,
+          "stdout_sha256": "14d20df32ebb8f7bcb1685a1566d27e3844b9ccdb6301afdc922f04b9bcb3d1a",
+          "outputs": {
+            "out/slo-excursion.json": {
+              "bytes": 558,
+              "sha256": "14d20df32ebb8f7bcb1685a1566d27e3844b9ccdb6301afdc922f04b9bcb3d1a"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 29.112,
+          "stdout_bytes": 524,
+          "stdout_sha256": "cf903c8efce8b1d552e475fbd45281d004b7eb6c02f30d588ea819bd4282b8e6",
+          "outputs": {
+            "out/slo-excursion.json": {
+              "bytes": 524,
+              "sha256": "cf903c8efce8b1d552e475fbd45281d004b7eb6c02f30d588ea819bd4282b8e6"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 10,
+      "ordinal": "010",
+      "title": "Generate a tabletop exercise from archived incidents",
+      "file": "010-tabletop-exercise.program",
+      "source_sha256": "63ddbd3f869fa0e45581381215e385a3c4d668c1e6d32640111061c6a7fdea7f",
+      "fixture_bytes": 5126,
+      "fixture_sha256": "e04b72b35518a1dd649e425762a55f71da58e780324117c136e1247828145c7b",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 34.427,
+          "stdout_bytes": 726,
+          "stdout_sha256": "a194ca327d97e0b152a5f0ad57123154e098310a89fecab4c1ecc0745374f07b",
+          "outputs": {
+            "out/tabletop-exercise.json": {
+              "bytes": 726,
+              "sha256": "a194ca327d97e0b152a5f0ad57123154e098310a89fecab4c1ecc0745374f07b"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 26.163,
+          "stdout_bytes": 672,
+          "stdout_sha256": "27e47428aece7ac6d861dee9cb0ed1697b5d1216dbc876c4e3b50166c77f9f22",
+          "outputs": {
+            "out/tabletop-exercise.json": {
+              "bytes": 672,
+              "sha256": "27e47428aece7ac6d861dee9cb0ed1697b5d1216dbc876c4e3b50166c77f9f22"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 27.561,
+          "stdout_bytes": 634,
+          "stdout_sha256": "9a0795b7a491690b500616adc5a859589d5a56c932a07c3f6cbaf48db887de0e",
+          "outputs": {
+            "out/tabletop-exercise.json": {
+              "bytes": 634,
+              "sha256": "9a0795b7a491690b500616adc5a859589d5a56c932a07c3f6cbaf48db887de0e"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 11,
+      "ordinal": "011",
+      "title": "Turn a failing-test bundle into a reproduction plan",
+      "file": "011-test-reproduction.program",
+      "source_sha256": "86c3d9202a96ed2c8098def8a4d41eaa93833178460dd1ffcc6140752eb446d0",
+      "fixture_bytes": 4937,
+      "fixture_sha256": "22ec96a836b369641987adc52b0311ffa6f8cf54ea94628e3cef335ae57f70bb",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 36.396,
+          "stdout_bytes": 666,
+          "stdout_sha256": "85438145c6d6ead9dc852617b4652b87ec6a2bdd3b25fa909e09eaee3024779c",
+          "outputs": {
+            "out/test-reproduction.json": {
+              "bytes": 666,
+              "sha256": "85438145c6d6ead9dc852617b4652b87ec6a2bdd3b25fa909e09eaee3024779c"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 26.987,
+          "stdout_bytes": 651,
+          "stdout_sha256": "3ce9dc5e61aa39d541dbc03ccebf3690599dfe41c28446241610164d4285596f",
+          "outputs": {
+            "out/test-reproduction.json": {
+              "bytes": 651,
+              "sha256": "3ce9dc5e61aa39d541dbc03ccebf3690599dfe41c28446241610164d4285596f"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 26.395,
+          "stdout_bytes": 613,
+          "stdout_sha256": "38b1f057cb782a44507d3ad53ba0ed0be4452159b3586a38c9a850a21f7398e0",
+          "outputs": {
+            "out/test-reproduction.json": {
+              "bytes": 613,
+              "sha256": "38b1f057cb782a44507d3ad53ba0ed0be4452159b3586a38c9a850a21f7398e0"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 12,
+      "ordinal": "012",
+      "title": "Route incoming issue exports to repository evidence",
+      "file": "012-issue-repository-routing.program",
+      "source_sha256": "ce34748a0e054ed42696ea7ecbabcbd4ff896a233b94c6615c8670ddfb18de1d",
+      "fixture_bytes": 5151,
+      "fixture_sha256": "e6c8cd78abde342f478f4c8073e0a86c205c2ecae70a5d293e0b3da06280db96",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 35.745,
+          "stdout_bytes": 687,
+          "stdout_sha256": "a502d42a41535aa505dc10347771f4bc99ca32bf867ba34edbcf2928c2e8156f",
+          "outputs": {
+            "out/issue-repository-routing.json": {
+              "bytes": 687,
+              "sha256": "a502d42a41535aa505dc10347771f4bc99ca32bf867ba34edbcf2928c2e8156f"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 27.228,
+          "stdout_bytes": 664,
+          "stdout_sha256": "9a9deec11b4c1cb33d0179123d92035e3ebcfa9bec9660d21438c4cba9609dc0",
+          "outputs": {
+            "out/issue-repository-routing.json": {
+              "bytes": 664,
+              "sha256": "9a9deec11b4c1cb33d0179123d92035e3ebcfa9bec9660d21438c4cba9609dc0"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 27.284,
+          "stdout_bytes": 626,
+          "stdout_sha256": "a6013f7bb900dbffc4d8d9de77908fdb60e05944d670bf418bc922b7d00363eb",
+          "outputs": {
+            "out/issue-repository-routing.json": {
+              "bytes": 626,
+              "sha256": "a6013f7bb900dbffc4d8d9de77908fdb60e05944d670bf418bc922b7d00363eb"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 13,
+      "ordinal": "013",
+      "title": "Prepare release-note candidates from merged changes",
+      "file": "013-release-notes.program",
+      "source_sha256": "f5a0ac0b403b5cf8d3ed7eb4e28e8aab4d7c203370f5c4155a13bf64fef72c05",
+      "fixture_bytes": 4326,
+      "fixture_sha256": "d011bf48267b4119575a31dbfeaa76468d9cadb910b0266289b8d8506b7b7499",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 34.6,
+          "stdout_bytes": 554,
+          "stdout_sha256": "8b367bf5b2075cd9132b96e10ad9032c1042a68e7df8518dc40e585ca015286c",
+          "outputs": {
+            "out/release-notes.json": {
+              "bytes": 554,
+              "sha256": "8b367bf5b2075cd9132b96e10ad9032c1042a68e7df8518dc40e585ca015286c"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 27.822,
+          "stdout_bytes": 531,
+          "stdout_sha256": "d7c3fa2b147c4436e4c57126f38a426045cce028487440e38f64d7f7d8721d24",
+          "outputs": {
+            "out/release-notes.json": {
+              "bytes": 531,
+              "sha256": "d7c3fa2b147c4436e4c57126f38a426045cce028487440e38f64d7f7d8721d24"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 26.751,
+          "stdout_bytes": 493,
+          "stdout_sha256": "eab920f63bc54787f7974eafaf8bf2c1e42acc46ed4789e09b301d5ad5f0a236",
+          "outputs": {
+            "out/release-notes.json": {
+              "bytes": 493,
+              "sha256": "eab920f63bc54787f7974eafaf8bf2c1e42acc46ed4789e09b301d5ad5f0a236"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 14,
+      "ordinal": "014",
+      "title": "Map an API migration across local clients",
+      "file": "014-api-migration-map.program",
+      "source_sha256": "30a278d608a46afb49e893cf7253078a0d6dff19070aa2a3ae95bc206461c628",
+      "fixture_bytes": 5954,
+      "fixture_sha256": "c05e5a1b2f9ddebe120b43a64b884ca56966d808723ede248786f54b61febf12",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 35.07,
+          "stdout_bytes": 717,
+          "stdout_sha256": "85ac22f660d12b761b2a115f56ce2a67ea4d2af586acb051fb4ad277f5b962ee",
+          "outputs": {
+            "out/api-migration-map.json": {
+              "bytes": 717,
+              "sha256": "85ac22f660d12b761b2a115f56ce2a67ea4d2af586acb051fb4ad277f5b962ee"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 26.531,
+          "stdout_bytes": 716,
+          "stdout_sha256": "22e849bf82df633cf7a73ab11be9b846bb2c325a1d954df510068d8b60c3f1b6",
+          "outputs": {
+            "out/api-migration-map.json": {
+              "bytes": 716,
+              "sha256": "22e849bf82df633cf7a73ab11be9b846bb2c325a1d954df510068d8b60c3f1b6"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 26.526,
+          "stdout_bytes": 678,
+          "stdout_sha256": "4a319f82cbf33d5de4ebd660ca46cc3103bfd29c417c5306cad88daa114db2c0",
+          "outputs": {
+            "out/api-migration-map.json": {
+              "bytes": 678,
+              "sha256": "4a319f82cbf33d5de4ebd660ca46cc3103bfd29c417c5306cad88daa114db2c0"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 15,
+      "ordinal": "015",
+      "title": "Cluster static-analysis findings into fix themes",
+      "file": "015-static-analysis-themes.program",
+      "source_sha256": "e01cb99a4c0de79a77d70b1239bcfbe110fc25f368d885a8a29b598353df0030",
+      "fixture_bytes": 5372,
+      "fixture_sha256": "10463be6f5cfddf8b7d3954b6e854d79d3e5957f0dc5866a84fa1262edb74ffd",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 35.068,
+          "stdout_bytes": 656,
+          "stdout_sha256": "4fedfc2fcc633f4e193d6dde927681e5955f05182d881f726217d51c46d2d192",
+          "outputs": {
+            "out/static-analysis-themes.json": {
+              "bytes": 656,
+              "sha256": "4fedfc2fcc633f4e193d6dde927681e5955f05182d881f726217d51c46d2d192"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 28.471,
+          "stdout_bytes": 639,
+          "stdout_sha256": "b34ae5f142e5208529c2ab7eeffa66ce5c790f472b2e4415c8996aa09f677fc6",
+          "outputs": {
+            "out/static-analysis-themes.json": {
+              "bytes": 639,
+              "sha256": "b34ae5f142e5208529c2ab7eeffa66ce5c790f472b2e4415c8996aa09f677fc6"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 26.393,
+          "stdout_bytes": 601,
+          "stdout_sha256": "242740905a0137b353981345ca65bece0ad3876fe0189f55b015ef2fffba3cd2",
+          "outputs": {
+            "out/static-analysis-themes.json": {
+              "bytes": 601,
+              "sha256": "242740905a0137b353981345ca65bece0ad3876fe0189f55b015ef2fffba3cd2"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 16,
+      "ordinal": "016",
+      "title": "Assess flaky-test evidence before a rerun policy change",
+      "file": "016-flaky-test-policy.program",
+      "source_sha256": "96b5f2e905c1b2d70d12227b808c4b14b72663a1368282583ea0f448cf82259a",
+      "fixture_bytes": 5675,
+      "fixture_sha256": "717cc77af08241119c934b874b60c6e461218ef8076ceccaf3d17fdb52dcc573",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 36.584,
+          "stdout_bytes": 727,
+          "stdout_sha256": "7ad79a2b19d2af431ec7b271d622b57eb6935392d276abde636c09579395a5c2",
+          "outputs": {
+            "out/flaky-test-policy.json": {
+              "bytes": 727,
+              "sha256": "7ad79a2b19d2af431ec7b271d622b57eb6935392d276abde636c09579395a5c2"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 29.211,
+          "stdout_bytes": 681,
+          "stdout_sha256": "94139a2ae2c045bd836a2c5cd95c249ca308d8e58f6447d6b0d10484e92dfec8",
+          "outputs": {
+            "out/flaky-test-policy.json": {
+              "bytes": 681,
+              "sha256": "94139a2ae2c045bd836a2c5cd95c249ca308d8e58f6447d6b0d10484e92dfec8"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 29.118,
+          "stdout_bytes": 647,
+          "stdout_sha256": "036466b6109282c135e83d04bd63dfb61ad0566ff1dc02d5f39bb121a30ce4d4",
+          "outputs": {
+            "out/flaky-test-policy.json": {
+              "bytes": 647,
+              "sha256": "036466b6109282c135e83d04bd63dfb61ad0566ff1dc02d5f39bb121a30ce4d4"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 17,
+      "ordinal": "017",
+      "title": "Find stale documentation examples against captured CLI help",
+      "file": "017-stale-doc-examples.program",
+      "source_sha256": "3880b6adbdcc4ed1d7ba48d9e6f7a14bf74ec06dde4759b2cfdd5bb0c3c008e5",
+      "fixture_bytes": 2708,
+      "fixture_sha256": "faf8425403dd2663533a4e3ca37851082e12dd08cc50a8ab6d52539b1d92cd11",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 32.139,
+          "stdout_bytes": 482,
+          "stdout_sha256": "ca6850a976bacc586382f2b567b602c3eb98d25372f427635ab0707ad2d91931",
+          "outputs": {
+            "out/stale-doc-examples.json": {
+              "bytes": 482,
+              "sha256": "ca6850a976bacc586382f2b567b602c3eb98d25372f427635ab0707ad2d91931"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 26.12,
+          "stdout_bytes": 411,
+          "stdout_sha256": "bdec879cb9639c4098a0d62b5385963a988907d16e0bb37cfec12fd671dba2e0",
+          "outputs": {
+            "out/stale-doc-examples.json": {
+              "bytes": 411,
+              "sha256": "bdec879cb9639c4098a0d62b5385963a988907d16e0bb37cfec12fd671dba2e0"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 26.265,
+          "stdout_bytes": 376,
+          "stdout_sha256": "a6342e6a8ee5686ab50338a9b50631f2f628f76bfcf2045d698821ae9c814af0",
+          "outputs": {
+            "out/stale-doc-examples.json": {
+              "bytes": 376,
+              "sha256": "a6342e6a8ee5686ab50338a9b50631f2f628f76bfcf2045d698821ae9c814af0"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 18,
+      "ordinal": "018",
+      "title": "Assess a dependency upgrade from local evidence",
+      "file": "018-dependency-upgrade-review.program",
+      "source_sha256": "ae81aa40efe0621522585c0a65075c6a05f1e8089d32ab0c5b5ba49d5f61c870",
+      "fixture_bytes": 3449,
+      "fixture_sha256": "36933dc828fa5c69860324c8c614a09945d0eaf23e642ab3f8d174bbdb76e9e2",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 31.626,
+          "stdout_bytes": 497,
+          "stdout_sha256": "d78c9b57e9b4f6f3444389e973bfb8520184eeb1b672e0265de5cb728dc4a445",
+          "outputs": {
+            "out/dependency-upgrade-review.json": {
+              "bytes": 497,
+              "sha256": "d78c9b57e9b4f6f3444389e973bfb8520184eeb1b672e0265de5cb728dc4a445"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 25.442,
+          "stdout_bytes": 469,
+          "stdout_sha256": "5974f259bb0a317a6f2a80e68f19db220c4699c2291e7940df839b0e990c6ac9",
+          "outputs": {
+            "out/dependency-upgrade-review.json": {
+              "bytes": 469,
+              "sha256": "5974f259bb0a317a6f2a80e68f19db220c4699c2291e7940df839b0e990c6ac9"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 25.194,
+          "stdout_bytes": 431,
+          "stdout_sha256": "f2ca1fe5f3bdfc7392fd6adc6f04e598d8dc6256e73c2a20e6401e3ffe5345a8",
+          "outputs": {
+            "out/dependency-upgrade-review.json": {
+              "bytes": 431,
+              "sha256": "f2ca1fe5f3bdfc7392fd6adc6f04e598d8dc6256e73c2a20e6401e3ffe5345a8"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 19,
+      "ordinal": "019",
+      "title": "Build an onboarding map for an unfamiliar repository",
+      "file": "019-repository-onboarding.program",
+      "source_sha256": "9536ec57c0d5d4c33775118b5d0ed6c9d9187ead4044eda34b0c1e14340176cb",
+      "fixture_bytes": 4939,
+      "fixture_sha256": "de7078411806be825170b25038b36a49782a5105e59508c12275f6f14478acfa",
+      "cases": [
+        {
+          "name": "structured-candidate",
+          "passed": true,
+          "elapsed_ms": 29.637,
+          "stdout_bytes": 644,
+          "stdout_sha256": "9c3aed94217acb3d87f5a5b2ac73b466220b70952759ebc60b3b22ed3b35d623",
+          "outputs": {
+            "out/repository-onboarding.json": {
+              "bytes": 644,
+              "sha256": "9c3aed94217acb3d87f5a5b2ac73b466220b70952759ebc60b3b22ed3b35d623"
+            }
+          }
+        },
+        {
+          "name": "human-review",
+          "passed": true,
+          "elapsed_ms": 30.664,
+          "stdout_bytes": 641,
+          "stdout_sha256": "6e3d125370bf1549a487fd239f78d7de7a63e44bc377312812f330961d2ab8c8",
+          "outputs": {
+            "out/repository-onboarding.json": {
+              "bytes": 641,
+              "sha256": "6e3d125370bf1549a487fd239f78d7de7a63e44bc377312812f330961d2ab8c8"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 20,
+      "ordinal": "020",
+      "title": "Explain a regression between two saved test runs",
+      "file": "020-regression-comparison.program",
+      "source_sha256": "b09bf9bd24ee2114d6a19d23a9547c8713dd31bab7097ff58126d8cbf1c7c9a6",
+      "fixture_bytes": 4381,
+      "fixture_sha256": "5db2385c58445e85c3dbbb9931fc9dfba29c653cf881459f30df7712b2e778fc",
+      "cases": [
+        {
+          "name": "evidence-ready",
+          "passed": true,
+          "elapsed_ms": 36.827,
+          "stdout_bytes": 569,
+          "stdout_sha256": "13ea17a7fba222845aee1eafcec39be016295a265c787a922443add559859098",
+          "outputs": {
+            "out/regression-comparison.json": {
+              "bytes": 569,
+              "sha256": "13ea17a7fba222845aee1eafcec39be016295a265c787a922443add559859098"
+            }
+          }
+        },
+        {
+          "name": "confident-other",
+          "passed": true,
+          "elapsed_ms": 29.327,
+          "stdout_bytes": 547,
+          "stdout_sha256": "e1a09ab96607f82ded8013dbf999c2a6e67faa972512d762f3b5095ef559ef71",
+          "outputs": {
+            "out/regression-comparison.json": {
+              "bytes": 547,
+              "sha256": "e1a09ab96607f82ded8013dbf999c2a6e67faa972512d762f3b5095ef559ef71"
+            }
+          }
+        },
+        {
+          "name": "low-confidence",
+          "passed": true,
+          "elapsed_ms": 29.156,
+          "stdout_bytes": 513,
+          "stdout_sha256": "760a08db49b2a378b65a5585e5e748cf1660203d6c87b70091d11dc4a33fcce5",
+          "outputs": {
+            "out/regression-comparison.json": {
+              "bytes": 513,
+              "sha256": "760a08db49b2a378b65a5585e5e748cf1660203d6c87b70091d11dc4a33fcce5"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 21,
+      "ordinal": "021",
+      "title": "Compare contract revisions as an obligation matrix",
+      "file": "021-contract-obligations.program",
+      "source_sha256": "434ea957db72954cdcb36009fbd828425b5c887a69e200fd05d418713239a46c",
+      "fixture_bytes": 4391,
+      "fixture_sha256": "78b9a8a733491a362e0d0dd50f78dcfaefb0b7ed9583f3e3cda88485be7f5074",
+      "cases": [
+        {
+          "name": "structured-candidate",
+          "passed": true,
+          "elapsed_ms": 30.408,
+          "stdout_bytes": 570,
+          "stdout_sha256": "ff90acb3437599650e5990b19428a615eb5f45cb9fec142af6fa2d5e07ce008d",
+          "outputs": {
+            "out/contract-obligations.json": {
+              "bytes": 570,
+              "sha256": "ff90acb3437599650e5990b19428a615eb5f45cb9fec142af6fa2d5e07ce008d"
+            }
+          }
+        },
+        {
+          "name": "human-review",
+          "passed": true,
+          "elapsed_ms": 29.732,
+          "stdout_bytes": 567,
+          "stdout_sha256": "1ba40bbff2b56b96d9fa033ed5f7bf1aaba7fc0a231b1a9ddc45d859f55405a1",
+          "outputs": {
+            "out/contract-obligations.json": {
+              "bytes": 567,
+              "sha256": "1ba40bbff2b56b96d9fa033ed5f7bf1aaba7fc0a231b1a9ddc45d859f55405a1"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 22,
+      "ordinal": "022",
+      "title": "Map policy rules to evidence in local case files",
+      "file": "022-policy-evidence-map.program",
+      "source_sha256": "d4fb457b5cd8cef1a953d5b713396a6cb8e89df0ac0611e5f568745f4acdd264",
+      "fixture_bytes": 4414,
+      "fixture_sha256": "060b5ab2df07f1f2b40a1a8521c261d1309d649b591d36f91bd287f78bea020e",
+      "cases": [
+        {
+          "name": "structured-candidate",
+          "passed": true,
+          "elapsed_ms": 29.753,
+          "stdout_bytes": 542,
+          "stdout_sha256": "8264f6933e8abf9597d77b077c6d2e31e886928284f4bacc27a340efcd330f28",
+          "outputs": {
+            "out/policy-evidence-map.json": {
+              "bytes": 542,
+              "sha256": "8264f6933e8abf9597d77b077c6d2e31e886928284f4bacc27a340efcd330f28"
+            }
+          }
+        },
+        {
+          "name": "human-review",
+          "passed": true,
+          "elapsed_ms": 29.673,
+          "stdout_bytes": 539,
+          "stdout_sha256": "8e1c51dde3f5910b631a52e110c489c06e4967c61df462a9a4ef240778806e98",
+          "outputs": {
+            "out/policy-evidence-map.json": {
+              "bytes": 539,
+              "sha256": "8e1c51dde3f5910b631a52e110c489c06e4967c61df462a9a4ef240778806e98"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 23,
+      "ordinal": "023",
+      "title": "Compare proposal submissions against fixed criteria",
+      "file": "023-proposal-criteria.program",
+      "source_sha256": "7ac3b71a50089e6783c9644200fd4ef99fcb00c780aa52c5dfbe66f8dcee7e99",
+      "fixture_bytes": 5115,
+      "fixture_sha256": "f9fef6bfe83cc3b249abc4942d8bed877d6c985a6b6fd4cb16678ad42336af2c",
+      "cases": [
+        {
+          "name": "structured-candidate",
+          "passed": true,
+          "elapsed_ms": 29.736,
+          "stdout_bytes": 646,
+          "stdout_sha256": "d15dd9062c442a09a6ce8b427b3b10ca9010a1480280473ce03bd4be1e944249",
+          "outputs": {
+            "out/proposal-criteria.json": {
+              "bytes": 646,
+              "sha256": "d15dd9062c442a09a6ce8b427b3b10ca9010a1480280473ce03bd4be1e944249"
+            }
+          }
+        },
+        {
+          "name": "human-review",
+          "passed": true,
+          "elapsed_ms": 29.242,
+          "stdout_bytes": 643,
+          "stdout_sha256": "5ebfc2f89e4bbb367261d94b20daa9c2ecf45ee153f9ba1666b7c1e3e410ea32",
+          "outputs": {
+            "out/proposal-criteria.json": {
+              "bytes": 643,
+              "sha256": "5ebfc2f89e4bbb367261d94b20daa9c2ecf45ee153f9ba1666b7c1e3e410ea32"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 24,
+      "ordinal": "024",
+      "title": "Reconcile meeting minutes against the source transcript",
+      "file": "024-meeting-reconciliation.program",
+      "source_sha256": "f580c95f13ffab89f5f242ac1f610381c767457fb485e20b7306ca8684ec7d3c",
+      "fixture_bytes": 4588,
+      "fixture_sha256": "204fadbfcce6448506f3fd3c3ecad14e1276d2be7a271826555b78b32ff44091",
+      "cases": [
+        {
+          "name": "structured-candidate",
+          "passed": true,
+          "elapsed_ms": 30.044,
+          "stdout_bytes": 605,
+          "stdout_sha256": "83d23264bf52155ce767e6595ed87daed539a05ce26c5b26743b50e367cf6398",
+          "outputs": {
+            "out/meeting-reconciliation.json": {
+              "bytes": 605,
+              "sha256": "83d23264bf52155ce767e6595ed87daed539a05ce26c5b26743b50e367cf6398"
+            }
+          }
+        },
+        {
+          "name": "human-review",
+          "passed": true,
+          "elapsed_ms": 30.339,
+          "stdout_bytes": 602,
+          "stdout_sha256": "218ac1fd9e7330ce8f3e4a21399942352e9b2a2d99d996635a0a54152677eca5",
+          "outputs": {
+            "out/meeting-reconciliation.json": {
+              "bytes": 602,
+              "sha256": "218ac1fd9e7330ce8f3e4a21399942352e9b2a2d99d996635a0a54152677eca5"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 25,
+      "ordinal": "025",
+      "title": "Check an RFP response for unsupported claims",
+      "file": "025-rfp-claim-review.program",
+      "source_sha256": "0da90882aa48c3ce0132ce74bd9f44569915593100db22a1b41ebfc459361907",
+      "fixture_bytes": 4093,
+      "fixture_sha256": "dc77db885b6c21ea1626d8def1a8d3dc4931b5488e173c2dcd8a8b8cbc532277",
+      "cases": [
+        {
+          "name": "structured-candidate",
+          "passed": true,
+          "elapsed_ms": 29.711,
+          "stdout_bytes": 483,
+          "stdout_sha256": "41cfd1985d3541b82ecf56b9ad8575eb761649379d6d98dbb29f22a375443997",
+          "outputs": {
+            "out/rfp-claim-review.json": {
+              "bytes": 483,
+              "sha256": "41cfd1985d3541b82ecf56b9ad8575eb761649379d6d98dbb29f22a375443997"
+            }
+          }
+        },
+        {
+          "name": "human-review",
+          "passed": true,
+          "elapsed_ms": 29.008,
+          "stdout_bytes": 480,
+          "stdout_sha256": "b1cc736c798f57a4ab504dddb1be7e20269b0cdbf780a74427d3f8be788daf38",
+          "outputs": {
+            "out/rfp-claim-review.json": {
+              "bytes": 480,
+              "sha256": "b1cc736c798f57a4ab504dddb1be7e20269b0cdbf780a74427d3f8be788daf38"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 26,
+      "ordinal": "026",
+      "title": "Prepare a cited vendor due-diligence answer packet",
+      "file": "026-vendor-due-diligence.program",
+      "source_sha256": "9b86fe0353739cd0d6a449d11646d511fb5e43f7fd5ef5587f429a9e7632f649",
+      "fixture_bytes": 5956,
+      "fixture_sha256": "fa5ec1006ad78f130480bf203d6e2d13a844d7e319c6922ced0c4493f65bf804",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.063,
+          "stdout_bytes": 637,
+          "stdout_sha256": "7b4eaa84ca0e2a1be6a1ad81200aeb9149ebfc34021e1a90a8e123e6eef16f3b",
+          "outputs": {
+            "out/026-vendor-due-diligence.json": {
+              "bytes": 637,
+              "sha256": "7b4eaa84ca0e2a1be6a1ad81200aeb9149ebfc34021e1a90a8e123e6eef16f3b"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 27.239,
+          "stdout_bytes": 645,
+          "stdout_sha256": "efdbde09f9eeb52277ac3b9edd82ba4a01bf4c0a44c3aec0743a3bcf975cd74e",
+          "outputs": {
+            "out/026-vendor-due-diligence.json": {
+              "bytes": 645,
+              "sha256": "efdbde09f9eeb52277ac3b9edd82ba4a01bf4c0a44c3aec0743a3bcf975cd74e"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 27.635,
+          "stdout_bytes": 653,
+          "stdout_sha256": "f93ee0475a8c6a3f0ccb53bd377464d0fc445883d6d0b3fb49e3a3d133cbc25b",
+          "outputs": {
+            "out/026-vendor-due-diligence.json": {
+              "bytes": 653,
+              "sha256": "f93ee0475a8c6a3f0ccb53bd377464d0fc445883d6d0b3fb49e3a3d133cbc25b"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 27,
+      "ordinal": "027",
+      "title": "Create a claim-provenance brief from a technical report",
+      "file": "027-claim-provenance-brief.program",
+      "source_sha256": "cc6daae174fa9cf7a30aa6518950627fc8576e78280cd13812ba7dd1eed42ebf",
+      "fixture_bytes": 6231,
+      "fixture_sha256": "d1ffbab9de81d6debfea22bc96c4ecba3603674abd8853e11033ac1f4a65197d",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.227,
+          "stdout_bytes": 697,
+          "stdout_sha256": "e4ac2fc6c76ae547b21d0ef24746ca577b8b01aefde2466e347d3368f7c89319",
+          "outputs": {
+            "out/027-claim-provenance-brief.json": {
+              "bytes": 697,
+              "sha256": "e4ac2fc6c76ae547b21d0ef24746ca577b8b01aefde2466e347d3368f7c89319"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.771,
+          "stdout_bytes": 669,
+          "stdout_sha256": "23ecd292b4501cacbdf9e345efebd04666c89f1b3bace8632a9dc1fbe6059555",
+          "outputs": {
+            "out/027-claim-provenance-brief.json": {
+              "bytes": 669,
+              "sha256": "23ecd292b4501cacbdf9e345efebd04666c89f1b3bace8632a9dc1fbe6059555"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.825,
+          "stdout_bytes": 657,
+          "stdout_sha256": "4ed5bb11aa673e9086781505835a3f4d5896ae6f8f78020266df33fd22cbf12a",
+          "outputs": {
+            "out/027-claim-provenance-brief.json": {
+              "bytes": 657,
+              "sha256": "4ed5bb11aa673e9086781505835a3f4d5896ae6f8f78020266df33fd22cbf12a"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 28,
+      "ordinal": "028",
+      "title": "Explain invoice exceptions using purchase evidence",
+      "file": "028-invoice-exception.program",
+      "source_sha256": "7356d5d6986340d5640ca440125fb56163e64b5b430c95667f9798a5195177ec",
+      "fixture_bytes": 5890,
+      "fixture_sha256": "0a9b6156666bb8178f0416caa1236c748abe21bdfb94f7ab644f445c4ca46a3e",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.367,
+          "stdout_bytes": 611,
+          "stdout_sha256": "990ec8464c443e2c52db55c624348c2f7bec5c1373b611eb36f179f6acd4d5e8",
+          "outputs": {
+            "out/028-invoice-exception.json": {
+              "bytes": 611,
+              "sha256": "990ec8464c443e2c52db55c624348c2f7bec5c1373b611eb36f179f6acd4d5e8"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.344,
+          "stdout_bytes": 594,
+          "stdout_sha256": "399eb148eb937ba9c5e45ff2db19759caa0dcc61cba183f5d9265b36604c6094",
+          "outputs": {
+            "out/028-invoice-exception.json": {
+              "bytes": 594,
+              "sha256": "399eb148eb937ba9c5e45ff2db19759caa0dcc61cba183f5d9265b36604c6094"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.932,
+          "stdout_bytes": 595,
+          "stdout_sha256": "dc8c9366cb49d74c6da8a3023192045633987e0d9b8b470db1173b9eb21800b0",
+          "outputs": {
+            "out/028-invoice-exception.json": {
+              "bytes": 595,
+              "sha256": "dc8c9366cb49d74c6da8a3023192045633987e0d9b8b470db1173b9eb21800b0"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 29,
+      "ordinal": "029",
+      "title": "Index scanned correspondence for human filing",
+      "file": "029-correspondence-index.program",
+      "source_sha256": "5723470d03ff791b782924c5e3f6017a3e290aaac501d0743122c1483950fcd2",
+      "fixture_bytes": 4324,
+      "fixture_sha256": "ed6ec26f122b1c6a506bd1f6ffc671d8360ba7004f4b498e997f718438c1cf1e",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 35.186,
+          "stdout_bytes": 493,
+          "stdout_sha256": "ee50f94285ef8d134793c0a59954f177a416595fa850c903226100229c53d2da",
+          "outputs": {
+            "out/029-correspondence-index.json": {
+              "bytes": 493,
+              "sha256": "ee50f94285ef8d134793c0a59954f177a416595fa850c903226100229c53d2da"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 29.413,
+          "stdout_bytes": 427,
+          "stdout_sha256": "75093c43600263b7f35264029b66f457c283670697ac4223498af9cbb77384a7",
+          "outputs": {
+            "out/029-correspondence-index.json": {
+              "bytes": 427,
+              "sha256": "75093c43600263b7f35264029b66f457c283670697ac4223498af9cbb77384a7"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 28.926,
+          "stdout_bytes": 436,
+          "stdout_sha256": "ecc9aa221793a20fbb286c4b8c9d69bb952d1d0d7cddc0bd42341d8526e449cc",
+          "outputs": {
+            "out/029-correspondence-index.json": {
+              "bytes": 436,
+              "sha256": "ecc9aa221793a20fbb286c4b8c9d69bb952d1d0d7cddc0bd42341d8526e449cc"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 30,
+      "ordinal": "030",
+      "title": "Find contradictions and superseded sections in a document set",
+      "file": "030-document-supersession-review.program",
+      "source_sha256": "33d56c28266cec4a205ae9d6e0e6ff49dcf44a08f849446f7e5d61a77f6788d9",
+      "fixture_bytes": 6331,
+      "fixture_sha256": "1139e8c9e30fd966784fe41931d582e2590c18ec22a814635548d4dc85000259",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.746,
+          "stdout_bytes": 701,
+          "stdout_sha256": "86622d93a2c7020ca457380f6ce2fac2fb8288855686dfb594610512a90133a2",
+          "outputs": {
+            "out/030-document-supersession-review.json": {
+              "bytes": 701,
+              "sha256": "86622d93a2c7020ca457380f6ce2fac2fb8288855686dfb594610512a90133a2"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.423,
+          "stdout_bytes": 699,
+          "stdout_sha256": "1fc26c8eb2b722e3e919b7c39032c450600128b1a30f7c9a014518c14c4decd1",
+          "outputs": {
+            "out/030-document-supersession-review.json": {
+              "bytes": 699,
+              "sha256": "1fc26c8eb2b722e3e919b7c39032c450600128b1a30f7c9a014518c14c4decd1"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.263,
+          "stdout_bytes": 693,
+          "stdout_sha256": "4cdba0a946f40b43bec27d36335dbfa5ad67948ebe39243a84574a290455b1ae",
+          "outputs": {
+            "out/030-document-supersession-review.json": {
+              "bytes": 693,
+              "sha256": "4cdba0a946f40b43bec27d36335dbfa5ad67948ebe39243a84574a290455b1ae"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 31,
+      "ordinal": "031",
+      "title": "Triage a local paper library against a research question",
+      "file": "031-paper-library-triage.program",
+      "source_sha256": "9857f80f1f47285b5c11f15e7d0227d8fa50ad3b19a1e256d3a406c4450d4b59",
+      "fixture_bytes": 7536,
+      "fixture_sha256": "b1092aa528f877ea151e676266d071726e9d2b2c8aad681992afb7b7af144fa4",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 31.917,
+          "stdout_bytes": 843,
+          "stdout_sha256": "8c40f6acfb1d0f21bf3221a33a9983925be1d38b84affaaaf844c368af33c629",
+          "outputs": {
+            "out/031-paper-library-triage.json": {
+              "bytes": 843,
+              "sha256": "8c40f6acfb1d0f21bf3221a33a9983925be1d38b84affaaaf844c368af33c629"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.577,
+          "stdout_bytes": 826,
+          "stdout_sha256": "22a9e66cb72820ffe641ef0f9594c4bacb91ddcff79e2fcad48f007ff0a70a1e",
+          "outputs": {
+            "out/031-paper-library-triage.json": {
+              "bytes": 826,
+              "sha256": "22a9e66cb72820ffe641ef0f9594c4bacb91ddcff79e2fcad48f007ff0a70a1e"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.331,
+          "stdout_bytes": 826,
+          "stdout_sha256": "e59e42869d7dac5fd19ab8077f4afc4c91a20bee69af65a155b5d3813a621c27",
+          "outputs": {
+            "out/031-paper-library-triage.json": {
+              "bytes": 826,
+              "sha256": "e59e42869d7dac5fd19ab8077f4afc4c91a20bee69af65a155b5d3813a621c27"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 32,
+      "ordinal": "032",
+      "title": "Compare support and contradiction for a claim set",
+      "file": "032-claim-evidence-matrix.program",
+      "source_sha256": "5803f15932a2f959099937a16b8989ac31fc90af0a8f8e673eb3e4074b7701d7",
+      "fixture_bytes": 6860,
+      "fixture_sha256": "8f61a3cd68100d08fb1c0d976cb84594bd73d568315124b19c0c2397b167cc9f",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.45,
+          "stdout_bytes": 765,
+          "stdout_sha256": "06c6c2dc66f113b9c9e7d8833f99650ecfc98bbe897a19d3785416957fc6870d",
+          "outputs": {
+            "out/032-claim-evidence-matrix.json": {
+              "bytes": 765,
+              "sha256": "06c6c2dc66f113b9c9e7d8833f99650ecfc98bbe897a19d3785416957fc6870d"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.4,
+          "stdout_bytes": 751,
+          "stdout_sha256": "489e3b0a7b1fd50f109bcc913347faf48d74ad25d198c4dfc5e4e48444125b57",
+          "outputs": {
+            "out/032-claim-evidence-matrix.json": {
+              "bytes": 751,
+              "sha256": "489e3b0a7b1fd50f109bcc913347faf48d74ad25d198c4dfc5e4e48444125b57"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.653,
+          "stdout_bytes": 759,
+          "stdout_sha256": "1adf3ddeb404920f557ade004563cd1acc892222584810f6dfc9149660783b34",
+          "outputs": {
+            "out/032-claim-evidence-matrix.json": {
+              "bytes": 759,
+              "sha256": "1adf3ddeb404920f557ade004563cd1acc892222584810f6dfc9149660783b34"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 33,
+      "ordinal": "033",
+      "title": "Extract reproducibility details from methods sections",
+      "file": "033-methods-reproducibility-extraction.program",
+      "source_sha256": "5b6d0ec2d017b4c5f11106196c80255f4c2b5e1c52278dbc46d3ac65bf90474c",
+      "fixture_bytes": 12721,
+      "fixture_sha256": "70f5794e765a321e86a6a33046f842bd766425eda8d7a64417e4c4cd76e28278",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.169,
+          "stdout_bytes": 576,
+          "stdout_sha256": "71a49f51dad408190fdbb86b638f1daecdccc4224bce579a82d806c30e748eb6",
+          "outputs": {
+            "out/033-methods-reproducibility-extraction.json": {
+              "bytes": 576,
+              "sha256": "71a49f51dad408190fdbb86b638f1daecdccc4224bce579a82d806c30e748eb6"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 28.218,
+          "stdout_bytes": 574,
+          "stdout_sha256": "d189515f4535471b68c6ce8b26e5d671c724e9fc94e8f3cb8b3c89c0da14ade9",
+          "outputs": {
+            "out/033-methods-reproducibility-extraction.json": {
+              "bytes": 574,
+              "sha256": "d189515f4535471b68c6ce8b26e5d671c724e9fc94e8f3cb8b3c89c0da14ade9"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 27.271,
+          "stdout_bytes": 574,
+          "stdout_sha256": "ab5bedddd7f8a3c0e8daea5f0e8a76842e434f84a83fdeaf1356f20ec59c62bd",
+          "outputs": {
+            "out/033-methods-reproducibility-extraction.json": {
+              "bytes": 574,
+              "sha256": "ab5bedddd7f8a3c0e8daea5f0e8a76842e434f84a83fdeaf1356f20ec59c62bd"
+            }
+          }
+        },
+        {
+          "name": "nullable-missing-fields",
+          "passed": true,
+          "elapsed_ms": 31.074,
+          "stdout_bytes": 601,
+          "stdout_sha256": "43944eb25115e02cb422eebc215944f436a8deaa1795be85280e7e114c5dbf86",
+          "outputs": {
+            "out/033-methods-reproducibility-extraction.json": {
+              "bytes": 601,
+              "sha256": "43944eb25115e02cb422eebc215944f436a8deaa1795be85280e7e114c5dbf86"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 34,
+      "ordinal": "034",
+      "title": "Reconcile bibliography entries with cited references",
+      "file": "034-bibliography-reconciliation.program",
+      "source_sha256": "ff274e61a282be3a18e1e5f10f3dc1305419006006003fa94bbf81f8a296e3c8",
+      "fixture_bytes": 6140,
+      "fixture_sha256": "bddb6fb9e5a6b44489ac5841661d53666b711aec16aafe256f18e8027fc1432e",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.34,
+          "stdout_bytes": 706,
+          "stdout_sha256": "d92c05fe6a67c6828f715915fecd0514acde072014461d5ff7f267c976d528a7",
+          "outputs": {
+            "out/034-bibliography-reconciliation.json": {
+              "bytes": 706,
+              "sha256": "d92c05fe6a67c6828f715915fecd0514acde072014461d5ff7f267c976d528a7"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.865,
+          "stdout_bytes": 701,
+          "stdout_sha256": "1c48eca7bc5e8f63133cdc5492f5e066114769b63281694a5924810fa7034ab1",
+          "outputs": {
+            "out/034-bibliography-reconciliation.json": {
+              "bytes": 701,
+              "sha256": "1c48eca7bc5e8f63133cdc5492f5e066114769b63281694a5924810fa7034ab1"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.444,
+          "stdout_bytes": 705,
+          "stdout_sha256": "659d438ab54ad6655fba81be7a91158fefe91f337384e1fd597908c09d8ce3a3",
+          "outputs": {
+            "out/034-bibliography-reconciliation.json": {
+              "bytes": 705,
+              "sha256": "659d438ab54ad6655fba81be7a91158fefe91f337384e1fd597908c09d8ce3a3"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 35,
+      "ordinal": "035",
+      "title": "Match paper dataset claims to local supplements",
+      "file": "035-paper-supplement-match.program",
+      "source_sha256": "43c7ff1a5897d7a07b92d2b44360c0c50959d5e14239aedaad08b2110b035e33",
+      "fixture_bytes": 5853,
+      "fixture_sha256": "db3bbb8de3d096e3c1f1f5d1fa37b15fbad11f3a644b3243a27bb906966832a9",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.754,
+          "stdout_bytes": 671,
+          "stdout_sha256": "fbc924973d2267ffe171d659c3fecfce6e801ac41a18f41d2ab375dc4628e194",
+          "outputs": {
+            "out/035-paper-supplement-match.json": {
+              "bytes": 671,
+              "sha256": "fbc924973d2267ffe171d659c3fecfce6e801ac41a18f41d2ab375dc4628e194"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 27.526,
+          "stdout_bytes": 645,
+          "stdout_sha256": "81bdbe6c3ff5f94800cce689c1c352d2df7c46fd750bb37d31db9c0076d9b75b",
+          "outputs": {
+            "out/035-paper-supplement-match.json": {
+              "bytes": 645,
+              "sha256": "81bdbe6c3ff5f94800cce689c1c352d2df7c46fd750bb37d31db9c0076d9b75b"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.668,
+          "stdout_bytes": 660,
+          "stdout_sha256": "b416f3d71fb8b7c22db39dd1da7cc15fdd82f47dd9aefebe78c4604a32765fe8",
+          "outputs": {
+            "out/035-paper-supplement-match.json": {
+              "bytes": 660,
+              "sha256": "b416f3d71fb8b7c22db39dd1da7cc15fdd82f47dd9aefebe78c4604a32765fe8"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 36,
+      "ordinal": "036",
+      "title": "Build a cited timeline from a local historical corpus",
+      "file": "036-archival-timeline.program",
+      "source_sha256": "3e4cc85e7ae4260b7913a0b7a4e226eb3972cc1cae54c463c1408b21684c15c7",
+      "fixture_bytes": 6328,
+      "fixture_sha256": "5a9ecd8af94a184319f4febfa70179dd5231af652ee77813506824a99aec4232",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.236,
+          "stdout_bytes": 692,
+          "stdout_sha256": "4047e4173d700d70e996e0f6aa29adee773d39fbd9584b014d14bcfc15ef32e8",
+          "outputs": {
+            "out/036-archival-timeline.json": {
+              "bytes": 692,
+              "sha256": "4047e4173d700d70e996e0f6aa29adee773d39fbd9584b014d14bcfc15ef32e8"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.794,
+          "stdout_bytes": 687,
+          "stdout_sha256": "7828a0a3f269f58435beca6d24b154278358ee6879c0e98aaa994ef211272aec",
+          "outputs": {
+            "out/036-archival-timeline.json": {
+              "bytes": 687,
+              "sha256": "7828a0a3f269f58435beca6d24b154278358ee6879c0e98aaa994ef211272aec"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 27.267,
+          "stdout_bytes": 696,
+          "stdout_sha256": "23c83c87277996ec45135e851d4892a4c0fd7c6f4afea6bdd5f793ffbe7f58d3",
+          "outputs": {
+            "out/036-archival-timeline.json": {
+              "bytes": 696,
+              "sha256": "23c83c87277996ec45135e851d4892a4c0fd7c6f4afea6bdd5f793ffbe7f58d3"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 37,
+      "ordinal": "037",
+      "title": "Answer a question from a closed manual corpus",
+      "file": "037-closed-manual-qa.program",
+      "source_sha256": "2f249792c0c806c4e1fcec66f2b7a6071ecf7fce6442002dbebd7c3f17babc5d",
+      "fixture_bytes": 7036,
+      "fixture_sha256": "10a0c84a59f455e63ba17a1b0978cefde342d0306da7eee773fbe92e97d000b7",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 33.376,
+          "stdout_bytes": 775,
+          "stdout_sha256": "832428506533c6dd124e9866b5e3128de88dba14b481d8d2201e19bc30f24791",
+          "outputs": {
+            "out/037-closed-manual-qa.json": {
+              "bytes": 775,
+              "sha256": "832428506533c6dd124e9866b5e3128de88dba14b481d8d2201e19bc30f24791"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.497,
+          "stdout_bytes": 681,
+          "stdout_sha256": "0bd2c1bf899bdb6afe2997cdfc25b299ee5655b3176140f704a5a4d56f104ae7",
+          "outputs": {
+            "out/037-closed-manual-qa.json": {
+              "bytes": 681,
+              "sha256": "0bd2c1bf899bdb6afe2997cdfc25b299ee5655b3176140f704a5a4d56f104ae7"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.456,
+          "stdout_bytes": 690,
+          "stdout_sha256": "81894957d1b3c765df03173f38aae68f8b6c77a68fe3267ca8758dab4677c99e",
+          "outputs": {
+            "out/037-closed-manual-qa.json": {
+              "bytes": 690,
+              "sha256": "81894957d1b3c765df03173f38aae68f8b6c77a68fe3267ca8758dab4677c99e"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 38,
+      "ordinal": "038",
+      "title": "Review a standards update against local implementations",
+      "file": "038-standards-implementation-review.program",
+      "source_sha256": "c44ec9b8af38c43dab9364b4f3324c9ce6944ccf1bed5826b47526ebd8bfa6a9",
+      "fixture_bytes": 6954,
+      "fixture_sha256": "d481b47c5c5e815515285037992ea3871aaa6dbc4dfe4c1b80415bd88f5e7bc9",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.481,
+          "stdout_bytes": 832,
+          "stdout_sha256": "77af7492ddfd59e313e765871c0b196690ccbf74bbfdf9e167f49a6179f0a1b9",
+          "outputs": {
+            "out/038-standards-implementation-review.json": {
+              "bytes": 832,
+              "sha256": "77af7492ddfd59e313e765871c0b196690ccbf74bbfdf9e167f49a6179f0a1b9"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.591,
+          "stdout_bytes": 722,
+          "stdout_sha256": "0b8f442e6b99651a485c43378d0baaa1f93f939d7113118edec0e1cdac400fa0",
+          "outputs": {
+            "out/038-standards-implementation-review.json": {
+              "bytes": 722,
+              "sha256": "0b8f442e6b99651a485c43378d0baaa1f93f939d7113118edec0e1cdac400fa0"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.958,
+          "stdout_bytes": 709,
+          "stdout_sha256": "8cedf1c38998fbaf9cb22d1fc04cfaf9128303ba8b5c9425d6fadad8e1c43880",
+          "outputs": {
+            "out/038-standards-implementation-review.json": {
+              "bytes": 709,
+              "sha256": "8cedf1c38998fbaf9cb22d1fc04cfaf9128303ba8b5c9425d6fadad8e1c43880"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 39,
+      "ordinal": "039",
+      "title": "Trace a result across a paper and replication reports",
+      "file": "039-paper-replication-trace.program",
+      "source_sha256": "09ec063e20c268be1e388e46f3a3eeb194f621ec305ff592274bc2b8f65331ce",
+      "fixture_bytes": 6224,
+      "fixture_sha256": "2377bedb42742d42858796ec31f1b2216e9cfe725674e081ff32ad3effc927eb",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.63,
+          "stdout_bytes": 709,
+          "stdout_sha256": "e116a00de42287e220c7716ba0f6c6f1e59173d04bed3b27cb47529b10dcbdbf",
+          "outputs": {
+            "out/039-paper-replication-trace.json": {
+              "bytes": 709,
+              "sha256": "e116a00de42287e220c7716ba0f6c6f1e59173d04bed3b27cb47529b10dcbdbf"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.282,
+          "stdout_bytes": 637,
+          "stdout_sha256": "88b89ce2913b518204aa641f0f2a27abe584f296f7b14ee0d51044a3afa1088a",
+          "outputs": {
+            "out/039-paper-replication-trace.json": {
+              "bytes": 637,
+              "sha256": "88b89ce2913b518204aa641f0f2a27abe584f296f7b14ee0d51044a3afa1088a"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.661,
+          "stdout_bytes": 627,
+          "stdout_sha256": "f245dfe0fb5d6adeb3fe0353bd22e47902db2be85279c45a6220fe09877545fe",
+          "outputs": {
+            "out/039-paper-replication-trace.json": {
+              "bytes": 627,
+              "sha256": "f245dfe0fb5d6adeb3fe0353bd22e47902db2be85279c45a6220fe09877545fe"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 40,
+      "ordinal": "040",
+      "title": "Code interview excerpts into a traceable qualitative memo",
+      "file": "040-qualitative-interview-coding.program",
+      "source_sha256": "ae738f5cd0a47fba099ad43cbaec163791b2904d1cdcf7c8952b300a446c5006",
+      "fixture_bytes": 7858,
+      "fixture_sha256": "e6a2dbb4c351c01f341659374f4595998e80d950aac1eb2ac8e86b5e895a9a90",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 31.91,
+          "stdout_bytes": 874,
+          "stdout_sha256": "0fc7688606333fc20a507ee5c84f1e7faf03d42120b4c7d72c52e70d7e88ecd6",
+          "outputs": {
+            "out/040-qualitative-interview-coding.json": {
+              "bytes": 874,
+              "sha256": "0fc7688606333fc20a507ee5c84f1e7faf03d42120b4c7d72c52e70d7e88ecd6"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.739,
+          "stdout_bytes": 777,
+          "stdout_sha256": "2f649abcaac08c48ed3d4130091449a2c601cd104614324aecb7f02effcb8147",
+          "outputs": {
+            "out/040-qualitative-interview-coding.json": {
+              "bytes": 777,
+              "sha256": "2f649abcaac08c48ed3d4130091449a2c601cd104614324aecb7f02effcb8147"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 27.252,
+          "stdout_bytes": 786,
+          "stdout_sha256": "e0bfde93c69d5b4f3480156170c2e2dba38b6ca3f5d521952ff22e3dac61acf5",
+          "outputs": {
+            "out/040-qualitative-interview-coding.json": {
+              "bytes": 786,
+              "sha256": "e0bfde93c69d5b4f3480156170c2e2dba38b6ca3f5d521952ff22e3dac61acf5"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 41,
+      "ordinal": "041",
+      "title": "Build a field-aware data dictionary from a raw export",
+      "file": "041-raw-export-data-dictionary.program",
+      "source_sha256": "2044a8130133e127565df2fd4e96c3f3b654694991278223bdf2884efa885d5e",
+      "fixture_bytes": 7219,
+      "fixture_sha256": "4e33e766685f3e94e61a34a4e1ca1f2b02b9bb15dae49d472b09037938ba0d6e",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.456,
+          "stdout_bytes": 843,
+          "stdout_sha256": "d066a13a15c2c647d27053950826cd16426ce6f3c25250484c47db01cfc4e991",
+          "outputs": {
+            "out/041-raw-export-data-dictionary.json": {
+              "bytes": 843,
+              "sha256": "d066a13a15c2c647d27053950826cd16426ce6f3c25250484c47db01cfc4e991"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.002,
+          "stdout_bytes": 760,
+          "stdout_sha256": "cf3f7c10c8d9d5984b38253ac0003f31d63fd51047ed7f653a444db75342fde1",
+          "outputs": {
+            "out/041-raw-export-data-dictionary.json": {
+              "bytes": 760,
+              "sha256": "cf3f7c10c8d9d5984b38253ac0003f31d63fd51047ed7f653a444db75342fde1"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.917,
+          "stdout_bytes": 769,
+          "stdout_sha256": "30f33703559a8207717d4eb142042d4e3e73c41508e3149dd6b5ba26ebebb222",
+          "outputs": {
+            "out/041-raw-export-data-dictionary.json": {
+              "bytes": 769,
+              "sha256": "30f33703559a8207717d4eb142042d4e3e73c41508e3149dd6b5ba26ebebb222"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 42,
+      "ordinal": "042",
+      "title": "Map an external feed into a canonical schema",
+      "file": "042-external-feed-schema-map.program",
+      "source_sha256": "162fe21d85c32083d59cb54da59c7ea6b6315f144e772ce7874e0169128967c4",
+      "fixture_bytes": 7318,
+      "fixture_sha256": "05cc7df8f26a1aa586b0c3c864810a6986ba6783912f6c223a690c1f6b306894",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 33.849,
+          "stdout_bytes": 882,
+          "stdout_sha256": "daa547fb9688a6e5d6de0a8ca19cfd9b67e0a5f230a5fe61f347e81a0bfb88cd",
+          "outputs": {
+            "out/042-external-feed-schema-map.json": {
+              "bytes": 882,
+              "sha256": "daa547fb9688a6e5d6de0a8ca19cfd9b67e0a5f230a5fe61f347e81a0bfb88cd"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 28.641,
+          "stdout_bytes": 802,
+          "stdout_sha256": "9a13ec9af022b6cc55ca0179117368bf91f15c31b5c5e01c74b9cd9de6506a59",
+          "outputs": {
+            "out/042-external-feed-schema-map.json": {
+              "bytes": 802,
+              "sha256": "9a13ec9af022b6cc55ca0179117368bf91f15c31b5c5e01c74b9cd9de6506a59"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 27.735,
+          "stdout_bytes": 811,
+          "stdout_sha256": "2ebd85d789c4d76a718af6c298c85f120187bf950828fc22e7d0fb1c78b5ed5a",
+          "outputs": {
+            "out/042-external-feed-schema-map.json": {
+              "bytes": 811,
+              "sha256": "2ebd85d789c4d76a718af6c298c85f120187bf950828fc22e7d0fb1c78b5ed5a"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 43,
+      "ordinal": "043",
+      "title": "Surface minority themes in free-text survey responses",
+      "file": "043-survey-minority-themes.program",
+      "source_sha256": "6ac6ea13bf77009b846996d6cc727a2caf12a895d832b12c453a77f6e4be390a",
+      "fixture_bytes": 8611,
+      "fixture_sha256": "ec75365b5fda20b232e0473aca4460c7de52f1b0a5d7fce4eb93b50e8c66ea60",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 34.597,
+          "stdout_bytes": 1019,
+          "stdout_sha256": "6687e9c44d4f3d219eac4c2afcb7fbfef03052697a5523f1a89a1bebd9644a68",
+          "outputs": {
+            "out/043-survey-minority-themes.json": {
+              "bytes": 1019,
+              "sha256": "6687e9c44d4f3d219eac4c2afcb7fbfef03052697a5523f1a89a1bebd9644a68"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 29.096,
+          "stdout_bytes": 914,
+          "stdout_sha256": "d1f9aabe5b2469568e16d12962576c90850edcfda8ebc6b38a3c0df6c7c4aca5",
+          "outputs": {
+            "out/043-survey-minority-themes.json": {
+              "bytes": 914,
+              "sha256": "d1f9aabe5b2469568e16d12962576c90850edcfda8ebc6b38a3c0df6c7c4aca5"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 28.059,
+          "stdout_bytes": 923,
+          "stdout_sha256": "00eabe01d553d09cbf347e68b978faa5f154aff92300a00597ae1bd990d456e9",
+          "outputs": {
+            "out/043-survey-minority-themes.json": {
+              "bytes": 923,
+              "sha256": "00eabe01d553d09cbf347e68b978faa5f154aff92300a00597ae1bd990d456e9"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 44,
+      "ordinal": "044",
+      "title": "Investigate conflicting metric totals across reports",
+      "file": "044-metric-total-reconciliation.program",
+      "source_sha256": "652959e4eb49c85fac36bc9f6b84862f7a7fa77b62eba2fb4d24866b5204d7e1",
+      "fixture_bytes": 6428,
+      "fixture_sha256": "0e75100c35cf87371a4b4bcca6546a027d0edc513a0addaa6664462346a415af",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 35.408,
+          "stdout_bytes": 712,
+          "stdout_sha256": "943e3e89ff712ad7c198ecf0813f2f6dd51faa03d54d81976d31185d08e4ec5c",
+          "outputs": {
+            "out/044-metric-total-reconciliation.json": {
+              "bytes": 712,
+              "sha256": "943e3e89ff712ad7c198ecf0813f2f6dd51faa03d54d81976d31185d08e4ec5c"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 27.56,
+          "stdout_bytes": 646,
+          "stdout_sha256": "23420664280336de12683425036303223e61c0fb50fe757e1fd3be8ef2982afc",
+          "outputs": {
+            "out/044-metric-total-reconciliation.json": {
+              "bytes": 646,
+              "sha256": "23420664280336de12683425036303223e61c0fb50fe757e1fd3be8ef2982afc"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 27.336,
+          "stdout_bytes": 645,
+          "stdout_sha256": "a388c8c747c60f955ae7068cea968b8ab025108e6bf3e1d8281c29304503e3ed",
+          "outputs": {
+            "out/044-metric-total-reconciliation.json": {
+              "bytes": 645,
+              "sha256": "a388c8c747c60f955ae7068cea968b8ab025108e6bf3e1d8281c29304503e3ed"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 45,
+      "ordinal": "045",
+      "title": "Turn validation failures into data-owner review notes",
+      "file": "045-validation-owner-review.program",
+      "source_sha256": "cf999272016ef56ef96e1dd31a62c7697f2927303eb1a52187c2bc76418b7c5c",
+      "fixture_bytes": 7840,
+      "fixture_sha256": "7869b68acf05e7926d51431e7e56d85db00cdf50b358a1093e81fa88200cf3d0",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 35.376,
+          "stdout_bytes": 928,
+          "stdout_sha256": "b2205360b6c64c0f05cf16ddfc2e9939fa77c97b49b3475f24ed692d183963d7",
+          "outputs": {
+            "out/045-validation-owner-review.json": {
+              "bytes": 928,
+              "sha256": "b2205360b6c64c0f05cf16ddfc2e9939fa77c97b49b3475f24ed692d183963d7"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 28.488,
+          "stdout_bytes": 863,
+          "stdout_sha256": "6682def28911bad601298ca5200f279c8312a3791b5ff925ad61c60aec48fc4e",
+          "outputs": {
+            "out/045-validation-owner-review.json": {
+              "bytes": 863,
+              "sha256": "6682def28911bad601298ca5200f279c8312a3791b5ff925ad61c60aec48fc4e"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 27.321,
+          "stdout_bytes": 872,
+          "stdout_sha256": "80bba45e7ce62d56c491cde125b7f9260301f7d9d43f8c8d45849c3836536e84",
+          "outputs": {
+            "out/045-validation-owner-review.json": {
+              "bytes": 872,
+              "sha256": "80bba45e7ce62d56c491cde125b7f9260301f7d9d43f8c8d45849c3836536e84"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 46,
+      "ordinal": "046",
+      "title": "Rank entity-resolution candidates without merging records",
+      "file": "046-entity-resolution-candidates.program",
+      "source_sha256": "8a6a0f5232d600eb0d9959296652240e6681a5c3df2303308e593326f2494316",
+      "fixture_bytes": 7429,
+      "fixture_sha256": "39884e8aaf1f63859aa5cbf49bab6d6e312d765bcbb051025e72bcefd274d449",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 33.662,
+          "stdout_bytes": 888,
+          "stdout_sha256": "0083a4720012dac2470dadbfb1b1726a6c0dff1535f8834dafc539119cd05f60",
+          "outputs": {
+            "out/046-entity-resolution-candidates.json": {
+              "bytes": 888,
+              "sha256": "0083a4720012dac2470dadbfb1b1726a6c0dff1535f8834dafc539119cd05f60"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 27.942,
+          "stdout_bytes": 798,
+          "stdout_sha256": "a96a3671023a22308c75f8a09312e05a139be0d6e4c1f675dd4e040f8a8875d4",
+          "outputs": {
+            "out/046-entity-resolution-candidates.json": {
+              "bytes": 798,
+              "sha256": "a96a3671023a22308c75f8a09312e05a139be0d6e4c1f675dd4e040f8a8875d4"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.651,
+          "stdout_bytes": 807,
+          "stdout_sha256": "d18ac3206c5b6a2208abf089f6dc9feaaf4f416e34fb454a80c5502cbce570c8",
+          "outputs": {
+            "out/046-entity-resolution-candidates.json": {
+              "bytes": 807,
+              "sha256": "d18ac3206c5b6a2208abf089f6dc9feaaf4f416e34fb454a80c5502cbce570c8"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 47,
+      "ordinal": "047",
+      "title": "Draft field-level lineage from local SQL references",
+      "file": "047-sql-field-lineage.program",
+      "source_sha256": "07eef81c6e9619bbcc5070e2cb13449a0eeedec6452b07f63d13efe3823c5d45",
+      "fixture_bytes": 8404,
+      "fixture_sha256": "baa23108f61d7d8c27c2f2e5a8dbc13ad8339b4d270a6148a9310a8f83bc2174",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.694,
+          "stdout_bytes": 971,
+          "stdout_sha256": "7e0623dfcf81d2f841e9f82f307731b10bac38391f00cf803c5a83926f00c141",
+          "outputs": {
+            "out/047-sql-field-lineage.json": {
+              "bytes": 971,
+              "sha256": "7e0623dfcf81d2f841e9f82f307731b10bac38391f00cf803c5a83926f00c141"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.316,
+          "stdout_bytes": 878,
+          "stdout_sha256": "f4e39cea091c029871da47e12251de79f4034b8f172b22db4699f497ad3a7b01",
+          "outputs": {
+            "out/047-sql-field-lineage.json": {
+              "bytes": 878,
+              "sha256": "f4e39cea091c029871da47e12251de79f4034b8f172b22db4699f497ad3a7b01"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 28.042,
+          "stdout_bytes": 887,
+          "stdout_sha256": "e366383f0e954268842e0bba92a78a999d4ccf6e5d38334b4aed4460a38f237a",
+          "outputs": {
+            "out/047-sql-field-lineage.json": {
+              "bytes": 887,
+              "sha256": "e366383f0e954268842e0bba92a78a999d4ccf6e5d38334b4aed4460a38f237a"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 48,
+      "ordinal": "048",
+      "title": "Diagnose missingness patterns by field and source partition",
+      "file": "048-partition-missingness-diagnosis.program",
+      "source_sha256": "e304c2ba437649b9b787a98d6513942f883cf334ae671f4c0fa24c76d862be3f",
+      "fixture_bytes": 7669,
+      "fixture_sha256": "28c57a8817b3d8477ec99a371a05e9bfcbd4a35f9db7afab57b40c7b0891dd17",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.284,
+          "stdout_bytes": 918,
+          "stdout_sha256": "6f71938f6e61b76629e5fb4fa738c5b36c47b65b2ba7ee76635788cb97e5f8c1",
+          "outputs": {
+            "out/048-partition-missingness-diagnosis.json": {
+              "bytes": 918,
+              "sha256": "6f71938f6e61b76629e5fb4fa738c5b36c47b65b2ba7ee76635788cb97e5f8c1"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.842,
+          "stdout_bytes": 822,
+          "stdout_sha256": "1146cb4919a9452ab0a2e532646d1ec4c4f5514881d31434745008c51736f97e",
+          "outputs": {
+            "out/048-partition-missingness-diagnosis.json": {
+              "bytes": 822,
+              "sha256": "1146cb4919a9452ab0a2e532646d1ec4c4f5514881d31434745008c51736f97e"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 27.342,
+          "stdout_bytes": 831,
+          "stdout_sha256": "b2bda01b3c5e8b95ff30b691952e59d815e3704c9a07ae9a5528c14aef94b556",
+          "outputs": {
+            "out/048-partition-missingness-diagnosis.json": {
+              "bytes": 831,
+              "sha256": "b2bda01b3c5e8b95ff30b691952e59d815e3704c9a07ae9a5528c14aef94b556"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 49,
+      "ordinal": "049",
+      "title": "Contextualize statistical outliers against explicit cohorts",
+      "file": "049-cohort-outlier-context.program",
+      "source_sha256": "dc43f03306f5c279f78678e46420578bc6a85f98fe3f1e434fbf38710e376bff",
+      "fixture_bytes": 7870,
+      "fixture_sha256": "1e37d8b84556d82ea94e579a12e1fbc53ee16c014ed867fd9a3e585a05c1f68d",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.019,
+          "stdout_bytes": 960,
+          "stdout_sha256": "82a890e901c925436401af1976eecc9c994ed637dd609f8f72f0ade1b9a96583",
+          "outputs": {
+            "out/049-cohort-outlier-context.json": {
+              "bytes": 960,
+              "sha256": "82a890e901c925436401af1976eecc9c994ed637dd609f8f72f0ade1b9a96583"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 26.573,
+          "stdout_bytes": 856,
+          "stdout_sha256": "8bc94113dc097f57f19dc987e18f478bd7c72df963d96308f74a805cd31bd37b",
+          "outputs": {
+            "out/049-cohort-outlier-context.json": {
+              "bytes": 856,
+              "sha256": "8bc94113dc097f57f19dc987e18f478bd7c72df963d96308f74a805cd31bd37b"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 26.685,
+          "stdout_bytes": 865,
+          "stdout_sha256": "fd478d50f04b2665d9dfc8081132c20a3ae65def8b0e5a865489ec0817aef609",
+          "outputs": {
+            "out/049-cohort-outlier-context.json": {
+              "bytes": 865,
+              "sha256": "fd478d50f04b2665d9dfc8081132c20a3ae65def8b0e5a865489ec0817aef609"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 50,
+      "ordinal": "050",
+      "title": "Detect vocabulary drift between two taxonomies",
+      "file": "050-taxonomy-vocabulary-drift.program",
+      "source_sha256": "09bff09149c00c2af7ff705babebafc93764a60c8c4db76630337103a6316bd6",
+      "fixture_bytes": 7591,
+      "fixture_sha256": "69b1e4747fbc2563b9c95d802aba9b4055d135ffad9eed9ed748a5776619b871",
+      "cases": [
+        {
+          "name": "high",
+          "passed": true,
+          "elapsed_ms": 32.47,
+          "stdout_bytes": 928,
+          "stdout_sha256": "0c567ccd6a4900a704c88306961e5579b09a334b4e918bdca17f8860a6db36db",
+          "outputs": {
+            "out/050-taxonomy-vocabulary-drift.json": {
+              "bytes": 928,
+              "sha256": "0c567ccd6a4900a704c88306961e5579b09a334b4e918bdca17f8860a6db36db"
+            }
+          }
+        },
+        {
+          "name": "low",
+          "passed": true,
+          "elapsed_ms": 27.393,
+          "stdout_bytes": 821,
+          "stdout_sha256": "9c5227bc1bc33d4adbf5b2a84a74577a50428c62dc26a65271bc0a53f5a2834e",
+          "outputs": {
+            "out/050-taxonomy-vocabulary-drift.json": {
+              "bytes": 821,
+              "sha256": "9c5227bc1bc33d4adbf5b2a84a74577a50428c62dc26a65271bc0a53f5a2834e"
+            }
+          }
+        },
+        {
+          "name": "alternate",
+          "passed": true,
+          "elapsed_ms": 27.45,
+          "stdout_bytes": 830,
+          "stdout_sha256": "4aacbbaddd8af6933b69910b9a7a00de2d20631efdc8067084eeb8f8c003c0be",
+          "outputs": {
+            "out/050-taxonomy-vocabulary-drift.json": {
+              "bytes": 830,
+              "sha256": "4aacbbaddd8af6933b69910b9a7a00de2d20631efdc8067084eeb8f8c003c0be"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 51,
+      "ordinal": "051",
+      "title": "Audit document reading order and heading structure",
+      "file": "051-document-heading-order-review.program",
+      "source_sha256": "3904a309a7d10de5311b90604b93d8e08578b3bffc4e7e4154b392c7ef9a0d1e",
+      "fixture_bytes": 3897,
+      "fixture_sha256": "8b8c262a46cbd5d502cd85fcb40b9387df2f89315461313bcac2a952c6e98b23",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.617,
+          "stdout_bytes": 574,
+          "stdout_sha256": "91ad23b74e42a7f353d76784b90b4b92390c2d77bda5bc01c8c04b37bc37f5e3",
+          "outputs": {
+            "out/051-document-heading-order-review.json": {
+              "bytes": 574,
+              "sha256": "91ad23b74e42a7f353d76784b90b4b92390c2d77bda5bc01c8c04b37bc37f5e3"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.208,
+          "stdout_bytes": 545,
+          "stdout_sha256": "00eebb515d27247ae11b4d2f35228204a99fb91b6ef47461eec1f2c7a9f664c8",
+          "outputs": {
+            "out/051-document-heading-order-review.json": {
+              "bytes": 545,
+              "sha256": "00eebb515d27247ae11b4d2f35228204a99fb91b6ef47461eec1f2c7a9f664c8"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 27.089,
+          "stdout_bytes": 552,
+          "stdout_sha256": "d162b36f3d83dea815a1144f55bd099e97daf13d8caac1fa6209e22d75b23e79",
+          "outputs": {
+            "out/051-document-heading-order-review.json": {
+              "bytes": 552,
+              "sha256": "d162b36f3d83dea815a1144f55bd099e97daf13d8caac1fa6209e22d75b23e79"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 52,
+      "ordinal": "052",
+      "title": "Draft evidence-bounded alt-text review candidates",
+      "file": "052-alt-text-evidence-review.program",
+      "source_sha256": "b3e1967d1edc7645aaba3d873968767492cd73bc30e14c3eb3bdaba7cf719972",
+      "fixture_bytes": 3787,
+      "fixture_sha256": "7069b506438740abe45616ad8b8bf32ce55c8d7fc2b63a6887e5664b8d3872e5",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.726,
+          "stdout_bytes": 634,
+          "stdout_sha256": "7b139c6485bba9f244f13ec08226e92ebae2557be9959db14896ccd72a9000d0",
+          "outputs": {
+            "out/052-alt-text-evidence-review.json": {
+              "bytes": 634,
+              "sha256": "7b139c6485bba9f244f13ec08226e92ebae2557be9959db14896ccd72a9000d0"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.943,
+          "stdout_bytes": 434,
+          "stdout_sha256": "82444417baa5ba08b11ac2b5a22b024b57137ece057b73a4a1d108f4547478ce",
+          "outputs": {
+            "out/052-alt-text-evidence-review.json": {
+              "bytes": 434,
+              "sha256": "82444417baa5ba08b11ac2b5a22b024b57137ece057b73a4a1d108f4547478ce"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 28.445,
+          "stdout_bytes": 441,
+          "stdout_sha256": "f08b0c608ea7a350b9385e2b58926ec1fc4c08a213cd14a3c0b5f58a6ea0369f",
+          "outputs": {
+            "out/052-alt-text-evidence-review.json": {
+              "bytes": 441,
+              "sha256": "f08b0c608ea7a350b9385e2b58926ec1fc4c08a213cd14a3c0b5f58a6ea0369f"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 53,
+      "ordinal": "053",
+      "title": "Review caption and transcript timing alignment",
+      "file": "053-caption-transcript-alignment-review.program",
+      "source_sha256": "98667a791ce567ff1f70d334046e59aa19959f6bb17e593ca92288a85af718f3",
+      "fixture_bytes": 3971,
+      "fixture_sha256": "b0d1486a4ec2e33e8b9525dec6d8f4696cbc3f355b51ecbc76ed82b93c4028f2",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.036,
+          "stdout_bytes": 592,
+          "stdout_sha256": "e6cf3d6771d3379477edee2afdfe75c4e6c265dd856b53e0538949ee7f8471b6",
+          "outputs": {
+            "out/053-caption-transcript-alignment-review.json": {
+              "bytes": 592,
+              "sha256": "e6cf3d6771d3379477edee2afdfe75c4e6c265dd856b53e0538949ee7f8471b6"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 25.835,
+          "stdout_bytes": 522,
+          "stdout_sha256": "78967252ab76273d8387a78821bb91add687fbfb92ed86a537a9ba3c39fafccd",
+          "outputs": {
+            "out/053-caption-transcript-alignment-review.json": {
+              "bytes": 522,
+              "sha256": "78967252ab76273d8387a78821bb91add687fbfb92ed86a537a9ba3c39fafccd"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 27.535,
+          "stdout_bytes": 529,
+          "stdout_sha256": "8f405648fa877c39837170e3a5843441b4c17a8a587ae66dca9ac0005515d239",
+          "outputs": {
+            "out/053-caption-transcript-alignment-review.json": {
+              "bytes": 529,
+              "sha256": "8f405648fa877c39837170e3a5843441b4c17a8a587ae66dca9ac0005515d239"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 54,
+      "ordinal": "054",
+      "title": "Generate plain-language interface message review",
+      "file": "054-plain-language-ui-copy-review.program",
+      "source_sha256": "8b454c652e372e699b9df69cfe505970446fff788c2d786c6c5d511fbf4268a8",
+      "fixture_bytes": 3823,
+      "fixture_sha256": "8b492df55531d92e7a4e22856798bff0d189f074f0b5bdcca7806ed1dd5ee9ce",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.715,
+          "stdout_bytes": 578,
+          "stdout_sha256": "ff7f278ed050594484bf68e44c53ecd249b297c152c51f7e21f517e8471358e8",
+          "outputs": {
+            "out/054-plain-language-ui-copy-review.json": {
+              "bytes": 578,
+              "sha256": "ff7f278ed050594484bf68e44c53ecd249b297c152c51f7e21f517e8471358e8"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 25.482,
+          "stdout_bytes": 443,
+          "stdout_sha256": "8a0cef895fc86c95294bd9428931eccfe662986d8aee56b9fe1742f1ae8cdfa2",
+          "outputs": {
+            "out/054-plain-language-ui-copy-review.json": {
+              "bytes": 443,
+              "sha256": "8a0cef895fc86c95294bd9428931eccfe662986d8aee56b9fe1742f1ae8cdfa2"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 26.461,
+          "stdout_bytes": 450,
+          "stdout_sha256": "1d58536b97b4f9107bd685d9bcf8123b07fe7c18e7cd1fe740732100bd3ed38a",
+          "outputs": {
+            "out/054-plain-language-ui-copy-review.json": {
+              "bytes": 450,
+              "sha256": "1d58536b97b4f9107bd685d9bcf8123b07fe7c18e7cd1fe740732100bd3ed38a"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 55,
+      "ordinal": "055",
+      "title": "Review localization strings for placeholder and plural risks",
+      "file": "055-localization-po-review.program",
+      "source_sha256": "ecbcb027b0727db7d8045e9fc48eecf4a8a3b3111bc8a4a15068c2e1783ddcaa",
+      "fixture_bytes": 3582,
+      "fixture_sha256": "f99c7cb558e33bcb9ab087c3534c432c6768d936f1157017ef4925937ef1f4ab",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.853,
+          "stdout_bytes": 541,
+          "stdout_sha256": "d83b258e1b2cab136153172ba1c8c224764e021a22f417aeb2acb3651f55c679",
+          "outputs": {
+            "out/055-localization-po-review.json": {
+              "bytes": 541,
+              "sha256": "d83b258e1b2cab136153172ba1c8c224764e021a22f417aeb2acb3651f55c679"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.39,
+          "stdout_bytes": 460,
+          "stdout_sha256": "f2e7be4c0baf883e7d3dd73ef529c2efe858d90de85daffb8fc095b2f137f949",
+          "outputs": {
+            "out/055-localization-po-review.json": {
+              "bytes": 460,
+              "sha256": "f2e7be4c0baf883e7d3dd73ef529c2efe858d90de85daffb8fc095b2f137f949"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 28.114,
+          "stdout_bytes": 467,
+          "stdout_sha256": "99a6460c003b66bf3ba93531d26d0e6fd7e503792004a19409cb2c99b8e24834",
+          "outputs": {
+            "out/055-localization-po-review.json": {
+              "bytes": 467,
+              "sha256": "99a6460c003b66bf3ba93531d26d0e6fd7e503792004a19409cb2c99b8e24834"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 56,
+      "ordinal": "056",
+      "title": "Map PDF and HTML structural findings to review actions",
+      "file": "056-document-structure-findings.program",
+      "source_sha256": "bb2a83cefc552c3fce65c4aa0940acd039a005376b4ef786bc4824df940c3e94",
+      "fixture_bytes": 3815,
+      "fixture_sha256": "62cc13eee34fc60cb89972548d71e5b82396f6dd46a3b806e13697acb1bfaf2d",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.872,
+          "stdout_bytes": 560,
+          "stdout_sha256": "99f772cc82d21063cbecc3fd1692430ec2d0176ebfe585eeaf678c9148911be6",
+          "outputs": {
+            "out/056-document-structure-findings.json": {
+              "bytes": 560,
+              "sha256": "99f772cc82d21063cbecc3fd1692430ec2d0176ebfe585eeaf678c9148911be6"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.694,
+          "stdout_bytes": 474,
+          "stdout_sha256": "bfbcffe64acf668dc1a60809e58576b9d61aa19572e2a8629c92126508a84c08",
+          "outputs": {
+            "out/056-document-structure-findings.json": {
+              "bytes": 474,
+              "sha256": "bfbcffe64acf668dc1a60809e58576b9d61aa19572e2a8629c92126508a84c08"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 28.38,
+          "stdout_bytes": 481,
+          "stdout_sha256": "e10fe0a55ccdcbeb9275df2187ef3cbe67461c621bf9af2863750dc49217a9e6",
+          "outputs": {
+            "out/056-document-structure-findings.json": {
+              "bytes": 481,
+              "sha256": "e10fe0a55ccdcbeb9275df2187ef3cbe67461c621bf9af2863750dc49217a9e6"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 57,
+      "ordinal": "057",
+      "title": "Cluster keyboard test logs into reproducible barriers",
+      "file": "057-keyboard-barrier-clusters.program",
+      "source_sha256": "48b5d7ad8f0e32604cd61b01d6bd122404e4a4edb21f6f489a777b7a005dd9a2",
+      "fixture_bytes": 3698,
+      "fixture_sha256": "c845f1c6629b64e3cafb0915c60447e8cab28a751953f0cd87cf5928eaac422d",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 35.531,
+          "stdout_bytes": 561,
+          "stdout_sha256": "e7c5163971d17557dc5f160d263bda09c54ccf6a20f4f00b8e150654ed49fcb2",
+          "outputs": {
+            "out/057-keyboard-barrier-clusters.json": {
+              "bytes": 561,
+              "sha256": "e7c5163971d17557dc5f160d263bda09c54ccf6a20f4f00b8e150654ed49fcb2"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.667,
+          "stdout_bytes": 488,
+          "stdout_sha256": "91345f75befefe4520aaf701f883183a2bcd5a92b7c18d7fca322d938ab64f2d",
+          "outputs": {
+            "out/057-keyboard-barrier-clusters.json": {
+              "bytes": 488,
+              "sha256": "91345f75befefe4520aaf701f883183a2bcd5a92b7c18d7fca322d938ab64f2d"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 29.077,
+          "stdout_bytes": 495,
+          "stdout_sha256": "dcc037ef56fe758e70511fc4868a02dbc791c76baad55f409cd768159ebbac20",
+          "outputs": {
+            "out/057-keyboard-barrier-clusters.json": {
+              "bytes": 495,
+              "sha256": "dcc037ef56fe758e70511fc4868a02dbc791c76baad55f409cd768159ebbac20"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 58,
+      "ordinal": "058",
+      "title": "Check chart narratives against computed table values",
+      "file": "058-chart-table-narrative-check.program",
+      "source_sha256": "ed3d65bf64fd2539e6030ff13f9a160bc776d51569f6491e5e589654c328e38e",
+      "fixture_bytes": 3506,
+      "fixture_sha256": "debf474556a55d4ba04f6e31f6ac47d3942803bbef36a28af3f24d45bd0235c8",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 37.413,
+          "stdout_bytes": 528,
+          "stdout_sha256": "deed051ef4a1fe40d41a66d8a59b817ef34401eaeb59a75ab3d25d8c71abd481",
+          "outputs": {
+            "out/058-chart-table-narrative-check.json": {
+              "bytes": 528,
+              "sha256": "deed051ef4a1fe40d41a66d8a59b817ef34401eaeb59a75ab3d25d8c71abd481"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.618,
+          "stdout_bytes": 454,
+          "stdout_sha256": "8022a92747f0d5c7d7f2a0c314d8fd8faeb4ef4b7d804fcf6c61dadc4e22725f",
+          "outputs": {
+            "out/058-chart-table-narrative-check.json": {
+              "bytes": 454,
+              "sha256": "8022a92747f0d5c7d7f2a0c314d8fd8faeb4ef4b7d804fcf6c61dadc4e22725f"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 28.075,
+          "stdout_bytes": 461,
+          "stdout_sha256": "65deba1edd902a385d6e88ed5f899d186c902fa8ded3d6deeb3273e25c04c73d",
+          "outputs": {
+            "out/058-chart-table-narrative-check.json": {
+              "bytes": 461,
+              "sha256": "65deba1edd902a385d6e88ed5f899d186c902fa8ded3d6deeb3273e25c04c73d"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 59,
+      "ordinal": "059",
+      "title": "Review help and error messages against control inventory",
+      "file": "059-help-control-message-join.program",
+      "source_sha256": "7c16c60b2477b37160365e1a37e3030481c27d6fdb4ab24d992f63a378fabdce",
+      "fixture_bytes": 3532,
+      "fixture_sha256": "00cd9061d4293397edda5761a6f577fd1b247f1e37c25689bce5920e63f01445",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 33.56,
+          "stdout_bytes": 533,
+          "stdout_sha256": "98f6411d81de81280dc011aba299b054d7a4095dca166ad8e10e66d3be9cfb08",
+          "outputs": {
+            "out/059-help-control-message-join.json": {
+              "bytes": 533,
+              "sha256": "98f6411d81de81280dc011aba299b054d7a4095dca166ad8e10e66d3be9cfb08"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 25.821,
+          "stdout_bytes": 459,
+          "stdout_sha256": "2f193f0d542f5d2e0aae5e55fc4a4a66b9c9d81091b32e2d0310eb2a92e21bf5",
+          "outputs": {
+            "out/059-help-control-message-join.json": {
+              "bytes": 459,
+              "sha256": "2f193f0d542f5d2e0aae5e55fc4a4a66b9c9d81091b32e2d0310eb2a92e21bf5"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 26.532,
+          "stdout_bytes": 466,
+          "stdout_sha256": "b9ffed6d55a318deb8bf079523732008efb22a0e52d15058071839042180ba96",
+          "outputs": {
+            "out/059-help-control-message-join.json": {
+              "bytes": 466,
+              "sha256": "b9ffed6d55a318deb8bf079523732008efb22a0e52d15058071839042180ba96"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 60,
+      "ordinal": "060",
+      "title": "Audit caption and transcript locale coverage",
+      "file": "060-caption-locale-coverage.program",
+      "source_sha256": "bc65cb7c5f440f26e6c8baa2ca8bfeebbfd845b6822de29a43977e3f682a75a1",
+      "fixture_bytes": 3201,
+      "fixture_sha256": "3b62609d6acd354601ad6f8a36d8805be7b0b4eac858210517896a42389ce262",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 33.377,
+          "stdout_bytes": 481,
+          "stdout_sha256": "9301e56b454e6e9c412dbe2b97601920ced9490169ecded046b7ce2ad9a41ea5",
+          "outputs": {
+            "out/060-caption-locale-coverage.json": {
+              "bytes": 481,
+              "sha256": "9301e56b454e6e9c412dbe2b97601920ced9490169ecded046b7ce2ad9a41ea5"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 27.157,
+          "stdout_bytes": 404,
+          "stdout_sha256": "cb0d063efe6e27e74d483e3188f241dfa452f717b5fd813f04cddf80fcfb5124",
+          "outputs": {
+            "out/060-caption-locale-coverage.json": {
+              "bytes": 404,
+              "sha256": "cb0d063efe6e27e74d483e3188f241dfa452f717b5fd813f04cddf80fcfb5124"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 26.739,
+          "stdout_bytes": 411,
+          "stdout_sha256": "ab7b48650d8688829b54ce908b4df725d4030b2f27aa824615e585ace676ec27",
+          "outputs": {
+            "out/060-caption-locale-coverage.json": {
+              "bytes": 411,
+              "sha256": "ab7b48650d8688829b54ce908b4df725d4030b2f27aa824615e585ace676ec27"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 61,
+      "ordinal": "061",
+      "title": "Map package vulnerabilities to local runtime usage",
+      "file": "061-vulnerability-usage-review.program",
+      "source_sha256": "fead766cc3909e72ae225928e460564553cbe02cdf2eed930de921f1bd75148c",
+      "fixture_bytes": 3796,
+      "fixture_sha256": "a47a3441c166fbfd0f854931342366e2c263e39c6c94ac040f19383332899adc",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.188,
+          "stdout_bytes": 606,
+          "stdout_sha256": "cf30176f9c2b04348a5ee9b65534eb1cb72353461262a6aa5d8924f9db3bd8af",
+          "outputs": {
+            "out/061-vulnerability-usage-review.json": {
+              "bytes": 606,
+              "sha256": "cf30176f9c2b04348a5ee9b65534eb1cb72353461262a6aa5d8924f9db3bd8af"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.391,
+          "stdout_bytes": 512,
+          "stdout_sha256": "7da9f5d31a307c6a0572990c0526220224a8a52a67f7f80cde73c1f42d535725",
+          "outputs": {
+            "out/061-vulnerability-usage-review.json": {
+              "bytes": 512,
+              "sha256": "7da9f5d31a307c6a0572990c0526220224a8a52a67f7f80cde73c1f42d535725"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 27.251,
+          "stdout_bytes": 519,
+          "stdout_sha256": "791824389d1c5b57d49632d92ca88d2af11c1c476e28b8443c599a3ac7a5ba65",
+          "outputs": {
+            "out/061-vulnerability-usage-review.json": {
+              "bytes": 519,
+              "sha256": "791824389d1c5b57d49632d92ca88d2af11c1c476e28b8443c599a3ac7a5ba65"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 62,
+      "ordinal": "062",
+      "title": "Review access-control changes against declared roles",
+      "file": "062-access-control-diff-review.program",
+      "source_sha256": "410f361c4bdfea7307565bcb88a07e0addef038ef1ed9957a0319ee4da5f72ab",
+      "fixture_bytes": 3810,
+      "fixture_sha256": "bd4ccbef0d9e1d028e654c16602a46e23e3b5622e7f0fa858dc1929114564577",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 35.439,
+          "stdout_bytes": 616,
+          "stdout_sha256": "143b15b041c00b8f212da7889172675469172b8c274d1c3b6a785975026cd5dc",
+          "outputs": {
+            "out/062-access-control-diff-review.json": {
+              "bytes": 616,
+              "sha256": "143b15b041c00b8f212da7889172675469172b8c274d1c3b6a785975026cd5dc"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.429,
+          "stdout_bytes": 505,
+          "stdout_sha256": "1de7298e6cac190b14a96b7136427f7eff3c95933b66783ed85b069102c87a6c",
+          "outputs": {
+            "out/062-access-control-diff-review.json": {
+              "bytes": 505,
+              "sha256": "1de7298e6cac190b14a96b7136427f7eff3c95933b66783ed85b069102c87a6c"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 26.706,
+          "stdout_bytes": 512,
+          "stdout_sha256": "902e5345d727abfc4986c43672a5094c80183f2e7610954e9e3bbcaf362c68d8",
+          "outputs": {
+            "out/062-access-control-diff-review.json": {
+              "bytes": 512,
+              "sha256": "902e5345d727abfc4986c43672a5094c80183f2e7610954e9e3bbcaf362c68d8"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 63,
+      "ordinal": "063",
+      "title": "Review sensitive-data redaction candidates by span ID",
+      "file": "063-redaction-span-review.program",
+      "source_sha256": "533fef1cdf32164b560ae4472b8e93cf3ea03a1de8d717730c5216da5ad09a5c",
+      "fixture_bytes": 3575,
+      "fixture_sha256": "31ca0129a03d87df83a792939027c269bcb12820e1b40bc598e8e4ddfa4309cf",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.086,
+          "stdout_bytes": 514,
+          "stdout_sha256": "e57f5c5c290c7225179108c0548b5d658b30f3329d955c6d9dc4f459acd0fecc",
+          "outputs": {
+            "out/063-redaction-span-review.json": {
+              "bytes": 514,
+              "sha256": "e57f5c5c290c7225179108c0548b5d658b30f3329d955c6d9dc4f459acd0fecc"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.494,
+          "stdout_bytes": 471,
+          "stdout_sha256": "43b58bfbb60845ddab13b7763baec2f28e25887299b34ba9908ab7e73cfc9132",
+          "outputs": {
+            "out/063-redaction-span-review.json": {
+              "bytes": 471,
+              "sha256": "43b58bfbb60845ddab13b7763baec2f28e25887299b34ba9908ab7e73cfc9132"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 27.825,
+          "stdout_bytes": 478,
+          "stdout_sha256": "255149dd79b6fd5bb9e78e17e24c2bb95ed24f935ea87b88178642b935fda6ab",
+          "outputs": {
+            "out/063-redaction-span-review.json": {
+              "bytes": 478,
+              "sha256": "255149dd79b6fd5bb9e78e17e24c2bb95ed24f935ea87b88178642b935fda6ab"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 64,
+      "ordinal": "064",
+      "title": "Inventory records eligible for retention review",
+      "file": "064-retention-eligibility-inventory.program",
+      "source_sha256": "344a57ae52d508bf6adc88268dc2d05cd6c4344e237c0a1a34551a58bac35f80",
+      "fixture_bytes": 3676,
+      "fixture_sha256": "09322c0b30a62d1a0749dc9b187fb498be918e8fe923c9f491a6f4e322cf7fe3",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.307,
+          "stdout_bytes": 565,
+          "stdout_sha256": "da34dddc0bc9fd00db6273895de26f50757aec86b2967288a53502520eec81ad",
+          "outputs": {
+            "out/064-retention-eligibility-inventory.json": {
+              "bytes": 565,
+              "sha256": "da34dddc0bc9fd00db6273895de26f50757aec86b2967288a53502520eec81ad"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 27.805,
+          "stdout_bytes": 443,
+          "stdout_sha256": "e3dcd4d0ba33c51669fd6b2a54921d4cffc9acd124c3d113945872bace62591c",
+          "outputs": {
+            "out/064-retention-eligibility-inventory.json": {
+              "bytes": 443,
+              "sha256": "e3dcd4d0ba33c51669fd6b2a54921d4cffc9acd124c3d113945872bace62591c"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 28.68,
+          "stdout_bytes": 450,
+          "stdout_sha256": "e5457bded91b746d6f4d807af04e651c313dec3d49d144642c36ff573bd43899",
+          "outputs": {
+            "out/064-retention-eligibility-inventory.json": {
+              "bytes": 450,
+              "sha256": "e5457bded91b746d6f4d807af04e651c313dec3d49d144642c36ff573bd43899"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 65,
+      "ordinal": "065",
+      "title": "Map a data-subject request to local source inventory",
+      "file": "065-data-request-source-index.program",
+      "source_sha256": "aa72a6cc6903c3dbb395a4a6a43b60b89f4ded6775abba9583a9dd258b9f90cd",
+      "fixture_bytes": 3826,
+      "fixture_sha256": "cb9c63927668847c7406a9c82beeb18268cee23b6df7547da643154f459ebc7c",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.583,
+          "stdout_bytes": 585,
+          "stdout_sha256": "524fe4fc310c634b97165b12af50f9bc02be0d72d013824619bdb4b1790d5a5e",
+          "outputs": {
+            "out/065-data-request-source-index.json": {
+              "bytes": 585,
+              "sha256": "524fe4fc310c634b97165b12af50f9bc02be0d72d013824619bdb4b1790d5a5e"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 25.097,
+          "stdout_bytes": 501,
+          "stdout_sha256": "31dea43a03293dca5e3aaddac07746e5451b6ab724532713754f1825cdbcc0e6",
+          "outputs": {
+            "out/065-data-request-source-index.json": {
+              "bytes": 501,
+              "sha256": "31dea43a03293dca5e3aaddac07746e5451b6ab724532713754f1825cdbcc0e6"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 26.656,
+          "stdout_bytes": 508,
+          "stdout_sha256": "c58b23ebe676cad6d7c973efce2d3a193c311031c02ea5349a6af3ba0837fd70",
+          "outputs": {
+            "out/065-data-request-source-index.json": {
+              "bytes": 508,
+              "sha256": "c58b23ebe676cad6d7c973efce2d3a193c311031c02ea5349a6af3ba0837fd70"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 66,
+      "ordinal": "066",
+      "title": "Compare AI data flows to a supplied policy checklist",
+      "file": "066-ai-data-flow-policy-gap-map.program",
+      "source_sha256": "fb6f1daaf64dc3583e8cb50bd87ef98d9c9d9b78c88377cf59f2efcacee0f6d0",
+      "fixture_bytes": 3695,
+      "fixture_sha256": "26c6e1100a226470891a1ad150e5a7cc50bcb839b7322de671ce515ab9ded0e3",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.504,
+          "stdout_bytes": 544,
+          "stdout_sha256": "7fd2375f601207e2d6cff253891e747c56cfcec7a761e785b7e72e6fceb91194",
+          "outputs": {
+            "out/066-ai-data-flow-policy-gap-map.json": {
+              "bytes": 544,
+              "sha256": "7fd2375f601207e2d6cff253891e747c56cfcec7a761e785b7e72e6fceb91194"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.702,
+          "stdout_bytes": 458,
+          "stdout_sha256": "919271ab148ed2d236e75b83b4db83f25568ba18d5f29641942f8e69e42025ef",
+          "outputs": {
+            "out/066-ai-data-flow-policy-gap-map.json": {
+              "bytes": 458,
+              "sha256": "919271ab148ed2d236e75b83b4db83f25568ba18d5f29641942f8e69e42025ef"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 27.701,
+          "stdout_bytes": 465,
+          "stdout_sha256": "06c004d5dcb01b0926a29fb112bdcadbae55333101c5ddb9372e89f35cde0e8d",
+          "outputs": {
+            "out/066-ai-data-flow-policy-gap-map.json": {
+              "bytes": 465,
+              "sha256": "06c004d5dcb01b0926a29fb112bdcadbae55333101c5ddb9372e89f35cde0e8d"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 67,
+      "ordinal": "067",
+      "title": "Trace CI security findings to source evidence",
+      "file": "067-ci-security-finding-provenance.program",
+      "source_sha256": "4856b50305a03061922674801875954cf8470c63359383519026df2fd94b54ae",
+      "fixture_bytes": 3591,
+      "fixture_sha256": "78100ad1c519d1874aa2ed1dd2d36e8585510a73ac670a2b19e456ece4332fb0",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 33.683,
+          "stdout_bytes": 579,
+          "stdout_sha256": "120fb82f6dbce3d444d8fbe2be3d447fc46c716dc3cb348d1d76c0ef4b4f0d2d",
+          "outputs": {
+            "out/067-ci-security-finding-provenance.json": {
+              "bytes": 579,
+              "sha256": "120fb82f6dbce3d444d8fbe2be3d447fc46c716dc3cb348d1d76c0ef4b4f0d2d"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 25.781,
+          "stdout_bytes": 459,
+          "stdout_sha256": "aaa60f468b0faad5bddb1a9c932f82312bce578d3a09a79b07ae4ffd6c98e5a1",
+          "outputs": {
+            "out/067-ci-security-finding-provenance.json": {
+              "bytes": 459,
+              "sha256": "aaa60f468b0faad5bddb1a9c932f82312bce578d3a09a79b07ae4ffd6c98e5a1"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 27.423,
+          "stdout_bytes": 466,
+          "stdout_sha256": "c042bc23e5c8ac9037d2cbf75dd261f0e1d293950828947ea0a5ba40c30991c9",
+          "outputs": {
+            "out/067-ci-security-finding-provenance.json": {
+              "bytes": 466,
+              "sha256": "c042bc23e5c8ac9037d2cbf75dd261f0e1d293950828947ea0a5ba40c30991c9"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 68,
+      "ordinal": "068",
+      "title": "Review audit event ordering and sequence gaps",
+      "file": "068-audit-event-sequence-review.program",
+      "source_sha256": "cd2d909a76b6abc7a4b3cd22c11cf9ddd9b0e75974cc9df4a90a206b41c19f9d",
+      "fixture_bytes": 3502,
+      "fixture_sha256": "48a4a6dbd7726bdae129e8847b542dd2ac686944826d23e6929c7275229214d7",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 33.144,
+          "stdout_bytes": 552,
+          "stdout_sha256": "237628ccf5563bb02de93fcd76c27c29e8afe26b98dedbc13e085b30daf2e250",
+          "outputs": {
+            "out/068-audit-event-sequence-review.json": {
+              "bytes": 552,
+              "sha256": "237628ccf5563bb02de93fcd76c27c29e8afe26b98dedbc13e085b30daf2e250"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 25.776,
+          "stdout_bytes": 482,
+          "stdout_sha256": "b5683aec91f1fcca5afd30d0ffdbfc852ce3e3d2db6d0be08e66d503f45ba607",
+          "outputs": {
+            "out/068-audit-event-sequence-review.json": {
+              "bytes": 482,
+              "sha256": "b5683aec91f1fcca5afd30d0ffdbfc852ce3e3d2db6d0be08e66d503f45ba607"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 27.115,
+          "stdout_bytes": 489,
+          "stdout_sha256": "c780c967122191b6651a4b447e17736f8b15c9b5ab7cf20e2de9ef0d14a80f25",
+          "outputs": {
+            "out/068-audit-event-sequence-review.json": {
+              "bytes": 489,
+              "sha256": "c780c967122191b6651a4b447e17736f8b15c9b5ab7cf20e2de9ef0d14a80f25"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 69,
+      "ordinal": "069",
+      "title": "Map discovered license notices to attribution inventory",
+      "file": "069-license-attribution-map.program",
+      "source_sha256": "d621d22b1e1b10b012090df865a71331c3b917d7466ac682a085e9101df23da5",
+      "fixture_bytes": 3486,
+      "fixture_sha256": "bed9be321b176de6ffaed8b2744fd3d269e57d720c44204c015f4d62d646e10a",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 33.512,
+          "stdout_bytes": 520,
+          "stdout_sha256": "5ac6bb9c55a5688dcd1383472e2232350f7b516d0e05c2b3c1b9a7d69f391dcb",
+          "outputs": {
+            "out/069-license-attribution-map.json": {
+              "bytes": 520,
+              "sha256": "5ac6bb9c55a5688dcd1383472e2232350f7b516d0e05c2b3c1b9a7d69f391dcb"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 25.797,
+          "stdout_bytes": 435,
+          "stdout_sha256": "747122a10808999ebc98918fcf01e4c90ff6a3c9f280ffeab99b63239f3661bb",
+          "outputs": {
+            "out/069-license-attribution-map.json": {
+              "bytes": 435,
+              "sha256": "747122a10808999ebc98918fcf01e4c90ff6a3c9f280ffeab99b63239f3661bb"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 26.901,
+          "stdout_bytes": 442,
+          "stdout_sha256": "382ee35ced0eb6d01cc70b59b9c8ca9ae97d0cf1ecca9e93cfc5ad018b2a0f3b",
+          "outputs": {
+            "out/069-license-attribution-map.json": {
+              "bytes": 442,
+              "sha256": "382ee35ced0eb6d01cc70b59b9c8ca9ae97d0cf1ecca9e93cfc5ad018b2a0f3b"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 70,
+      "ordinal": "070",
+      "title": "Summarize offline model-assisted fixture regressions",
+      "file": "070-model-fixture-regression-review.program",
+      "source_sha256": "b846614fc38b3094d363ef9f76952c1ae9ba1fe48c6413768e92a20429de5c8f",
+      "fixture_bytes": 3798,
+      "fixture_sha256": "80ab48510ca817256480a2577ef60132a2491fb1bdfa397ce90aaf79dc8bf87a",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.104,
+          "stdout_bytes": 583,
+          "stdout_sha256": "50753ff0816688211b570000cc282b9af748c2ecec3a9310215f7a48d8b6541f",
+          "outputs": {
+            "out/070-model-fixture-regression-review.json": {
+              "bytes": 583,
+              "sha256": "50753ff0816688211b570000cc282b9af748c2ecec3a9310215f7a48d8b6541f"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 25.906,
+          "stdout_bytes": 490,
+          "stdout_sha256": "ff7e7bc5560559ac3b9fc5b3825248e61424c4b34fa574702c7826e7405376c5",
+          "outputs": {
+            "out/070-model-fixture-regression-review.json": {
+              "bytes": 490,
+              "sha256": "ff7e7bc5560559ac3b9fc5b3825248e61424c4b34fa574702c7826e7405376c5"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 26.884,
+          "stdout_bytes": 497,
+          "stdout_sha256": "44eff6c2a3522fec7cc642f30bcd14f1a984d936ae2371e2b8c663a64bbc6897",
+          "outputs": {
+            "out/070-model-fixture-regression-review.json": {
+              "bytes": 497,
+              "sha256": "44eff6c2a3522fec7cc642f30bcd14f1a984d936ae2371e2b8c663a64bbc6897"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 71,
+      "ordinal": "071",
+      "title": "Prepare Downloads folder filing suggestions",
+      "file": "071-downloads-filing-suggestions.program",
+      "source_sha256": "da1fb490c3a4948861b89b00973241a1a9dc947ad1e84497eff2e705b23fc125",
+      "fixture_bytes": 3853,
+      "fixture_sha256": "1444f2a45256e73ceb2d18e270c99ed92bcbeb58be164083e093070b693ebeb7",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.041,
+          "stdout_bytes": 606,
+          "stdout_sha256": "00d354b8dfdbfe7c1fe2d80d8f061cb2ee0b5410c08bcf2f328ba58dd3549b13",
+          "outputs": {
+            "out/071-downloads-filing-suggestions.json": {
+              "bytes": 606,
+              "sha256": "00d354b8dfdbfe7c1fe2d80d8f061cb2ee0b5410c08bcf2f328ba58dd3549b13"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 27.517,
+          "stdout_bytes": 499,
+          "stdout_sha256": "612ced585b2daea00af606df377879d41dcfd47832a5b0298164e749866a7c54",
+          "outputs": {
+            "out/071-downloads-filing-suggestions.json": {
+              "bytes": 499,
+              "sha256": "612ced585b2daea00af606df377879d41dcfd47832a5b0298164e749866a7c54"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 26.961,
+          "stdout_bytes": 506,
+          "stdout_sha256": "ec0b2b8a368331c15e3e32a42639f6b65fc8fff410e816a2d33228e498e1b974",
+          "outputs": {
+            "out/071-downloads-filing-suggestions.json": {
+              "bytes": 506,
+              "sha256": "ec0b2b8a368331c15e3e32a42639f6b65fc8fff410e816a2d33228e498e1b974"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 72,
+      "ordinal": "072",
+      "title": "Build a timestamped meeting recording clip index",
+      "file": "072-meeting-clip-index.program",
+      "source_sha256": "49c743a1e720301e3f1041365a3e4da32ab9aea44bb283cd4e005a863469d3f1",
+      "fixture_bytes": 4185,
+      "fixture_sha256": "7dfd9e7abd31fbcd9ec3ffdf98d1f958b8d6e350c7c1250402e39fdef108bbf6",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 35.094,
+          "stdout_bytes": 657,
+          "stdout_sha256": "a684f7806894c3112f57e5e2bf11c5c71dbd958ff101ce4fc528c222a2b17175",
+          "outputs": {
+            "out/072-meeting-clip-index.json": {
+              "bytes": 657,
+              "sha256": "a684f7806894c3112f57e5e2bf11c5c71dbd958ff101ce4fc528c222a2b17175"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.967,
+          "stdout_bytes": 558,
+          "stdout_sha256": "0751321f4d08cc250e883da9e596d5683770d63bda946151c1cadb0c1126431e",
+          "outputs": {
+            "out/072-meeting-clip-index.json": {
+              "bytes": 558,
+              "sha256": "0751321f4d08cc250e883da9e596d5683770d63bda946151c1cadb0c1126431e"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 28.99,
+          "stdout_bytes": 565,
+          "stdout_sha256": "aa342d2f11aa52b07cda54d8aac59340de17e095b14d6928b511495da96bf549",
+          "outputs": {
+            "out/072-meeting-clip-index.json": {
+              "bytes": 565,
+              "sha256": "aa342d2f11aa52b07cda54d8aac59340de17e095b14d6928b511495da96bf549"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 73,
+      "ordinal": "073",
+      "title": "Bundle screenshot-to-UI bug evidence from OCR",
+      "file": "073-screenshot-ui-bug-evidence.program",
+      "source_sha256": "2739b278175b7effdead6c7904df78c172c3abf908b111676f81ea387fdfdad8",
+      "fixture_bytes": 3642,
+      "fixture_sha256": "aea0d666e2cc1594ccfefea94fab19c674093cdc93f7ffac8f0094a1229e89d1",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 34.863,
+          "stdout_bytes": 556,
+          "stdout_sha256": "9c07db4bb737531f8ee0f9612fddcc4259df11de874ceb98902dee34e4959a6d",
+          "outputs": {
+            "out/073-screenshot-ui-bug-evidence.json": {
+              "bytes": 556,
+              "sha256": "9c07db4bb737531f8ee0f9612fddcc4259df11de874ceb98902dee34e4959a6d"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.875,
+          "stdout_bytes": 486,
+          "stdout_sha256": "e246509c1d580ab4dbbff631ce1c0ce7b72e5f951657c37a72d627ee09791c7d",
+          "outputs": {
+            "out/073-screenshot-ui-bug-evidence.json": {
+              "bytes": 486,
+              "sha256": "e246509c1d580ab4dbbff631ce1c0ce7b72e5f951657c37a72d627ee09791c7d"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 29.549,
+          "stdout_bytes": 493,
+          "stdout_sha256": "8864e0a27bae66ca6ff425a5a2603f0ba734ba5ac0dfaf89ae34e24f5dbccb22",
+          "outputs": {
+            "out/073-screenshot-ui-bug-evidence.json": {
+              "bytes": 493,
+              "sha256": "8864e0a27bae66ca6ff425a5a2603f0ba734ba5ac0dfaf89ae34e24f5dbccb22"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 74,
+      "ordinal": "074",
+      "title": "Cross-reference warranty, receipt and product records",
+      "file": "074-warranty-receipt-product-cross-reference.program",
+      "source_sha256": "e123e454df78b10f1d936fa3a5fab6476af9ebd165f46cb57c574527c70d1dfe",
+      "fixture_bytes": 3831,
+      "fixture_sha256": "5650d80bd0cfdb0fd9e20fa21587a1297d2be40420a15b35bd7f1ca104dcbdc8",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 33.888,
+          "stdout_bytes": 584,
+          "stdout_sha256": "7d2f34d660a07fc1d0478da1af4fe9a3256fc8982e19b376ff47dc2ab2575664",
+          "outputs": {
+            "out/074-warranty-receipt-product-cross-reference.json": {
+              "bytes": 584,
+              "sha256": "7d2f34d660a07fc1d0478da1af4fe9a3256fc8982e19b376ff47dc2ab2575664"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 25.867,
+          "stdout_bytes": 496,
+          "stdout_sha256": "13314ef50e663141fda3a40f872799f0951fef284af92c07580b9a2d35ee6685",
+          "outputs": {
+            "out/074-warranty-receipt-product-cross-reference.json": {
+              "bytes": 496,
+              "sha256": "13314ef50e663141fda3a40f872799f0951fef284af92c07580b9a2d35ee6685"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 27.278,
+          "stdout_bytes": 503,
+          "stdout_sha256": "834bb6da4ebac6ffbc6861deb2620da25fdde925e56372e6c3dd5437acccb8c6",
+          "outputs": {
+            "out/074-warranty-receipt-product-cross-reference.json": {
+              "bytes": 503,
+              "sha256": "834bb6da4ebac6ffbc6861deb2620da25fdde925e56372e6c3dd5437acccb8c6"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 75,
+      "ordinal": "075",
+      "title": "Cluster similar media for human duplicate review",
+      "file": "075-similar-media-human-review.program",
+      "source_sha256": "5a799baa6b43d989da120a50d9f89091e2e8f97d5fb4b5492dbe72377ea6a656",
+      "fixture_bytes": 4017,
+      "fixture_sha256": "bc85cce0b4884380c660d2bae09d0851eddecf993d448ccc3fb4f46054ba2915",
+      "cases": [
+        {
+          "name": "confident-local-evidence",
+          "passed": true,
+          "elapsed_ms": 33.621,
+          "stdout_bytes": 678,
+          "stdout_sha256": "b60ae31a8f625804cc77eeba550de531d56435ec8f58c79842908ae20c691aa7",
+          "outputs": {
+            "out/075-similar-media-human-review.json": {
+              "bytes": 678,
+              "sha256": "b60ae31a8f625804cc77eeba550de531d56435ec8f58c79842908ae20c691aa7"
+            }
+          }
+        },
+        {
+          "name": "below-threshold-review",
+          "passed": true,
+          "elapsed_ms": 26.433,
+          "stdout_bytes": 484,
+          "stdout_sha256": "a00c3df27327301098a0e187d48dc53431fcb47e3ace5a40c7dd7b1e168dcd44",
+          "outputs": {
+            "out/075-similar-media-human-review.json": {
+              "bytes": 484,
+              "sha256": "a00c3df27327301098a0e187d48dc53431fcb47e3ace5a40c7dd7b1e168dcd44"
+            }
+          }
+        },
+        {
+          "name": "confident-human-review-label",
+          "passed": true,
+          "elapsed_ms": 27.158,
+          "stdout_bytes": 491,
+          "stdout_sha256": "f0803ab05454477b2654304b9cbe4023523081b97d62c49255045d47f78cb61c",
+          "outputs": {
+            "out/075-similar-media-human-review.json": {
+              "bytes": 491,
+              "sha256": "f0803ab05454477b2654304b9cbe4023523081b97d62c49255045d47f78cb61c"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 76,
+      "ordinal": "076",
+      "title": "Answer a troubleshooting question from a closed local knowledge set",
+      "file": "076-closed-local-knowledge-answer.program",
+      "source_sha256": "effdbbbb77ca8cd117be1f07692db72ff4436d944123ba337eabfeb3b5099541",
+      "fixture_bytes": 11548,
+      "fixture_sha256": "bc60ec07dcd2acff315f46ab9363cc9ab2cfac790c7e91f1120d679a2b15adff",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 41.67,
+          "stdout_bytes": 311,
+          "stdout_sha256": "fcfa700ef1cb8a098b24fc055bd4b79dc63a27e5261886c25ba00da46fa56ef7",
+          "outputs": {
+            "out/076-closed-local-knowledge-answer.md": {
+              "bytes": 311,
+              "sha256": "fcfa700ef1cb8a098b24fc055bd4b79dc63a27e5261886c25ba00da46fa56ef7"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 25.009,
+          "stdout_bytes": 76,
+          "stdout_sha256": "8c2e2ef9c493260f4cad623a78f18127853e44102e3d845677cbab6e8084aa12",
+          "outputs": {
+            "out/076-closed-local-knowledge-answer.md": {
+              "bytes": 76,
+              "sha256": "8c2e2ef9c493260f4cad623a78f18127853e44102e3d845677cbab6e8084aa12"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 24.686,
+          "stdout_bytes": 76,
+          "stdout_sha256": "8c2e2ef9c493260f4cad623a78f18127853e44102e3d845677cbab6e8084aa12",
+          "outputs": {
+            "out/076-closed-local-knowledge-answer.md": {
+              "bytes": 76,
+              "sha256": "8c2e2ef9c493260f4cad623a78f18127853e44102e3d845677cbab6e8084aa12"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 77,
+      "ordinal": "077",
+      "title": "Find diagnostic-flow gaps in de-identified support cases",
+      "file": "077-deidentified-support-diagnostic-gaps.program",
+      "source_sha256": "9f68e171189f305481eebec8d786016cdfa4f55887d4f5194b2f3f4c0c62f118",
+      "fixture_bytes": 13768,
+      "fixture_sha256": "c8e2a556556ddf3f4e6b4a80a56e37001c1a2a40b79dfca64aefe0eeb318bbc8",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 42.428,
+          "stdout_bytes": 266,
+          "stdout_sha256": "1adf3c0867f407297aaa44e245295f3022d22ab576ceeaea041964e7ce22481b",
+          "outputs": {
+            "out/077-deidentified-support-diagnostic-gaps.md": {
+              "bytes": 266,
+              "sha256": "1adf3c0867f407297aaa44e245295f3022d22ab576ceeaea041964e7ce22481b"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 31.835,
+          "stdout_bytes": 152,
+          "stdout_sha256": "4f1ec72846daeefbcbea0bbd2f1895afddaf7026c4c984f0760a3e5883fdef2f",
+          "outputs": {
+            "out/077-deidentified-support-diagnostic-gaps.md": {
+              "bytes": 152,
+              "sha256": "4f1ec72846daeefbcbea0bbd2f1895afddaf7026c4c984f0760a3e5883fdef2f"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 32.798,
+          "stdout_bytes": 229,
+          "stdout_sha256": "123fc2393296a9539adad7b2d35dd3e4e14456cee9155c63fb6c21f540bf7620",
+          "outputs": {
+            "out/077-deidentified-support-diagnostic-gaps.md": {
+              "bytes": 229,
+              "sha256": "123fc2393296a9539adad7b2d35dd3e4e14456cee9155c63fb6c21f540bf7620"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 78,
+      "ordinal": "078",
+      "title": "Draft evidence-linked support reply macros",
+      "file": "078-evidence-linked-support-reply-macro.program",
+      "source_sha256": "1cca4c3ec36af4c020cf576f47416116af862f59bdeac7c3a6ae2612833c0721",
+      "fixture_bytes": 10391,
+      "fixture_sha256": "1724e15715f9171b19a4d73c29840537be9bed2e8c9d44d9604675ae882f425b",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 35.364,
+          "stdout_bytes": 223,
+          "stdout_sha256": "0f123094b6fc90edda7db435fa85faee08e8546f0f707b48d9645ba4a69d14f7",
+          "outputs": {
+            "out/078-evidence-linked-support-reply-macro.md": {
+              "bytes": 223,
+              "sha256": "0f123094b6fc90edda7db435fa85faee08e8546f0f707b48d9645ba4a69d14f7"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 29.726,
+          "stdout_bytes": 154,
+          "stdout_sha256": "7093b4382a0faecaf649d209d20facbb2f1fa4175bfe3259fa4c3aa9b0b45620",
+          "outputs": {
+            "out/078-evidence-linked-support-reply-macro.md": {
+              "bytes": 154,
+              "sha256": "7093b4382a0faecaf649d209d20facbb2f1fa4175bfe3259fa4c3aa9b0b45620"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 28.192,
+          "stdout_bytes": 231,
+          "stdout_sha256": "a29df916a62094c6146fb9a510ad16b1f26a99d18bddd7e76e0fa46a05b7c474",
+          "outputs": {
+            "out/078-evidence-linked-support-reply-macro.md": {
+              "bytes": 231,
+              "sha256": "a29df916a62094c6146fb9a510ad16b1f26a99d18bddd7e76e0fa46a05b7c474"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 79,
+      "ordinal": "079",
+      "title": "Explain a release change for a specified customer context",
+      "file": "079-customer-context-release-explanation.program",
+      "source_sha256": "0e3df38553a4645e432c0bfb8fdcfdbc1d8dee10409dada158525f0d1ae14886",
+      "fixture_bytes": 12630,
+      "fixture_sha256": "1cd01dc1d2a196ffe9ef82a1e96c3bede16935057c172a8a6755ae967e8b1276",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 36.629,
+          "stdout_bytes": 209,
+          "stdout_sha256": "afa2daefb537618fe881ff7e1c69c1f8625712461a5e24f39d8c38a59c18ea14",
+          "outputs": {
+            "out/079-customer-context-release-explanation.md": {
+              "bytes": 209,
+              "sha256": "afa2daefb537618fe881ff7e1c69c1f8625712461a5e24f39d8c38a59c18ea14"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 28.508,
+          "stdout_bytes": 151,
+          "stdout_sha256": "0f1b3f2cbbf362a3fce898e133aed5b4b58244cfc7fe9e174549b9f81875b733",
+          "outputs": {
+            "out/079-customer-context-release-explanation.md": {
+              "bytes": 151,
+              "sha256": "0f1b3f2cbbf362a3fce898e133aed5b4b58244cfc7fe9e174549b9f81875b733"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 29.315,
+          "stdout_bytes": 228,
+          "stdout_sha256": "0e5653b72891eb1020e78281204207dd83d8f184983992c32969d4b63f85874c",
+          "outputs": {
+            "out/079-customer-context-release-explanation.md": {
+              "bytes": 228,
+              "sha256": "0e5653b72891eb1020e78281204207dd83d8f184983992c32969d4b63f85874c"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 80,
+      "ordinal": "080",
+      "title": "Analyze feedback while preserving rare themes",
+      "file": "080-versioned-feedback-rare-themes.program",
+      "source_sha256": "0a9a96082eb5dd61043795d623ee7a44fd876afb0a667c70e7c3368bf29daf23",
+      "fixture_bytes": 11461,
+      "fixture_sha256": "a06f97715c110b9a1d623cf65c141bc01905dd409db90eb9bee1127f15802e97",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 39.692,
+          "stdout_bytes": 231,
+          "stdout_sha256": "ea491cb23f57ef85ea7d4451b645113eb4a761cd2db3cb7cf169d8b94238efbf",
+          "outputs": {
+            "out/080-versioned-feedback-rare-themes.md": {
+              "bytes": 231,
+              "sha256": "ea491cb23f57ef85ea7d4451b645113eb4a761cd2db3cb7cf169d8b94238efbf"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 31.138,
+          "stdout_bytes": 143,
+          "stdout_sha256": "faef2b9d15023d08bfd39e0bca5f139e305fe269aa41280b74af2020c5689258",
+          "outputs": {
+            "out/080-versioned-feedback-rare-themes.md": {
+              "bytes": 143,
+              "sha256": "faef2b9d15023d08bfd39e0bca5f139e305fe269aa41280b74af2020c5689258"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 30.206,
+          "stdout_bytes": 220,
+          "stdout_sha256": "bdc39f49707c92cc24a4be6c5b9bca0735671daa02ddc258b6f23a5111c0380b",
+          "outputs": {
+            "out/080-versioned-feedback-rare-themes.md": {
+              "bytes": 220,
+              "sha256": "bdc39f49707c92cc24a4be6c5b9bca0735671daa02ddc258b6f23a5111c0380b"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 81,
+      "ordinal": "081",
+      "title": "Map student-work evidence to a supplied rubric",
+      "file": "081-rubric-evidence-feedback.program",
+      "source_sha256": "23a8fdd906fe03f344c2a2a9369fbc220cc2d06e63a8e62244a4d891faa7e287",
+      "fixture_bytes": 13761,
+      "fixture_sha256": "1757f8a307813a0bb082da91ca322c422f940a12673157bb7f850e67b97d5378",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 39.919,
+          "stdout_bytes": 290,
+          "stdout_sha256": "859294e0d5b880066cbc2ff575dc13b718c6e3a0c8ea723dbddb5f8fc925630e",
+          "outputs": {
+            "out/081-rubric-evidence-feedback.md": {
+              "bytes": 290,
+              "sha256": "859294e0d5b880066cbc2ff575dc13b718c6e3a0c8ea723dbddb5f8fc925630e"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 29.63,
+          "stdout_bytes": 143,
+          "stdout_sha256": "560b1b9962a34160472f5b78a5583631a560acf92dbf51d1496cf671006815d6",
+          "outputs": {
+            "out/081-rubric-evidence-feedback.md": {
+              "bytes": 143,
+              "sha256": "560b1b9962a34160472f5b78a5583631a560acf92dbf51d1496cf671006815d6"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 29.644,
+          "stdout_bytes": 220,
+          "stdout_sha256": "16c792f13a9206fee6e4d09bf1e79aafc04d78c6485743b552318465dc1da93a",
+          "outputs": {
+            "out/081-rubric-evidence-feedback.md": {
+              "bytes": 220,
+              "sha256": "16c792f13a9206fee6e4d09bf1e79aafc04d78c6485743b552318465dc1da93a"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 82,
+      "ordinal": "082",
+      "title": "Check syllabus outcomes against readings and assessments",
+      "file": "082-syllabus-outcome-coverage.program",
+      "source_sha256": "3785d18de5479301028b7bd516817e96a6678e8273d8f37b82fbe838591a084c",
+      "fixture_bytes": 11431,
+      "fixture_sha256": "7c65a713089870121c7975ed8f8d67deefcac2dcb4040217671a956456fda4f6",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 42.359,
+          "stdout_bytes": 223,
+          "stdout_sha256": "54a0aea7ee01ffa88a02d017a813e1f4609ab4a1cae85826930b35a5f9ae37db",
+          "outputs": {
+            "out/082-syllabus-outcome-coverage.md": {
+              "bytes": 223,
+              "sha256": "54a0aea7ee01ffa88a02d017a813e1f4609ab4a1cae85826930b35a5f9ae37db"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 32.852,
+          "stdout_bytes": 144,
+          "stdout_sha256": "24d5a160c97582f875c3a942cdfe4e7e529262cca107870c907f6570a7de532c",
+          "outputs": {
+            "out/082-syllabus-outcome-coverage.md": {
+              "bytes": 144,
+              "sha256": "24d5a160c97582f875c3a942cdfe4e7e529262cca107870c907f6570a7de532c"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 32.157,
+          "stdout_bytes": 221,
+          "stdout_sha256": "f8aea920dc911521b14e428888adfec4043bf0432ddc800a2e144edb9ab2e636",
+          "outputs": {
+            "out/082-syllabus-outcome-coverage.md": {
+              "bytes": 221,
+              "sha256": "f8aea920dc911521b14e428888adfec4043bf0432ddc800a2e144edb9ab2e636"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 83,
+      "ordinal": "083",
+      "title": "Summarize quiz error patterns as misconception candidates",
+      "file": "083-quiz-error-misconception-candidates.program",
+      "source_sha256": "787edde4879580a4a153d1ca162588d387373333bb58f8ae5ffbc0dc1d261af1",
+      "fixture_bytes": 13765,
+      "fixture_sha256": "4ab6f965bed5cb4f2b2cbc45559a858f6b30e6b89a46dbb3e43269e528a466e3",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 51.043,
+          "stdout_bytes": 221,
+          "stdout_sha256": "f134d7f52ee921a4dddac1c710f5a8c93ac27d97f42a74aa41e7e7558371fe91",
+          "outputs": {
+            "out/083-quiz-error-misconception-candidates.md": {
+              "bytes": 221,
+              "sha256": "f134d7f52ee921a4dddac1c710f5a8c93ac27d97f42a74aa41e7e7558371fe91"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 41.081,
+          "stdout_bytes": 142,
+          "stdout_sha256": "5808e4139a18a792b9e3da2102aa07bebe59a56468f31d9b89fde388f3a76e19",
+          "outputs": {
+            "out/083-quiz-error-misconception-candidates.md": {
+              "bytes": 142,
+              "sha256": "5808e4139a18a792b9e3da2102aa07bebe59a56468f31d9b89fde388f3a76e19"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 40.872,
+          "stdout_bytes": 219,
+          "stdout_sha256": "c05696f7f4e65451acafd81c8eb7f8f02db45e11547e5e793a3e39c538fd34ad",
+          "outputs": {
+            "out/083-quiz-error-misconception-candidates.md": {
+              "bytes": 219,
+              "sha256": "c05696f7f4e65451acafd81c8eb7f8f02db45e11547e5e793a3e39c538fd34ad"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 84,
+      "ordinal": "084",
+      "title": "Draft a graded hint ladder from an approved solution",
+      "file": "084-approved-solution-hint-ladder.program",
+      "source_sha256": "6cf2adf0bf025c0a7a268220c75594b4bac62761100596cc34f2eeb7d01a062f",
+      "fixture_bytes": 10490,
+      "fixture_sha256": "cd477b550215d9282e0a18d0c97144d251877715ceeb29aec81b36c2d606e5d5",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 35.639,
+          "stdout_bytes": 229,
+          "stdout_sha256": "2f799135cd18e16ddd198bfc63e8b8a1cdf7ed04c2d22fc40f91408c4405098c",
+          "outputs": {
+            "out/084-approved-solution-hint-ladder.md": {
+              "bytes": 229,
+              "sha256": "2f799135cd18e16ddd198bfc63e8b8a1cdf7ed04c2d22fc40f91408c4405098c"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 27.887,
+          "stdout_bytes": 142,
+          "stdout_sha256": "e79918b02ea94cd5af81cc36600142f466598c06041d3b3de00efdb54fb15ae9",
+          "outputs": {
+            "out/084-approved-solution-hint-ladder.md": {
+              "bytes": 142,
+              "sha256": "e79918b02ea94cd5af81cc36600142f466598c06041d3b3de00efdb54fb15ae9"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 27.275,
+          "stdout_bytes": 219,
+          "stdout_sha256": "5fd22a692399994f4321a040270a052236399e9da6cc76756898194331d40e6d",
+          "outputs": {
+            "out/084-approved-solution-hint-ladder.md": {
+              "bytes": 219,
+              "sha256": "5fd22a692399994f4321a040270a052236399e9da6cc76756898194331d40e6d"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 85,
+      "ordinal": "085",
+      "title": "Review lab instructions against a supplied safety checklist",
+      "file": "085-lab-instruction-checklist-review.program",
+      "source_sha256": "43d6f32e52c7e4c56cfbe67573a1b9493d232e4e86a0b2a2a1f3bf6f299e161e",
+      "fixture_bytes": 13870,
+      "fixture_sha256": "2d2314992e2274c21aaba9859d2ccefe01cac2e634163cfbae8ac3346c4cc3d3",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 61.661,
+          "stdout_bytes": 290,
+          "stdout_sha256": "9d10fed949c2df9459f5f3bf28b1165544070558db140cfda7370743fe9b8386",
+          "outputs": {
+            "out/085-lab-instruction-checklist-review.md": {
+              "bytes": 290,
+              "sha256": "9d10fed949c2df9459f5f3bf28b1165544070558db140cfda7370743fe9b8386"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 33.289,
+          "stdout_bytes": 147,
+          "stdout_sha256": "13f4ff6456b6d444533ad2443549bd8e2da75f90e813284431e8f21d8e34041c",
+          "outputs": {
+            "out/085-lab-instruction-checklist-review.md": {
+              "bytes": 147,
+              "sha256": "13f4ff6456b6d444533ad2443549bd8e2da75f90e813284431e8f21d8e34041c"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 30.522,
+          "stdout_bytes": 224,
+          "stdout_sha256": "74c561cfb9756ab4125231b3070f2a10832b4b92c661b91fac617301dbf136f4",
+          "outputs": {
+            "out/085-lab-instruction-checklist-review.md": {
+              "bytes": 224,
+              "sha256": "74c561cfb9756ab4125231b3070f2a10832b4b92c661b91fac617301dbf136f4"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 86,
+      "ordinal": "086",
+      "title": "Audit course materials for declared accessible alternatives",
+      "file": "086-course-accessible-alternative-audit.program",
+      "source_sha256": "84761b89da593ccb68b42b9f1a42770e35d5aab89aea031ca8b45ccd873c89d9",
+      "fixture_bytes": 11657,
+      "fixture_sha256": "a79b57182eeefe1f321c080145976e7b5885f04b6d764993d7cf64b57919e8f4",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 40.583,
+          "stdout_bytes": 228,
+          "stdout_sha256": "cbc3e1f71b346df9a3d3ff0675d0bbfe426d5d088a6212ddbdaae2238b10f71f",
+          "outputs": {
+            "out/086-course-accessible-alternative-audit.md": {
+              "bytes": 228,
+              "sha256": "cbc3e1f71b346df9a3d3ff0675d0bbfe426d5d088a6212ddbdaae2238b10f71f"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 29.998,
+          "stdout_bytes": 157,
+          "stdout_sha256": "4c0b7e17ee7de458c1f79ddaf2fe8a6c0f7c3c6a5ee370b093754c0d73e61db8",
+          "outputs": {
+            "out/086-course-accessible-alternative-audit.md": {
+              "bytes": 157,
+              "sha256": "4c0b7e17ee7de458c1f79ddaf2fe8a6c0f7c3c6a5ee370b093754c0d73e61db8"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 29.041,
+          "stdout_bytes": 234,
+          "stdout_sha256": "31325e7c6466b73ef8c1d63261e5153bff30663f05bd012f192ab62c2e9b9838",
+          "outputs": {
+            "out/086-course-accessible-alternative-audit.md": {
+              "bytes": 234,
+              "sha256": "31325e7c6466b73ef8c1d63261e5153bff30663f05bd012f192ab62c2e9b9838"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 87,
+      "ordinal": "087",
+      "title": "Review reading lists against stated prerequisites",
+      "file": "087-reading-prerequisite-review.program",
+      "source_sha256": "c95d109ac2202de66f8f33979e92af8fb6300c0d8148790afc21845611887c2f",
+      "fixture_bytes": 13126,
+      "fixture_sha256": "c29c2c619f2213b28fc7a3a4c9ee6da32e63265b8af16d85051419daac90e2b5",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 36.668,
+          "stdout_bytes": 240,
+          "stdout_sha256": "acce0815f4dad9eeec441ff00b87976f17b1d9aa4932de1c6b3bf4ab43e11df8",
+          "outputs": {
+            "out/087-reading-prerequisite-review.md": {
+              "bytes": 240,
+              "sha256": "acce0815f4dad9eeec441ff00b87976f17b1d9aa4932de1c6b3bf4ab43e11df8"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 27.409,
+          "stdout_bytes": 156,
+          "stdout_sha256": "0f65ba896c61a513b32cc7b75ef1c5990c23b544d8a8abf130ebc0f8768bf7de",
+          "outputs": {
+            "out/087-reading-prerequisite-review.md": {
+              "bytes": 156,
+              "sha256": "0f65ba896c61a513b32cc7b75ef1c5990c23b544d8a8abf130ebc0f8768bf7de"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 27.528,
+          "stdout_bytes": 233,
+          "stdout_sha256": "6798c64dde3ea9e96a131c6d64b6332083beee6a7268a8d18a1e2c5f3c5a7d4c",
+          "outputs": {
+            "out/087-reading-prerequisite-review.md": {
+              "bytes": 233,
+              "sha256": "6798c64dde3ea9e96a131c6d64b6332083beee6a7268a8d18a1e2c5f3c5a7d4c"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 88,
+      "ordinal": "088",
+      "title": "Create audience-level variants of an approved FAQ",
+      "file": "088-approved-faq-audience-variants.program",
+      "source_sha256": "e40ae82178c056e719dcb86dd0506263d555d71ce86547e63ff57c8ed727704b",
+      "fixture_bytes": 10844,
+      "fixture_sha256": "0dd99bf6c052da083bc2620e451888e1ac50bdb26ece925b089c94a0df99669d",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 39.293,
+          "stdout_bytes": 273,
+          "stdout_sha256": "8172755b77aa6b7a31b7ea4af862871e2e666b396468ebd5bdeec484a9a962de",
+          "outputs": {
+            "out/088-approved-faq-audience-variants.md": {
+              "bytes": 273,
+              "sha256": "8172755b77aa6b7a31b7ea4af862871e2e666b396468ebd5bdeec484a9a962de"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 28.11,
+          "stdout_bytes": 148,
+          "stdout_sha256": "4d5fa3a76860f3bc6f4cd81b743633d968def9696df5e6686a0ef9a8dacf7bee",
+          "outputs": {
+            "out/088-approved-faq-audience-variants.md": {
+              "bytes": 148,
+              "sha256": "4d5fa3a76860f3bc6f4cd81b743633d968def9696df5e6686a0ef9a8dacf7bee"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 27.064,
+          "stdout_bytes": 225,
+          "stdout_sha256": "19f17221427d2435036eb2d5c2b571d65ffa225fb0902afecce55939415011e6",
+          "outputs": {
+            "out/088-approved-faq-audience-variants.md": {
+              "bytes": 225,
+              "sha256": "19f17221427d2435036eb2d5c2b571d65ffa225fb0902afecce55939415011e6"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 89,
+      "ordinal": "089",
+      "title": "Find help-center gaps from anonymized search queries",
+      "file": "089-anonymized-help-center-gaps.program",
+      "source_sha256": "eb3b85459dd9f9c94256aa37e3d52e40a75cd1c74d4da77370d9399b51f93a3b",
+      "fixture_bytes": 13670,
+      "fixture_sha256": "b22fc3fb5a5b94207a4493f8ef134b769d1572c3f29bc4487f8cdccf38a64384",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 38.381,
+          "stdout_bytes": 241,
+          "stdout_sha256": "4d65e90a79ee6d882a3f4bff4515c40670358d4c6a662a55cb9dee146e4f7728",
+          "outputs": {
+            "out/089-anonymized-help-center-gaps.md": {
+              "bytes": 241,
+              "sha256": "4d65e90a79ee6d882a3f4bff4515c40670358d4c6a662a55cb9dee146e4f7728"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 28.501,
+          "stdout_bytes": 141,
+          "stdout_sha256": "31982b59c3900fafb8868884150404e2348d0e7d2d2683ae29697930ded20cea",
+          "outputs": {
+            "out/089-anonymized-help-center-gaps.md": {
+              "bytes": 141,
+              "sha256": "31982b59c3900fafb8868884150404e2348d0e7d2d2683ae29697930ded20cea"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 28.711,
+          "stdout_bytes": 218,
+          "stdout_sha256": "eb6baff0cacfd13eee02177b490e033df8e537ae6a4204f3d408d52bdfa8c1dc",
+          "outputs": {
+            "out/089-anonymized-help-center-gaps.md": {
+              "bytes": 218,
+              "sha256": "eb6baff0cacfd13eee02177b490e033df8e537ae6a4204f3d408d52bdfa8c1dc"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 90,
+      "ordinal": "090",
+      "title": "Reconcile escalation handoffs with recorded resolution evidence",
+      "file": "090-escalation-handoff-resolution-reconciliation.program",
+      "source_sha256": "52161c0fa064e4dff09d4f3fccf27a5618b347c82fc787bc40be64ccf723c7bf",
+      "fixture_bytes": 11784,
+      "fixture_sha256": "7c75aaad79fb947508dbaf9451613762ce834bbf4de389d8a08df2baf55f064d",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 44.69,
+          "stdout_bytes": 243,
+          "stdout_sha256": "2e715beb326946be69480a557cfd29c210209d82d88c43ae56cb5ecac24208a9",
+          "outputs": {
+            "out/090-escalation-handoff-resolution-reconciliation.md": {
+              "bytes": 243,
+              "sha256": "2e715beb326946be69480a557cfd29c210209d82d88c43ae56cb5ecac24208a9"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 35.889,
+          "stdout_bytes": 151,
+          "stdout_sha256": "c9d42f61816b2b37328783d469b1fcf7a06dfad459abaf01b4818f8d8bcf703b",
+          "outputs": {
+            "out/090-escalation-handoff-resolution-reconciliation.md": {
+              "bytes": 151,
+              "sha256": "c9d42f61816b2b37328783d469b1fcf7a06dfad459abaf01b4818f8d8bcf703b"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 34.752,
+          "stdout_bytes": 228,
+          "stdout_sha256": "3699323a6ea4fe838fc0b9a8caf101c4afec7703327450c11158d07bb8bd41cb",
+          "outputs": {
+            "out/090-escalation-handoff-resolution-reconciliation.md": {
+              "bytes": 228,
+              "sha256": "3699323a6ea4fe838fc0b9a8caf101c4afec7703327450c11158d07bb8bd41cb"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 91,
+      "ordinal": "091",
+      "title": "Index field observations by time, location, and source",
+      "file": "091-field-observation-time-location-index.program",
+      "source_sha256": "760cdf6afb08384d508dce26f9d530d7c91581b3dde795e2e638badc3e03a6e1",
+      "fixture_bytes": 13689,
+      "fixture_sha256": "1eecc9f009abddfea9e7b4d8260cc4e20687c0170c65fcd070833ffdf84d7db8",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 43.636,
+          "stdout_bytes": 227,
+          "stdout_sha256": "48dcfd54dd4543da43f76b62ac8203508496ca6afcee53baf62516228d92d053",
+          "outputs": {
+            "out/091-field-observation-time-location-index.md": {
+              "bytes": 227,
+              "sha256": "48dcfd54dd4543da43f76b62ac8203508496ca6afcee53baf62516228d92d053"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 35.235,
+          "stdout_bytes": 137,
+          "stdout_sha256": "0b9497f42e689586e2fbc953512523f1cbc261e6e62842f17f8c72b161eda2f9",
+          "outputs": {
+            "out/091-field-observation-time-location-index.md": {
+              "bytes": 137,
+              "sha256": "0b9497f42e689586e2fbc953512523f1cbc261e6e62842f17f8c72b161eda2f9"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 34.386,
+          "stdout_bytes": 214,
+          "stdout_sha256": "c96bfdd1dbf662d67178a967563c522ce797d362a350f01a4e048cb04d71fb4a",
+          "outputs": {
+            "out/091-field-observation-time-location-index.md": {
+              "bytes": 214,
+              "sha256": "c96bfdd1dbf662d67178a967563c522ce797d362a350f01a4e048cb04d71fb4a"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 92,
+      "ordinal": "092",
+      "title": "Reconcile a lab notebook against its recorded protocol",
+      "file": "092-notebook-protocol-measurement-reconciliation.program",
+      "source_sha256": "93092aa6785a95339b818edb8e286b49d7adabc42ab6b9cd16e162a1b9560473",
+      "fixture_bytes": 11253,
+      "fixture_sha256": "ff0c6683817d663d2d520c6889f37b5d3809e2334fdb8d67488c512688b353e0",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 38.222,
+          "stdout_bytes": 233,
+          "stdout_sha256": "e98723b85f18ddedb7eb206ae62e9d05ff44e760633490bd4782e0050c1c370a",
+          "outputs": {
+            "out/092-notebook-protocol-measurement-reconciliation.md": {
+              "bytes": 233,
+              "sha256": "e98723b85f18ddedb7eb206ae62e9d05ff44e760633490bd4782e0050c1c370a"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 29.378,
+          "stdout_bytes": 139,
+          "stdout_sha256": "33a70feeba6fe83214f6dfc6d37c37bcafe3d3d41d3a4884ac11befb2e2588f3",
+          "outputs": {
+            "out/092-notebook-protocol-measurement-reconciliation.md": {
+              "bytes": 139,
+              "sha256": "33a70feeba6fe83214f6dfc6d37c37bcafe3d3d41d3a4884ac11befb2e2588f3"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 28.442,
+          "stdout_bytes": 216,
+          "stdout_sha256": "aab3a1299ccdb63c7ec2a9ca9ec3ab58e031981b8c1961bc0227572914be500e",
+          "outputs": {
+            "out/092-notebook-protocol-measurement-reconciliation.md": {
+              "bytes": 216,
+              "sha256": "aab3a1299ccdb63c7ec2a9ca9ec3ab58e031981b8c1961bc0227572914be500e"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 93,
+      "ordinal": "093",
+      "title": "Build a timestamped index from a supplied audio transcript",
+      "file": "093-timestamped-audio-transcript-index.program",
+      "source_sha256": "f0494a3fcc994728fc96991201b762678b735f95c30d5a300af26afb6f33c911",
+      "fixture_bytes": 13886,
+      "fixture_sha256": "666de1d022e08662cc0e8d75234796bedbcd972a1eb6d761020d66a92cd0e140",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 38.58,
+          "stdout_bytes": 248,
+          "stdout_sha256": "be8b72175e75e615ac64d0d0e1757b8790dbf071ad0b18dffb2a3c110e6566cd",
+          "outputs": {
+            "out/093-timestamped-audio-transcript-index.md": {
+              "bytes": 248,
+              "sha256": "be8b72175e75e615ac64d0d0e1757b8790dbf071ad0b18dffb2a3c110e6566cd"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 27.8,
+          "stdout_bytes": 148,
+          "stdout_sha256": "e78edb5c44a80fb4abda8549bf104350b60606455a1e7f75b161be828629de4e",
+          "outputs": {
+            "out/093-timestamped-audio-transcript-index.md": {
+              "bytes": 148,
+              "sha256": "e78edb5c44a80fb4abda8549bf104350b60606455a1e7f75b161be828629de4e"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 28.203,
+          "stdout_bytes": 225,
+          "stdout_sha256": "f833de724c9a6dfb54c238a3b8b915ed1d90a029fd5821b67000dc5d022f40a2",
+          "outputs": {
+            "out/093-timestamped-audio-transcript-index.md": {
+              "bytes": 225,
+              "sha256": "f833de724c9a6dfb54c238a3b8b915ed1d90a029fd5821b67000dc5d022f40a2"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 94,
+      "ordinal": "094",
+      "title": "Map ecological observations to a supplied taxonomy",
+      "file": "094-ecological-observation-taxonomy-review.program",
+      "source_sha256": "bd281f0211ee80237121658678f9a8c56c51eeaf75e969b9c5e94cc24d2ef6f8",
+      "fixture_bytes": 11557,
+      "fixture_sha256": "a45b5f5c03b2402f018a85d3cd770a80580cd2f57f2f9b901e72be2eaff47160",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 40.376,
+          "stdout_bytes": 262,
+          "stdout_sha256": "5845653e2d14866aa565dcdbca848004dcb15ce2c1dff5b42f278ebaa402f0d8",
+          "outputs": {
+            "out/094-ecological-observation-taxonomy-review.md": {
+              "bytes": 262,
+              "sha256": "5845653e2d14866aa565dcdbca848004dcb15ce2c1dff5b42f278ebaa402f0d8"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 30.16,
+          "stdout_bytes": 139,
+          "stdout_sha256": "92482fd4f771f99fe1561144566a0fc8b28f3bcb727dfb3860cd362e7bf45e39",
+          "outputs": {
+            "out/094-ecological-observation-taxonomy-review.md": {
+              "bytes": 139,
+              "sha256": "92482fd4f771f99fe1561144566a0fc8b28f3bcb727dfb3860cd362e7bf45e39"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 29.555,
+          "stdout_bytes": 216,
+          "stdout_sha256": "2e967890930b2d31ebd30c98e4178a04a2877e52989f42fac5f1ac9ed7623c7f",
+          "outputs": {
+            "out/094-ecological-observation-taxonomy-review.md": {
+              "bytes": 216,
+              "sha256": "2e967890930b2d31ebd30c98e4178a04a2877e52989f42fac5f1ac9ed7623c7f"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 95,
+      "ordinal": "095",
+      "title": "Create a geospatial incident evidence report",
+      "file": "095-geospatial-incident-evidence-report.program",
+      "source_sha256": "4cd5e5b008273fd79ab517d37341cacb4fe9c6de4a3bb6ae8df71126291811a4",
+      "fixture_bytes": 13354,
+      "fixture_sha256": "f6ba647e828d1f8b880e7232cfef122f77268a9c27a70ae2f48e8f4b84e403bd",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 38.117,
+          "stdout_bytes": 249,
+          "stdout_sha256": "06ffba87980bf9c0358d6cbbe5394e368817f056ad630aad588e0dfa997d71cb",
+          "outputs": {
+            "out/095-geospatial-incident-evidence-report.md": {
+              "bytes": 249,
+              "sha256": "06ffba87980bf9c0358d6cbbe5394e368817f056ad630aad588e0dfa997d71cb"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 28.24,
+          "stdout_bytes": 135,
+          "stdout_sha256": "1792248973b3604cd693165277849dedbf9aa8f374298131c9e840cb72db3c86",
+          "outputs": {
+            "out/095-geospatial-incident-evidence-report.md": {
+              "bytes": 135,
+              "sha256": "1792248973b3604cd693165277849dedbf9aa8f374298131c9e840cb72db3c86"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 28.588,
+          "stdout_bytes": 212,
+          "stdout_sha256": "28fd739260918bef01ddcf38800076627eb776582934609976dda9426c05a2df",
+          "outputs": {
+            "out/095-geospatial-incident-evidence-report.md": {
+              "bytes": 212,
+              "sha256": "28fd739260918bef01ddcf38800076627eb776582934609976dda9426c05a2df"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 96,
+      "ordinal": "096",
+      "title": "Contextualize sensor anomalies against maintenance records",
+      "file": "096-sensor-anomaly-maintenance-context.program",
+      "source_sha256": "8008e804694e7ec7eebfd638422ac5dd2d6b23995a01742486eb4b47cda5fd15",
+      "fixture_bytes": 11061,
+      "fixture_sha256": "2901afd26d53267c574ba54deee41f1b13eeadbcf2c439973a4d099eee3640d4",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 36.552,
+          "stdout_bytes": 244,
+          "stdout_sha256": "8852dfd590da140ff21f8a0ae687d5b1b2609eb38883e9922672cf1a8d2b0799",
+          "outputs": {
+            "out/096-sensor-anomaly-maintenance-context.md": {
+              "bytes": 244,
+              "sha256": "8852dfd590da140ff21f8a0ae687d5b1b2609eb38883e9922672cf1a8d2b0799"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 29.333,
+          "stdout_bytes": 152,
+          "stdout_sha256": "cb067daa61f60b2f068bf554a1e8c008f685f2d434b42f306c90677503f9c70d",
+          "outputs": {
+            "out/096-sensor-anomaly-maintenance-context.md": {
+              "bytes": 152,
+              "sha256": "cb067daa61f60b2f068bf554a1e8c008f685f2d434b42f306c90677503f9c70d"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 27.204,
+          "stdout_bytes": 229,
+          "stdout_sha256": "fee81d74304b0f49c2188159a1562acb96174a32a271331782cc9e4a49910247",
+          "outputs": {
+            "out/096-sensor-anomaly-maintenance-context.md": {
+              "bytes": 229,
+              "sha256": "fee81d74304b0f49c2188159a1562acb96174a32a271331782cc9e4a49910247"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 97,
+      "ordinal": "097",
+      "title": "Index oral-history themes with timestamps and counterexamples",
+      "file": "097-oral-history-theme-counterexample-index.program",
+      "source_sha256": "3c5efac5f0fd1c4424fca43a7e50d3fd41f9600482bcabe0cb671d9e8f77daea",
+      "fixture_bytes": 14151,
+      "fixture_sha256": "a05e718adf546a5dcdbf3511801643c168efd2e5c626d3f383a02cf410a73bf3",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 38.354,
+          "stdout_bytes": 239,
+          "stdout_sha256": "1f1cc6dbf44d70c6985529044850bdc6d410d4e798aae556e56149cd839447f4",
+          "outputs": {
+            "out/097-oral-history-theme-counterexample-index.md": {
+              "bytes": 239,
+              "sha256": "1f1cc6dbf44d70c6985529044850bdc6d410d4e798aae556e56149cd839447f4"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 28.823,
+          "stdout_bytes": 149,
+          "stdout_sha256": "0746b47ba81f17b0216544ddf9f342f7fb833ee93b05278ce88e78fbc4b30f5c",
+          "outputs": {
+            "out/097-oral-history-theme-counterexample-index.md": {
+              "bytes": 149,
+              "sha256": "0746b47ba81f17b0216544ddf9f342f7fb833ee93b05278ce88e78fbc4b30f5c"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 28.59,
+          "stdout_bytes": 226,
+          "stdout_sha256": "37afe77cb69fd29af141aa4c7748e01e64f4fc9e3b42849435436679d95da048",
+          "outputs": {
+            "out/097-oral-history-theme-counterexample-index.md": {
+              "bytes": 226,
+              "sha256": "37afe77cb69fd29af141aa4c7748e01e64f4fc9e3b42849435436679d95da048"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 98,
+      "ordinal": "098",
+      "title": "Assemble a manufacturing nonconformance evidence packet",
+      "file": "098-manufacturing-nonconformance-evidence-packet.program",
+      "source_sha256": "4113a4add8a1054496d78436c790dff168da108dcfe50973369f29091f2c4fdc",
+      "fixture_bytes": 11580,
+      "fixture_sha256": "0754cf34bd88f7b818da38c8d1a9b8f5a115c84006f95b81b2ac5420b65bdcd3",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 38.462,
+          "stdout_bytes": 261,
+          "stdout_sha256": "605c591c8da5e9449fde64482fe27e3d42c9939151489a2f8d5c93b4989d24fc",
+          "outputs": {
+            "out/098-manufacturing-nonconformance-evidence-packet.md": {
+              "bytes": 261,
+              "sha256": "605c591c8da5e9449fde64482fe27e3d42c9939151489a2f8d5c93b4989d24fc"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 28.57,
+          "stdout_bytes": 148,
+          "stdout_sha256": "409ea175b972cf74c98834ea098d9035b9c9659d8c0359d8bbe87dd934f91317",
+          "outputs": {
+            "out/098-manufacturing-nonconformance-evidence-packet.md": {
+              "bytes": 148,
+              "sha256": "409ea175b972cf74c98834ea098d9035b9c9659d8c0359d8bbe87dd934f91317"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 29.477,
+          "stdout_bytes": 225,
+          "stdout_sha256": "4ee0d61e6c488858c09e9e0a6728a4a757143709032910eb80e0496d26ec668d",
+          "outputs": {
+            "out/098-manufacturing-nonconformance-evidence-packet.md": {
+              "bytes": 225,
+              "sha256": "4ee0d61e6c488858c09e9e0a6728a4a757143709032910eb80e0496d26ec668d"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 99,
+      "ordinal": "099",
+      "title": "Review disaster-recovery readiness from saved drill evidence",
+      "file": "099-disaster-recovery-saved-drill-readiness.program",
+      "source_sha256": "b706b547a1b5fd0da19eb8957e62229b611e4f55855f292b719b74030811822a",
+      "fixture_bytes": 13034,
+      "fixture_sha256": "8a1c8705584454853f7044aadc3311e044dd8d89670e93ea9fecec15fc95b9ec",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 35.604,
+          "stdout_bytes": 263,
+          "stdout_sha256": "a97dcefd04e1f90684bba7465833fdd377ed85664134b2d4361a56151ee4c2c7",
+          "outputs": {
+            "out/099-disaster-recovery-saved-drill-readiness.md": {
+              "bytes": 263,
+              "sha256": "a97dcefd04e1f90684bba7465833fdd377ed85664134b2d4361a56151ee4c2c7"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 27.402,
+          "stdout_bytes": 144,
+          "stdout_sha256": "971414b84dd0c5eb40e60e80dfd156ea5c2e679e6ce3f1b5f6768c5064798ddf",
+          "outputs": {
+            "out/099-disaster-recovery-saved-drill-readiness.md": {
+              "bytes": 144,
+              "sha256": "971414b84dd0c5eb40e60e80dfd156ea5c2e679e6ce3f1b5f6768c5064798ddf"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 27.214,
+          "stdout_bytes": 221,
+          "stdout_sha256": "ba3f131e2ef63c912cb79c96d0cf596c3702bb057a8e3061d051f82534104c94",
+          "outputs": {
+            "out/099-disaster-recovery-saved-drill-readiness.md": {
+              "bytes": 221,
+              "sha256": "ba3f131e2ef63c912cb79c96d0cf596c3702bb057a8e3061d051f82534104c94"
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": 100,
+      "ordinal": "100",
+      "title": "Summarize a field survey against its method schema",
+      "file": "100-field-survey-method-schema-summary.program",
+      "source_sha256": "4cbb1e0087d7ef0425ce4488982263bc5b8c9a5a5a1637b02d26cead7dcb9916",
+      "fixture_bytes": 11645,
+      "fixture_sha256": "ba6bacce1dc47f3f8d8c046fbdb4ea1dccb0d769d670b719fca2caa4d2b84925",
+      "cases": [
+        {
+          "name": "accepted-candidate",
+          "passed": true,
+          "elapsed_ms": 37.631,
+          "stdout_bytes": 233,
+          "stdout_sha256": "a78d2a3226cbf612f77a40fef7c7011d95d1ce10c19ba69cca09a06ec756757f",
+          "outputs": {
+            "out/100-field-survey-method-schema-summary.md": {
+              "bytes": 233,
+              "sha256": "a78d2a3226cbf612f77a40fef7c7011d95d1ce10c19ba69cca09a06ec756757f"
+            }
+          }
+        },
+        {
+          "name": "low-confidence-review",
+          "passed": true,
+          "elapsed_ms": 28.758,
+          "stdout_bytes": 148,
+          "stdout_sha256": "0003a77b3b78db1f243011ff0763b4552dc483246a114ceec914f64446fdccce",
+          "outputs": {
+            "out/100-field-survey-method-schema-summary.md": {
+              "bytes": 148,
+              "sha256": "0003a77b3b78db1f243011ff0763b4552dc483246a114ceec914f64446fdccce"
+            }
+          }
+        },
+        {
+          "name": "high-confidence-alternate-label-review",
+          "passed": true,
+          "elapsed_ms": 28.319,
+          "stdout_bytes": 225,
+          "stdout_sha256": "11051ecefc895766573302ec65739d226b2a37c43b9e4a40507011a3e789d7a2",
+          "outputs": {
+            "out/100-field-survey-method-schema-summary.md": {
+              "bytes": 225,
+              "sha256": "11051ecefc895766573302ec65739d226b2a37c43b9e4a40507011a3e789d7a2"
+            }
+          }
+        }
+      ],
+      "passed": true
+    }
+  ]
+}

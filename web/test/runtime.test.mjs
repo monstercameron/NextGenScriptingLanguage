@@ -44,3 +44,14 @@ test('head zero, no final newline, uniq sentinel and binary-safe cat',async()=>{
 test('repeated ABI calls release memory instead of retaining response buffers',async()=>{const instance=await WebAssembly.instantiate(module,{});const call=connect(instance);for(let at=0;at<1500;at++)good(run(call,'run printf with message "hello"'));assert.ok(instance.exports.memory.buffer.byteLength<16*1024*1024);});
 
 test('WASM memory is capped and direct cd cannot mutate terminal state',async()=>{const instance=await WebAssembly.instantiate(module,{});assert.throws(()=>instance.exports.memory.grow(1025),RangeError);const call=connect(instance);bad(run(call,'run "cd" with arguments ["/"]'),/interpreter builtin/);assert.equal(good(call({action:'command',command:'pwd'})).stdout,'/workspace\n');});
+
+test('build receipt binds source and WASM; local assets and full licenses ship together',async()=>{
+ const {createHash}=await import('node:crypto');
+ const receipt=JSON.parse(await readFile(path.join(root,'docs/playground/build.json'),'utf8'));
+ assert.equal(createHash('sha256').update(bytes).digest('hex'),receipt.wasm_sha256);
+ for(const [name,digest]of Object.entries(receipt.source_sha256))assert.equal(createHash('sha256').update(await readFile(path.join(root,name))).digest('hex'),digest,name);
+ const notices=await readFile(path.join(root,'docs/playground/THIRD_PARTY.txt'),'utf8');
+ for(const text of ['@xterm/xterm 6.0.0','@xterm/addon-fit 0.11.0','Permission is hereby granted','serde'])assert.ok(notices.includes(text));
+ const html=await readFile(path.join(root,'docs/playground/index.html'),'utf8');
+ for(const match of html.matchAll(/(?:href|src)="([^"]+)"/g)){const url=match[1];if(!url.startsWith('#')&&!url.includes('://'))await readFile(path.resolve(root,'docs/playground',url.endsWith('/')?url+'index.html':url));}
+});

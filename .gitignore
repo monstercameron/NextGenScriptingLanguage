@@ -25,3 +25,5 @@ __pycache__/
 /docs/playground/build.json
 /docs/playground/style.css
 /docs/playground/xterm.css
+
+/docs/playground/THIRD_PARTY.txt

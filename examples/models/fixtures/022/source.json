@@ -1,0 +1,25 @@
+{
+  "case": "CASE-88",
+  "rules": [
+    {
+      "id": "POL-1",
+      "topic": "approval"
+    },
+    {
+      "id": "POL-2",
+      "topic": "retention"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "EV-1",
+      "rule": "POL-1",
+      "file": "approval.log"
+    },
+    {
+      "id": "EV-2",
+      "rule": "POL-1",
+      "file": "ticket.json"
+    }
+  ]
+}

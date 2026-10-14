@@ -1,0 +1,52 @@
+{
+  "question": "Which recurring query cluster has no matching local help article, retaining rare clusters?",
+  "source_id": "MWI-089-A",
+  "source_ref": "help-search/clusters/CL-89-3",
+  "scope": "query_log=anonymized;article_index=local",
+  "facts": {
+    "deidentified": true,
+    "query_count": 7,
+    "article_ids": [
+      "HC-14",
+      "HC-22"
+    ],
+    "rare_clusters": [
+      "CL-89-3"
+    ]
+  },
+  "search_queries": [
+    {
+      "id": "MWI-089-A",
+      "kind": "partial_result",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "CL-89-3",
+      "ref": "help-search/clusters/CL-89-3",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-089-A-CTX-1",
+      "kind": "no_result",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for find help-center gaps from anonymized search queries with an unresolved detail.",
+      "ref": "help-center/index-v14#article-map",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-089-A-CTX-2",
+      "kind": "partial_result",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied find help-center gaps from anonymized search queries evidence record 2.",
+      "ref": "help-center/index-v14#article-map",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

@@ -4,6 +4,12 @@ Execute composes actual Unix CLI programs through a controlled-English language.
 Files use `.program`; `execute app.program` selects its lifetime from its contents.
 Programs remain plain text and manifests remain declarative argv bindings.
 
+The [source map](CONTRIBUTING.md#find-the-right-code) identifies implementation
+boundaries. The [release/source table](README.md#release-and-source-status) and
+[language reference](docs/language.md) describe current availability and contracts.
+The dated sections below retain the design decisions and evidence for their
+recorded versions.
+
 ## Implemented
 
 - Explicit persistent native streams: `stream from`, native `pipe to`, optional
@@ -19,6 +25,12 @@ Programs remain plain text and manifests remain declarative argv bindings.
   output flushes per handler, and bounded synchronous handling backpressures input.
 - Whole-program check/explain before execution, finite transformation caching,
   signal cancellation, process group ownership, traces, and isolated tests.
+- Direct quoted executable calls and typed CLI inputs in packaged 0.8.0.
+- Pending source primitives: finite inherited stdin, inspectable input interfaces,
+  structured check diagnostics, native exit-status bindings, scalar conditional
+  blocks, finite JSON operations and same-file finite program calls. Calls lower
+  into bounded, scoped instructions in the shared engine; conditions/calls are
+  whole checkpoint/live nodes. These features have not changed installed bundles.
 
 A service loads the catalog and parses its body once. Each ordinary command is
 still a one-shot process. A `listen to` producer remains running between events;
@@ -38,9 +50,11 @@ Add cooperating worker manifests and a versioned framed request/response protoco
 when avoiding process startup per event is necessary. Keep ordinary binaries
 supported; a pool cannot make an arbitrary one-shot command reusable.
 
-Add structured record schemas, field access, explicit conditions, deadlines,
-failure policies, bounded concurrency, and idempotent retries. Preserve readable
-canonical phrases and define scope/order before expanding the grammar.
+Extend finite JSON values toward CSV and structured streaming where justified.
+Add external modules, structured error results, bounded concurrency and explicit
+retry policies. Preserve readable canonical phrases and define scope/order before
+expanding the grammar. Native deadlines already exist; broader filesystem/CPU
+supervision needs separate evidence and contracts.
 
 Cache only transformations whose dependencies are declared. Add dependency
 fingerprints, binary/version pinning, cache eviction, and immutable artifact
@@ -303,3 +317,21 @@ completions and requires retry acknowledgment. Regular execution retains its
 existing path. Live state is ephemeral and separate from checkpoint journals.
 
 See [the control API](docs/live-control.md) for protocol and lifecycle contracts.
+
+## Model adapter boundary (source candidate)
+
+`execute-model` is a separate supervised Unix process, located beside the calling
+interpreter. Five manifests map Jev and OpenAI operations to literal argv; the
+`execute model` subcommand delegates to the same helper. This keeps HTTP/TLS and
+provider-specific parsing outside ordinary native pipelines while sharing their
+existing cancellation, timeout and output-bound machinery. The helper normalizes
+results to `execute.model/1`; JSON selection and conditions remain in `.program`.
+
+Fixtures check exact semantic requests and validate provider-native responses
+through the live response parser. Presence of `EXECUTE_MODELS_OFFLINE` prevents
+fixtureless calls before input, credentials or network access. Live calls use
+explicit provider/model settings and bounded input/output/token/time limits. No
+automatic retry or cache is enabled. Manifests mark failed requests as uncertain
+for checkpoint recovery because an HTTP failure can follow provider-side work.
+Completed results restore from private plaintext checkpoints without requesting
+inference again. This is a narrow adapter, not a model-driven command executor.

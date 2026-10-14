@@ -1,0 +1,1 @@
+{"vendor":"Northstar","scope":"image intake","answers":[{"topic":"region","response":"EU-West","evidence":"ATT-26"}],"policy":[{"id":"REG-1","rule":"disclose region"}],"evidence_id":"ATT-26C","checked_fact":"subprocessor unanswered","case_note":"explicit owner-review condition","case_id":"026-alternate"}

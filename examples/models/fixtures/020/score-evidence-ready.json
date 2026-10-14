@@ -1,0 +1,52 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "score",
+    "model": "jev-latest",
+    "state": {
+      "baseline_failures": [
+        "TEST-A"
+      ],
+      "candidate_failures": [
+        "TEST-A",
+        "TEST-C"
+      ],
+      "cleared_failures": [],
+      "new_failures": [
+        "TEST-C"
+      ],
+      "suite": "SUITE-4"
+    },
+    "question": "Do the saved runs contain a newly failing test that merits a regression review?",
+    "minimum": 80,
+    "levels": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "score",
+        "score": 2,
+        "confidence": 0.93,
+        "legend": {
+          "0": "low",
+          "1": "medium",
+          "2": "high"
+        },
+        "probabilities": {
+          "0": 0.07,
+          "1": 0.0,
+          "2": 0.93
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 3
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "question": "Which assigned reading introduces the stated vector prerequisite before the first application?",
+  "source_id": "MWI-087-A",
+  "source_ref": "reading-list/PHY-140/READ-02",
+  "scope": "course=PHY-140;prerequisites=declared",
+  "facts": {
+    "prerequisite_concepts": [
+      "vector-components",
+      "units"
+    ],
+    "learner_profiles_used": false,
+    "reading_count": 3
+  },
+  "assigned_readings": [
+    {
+      "id": "MWI-087-A",
+      "kind": "prerequisite_match",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "READ-PHY140-02",
+      "ref": "reading-list/PHY-140/READ-02",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-087-A-CTX-1",
+      "kind": "uncertain_match",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for review reading lists against stated prerequisites with an unresolved detail.",
+      "ref": "course-prerequisites/PHY-140/vector-basics",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-087-A-CTX-2",
+      "kind": "prerequisite_match",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied review reading lists against stated prerequisites evidence record 2.",
+      "ref": "course-prerequisites/PHY-140/vector-basics",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

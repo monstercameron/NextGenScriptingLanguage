@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "LC-ES\n",
+    "question": "Which required caption locales are absent from the delivered locale list?",
+    "minimum": 80,
+    "labels": [
+      "coverage-gap",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.5801,
+        "probabilities": {
+          "coverage-gap": 0.4199,
+          "needs-human": 0.5801
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

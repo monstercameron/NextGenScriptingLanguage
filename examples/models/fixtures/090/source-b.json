@@ -1,0 +1,36 @@
+{
+  "question": "Does the handoff have an explicit matching resolution record or remain open/conflicting? The alternate record has incomplete evidence.",
+  "source_id": "MWI-090-B",
+  "source_ref": "resolution-log/CASE-9007/event-R4",
+  "scope": "case=deidentified;closure_requires_exact_record;alternate=review",
+  "facts": {
+    "join_key": "case_id",
+    "closure_requires_status": "resolved",
+    "chronology_required": true,
+    "records": 2
+  },
+  "handoff_records": [
+    {
+      "id": "MWI-090-B",
+      "kind": "closed_with_record",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "CASE-9007",
+      "ref": "resolution-log/CASE-9007/event-R4",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-090-B-CTX-1",
+      "kind": "conflicting_or_open",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for reconcile escalation handoffs with recorded resolution evidence with an unresolved detail.",
+      "ref": "escalations/CASE-9007/handoff-H2",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

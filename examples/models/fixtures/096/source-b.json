@@ -1,0 +1,40 @@
+{
+  "question": "Is the threshold-crossing sensor sample inside a recorded maintenance or calibration window? The alternate record has incomplete evidence.",
+  "source_id": "MWI-096-B",
+  "source_ref": "maintenance/SEN-96/calibration-2026-10-12",
+  "scope": "instrument=SEN-96;units=declared;alternate=review",
+  "facts": {
+    "threshold": 12.0,
+    "unit": "ppm",
+    "timezone": "UTC",
+    "maintenance_windows": 1
+  },
+  "sensor_samples": [
+    {
+      "id": "MWI-096-B",
+      "kind": "maintenance_window",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "SEN-96-3",
+      "ref": "maintenance/SEN-96/calibration-2026-10-12",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied",
+        "value": 10.5,
+        "unit": "ppm"
+      }
+    },
+    {
+      "id": "MWI-096-B-CTX-1",
+      "kind": "rule_outlier",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for contextualize sensor anomalies against maintenance records with an unresolved detail.",
+      "ref": "sensors/SEN-96/sample-3",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied",
+        "value": 14.8,
+        "unit": "ppm"
+      }
+    }
+  ]
+}

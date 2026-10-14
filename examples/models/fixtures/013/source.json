@@ -1,0 +1,26 @@
+{
+  "release": "v2.4.0",
+  "commits": [
+    {
+      "id": "COM-11",
+      "merged": true,
+      "audience": "user",
+      "area": "export",
+      "summary": "Added archive manifest output"
+    },
+    {
+      "id": "COM-12",
+      "merged": true,
+      "audience": "internal",
+      "area": "build",
+      "summary": "Refactored CI cache"
+    },
+    {
+      "id": "COM-13",
+      "merged": false,
+      "audience": "user",
+      "area": "search",
+      "summary": "Search preview"
+    }
+  ]
+}

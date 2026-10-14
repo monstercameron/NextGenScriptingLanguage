@@ -1,0 +1,83 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "case": "CASE-88",
+      "evidence": [
+        {
+          "file": "approval.log",
+          "id": "EV-1",
+          "rule": "POL-1"
+        },
+        {
+          "file": "ticket.json",
+          "id": "EV-2",
+          "rule": "POL-1"
+        }
+      ],
+      "rules": [
+        {
+          "id": "POL-1",
+          "topic": "approval"
+        },
+        {
+          "id": "POL-2",
+          "topic": "retention"
+        }
+      ]
+    },
+    "instruction": "Return a structured matrix of each supplied policy rule and its directly linked evidence IDs. Leave rules with no link uncovered; do not decide compliance.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "review"
+          ]
+        },
+        "evidence_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "evidence_id",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"route\":\"draft\",\"evidence_id\":\"CASE-88\",\"summary\":\"Structured review for CASE-88 is based only on the listed local records.\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 12,
+      "total_tokens": 44
+    }
+  }
+}

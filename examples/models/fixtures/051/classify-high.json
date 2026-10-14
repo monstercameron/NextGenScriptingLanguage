@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "<h1 id=\"DOC-01\">Account recovery</h1>\n<h3 id=\"DOC-02\">Confirm address</h3>\n<h2 id=\"DOC-03\">Choose a new password</h2>\n",
+    "question": "Are these headings sufficient evidence of a document outline defect that needs accessibility review?",
+    "minimum": 80,
+    "labels": [
+      "outline-gap",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "outline-gap",
+        "confidence": 0.94,
+        "probabilities": {
+          "outline-gap": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

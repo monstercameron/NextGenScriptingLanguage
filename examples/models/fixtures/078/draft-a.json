@@ -1,0 +1,62 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "MACRO-EXPORT-02",
+          "id": "MWI-078-A",
+          "kind": "approved_macro",
+          "ref": "support-case/CASE-781"
+        }
+      ],
+      "facts": {
+        "anonymized": true,
+        "approved_template_ids": [
+          "MACRO-EXPORT-02",
+          "MACRO-ACCESS-01"
+        ],
+        "send_action": false
+      },
+      "question": "Which approved macro fits a user who can sign in but cannot export a report?",
+      "scope": "product=FieldSense;response=save-only",
+      "source_id": "MWI-078-A",
+      "source_ref": "support-case/CASE-781"
+    },
+    "instruction": "Draft evidence-linked support reply macros. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set macro_key to a concise value grounded in the supplied facts."
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Draft for draft evidence-linked support reply macros: A saved reply can point the user to the export permission check and ask them to retry after access is confirmed. [source_id=MWI-078-A; source_ref=support-case/CASE-781]",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

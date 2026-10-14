@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "cross-reference-complete",
+      "confidence_percent": 94,
+      "evidence": "PROD-01\theadphones\t2025-12-18\tRCPT-01\t2025-12-18\t2026-12-18\tRCPT-01\tCard statement 8F\n"
+    },
+    "instruction": "Summarize the joined PROD-* row and identify any missing purchase, coverage, or receipt fact. Cite local IDs; avoid warranty eligibility conclusions and do not contact a merchant."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: PROD-01\nLocal row links PROD-01 to RCPT-01 and purchase date 2025-12-18. Verify the original receipt and current coverage terms before opening a support request.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

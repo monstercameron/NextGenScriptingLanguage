@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "traceable-finding",
+      "confidence_percent": 94,
+      "evidence": "SEC-01\tsecret-pattern\tHIGH\t4f9c2d1\tworkflow-221\n"
+    },
+    "instruction": "For each joined SEC-* finding, draft a reproduction and remediation outline using the reported revision, path, and rule ID. Separate tool output from suspected impact; do not claim a fix is validated."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: SEC-01\nReproduce SEC-01 at the recorded source revision and inspect src/config.sample around the reported line. Confirm whether the value is a fixture placeholder before proposing a code change.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "properties": {
+    "source_id": {
+      "type": "string"
+    },
+    "source_ref": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "evidence_quote": {
+      "type": "string"
+    },
+    "context_count": {
+      "type": "integer"
+    },
+    "reading_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_id",
+    "source_ref",
+    "summary",
+    "evidence_quote",
+    "context_count",
+    "reading_id"
+  ],
+  "additionalProperties": false
+}

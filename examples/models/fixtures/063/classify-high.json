@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "RED-01\temail\t18\t39\tcontact field in export\n",
+    "question": "Which proposed spans should be reviewed before producing a redacted share copy?",
+    "minimum": 80,
+    "labels": [
+      "redaction-candidate",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "redaction-candidate",
+        "confidence": 0.94,
+        "probabilities": {
+          "redaction-candidate": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

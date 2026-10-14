@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "alignment-risk",
+      "confidence_percent": 94,
+      "evidence": "00:00:01,000 --> 00:00:02,000\n[CAP-01] Welcome to the setup guide.\n00:00:02,000 --> 00:00:03,000\n[CAP-02] Select the account menu.\n"
+    },
+    "instruction": "Compare cue order and timestamps only. Draft a concise timestamped review with CAP-* IDs and exact cue wording; do not reconstruct missing audio or assert a speech mismatch without supplied transcript evidence."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: CAP-01\nReview: CAP-01 spans 00:00:01,000–00:00:02,000 immediately before CAP-02; compare those boundaries with the supplied transcript and audio.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

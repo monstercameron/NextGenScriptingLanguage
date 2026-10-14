@@ -1,0 +1,70 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "acceptance": {
+          "width_max": 12.0
+        },
+        "criteria_version": "AC-98.2",
+        "signoff_blank": true,
+        "units": "mm"
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "LOT-98-4",
+          "id": "MWI-098-A",
+          "kind": "criterion_deviation",
+          "ref": "qc/PLANT-98/LOT-98-4/measurement-3"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for assemble a manufacturing nonconformance evidence packet with an unresolved detail.",
+          "id": "MWI-098-A-CTX-1",
+          "kind": "incomplete_evidence",
+          "ref": "work-orders/WO-98-7#inspection"
+        }
+      ],
+      "question": "Which quality record violates a supplied acceptance criterion and what work-order evidence is linked?",
+      "scope": "plant=PLANT-98;production_action=none",
+      "source_id": "MWI-098-A",
+      "source_ref": "qc/PLANT-98/LOT-98-4/measurement-3"
+    },
+    "question": "Classify QC evidence against supplied criteria and keep unknown or incomplete records for human review.",
+    "minimum": 75,
+    "labels": [
+      "criterion_deviation",
+      "incomplete_evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "criterion_deviation",
+        "confidence": 0.91,
+        "probabilities": {
+          "criterion_deviation": 0.91,
+          "incomplete_evidence": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

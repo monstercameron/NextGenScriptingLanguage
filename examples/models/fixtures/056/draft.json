@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "structure-finding",
+      "confidence_percent": 94,
+      "evidence": "STR-01\t4\ttable\tmissing-header-association\tData table with 3 columns and 8 body rows\n"
+    },
+    "instruction": "Organize the supplied structural findings into a practical remediation review queue. Cite every STR-* ID and page, distinguish the checker finding from an interpretation, and request a rendered-document check before changes."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: STR-01\nQueue item: inspect table header associations on page 4, then confirm the checker result in the tagged PDF or HTML source.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

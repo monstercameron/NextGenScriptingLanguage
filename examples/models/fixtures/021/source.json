@@ -1,0 +1,23 @@
+{
+  "contract": "CTR-8",
+  "old": [
+    {
+      "id": "OB-1",
+      "text": "retain audit logs for 30 days"
+    },
+    {
+      "id": "OB-2",
+      "text": "notify on breach"
+    }
+  ],
+  "new": [
+    {
+      "id": "OB-1",
+      "text": "retain audit logs for 90 days"
+    },
+    {
+      "id": "OB-3",
+      "text": "notify on breach"
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "criteria": [
+        {
+          "id": "CR-1",
+          "name": "offline mode"
+        },
+        {
+          "id": "CR-2",
+          "name": "audit export"
+        }
+      ],
+      "proposals": [
+        {
+          "claims": [
+            {
+              "criterion": "CR-1",
+              "evidence": "page-2"
+            }
+          ],
+          "id": "PROP-A"
+        },
+        {
+          "claims": [
+            {
+              "criterion": "CR-2",
+              "evidence": "page-5"
+            },
+            {
+              "criterion": "CR-X",
+              "evidence": "appendix"
+            }
+          ],
+          "id": "PROP-B"
+        }
+      ],
+      "request": "RFP-14"
+    },
+    "instruction": "Return a structured comparison of proposals against CR-1 and CR-2. Flag unknown criterion IDs and preserve page citations; do not rank vendors.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "review"
+          ]
+        },
+        "evidence_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "evidence_id",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"route\":\"review\",\"evidence_id\":\"RFP-14\",\"summary\":\"Some evidence for RFP-14 needs a human check before this packet is used.\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 13,
+      "total_tokens": 45
+    }
+  }
+}

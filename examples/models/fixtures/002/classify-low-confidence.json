@@ -1,0 +1,45 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "alert": {
+        "id": "ALT-22",
+        "service": "payments",
+        "symptom": "queue depth"
+      },
+      "matching_runbooks": [
+        {
+          "id": "RB-07",
+          "section": "Queue saturation checks",
+          "service": "payments"
+        }
+      ]
+    },
+    "question": "Does the alert have an exact service match in the supplied runbook inventory?",
+    "minimum": 80,
+    "labels": [
+      "evidence-ready",
+      "insufficient-evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "evidence-ready",
+        "confidence": 0.64,
+        "probabilities": {
+          "evidence-ready": 0.64,
+          "insufficient-evidence": 0.36
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 4
+    }
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "OBS-94-1",
+          "id": "MWI-094-A",
+          "kind": "dictionary_candidate",
+          "ref": "ecology/ECO-94/OBS-1"
+        }
+      ],
+      "facts": {
+        "allowed_ids": [
+          "TAX-94-17",
+          "TAX-94-22"
+        ],
+        "dictionary_version": "local-v3",
+        "expert_signoff_required": true
+      },
+      "question": "Which supplied taxonomy entry is a candidate for the observation, and should it remain expert-reviewable?",
+      "scope": "site=ECO-94;dictionary=local-v3",
+      "source_id": "MWI-094-A",
+      "source_ref": "ecology/ECO-94/OBS-1"
+    },
+    "instruction": "Map ecological observations to a supplied taxonomy. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set dictionary_entry_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "dictionary_entry_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "dictionary_entry_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-094-A\",\"source_ref\":\"ecology/ECO-94/OBS-1\",\"summary\":\"The observation description matches dictionary entry TAX-94-17 at the supplied site and date; retain as a candidate.\",\"evidence_quote\":\"OBS-94-1\",\"context_count\":2,\"dictionary_entry_id\":\"dictionary_entry_id:94-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

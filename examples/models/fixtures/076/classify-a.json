@@ -1,0 +1,70 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "product": "FieldSense",
+        "search_roots": [
+          "faq/fieldsense-3.2",
+          "runbook/fieldsense-3.2"
+        ],
+        "version": "3.2"
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "Restart the pairing service after clearing the stale pairing entry.",
+          "id": "MWI-076-A",
+          "kind": "answerable",
+          "ref": "faq/fieldsense-3.2/FAQ-14#pairing"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for answer a troubleshooting question from a closed local knowledge set with an unresolved detail.",
+          "id": "MWI-076-A-CTX-1",
+          "kind": "no_scoped_source",
+          "ref": "runbook/fieldsense-3.2/RB-02#discovery"
+        }
+      ],
+      "question": "Why does the sensor pair but remain absent from the app?",
+      "scope": "product=FieldSense;version=3.2",
+      "source_id": "MWI-076-A",
+      "source_ref": "faq/fieldsense-3.2/FAQ-14#pairing"
+    },
+    "question": "Route to a version-scoped local FAQ or runbook answer, or no scoped source.",
+    "minimum": 75,
+    "labels": [
+      "answerable",
+      "no_scoped_source"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "answerable",
+        "confidence": 0.91,
+        "probabilities": {
+          "answerable": 0.91,
+          "no_scoped_source": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

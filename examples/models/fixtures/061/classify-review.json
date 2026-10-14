@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "PKG-11\timgcodec\t4.2.0\tCVE-2026-1011\tmedium\tthumbnailer\tmetadata-reader\tbatch\n",
+    "question": "Does the local package-use evidence justify prioritizing an advisory for engineering review?",
+    "minimum": 80,
+    "labels": [
+      "used-exposed-package",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.5801,
+        "probabilities": {
+          "used-exposed-package": 0.4199,
+          "needs-human": 0.5801
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

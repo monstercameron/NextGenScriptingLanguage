@@ -1,0 +1,1 @@
+{"vendor":"Northstar","scope":"image intake","answers":[{"topic":"region","response":"EU-West","evidence":"ATT-26"}],"policy":[{"id":"REG-1","rule":"disclose region"}],"evidence_id":"ATT-26A","checked_fact":"EU-West","case_note":"supported source detail","case_id":"026-high"}

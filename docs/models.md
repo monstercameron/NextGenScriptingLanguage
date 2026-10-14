@@ -1,0 +1,171 @@
+# Model operations
+
+Model calls are explicit native applet calls. The bundled `execute-model`
+helper reads the program's current pipeline bytes on stdin and writes one
+normalized JSON result to stdout. Source builds must build both binaries with
+`cargo build --release`; the helper must sit beside `execute`. The ordinary
+`execute` runtime supervises it, including process-group cancellation and the
+outer command timeout and output-byte limit. Model calls are never cached and
+are never retried automatically. They do not change program control flow: parse
+the result and use `.program` conditions to choose the next steps. Input bytes
+that are valid JSON strings, objects, or arrays are sent with that type; other
+input, including JSON numbers, booleans, and null, is sent as UTF-8 text.
+
+Every successful result has `protocol: "execute.model/1"`, `provider`, `model`,
+`kind`, `transport`, and a `usage` object with nonnegative integer
+`input_tokens`, `output_tokens`, and `total_tokens`. `transport` is `https` for a
+provider request and `fixture` for offline fixture mode. Explicit loopback HTTP test endpoints use
+`http_loopback`; ordinary provider endpoints require HTTPS. The operation-specific
+fields are:
+
+| Applet | `kind` | Result fields |
+| --- | --- | --- |
+| `jev.classify` | `classify` | `label` (text), `confidence_percent` (integer 0–100), `accepted` (boolean) |
+| `jev.judge` | `judge` | `decision` (boolean), `confidence_percent` (integer 0–100), `accepted` (boolean) |
+| `jev.score` | `score` | `score` (number), `confidence_percent` (integer 0–100), `accepted` (boolean) |
+| `llm.ask` | `generate` | `text` (text) |
+| `llm.extract` | `extract` | `value` (JSON) |
+
+`confidence_percent` floors the provider confidence multiplied by 100;
+`accepted` compares that integer with `minimum`. It does not indicate a positive
+label or yes decision. An omitted `minimum` uses the helper's default threshold of 0. A well-formed
+result below the threshold succeeds with `accepted: false`; invalid provider
+responses fail the command instead of looking like a low-confidence result.
+
+The applets are declared in the manifest catalog as `jev.classify`, `jev.judge`,
+`jev.score`, `llm.ask`, and `llm.extract`. `jev.*` uses TypeSafe; `llm.*` uses
+OpenAI. The provider and operation are fixed by the selected applet. No shell
+interpolation or hidden HTTP call is performed by the `execute` runtime.
+
+## Classification
+
+Pass a question and a closed list of at least two labels. An optional `minimum`
+is a confidence threshold from 0 to 100. The response includes the selected `label`,
+`confidence_percent`, and `accepted`; branch on `accepted` before acting on the
+label:
+
+```text
+accept message as text
+run "printf" with arguments ["%s", message]
+then jev.classify with question "Which team should handle this message?" and labels ["billing", "account", "other"] and minimum 75 as raw
+then parse json as result
+take boolean at "/accepted" from result as accepted
+take text at "/label" from result as label
+if accepted is true
+  if label is "billing"
+    then "printf" with arguments ["Route to billing\n"]
+  otherwise
+    then "printf" with arguments ["Route to the general queue\n"]
+otherwise
+  then "printf" with arguments ["Send for human review\n"]
+```
+
+The label list is the allowed output set. The helper rejects a response whose
+label is outside it; labels beginning with `--` are rejected because labels and
+score levels are passed as explicit argv items. Supply descriptions in the
+question text; each label is also used as its choice criterion. `jev.judge`
+takes `question` and returns a boolean `decision`; confidence is the higher of
+the yes and no probabilities. `jev.score` takes `question` and an ordered
+`levels` list with at least two levels, then returns a numeric expected score,
+which may be fractional.
+Both include confidence and the threshold-derived `accepted` field. The default
+`minimum` is 0, so set a threshold when low-confidence results should go to
+review. The Jev default model is `jev-latest`; OpenAI calls require the caller to
+name a model. The normalized `model` field contains the model returned by the
+provider.
+
+## Text generation and extraction
+
+`execute model --help` exposes the same helper interface for standalone Unix
+pipelines; named manifests provide the `.program` parameter contracts.
+
+`llm.ask` requires an explicit OpenAI `model` and `instruction`. Its output
+contains generated `text`. `llm.extract` also requires a JSON Schema string and
+returns the extracted `value` as JSON. Keep schemas in a text file and read it
+into a binding when that is easier to maintain:
+
+```text
+accept source as text
+read "extraction-schema.json" as schema
+run "printf" with arguments ["%s", source]
+then llm.extract with model "<model-id>" and instruction "Extract the invoice fields." and schema schema as raw
+then parse json as result
+take text at "/value/vendor" from result as vendor
+take integer at "/value/amount_cents" from result as amount
+```
+
+OpenAI structured extraction uses strict JSON Schema output. The helper accepts
+these schema keywords: `$schema`, `$id`, `$comment`, `title`, `description`,
+`examples`, `default`, `deprecated`, `readOnly`, `writeOnly`, `type`, `enum`,
+`const`, `required`, `properties`, `additionalProperties`, `items`, `minLength`,
+`maxLength`, `minItems`, `maxItems`, `minimum`, `maximum`, `exclusiveMinimum`,
+`exclusiveMaximum`, `multipleOf`, `minProperties`, `maxProperties`,
+`uniqueItems`, and `anyOf`. The root schema must be an object. Nested `type` declarations may use a
+nonempty list of distinct supported types, such as `["integer", "null"]`, to
+represent optional values while keeping every property required. Object schemas must set `additionalProperties` to
+`false` and list every declared property in `required`. Other JSON Schema
+keywords are rejected before the request. The helper checks the returned value
+against the schema. Integer JSON values within the signed/unsigned 64-bit range
+retain their precision. Fractional and exponent values use the runtime's finite
+floating-point JSON representation and can round during parsing; this is not
+arbitrary-precision decimal storage. Bounds, enum/const equality, uniqueness and
+`multipleOf` use the normalized represented number. Use integer units or text
+when a value must preserve every source decimal digit. Refusals, incomplete output, provider errors, invalid JSON,
+and schema failures are errors; they do not become a low-confidence result or
+trigger a program branch. See the [OpenAI Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).
+
+## Limits, credentials, and offline fixtures
+
+The manifests expose `timeout_ms`, `max_bytes`, and optional `fixture` for each
+operation; Jev operations also accept `minimum` and optional `model`. OpenAI
+operations accept `max_tokens` and require an explicit `model`. `timeout_ms`
+bounds the helper's HTTP request. The runtime's `--command-timeout-ms` bounds the
+whole native pipeline, including helper startup and cleanup. `max_bytes` bounds
+the helper's input and provider request/response; the runtime's
+`--max-output-bytes` separately limits captured pipeline output. OpenAI requests default to an output token cap of 512; set `max_tokens` to
+change it. Provider token limits and byte limits measure different things.
+
+Pass credentials through a private `env_file` parameter or the helper process
+environment. The environment file accepts `jev=...` for TypeSafe or
+`openai=...` for OpenAI; uppercase `JEV_API_KEY`, `TYPESAFE_API_KEY`, and
+`OPENAI_API_KEY` are also accepted. Process environment values take precedence
+over values in the file. Keep secrets out of `.program` source and manifests.
+The helper emits sanitized error classes without provider response bodies,
+request values, paths, or credentials.
+
+Fixtures allow deterministic offline operation and validation without
+contacting a provider. A fixture checks the complete semantic request, including
+input state and operation settings, before supplying a provider-native response;
+this exercises the same response validation as a live request. If `fixture` is
+present, the helper must open and validate that file. An empty, missing, or
+mismatched fixture is an error and never falls back to a live provider request.
+Omit `fixture` for live calls. The presence of `EXECUTE_MODELS_OFFLINE` in the
+process environment, even with an empty value, rejects every fixtureless call
+before reading input, credentials, or opening a connection. Fixture calls still
+work. The [100-workflow runner](../examples/models/README.md) always enables
+this guard, sanitizes credentials and uses an OS network sandbox where available.
+
+The workflow collection defaults to fixtures. Its explicit `live` boolean selects
+a separate fixtureless branch; use `--input live=true` deliberately for real
+inference. Offline fixture success tests transport contracts and program routing,
+not model accuracy, calibration, or real generated-output quality.
+
+With checkpointing, completed model results are restored without another
+request. Checkpoint state stores model input and output in plaintext private
+files, so restrict access to that directory. A failed model call may already
+have reached the provider and incurred a charge; `uncertain_on_failure` makes
+resume require `--retry-uncertain` before trying that node again. Use that retry
+only when repeating the request is acceptable. There is no automatic retry.
+
+TypeSafe's public API describes `POST /v1/systemone`, its `noul`, `choice`, and
+`score` question types, and the corresponding answer fields. The helper maps
+those provider-specific responses into the normalized result described above.
+See the [TypeSafe OpenAPI contract](https://api.typesafe.ai/openapi.json). The
+OpenAI adapter uses the Responses API with Structured Outputs for extraction.
+
+## Current scope
+
+The adapter implements one classification, judgment, score, generation, or
+extraction per call. Batched named Jev questions, embeddings, streaming tokens,
+provider failover, and automatic tool execution are future work. Model results
+are data; executing any suggested command requires an explicit `.program` step.

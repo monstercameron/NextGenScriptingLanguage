@@ -1,0 +1,51 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "service": "catalog",
+      "windows": [
+        {
+          "error_percent": 2,
+          "errors": 18,
+          "id": "WIN-8",
+          "requests": 900
+        },
+        {
+          "error_percent": 0.2,
+          "errors": 2,
+          "id": "WIN-9",
+          "requests": 1000
+        }
+      ]
+    },
+    "instruction": "Write bounded hypotheses for WIN-8 using only the error counts and rates. Separate observed rate from possible causes and propose checks, not corrective actions."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: WIN-8\nReview: Write bounded hypotheses for WIN-8 using only the error counts and rates. Separate observed rate from possible causes and propose checks, not corrective actions.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 27,
+      "total_tokens": 59
+    }
+  }
+}

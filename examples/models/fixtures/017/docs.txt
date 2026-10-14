@@ -1,0 +1,3 @@
+--format json # DOC-CLI-1
+--legacy-mode # DOC-CLI-7
+--output PATH # DOC-CLI-2

@@ -1,0 +1,49 @@
+{
+  "question": "Which diagnostic step is missing for the silent reconnect cases?",
+  "source_id": "MWI-077-A",
+  "source_ref": "support-case/CASE-771",
+  "scope": "support_queue=Q4;identifiers=removed",
+  "facts": {
+    "deidentified": true,
+    "tree_version": "4",
+    "case_count": 3,
+    "rare_case_ids": [
+      "CASE-771"
+    ]
+  },
+  "support_cases": [
+    {
+      "id": "MWI-077-A",
+      "kind": "documented_branch",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "CASE-771: reconnect succeeds only after a fresh token is issued.",
+      "ref": "support-case/CASE-771",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-077-A-CTX-1",
+      "kind": "diagnostic_gap",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for find diagnostic-flow gaps in de-identified support cases with an unresolved detail.",
+      "ref": "troubleshooting-tree/BR-4#token-refresh",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-077-A-CTX-2",
+      "kind": "documented_branch",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied find diagnostic-flow gaps in de-identified support cases evidence record 2.",
+      "ref": "troubleshooting-tree/BR-4#token-refresh",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

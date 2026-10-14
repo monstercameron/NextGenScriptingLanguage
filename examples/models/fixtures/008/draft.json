@@ -1,0 +1,46 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "handoff": "SHIFT-7",
+      "open_cases": [
+        {
+          "id": "CASE-1",
+          "last_note": "recheck queue lag",
+          "owner": "team-a",
+          "status": "open",
+          "updated": "09:10Z"
+        }
+      ]
+    },
+    "instruction": "Draft an open-case handoff from SHIFT-7. Keep owner, update time, and last recorded note distinct; do not state that a case is resolved unless the source says so."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: SHIFT-7\nReview: Draft an open-case handoff from SHIFT-7. Keep owner, update time, and last recorded note distinct; do not state that a case is resolved unless the source says so.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 31,
+      "total_tokens": 63
+    }
+  }
+}

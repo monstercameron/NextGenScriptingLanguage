@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "properties": {
+    "section_id": {
+      "type": "string"
+    },
+    "sample_size": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "instrument": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "seed": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "missing_fields": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "section_id",
+    "sample_size",
+    "instrument",
+    "seed",
+    "missing_fields"
+  ],
+  "additionalProperties": false
+}

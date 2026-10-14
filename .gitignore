@@ -1,8 +1,15 @@
+# Build and local runtime state
 /target/
 /.flow-cache/
+.execute-state/
 *.tmp
 
-.execute-state/
+# Local settings and operating-system metadata
+.env
+.env.*
+!.env.example
+.DS_Store
 
+# Python bytecode
 __pycache__/
-*.pyc
+*.py[cod]

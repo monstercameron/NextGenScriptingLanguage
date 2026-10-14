@@ -33,3 +33,18 @@ Preserve native macOS/Linux behavior, real named CLI applets, and application co
 Baseline evidence is historical and labeled: Execute 0.6.1, 237 Rust tests, 31 live scenarios, 150 canonical utilities and 146 alternate inputs from the preceding full audit. New session results must be recorded separately. The old 0.4.5 scorecard is not a current score. Use `docs/language-quality-rubric.md`, `docs/full-testing.md`, `docs/replacement-gates.json`, and `benchmarks/README.md`; do not manufacture 10/10 ratings, usability results, Linux execution, or Bash replacement claims.
 
 Begin final validation no later than 13:35 UTC. During the final ten minutes, finalize and pause the heartbeat before its schedule expires. At 14:35 UTC stop starting work, checkpoint safely, clean up only owned children, summarize accepted and rejected changes, measured gains, unresolved gaps and verification limits, and pause this session's heartbeat using its recorded automation ID. If a run wakes after the deadline, only finalize and pause it. Do not extend the deadline or create another automation. Keep routine progress in the evidence log; report meaningful findings, blockers and completion in this chat.
+
+## Later human instructions
+
+The subsequent human request authorized implementing TypeSafe Jev System One
+and LLM integration with GPT-6 Luna subagents, 100 runnable fixture workflows,
+and privately supplied provider keys. Two bounded synthetic calls verified
+Jev classification and `gpt-6-luna` generation through `.program`. These are
+connectivity checks, not model-quality or latency benchmarks. Offline fixtures
+remain the default; this does not authorize broad unattended provider evaluation.
+
+The later instruction, “make sure to commit and push the changes as you go,”
+authorizes coherent tested commits and pushes to the configured project remote.
+It supersedes the earlier no-commit/no-push restriction. Secrets, ignored build
+output and private session scratch remain excluded. The fixed 14:35 UTC session
+deadline and immutable installed-release policy are unchanged.

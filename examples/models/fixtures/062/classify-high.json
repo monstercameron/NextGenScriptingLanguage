@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "ACL-01\tanalyst\twarehouse\tread\tanalyst\twarehouse\tread\nACL-02\tcontractor\tfinance\tread\tcontractor\tfinance\twrite\n",
+    "question": "Which joined access-control rows warrant a human least-privilege check?",
+    "minimum": 80,
+    "labels": [
+      "grant-review",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "grant-review",
+        "confidence": 0.94,
+        "probabilities": {
+          "grant-review": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

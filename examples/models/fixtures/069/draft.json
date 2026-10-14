@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "attribution-gap",
+      "confidence_percent": 94,
+      "evidence": "LIC-02\tlibbeta\t2.0\tApache-2.0\n"
+    },
+    "instruction": "Draft a license attribution follow-up for the missing LIC-* lines. Cite the exact package/version/license evidence and ask legal or release owners to verify obligations; do not provide a legal conclusion."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: LIC-02\nLIC-02 appears in the discovered set but not the supplied attribution list. Confirm the package version and required notice text with release/legal owners.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

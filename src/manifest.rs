@@ -16,6 +16,9 @@ pub struct Manifest {
     pub builtin: Option<Builtin>,
     pub accepts_stdin: bool,
     pub cacheable: bool,
+    /// A failed attempt may already have caused an external effect, such as billing.
+    #[serde(skip_serializing_if = "is_false")]
+    pub uncertain_on_failure: bool,
     pub phrases: Vec<String>,
     parameters: BTreeMap<String, ParameterSpec>,
     arguments: Vec<ArgumentNode>,
@@ -25,6 +28,10 @@ pub struct Manifest {
 #[serde(rename_all = "lowercase")]
 pub enum Builtin {
     Cd,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +124,7 @@ impl Registry {
             builtin: None,
             accepts_stdin: true,
             cacheable: false,
+            uncertain_on_failure: false,
             phrases: Vec::new(),
             parameters: BTreeMap::from([(
                 "arguments".into(),
@@ -551,6 +559,8 @@ struct RawManifest {
     #[serde(default)]
     cacheable: bool,
     #[serde(default)]
+    uncertain_on_failure: bool,
+    #[serde(default)]
     parameters: BTreeMap<String, ParameterSpec>,
     arguments: Vec<RawArgument>,
 }
@@ -634,10 +644,14 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         builtin: raw.builtin,
         accepts_stdin: raw.accepts_stdin,
         cacheable: raw.cacheable,
+        uncertain_on_failure: raw.uncertain_on_failure,
         parameters,
         arguments,
     };
     validate_builtin(&manifest)?;
+    if manifest.uncertain_on_failure && (manifest.cacheable || manifest.builtin.is_some()) {
+        bail!("uncertain_on_failure requires a non-cacheable external applet");
+    }
     validate_argument_usage(&manifest)?;
     Ok(manifest)
 }

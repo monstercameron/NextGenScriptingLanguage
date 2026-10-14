@@ -1,0 +1,55 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "score",
+    "model": "jev-latest",
+    "state": {
+      "service": "catalog",
+      "windows": [
+        {
+          "error_percent": 2,
+          "errors": 18,
+          "id": "WIN-8",
+          "requests": 900
+        },
+        {
+          "error_percent": 0.2,
+          "errors": 2,
+          "id": "WIN-9",
+          "requests": 1000
+        }
+      ]
+    },
+    "question": "How strongly does this SLO window deviate from the explicitly supplied target and comparison?",
+    "minimum": 80,
+    "levels": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "score",
+        "score": 2,
+        "confidence": 0.93,
+        "legend": {
+          "0": "low",
+          "1": "medium",
+          "2": "high"
+        },
+        "probabilities": {
+          "0": 0.07,
+          "1": 0.0,
+          "2": 0.93
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 3
+    }
+  }
+}

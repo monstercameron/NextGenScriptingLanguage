@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "PROD-01\theadphones\t2025-12-18\tRCPT-01\t2025-12-18\t2026-12-18\tRCPT-01\tCard statement 8F\n",
+    "question": "Does the local product and receipt evidence form a complete enough cross-reference for a support lookup?",
+    "minimum": 80,
+    "labels": [
+      "cross-reference-complete",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "cross-reference-complete",
+        "confidence": 0.94,
+        "probabilities": {
+          "cross-reference-complete": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

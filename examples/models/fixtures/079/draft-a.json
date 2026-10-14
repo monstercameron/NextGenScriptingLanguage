@@ -1,0 +1,72 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "CHG-481",
+          "id": "MWI-079-A",
+          "kind": "requested_change",
+          "ref": "release/4.8/CHG-481"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied explain a release change for a specified customer context evidence record 2.",
+          "id": "MWI-079-A-CTX-2",
+          "kind": "requested_change",
+          "ref": "product-docs/audit-export#timezone"
+        }
+      ],
+      "facts": {
+        "customer_feature_ids": [
+          "AUDIT-TZ"
+        ],
+        "date_promise_allowed": false,
+        "release": "4.8"
+      },
+      "question": "Which release change affects the clinic west audit export workflow?",
+      "scope": "release=4.8;customer=clinic-west",
+      "source_id": "MWI-079-A",
+      "source_ref": "release/4.8/CHG-481"
+    },
+    "instruction": "Explain a release change for a specified customer context. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set feature_id to a concise value grounded in the supplied facts."
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Draft for explain a release change for a specified customer context: The audit export now retains the operator-selected timezone in the saved CSV preview. [source_id=MWI-079-A; source_ref=release/4.8/CHG-481]",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

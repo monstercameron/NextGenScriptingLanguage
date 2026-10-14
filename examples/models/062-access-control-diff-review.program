@@ -1,0 +1,43 @@
+# Purpose: Compare two role-permission exports and draft a least-privilege review of changed grants only.
+# Inputs: Sorted TSV snapshots contain stable ACL-* IDs, role, resource, and action.
+# Outputs: out/062-access-control-diff-review.json: changed grant excerpts and an approval checklist; no ACL is applied.
+accept live as boolean with default false
+accept source_path as text with default "fixtures/062/source-high.txt"
+accept report_path as text with default "out/062-access-control-diff-review.json"
+accept classify_fixture_path as text with default "fixtures/062/classify-high.json"
+accept draft_fixture_path as text with default "fixtures/062/draft.json"
+accept generator_model as text with default "gpt-6-luna"
+accept env_file as text with default ".env"
+accept reference_path as text with default "fixtures/062/reference-high.tsv"
+# Refuse an output path that aliases an existing evidence or schema file.
+run "test" with arguments ["!", source_path, "-ef", report_path]
+run "test" with arguments ["!", reference_path, "-ef", report_path]
+run join with flags ["-t", "\t"] and files [source_path, reference_path] as evidence
+if live is true
+  then jev.classify with question "Which joined access-control rows warrant a human least-privilege check?" and labels ["grant-review", "needs-human"] and minimum 80 and env_file env_file as class_raw
+otherwise
+  then jev.classify with question "Which joined access-control rows warrant a human least-privilege check?" and labels ["grant-review", "needs-human"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
+then parse json as classification
+take text at "/label" from classification as label
+take integer at "/confidence_percent" from classification as confidence
+take boolean at "/accepted" from classification as accepted
+if accepted is true
+  if label is "grant-review"
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "label", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "{label:$label,confidence_percent:$confidence,evidence:$evidence}"]
+    if live is true
+      then llm.ask with model generator_model and instruction "Inspect the supplied role/resource/action rows and draft reviewer questions about scope, owner, and justification. Cite ACL-* IDs. Do not say a change is approved or apply access." and env_file env_file as draft_raw
+    otherwise
+      then llm.ask with model generator_model and instruction "Inspect the supplied role/resource/action rows and draft reviewer questions about scope, owner, and justification. Cite ACL-* IDs. Do not say a change is approved or apply access." and fixture draft_fixture_path and env_file env_file as draft_raw
+    then parse json as draft_result
+    take text at "/text" from draft_result as draft
+    run jq with flags ["-n", "-r", "--arg", "draft", draft, "--arg", "evidence", evidence] and filter "($draft | rtrimstr(\"\\n\")) as $candidate | if ($candidate | startswith(\"EVIDENCE:\")) and ([$evidence | scan(\"[A-Z][A-Z0-9]+-[A-Z0-9-]+\") | . as $id | select($candidate | contains($id))] | length > 0) then $candidate else error(\"draft must start with EVIDENCE and cite an ID present in the bounded evidence\") end" as validated_draft
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "access_control_change_review", "--arg", "classification", label, "--argjson", "confidence_percent", confidence, "--arg", "source_path", source_path, "--arg", "evidence", evidence, "--arg", "draft", validated_draft, "--arg", "action", "Data owner and security reviewer approve changes through their normal process.", "{artifact:$artifact,status:\"draft-for-human-review\",classification:$classification,confidence_percent:$confidence_percent,source_path:$source_path,evidence_excerpt:$evidence,least_privilege_checklist:$draft,action:$action}"]
+    then save to report_path
+  otherwise
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "access_control_change_review", "--arg", "classification", label, "--argjson", "confidence_percent", confidence, "--arg", "source_path", source_path, "--arg", "evidence", evidence, "--arg", "review_action", "This is a read-only review packet.", "{artifact:$artifact,status:\"needs-human-review\",classification:$classification,confidence_percent:$confidence_percent,source_path:$source_path,evidence_excerpt:$evidence,least_privilege_checklist:null,reason:\"Classifier selected the human-review label above the confidence threshold; no LLM draft was requested.\",action:$review_action}"]
+    then save to report_path
+  then cat with path report_path
+otherwise
+  then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "access_control_change_review", "--arg", "classification", label, "--argjson", "confidence_percent", confidence, "--arg", "source_path", source_path, "--arg", "evidence", evidence, "--arg", "review_action", "This is a read-only review packet.", "{artifact:$artifact,status:\"needs-human-review\",classification:$classification,confidence_percent:$confidence_percent,source_path:$source_path,evidence_excerpt:$evidence,least_privilege_checklist:null,reason:\"Classifier confidence is below the configured 80 percent threshold; no LLM draft was requested.\",action:$review_action}"]
+  then save to report_path
+then cat with path report_path

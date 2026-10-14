@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "grant-review",
+      "confidence_percent": 94,
+      "evidence": "ACL-01\tanalyst\twarehouse\tread\tanalyst\twarehouse\tread\nACL-02\tcontractor\tfinance\tread\tcontractor\tfinance\twrite\n"
+    },
+    "instruction": "Inspect the supplied role/resource/action rows and draft reviewer questions about scope, owner, and justification. Cite ACL-* IDs. Do not say a change is approved or apply access."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: ACL-02\nAsk whether contractor access to finance is required, time-limited, and scoped to a named resource; confirm with the data owner before changing grants.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

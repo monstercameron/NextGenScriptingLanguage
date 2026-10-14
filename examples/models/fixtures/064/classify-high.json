@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "RET-01\tsupport-log\t430\t365\tfalse\treview-eligible\n",
+    "question": "Which records are arithmetically past their supplied retention period and still require a hold/owner check?",
+    "minimum": 80,
+    "labels": [
+      "review-eligible",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "review-eligible",
+        "confidence": 0.94,
+        "probabilities": {
+          "review-eligible": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

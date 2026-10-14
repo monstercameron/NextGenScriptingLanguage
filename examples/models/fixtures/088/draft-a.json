@@ -1,0 +1,65 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "FAQ-88-A",
+          "id": "MWI-088-A",
+          "kind": "definition_or_procedure",
+          "ref": "faq/approved/FAQ-88-A"
+        }
+      ],
+      "facts": {
+        "audiences": [
+          "new-user",
+          "administrator"
+        ],
+        "required_terms": [
+          "shared link",
+          "recipient"
+        ],
+        "warnings_must_remain": true
+      },
+      "question": "Which approved FAQ entry contains a warning or policy statement that needs extra review when simplified?",
+      "scope": "faq=approved;links=preserve",
+      "source_id": "MWI-088-A",
+      "source_ref": "faq/approved/FAQ-88-A"
+    },
+    "instruction": "Create audience-level variants of an approved FAQ. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set faq_id to a concise value grounded in the supplied facts."
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Draft for create audience-level variants of an approved faq: For a general audience, explain the export setting in plain language and retain the warning that shared links remain accessible to their listed recipients. [source_id=MWI-088-A; source_ref=faq/approved/FAQ-88-A]",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

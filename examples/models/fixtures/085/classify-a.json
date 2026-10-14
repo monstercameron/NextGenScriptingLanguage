@@ -1,0 +1,82 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "checklist_ids": [
+          "SC-12-eye",
+          "SC-12-ventilation",
+          "SC-12-waste"
+        ],
+        "handout_version": "2",
+        "verdict_authorized": false
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "LAB-STEP-05: transfer solvent to the sealed vial.",
+          "id": "MWI-085-A",
+          "kind": "checklist_match",
+          "ref": "lab/CHEM-12/step-05"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for review lab instructions against a supplied safety checklist with an unresolved detail.",
+          "id": "MWI-085-A-CTX-1",
+          "kind": "hazard_unclear",
+          "ref": "safety-checklist/SC-12/ventilation"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied review lab instructions against a supplied safety checklist evidence record 2.",
+          "id": "MWI-085-A-CTX-2",
+          "kind": "checklist_match",
+          "ref": "safety-checklist/SC-12/ventilation"
+        }
+      ],
+      "question": "Which checklist item should the instructor review for the solvent transfer step?",
+      "scope": "lab=CHEM-12;review_only=true",
+      "source_id": "MWI-085-A",
+      "source_ref": "lab/CHEM-12/step-05"
+    },
+    "question": "Route a lab step to a supplied checklist topic or uncertainty; do not certify safety.",
+    "minimum": 75,
+    "labels": [
+      "checklist_match",
+      "hazard_unclear"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "checklist_match",
+        "confidence": 0.91,
+        "probabilities": {
+          "checklist_match": 0.91,
+          "hazard_unclear": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

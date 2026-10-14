@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "placeholder-risk",
+      "confidence_percent": 94,
+      "evidence": "# LOC-01\nmsgid \"Delete %d item\"\nmsgstr \"%s élément supprimé\"\n"
+    },
+    "instruction": "Review the msgid/msgstr pairs for likely placeholder or plural risks using only the supplied excerpt. Cite LOC-* IDs, quote only relevant tokens, and ask a native-language reviewer to decide; do not claim a translation is correct."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: LOC-01\nReview: Source uses %d while translation uses %s; verify the expected numeric placeholder and singular/plural catalog entry before release.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

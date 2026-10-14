@@ -1,0 +1,43 @@
+{
+  "question": "Which resource is missing a declared accessible alternative?",
+  "source_id": "MWI-086-A",
+  "source_ref": "course/M-4/resources/video-V44",
+  "scope": "module=M-4;checklist=AC-2",
+  "facts": {
+    "resource_types": [
+      "video",
+      "image",
+      "table"
+    ],
+    "alternative_types": [
+      "captions",
+      "transcript",
+      "alt_text"
+    ],
+    "student_diagnosis_ingested": false
+  },
+  "course_resources": [
+    {
+      "id": "MWI-086-A",
+      "kind": "alternative_listed",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "V-44",
+      "ref": "course/M-4/resources/video-V44",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-086-A-CTX-1",
+      "kind": "missing_or_unknown",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for audit course materials for declared accessible alternatives with an unresolved detail.",
+      "ref": "accessibility-manifest/AC-2/alternatives",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

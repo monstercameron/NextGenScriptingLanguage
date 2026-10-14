@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "CTRL-01\tbutton\tSave form\tError: press the button again\n",
+    "question": "Which joined control messages appear to need an error-recovery or accessible-label review?",
+    "minimum": 80,
+    "labels": [
+      "message-review",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "message-review",
+        "confidence": 0.94,
+        "probabilities": {
+          "message-review": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

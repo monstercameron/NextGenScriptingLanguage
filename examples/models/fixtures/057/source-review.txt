@@ -1,0 +1,2 @@
+KBT-11|profile|ESC|dialog-stayed-open|preferences
+KBT-12|profile|TAB|focus-lost|close

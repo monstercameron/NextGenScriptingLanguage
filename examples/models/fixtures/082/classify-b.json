@@ -1,0 +1,73 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "assessment_count": 1,
+        "course": "BIO-210",
+        "outcomes": [
+          "O-1",
+          "O-2",
+          "O-3"
+        ],
+        "reading_count": 1
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "O-3",
+          "id": "MWI-082-B",
+          "kind": "mapped_outcome",
+          "ref": "assessment/BIO-210/week-06#data"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for check syllabus outcomes against readings and assessments with an unresolved detail.",
+          "id": "MWI-082-B-CTX-1",
+          "kind": "unmatched_item",
+          "ref": "syllabus/BIO-210/outcome-O3"
+        }
+      ],
+      "question": "Which course outcome has an assessment link and which remains unsupported? The alternate record has incomplete evidence.",
+      "scope": "course=BIO-210;term=fall;alternate=review",
+      "source_id": "MWI-082-B",
+      "source_ref": "assessment/BIO-210/week-06#data",
+      "outcome_alignment_summary": "outcomes=3;linked=1;gaps=2"
+    },
+    "question": "Classify course items by outcome coverage, preserving unmatched readings and assessments.",
+    "minimum": 75,
+    "labels": [
+      "mapped_outcome",
+      "unmatched_item"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "unmatched_item",
+        "confidence": 0.42,
+        "probabilities": {
+          "mapped_outcome": 0.5800000000000001,
+          "unmatched_item": 0.42
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

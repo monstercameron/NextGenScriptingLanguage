@@ -1,0 +1,105 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "FN-91-2",
+          "id": "MWI-091-A",
+          "kind": "observation",
+          "ref": "notebook/FN-91/page-4#FN-91-2"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied index field observations by time, location, and source evidence record 2.",
+          "id": "MWI-091-A-CTX-2",
+          "kind": "observation",
+          "ref": "metadata/FN-91/gps-row-2"
+        }
+      ],
+      "facts": {
+        "coordinates": [
+          "42.103,-71.244",
+          "42.104,-71.240"
+        ],
+        "interpretation_count": 1,
+        "timestamps_are_metadata": true
+      },
+      "question": "Which records are direct observations and what timestamp/location should remain in the index?",
+      "scope": "notebook=FN-91;coordinates=provided-only",
+      "source_id": "MWI-091-A",
+      "source_ref": "notebook/FN-91/page-4#FN-91-2"
+    },
+    "instruction": "Index field observations by time, location, and source. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set notebook_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "notebook_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "notebook_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-091-A\",\"source_ref\":\"notebook/FN-91/page-4#FN-91-2\",\"summary\":\"Observation FN-91-2 records a wetland bird call at the supplied coordinate and timestamp.\",\"evidence_quote\":\"FN-91-2\",\"context_count\":3,\"notebook_id\":\"notebook_id:91-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

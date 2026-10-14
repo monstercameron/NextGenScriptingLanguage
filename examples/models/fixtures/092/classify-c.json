@@ -1,0 +1,70 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "measurement_count": 1,
+        "measurement_schema": {
+          "mass": "mg",
+          "temperature": "C"
+        },
+        "protocol_version": "P-92.1"
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "RUN-92-4",
+          "id": "MWI-092-B",
+          "kind": "recorded_step",
+          "ref": "protocol/P-92/step-4"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for reconcile a lab notebook against its recorded protocol with an unresolved detail.",
+          "id": "MWI-092-B-CTX-1",
+          "kind": "deviation_or_missing",
+          "ref": "notebook/RUN-92/entry-4"
+        }
+      ],
+      "question": "Which notebook entry maps to a protocol step, and is the measurement unit explicit? The alternate record has incomplete evidence.",
+      "scope": "protocol=P-92;instrument=I-92;alternate=review",
+      "source_id": "MWI-092-B",
+      "source_ref": "protocol/P-92/step-4"
+    },
+    "question": "Classify notebook spans against the recorded protocol and flag missing or unit-ambiguous evidence.",
+    "minimum": 75,
+    "labels": [
+      "recorded_step",
+      "deviation_or_missing"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "deviation_or_missing",
+        "confidence": 0.93,
+        "probabilities": {
+          "deviation_or_missing": 0.93,
+          "recorded_step": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "question": "Which approved solution step can support a hint without revealing the final answer?",
+  "source_id": "MWI-084-A",
+  "source_ref": "solutions/ALG-6/step-03",
+  "scope": "assignment=ALG-6;owner=instructor",
+  "facts": {
+    "instructor_approved": true,
+    "hint_levels": [
+      "nudge",
+      "strategy",
+      "worked-step"
+    ],
+    "final_answer_in_early_levels": false
+  },
+  "solution_steps": [
+    {
+      "id": "MWI-084-A",
+      "kind": "concept_hint",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "STEP-ALG6-03",
+      "ref": "solutions/ALG-6/step-03",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-084-A-CTX-1",
+      "kind": "answer_leak_risk",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for draft a graded hint ladder from an approved solution with an unresolved detail.",
+      "ref": "hint-template/ALG-6#level-1",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

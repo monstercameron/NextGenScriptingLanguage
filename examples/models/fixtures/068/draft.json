@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "sequence-anomaly",
+      "confidence_percent": 94,
+      "evidence": "AUD-01\tseq=1001\tgap=0\tlogin\nAUD-02\tseq=1004\tgap=2\trole-change\n"
+    },
+    "instruction": "Explain only the computed sequence gaps and supplied actions. Cite AUD-* event IDs and sequence numbers; list plausible collection checks without alleging tampering or attributing intent."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: AUD-02\nSequence 1004 follows 1001 with two missing integers in this excerpt. Check export filters and shard/offset continuity before interpreting the gap.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

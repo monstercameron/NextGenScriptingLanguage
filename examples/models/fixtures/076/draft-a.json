@@ -1,0 +1,94 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "Restart the pairing service after clearing the stale pairing entry.",
+          "id": "MWI-076-A",
+          "kind": "answerable",
+          "ref": "faq/fieldsense-3.2/FAQ-14#pairing"
+        }
+      ],
+      "facts": {
+        "product": "FieldSense",
+        "search_roots": [
+          "faq/fieldsense-3.2",
+          "runbook/fieldsense-3.2"
+        ],
+        "version": "3.2"
+      },
+      "question": "Why does the sensor pair but remain absent from the app?",
+      "scope": "product=FieldSense;version=3.2",
+      "source_id": "MWI-076-A",
+      "source_ref": "faq/fieldsense-3.2/FAQ-14#pairing"
+    },
+    "instruction": "Answer a troubleshooting question from a closed local knowledge set. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set version_scope to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "version_scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "version_scope"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-076-A\",\"source_ref\":\"faq/fieldsense-3.2/FAQ-14#pairing\",\"summary\":\"The local pairing steps identify a restart of the pairing service after clearing the stale pairing entry.\",\"evidence_quote\":\"Restart the pairing service after clearing the stale pairing entry.\",\"context_count\":2,\"version_scope\":\"version_scope:76-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

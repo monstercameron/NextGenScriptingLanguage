@@ -1,0 +1,108 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "CL-89-3",
+          "id": "MWI-089-A",
+          "kind": "partial_result",
+          "ref": "help-search/clusters/CL-89-3"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied find help-center gaps from anonymized search queries evidence record 2.",
+          "id": "MWI-089-A-CTX-2",
+          "kind": "partial_result",
+          "ref": "help-center/index-v14#article-map"
+        }
+      ],
+      "facts": {
+        "article_ids": [
+          "HC-14",
+          "HC-22"
+        ],
+        "deidentified": true,
+        "query_count": 7,
+        "rare_clusters": [
+          "CL-89-3"
+        ]
+      },
+      "question": "Which recurring query cluster has no matching local help article, retaining rare clusters?",
+      "scope": "query_log=anonymized;article_index=local",
+      "source_id": "MWI-089-A",
+      "source_ref": "help-search/clusters/CL-89-3"
+    },
+    "instruction": "Find help-center gaps from anonymized search queries. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set cluster_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "cluster_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "cluster_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-089-A\",\"source_ref\":\"help-search/clusters/CL-89-3\",\"summary\":\"Cluster CL-89-3 asks how to restore an export draft, but no article ID in the index covers draft recovery.\",\"evidence_quote\":\"CL-89-3\",\"context_count\":3,\"cluster_id\":\"cluster_id:89-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

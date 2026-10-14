@@ -1,0 +1,81 @@
+{
+  "expected_request": {
+    "instruction": "Return only a JSON object with section_id, sample_size, instrument, seed, and missing_fields from the supplied methods evidence. Use null for unstated values, cite no unsupported facts, and do not infer.",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "provider": "openai",
+    "state": {
+      "case_note": "weak or incomplete source detail",
+      "checked_fact": "not stated",
+      "evidence_id": "METHOD-33B",
+      "methods_text": "We evaluated 48 examples with Atlas 2.1. Random seed was 17; scripts in archive R-33.",
+      "section_id": "METHOD-33"
+    },
+    "schema": {
+      "type": "object",
+      "properties": {
+        "section_id": {
+          "type": "string"
+        },
+        "sample_size": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "instrument": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "missing_fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "section_id",
+        "sample_size",
+        "instrument",
+        "seed",
+        "missing_fields"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-fixture",
+    "model": "gpt-6-luna",
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "text": "{\"section_id\":\"METHOD-33\",\"sample_size\":null,\"instrument\":null,\"seed\":null,\"missing_fields\":[\"sample_size\",\"instrument\",\"seed\"]}",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg-fixture",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "status": "completed",
+    "usage": {
+      "input_tokens": 22,
+      "output_tokens": 18,
+      "total_tokens": 40
+    }
+  }
+}

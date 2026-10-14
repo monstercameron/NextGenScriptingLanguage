@@ -1,0 +1,69 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "chronology_required": true,
+        "closure_requires_status": "resolved",
+        "join_key": "case_id",
+        "records": 2
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "CASE-9007",
+          "id": "MWI-090-B",
+          "kind": "closed_with_record",
+          "ref": "resolution-log/CASE-9007/event-R4"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for reconcile escalation handoffs with recorded resolution evidence with an unresolved detail.",
+          "id": "MWI-090-B-CTX-1",
+          "kind": "conflicting_or_open",
+          "ref": "escalations/CASE-9007/handoff-H2"
+        }
+      ],
+      "question": "Does the handoff have an explicit matching resolution record or remain open/conflicting? The alternate record has incomplete evidence.",
+      "scope": "case=deidentified;closure_requires_exact_record;alternate=review",
+      "source_id": "MWI-090-B",
+      "source_ref": "resolution-log/CASE-9007/event-R4",
+      "event_chronology_summary": "events=2;first=2026-10-10T09:00:00Z;last=2026-10-11T09:00:00Z"
+    },
+    "question": "Classify a handoff only from an exact local resolution record; otherwise keep it open.",
+    "minimum": 75,
+    "labels": [
+      "closed_with_record",
+      "conflicting_or_open"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "conflicting_or_open",
+        "confidence": 0.42,
+        "probabilities": {
+          "closed_with_record": 0.5800000000000001,
+          "conflicting_or_open": 0.42
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "parser\tCVE-7\t1.2\t1.2\tsrc/parse.rs\ntransport\tCVE-9\t3.1\t3.1\tdev\n",
+    "question": "Do local usage records connect an advisory package/version to a runtime source path?",
+    "minimum": 80,
+    "labels": [
+      "evidence-ready",
+      "insufficient-evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "insufficient-evidence",
+        "confidence": 0.93,
+        "probabilities": {
+          "insufficient-evidence": 0.93,
+          "evidence-ready": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 4
+    }
+  }
+}

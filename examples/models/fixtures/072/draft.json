@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "clip-candidate",
+      "confidence_percent": 94,
+      "evidence": "00:00:05.000 --> 00:00:09.000 MEET-01 SPEAKER-A Project scope is unchanged.\n00:02:10.000 --> 00:02:14.000 MEET-02 SPEAKER-B We need an owner for the launch checklist.\n"
+    },
+    "instruction": "Propose a small timestamped clip index using only supplied MEET-* cues. Cite IDs and exact times, preserve speaker context, and flag privacy/consent review before any excerpt is shared."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: MEET-02\nCandidate index cue 00:02:10.000–00:02:14.000 for the launch-checklist owner discussion. Confirm participants’ consent and surrounding context before sharing.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

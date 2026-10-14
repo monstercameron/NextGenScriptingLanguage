@@ -1,0 +1,51 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "bundle": "TEST-B-5",
+      "failures": [
+        {
+          "error": "expected path token",
+          "id": "FAIL-4",
+          "seed": "seed-31",
+          "test": "parser::quoted_path"
+        },
+        {
+          "error": "expected path token",
+          "id": "FAIL-5",
+          "seed": "seed-32",
+          "test": "parser::quoted_path"
+        }
+      ]
+    },
+    "instruction": "Prepare a reproduction plan for TEST-B-5 from the recorded test names, seeds and errors. Do not claim the failure has been reproduced."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: FAIL-4\nReview: Prepare a reproduction plan for TEST-B-5 from the recorded test names, seeds and errors. Do not claim the failure has been reproduced.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 25,
+      "total_tokens": 57
+    }
+  }
+}

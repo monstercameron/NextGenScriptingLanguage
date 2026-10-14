@@ -1,0 +1,20 @@
+{
+  "scan": "SCAN-44",
+  "findings": [
+    {
+      "id": "FND-2",
+      "rule": "unchecked-result",
+      "location": "src/a.rs:20"
+    },
+    {
+      "id": "FND-1",
+      "rule": "unchecked-result",
+      "location": "src/b.rs:9"
+    },
+    {
+      "id": "FND-3",
+      "rule": "path-unwrap",
+      "location": "src/c.rs:41"
+    }
+  ]
+}

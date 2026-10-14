@@ -1,0 +1,73 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "READ-PHY140-02",
+          "id": "MWI-087-A",
+          "kind": "prerequisite_match",
+          "ref": "reading-list/PHY-140/READ-02"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied review reading lists against stated prerequisites evidence record 2.",
+          "id": "MWI-087-A-CTX-2",
+          "kind": "prerequisite_match",
+          "ref": "course-prerequisites/PHY-140/vector-basics"
+        }
+      ],
+      "facts": {
+        "learner_profiles_used": false,
+        "prerequisite_concepts": [
+          "vector-components",
+          "units"
+        ],
+        "reading_count": 3
+      },
+      "question": "Which assigned reading introduces the stated vector prerequisite before the first application?",
+      "scope": "course=PHY-140;prerequisites=declared",
+      "source_id": "MWI-087-A",
+      "source_ref": "reading-list/PHY-140/READ-02"
+    },
+    "instruction": "Review reading lists against stated prerequisites. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set reading_id to a concise value grounded in the supplied facts."
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Draft for review reading lists against stated prerequisites: Schedule the vector notation primer before the first force decomposition exercise and add a brief terminology note. [source_id=MWI-087-A; source_ref=reading-list/PHY-140/READ-02]",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

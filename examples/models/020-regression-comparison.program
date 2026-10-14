@@ -1,0 +1,46 @@
+# Purpose: Explain a regression between two saved test runs; prepare bounded evidence and save a review-only model-assisted report.
+# Inputs: local source.json evidence, explicit model fixtures, and a private empty environment file.
+# Outputs: out/regression-comparison.json; the workflow never changes the source evidence.
+accept source_path as text with default "fixtures/020/source.json"
+accept report_path as text with default "out/regression-comparison.json"
+accept classify_fixture_path as text with default "fixtures/020/score-evidence-ready.json"
+accept draft_fixture_path as text with default "fixtures/020/draft.json"
+accept generator_model as text with default "gpt-6-luna"
+accept env_file as text with default ".env"
+accept live as boolean with default false
+# Refuse an output path that aliases an existing evidence or schema file.
+run "test" with arguments ["!", source_path, "-ef", report_path]
+run cat with path source_path
+then jq with flags ["-c", "-S"] and filter ". as $d | {suite:$d.suite,baseline_failures:$d.baseline.failed,candidate_failures:$d.candidate.failed,new_failures:($d.candidate.failed-$d.baseline.failed),cleared_failures:($d.baseline.failed-$d.candidate.failed)}" as evidence
+if live is true
+  then jev.score with question "Do the saved runs contain a newly failing test that merits a regression review?" and levels ["low", "medium", "high"] and minimum 80 and env_file env_file as raw
+otherwise
+  then jev.score with question "Do the saved runs contain a newly failing test that merits a regression review?" and levels ["low", "medium", "high"] and minimum 80 and fixture classify_fixture_path and env_file env_file as raw
+then parse json as decision
+take json at "/score" from decision as score_value
+then encode score_value as json
+then "jq" with arguments ["-c", ". >= 1"] as score_gate_text
+then parse json as score_gate
+take boolean at "" from score_gate as high_score
+take boolean at "/accepted" from decision as accepted
+take integer at "/confidence_percent" from decision as confidence
+if accepted is true
+  if high_score is true
+    run cat with path source_path
+    then jq with flags ["-c", "-S"] and filter ". as $d | {suite:$d.suite,baseline_failures:$d.baseline.failed,candidate_failures:$d.candidate.failed,new_failures:($d.candidate.failed-$d.baseline.failed),cleared_failures:($d.baseline.failed-$d.candidate.failed)}"
+    if live is true
+      then llm.ask with model generator_model and instruction "Explain the exact difference between the baseline and candidate failures in SUITE-4. Do not attribute cause from test names alone." and env_file env_file as draft_raw
+    otherwise
+      then llm.ask with model generator_model and instruction "Explain the exact difference between the baseline and candidate failures in SUITE-4. Do not attribute cause from test names alone." and fixture draft_fixture_path and env_file env_file as draft_raw
+    then parse json as generated
+    take text at "/text" from generated as draft
+    run jq with flags ["-n", "-r", "-j", "--arg", "draft", draft, "--arg", "evidence", evidence] and filter "if ($draft | startswith(\"EVIDENCE:\")) and ([$evidence | scan(\"[A-Z][A-Z0-9]+-[A-Z0-9-]+\") | . as $id | select($draft | contains($id))] | length > 0) then $draft else error(\"draft must start with EVIDENCE and cite an ID in bounded local evidence\") end" as validated_draft
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "test_run_regression_review", "--arg", "status", "draft-for-human-review", "--arg", "classification", "scored-evidence", "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "regression_note", validated_draft, "--arg", "action", "A human owner reviews this proposed analysis before acting.", "{artifact:$artifact,status:$status,confidence_percent:$confidence,evidence_excerpt:$evidence,regression_note:$regression_note,action:$action,classification:$classification}"]
+    then save to report_path
+  otherwise
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "test_run_regression_review", "--arg", "status", "needs-human-review", "--arg", "classification", "below-target", "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "reason", "The accepted result did not match this workflow’s positive label, decision, or score level; generated analysis was withheld.", "--arg", "action", "An owner checks the original records and decides the next step.", "{artifact:$artifact,status:$status,confidence_percent:$confidence,evidence_excerpt:$evidence,regression_note:null,reason:$reason,action:$action,classification:$classification}"]
+    then save to report_path
+otherwise
+  then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "test_run_regression_review", "--arg", "status", "needs-human-review", "--arg", "classification", "uncertain", "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "reason", "The model signal is below the configured 80 percent floor; no generated analysis was requested.", "--arg", "action", "An owner checks the original records and decides the next step.", "{artifact:$artifact,status:$status,confidence_percent:$confidence,evidence_excerpt:$evidence,regression_note:null,reason:$reason,action:$action,classification:$classification}"]
+  then save to report_path
+then cat with path report_path

@@ -1,0 +1,21 @@
+{
+  "change": "CHG-90",
+  "service": "payments",
+  "edges": [
+    {
+      "from": "payments",
+      "to": "ledger",
+      "kind": "calls"
+    },
+    {
+      "from": "web",
+      "to": "payments",
+      "kind": "calls"
+    },
+    {
+      "from": "search",
+      "to": "catalog",
+      "kind": "calls"
+    }
+  ]
+}

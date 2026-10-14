@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "LIC-12\tlibdelta\t5.0\tMIT\n",
+    "question": "Which discovered package license entries are absent from the supplied attribution inventory?",
+    "minimum": 80,
+    "labels": [
+      "attribution-gap",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.5801,
+        "probabilities": {
+          "attribution-gap": 0.4199,
+          "needs-human": 0.5801
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

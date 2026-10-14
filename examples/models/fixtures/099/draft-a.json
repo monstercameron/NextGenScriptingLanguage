@@ -1,0 +1,71 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "SVC-99-1",
+          "id": "MWI-099-A",
+          "kind": "evidence_current",
+          "ref": "recovery/SVC-99-1/manifest-22"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied review disaster-recovery readiness from saved drill evidence evidence record 2.",
+          "id": "MWI-099-A-CTX-2",
+          "kind": "evidence_current",
+          "ref": "drills/SVC-99-1/DR-2026-10-10"
+        }
+      ],
+      "facts": {
+        "drill_max_age_days": 30,
+        "manifest_verified": true,
+        "restore_invocations": 0,
+        "target_rto_minutes": 60
+      },
+      "question": "Which service has a current saved drill record and what readiness question remains for the owner?",
+      "scope": "restore_action=prohibited;target=RTO-99",
+      "source_id": "MWI-099-A",
+      "source_ref": "recovery/SVC-99-1/manifest-22"
+    },
+    "instruction": "Review disaster-recovery readiness from saved drill evidence. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set service_id to a concise value grounded in the supplied facts."
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Draft for review disaster-recovery readiness from saved drill evidence: Service SVC-99-1 has a saved checksum-verified drill from 2026-10-10; ask the owner to confirm its RTO target remains current. [source_id=MWI-099-A; source_ref=recovery/SVC-99-1/manifest-22]",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "LAB-STEP-05: transfer solvent to the sealed vial.",
+          "id": "MWI-085-A",
+          "kind": "checklist_match",
+          "ref": "lab/CHEM-12/step-05"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied review lab instructions against a supplied safety checklist evidence record 2.",
+          "id": "MWI-085-A-CTX-2",
+          "kind": "checklist_match",
+          "ref": "safety-checklist/SC-12/ventilation"
+        }
+      ],
+      "facts": {
+        "checklist_ids": [
+          "SC-12-eye",
+          "SC-12-ventilation",
+          "SC-12-waste"
+        ],
+        "handout_version": "2",
+        "verdict_authorized": false
+      },
+      "question": "Which checklist item should the instructor review for the solvent transfer step?",
+      "scope": "lab=CHEM-12;review_only=true",
+      "source_id": "MWI-085-A",
+      "source_ref": "lab/CHEM-12/step-05"
+    },
+    "instruction": "Review lab instructions against a supplied safety checklist. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set checklist_item_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "checklist_item_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "checklist_item_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-085-A\",\"source_ref\":\"lab/CHEM-12/step-05\",\"summary\":\"The handout names eye protection but does not state the supplied ventilation check for the solvent transfer.\",\"evidence_quote\":\"LAB-STEP-05: transfer solvent to the sealed vial.\",\"context_count\":3,\"checklist_item_id\":\"checklist_item_id:85-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

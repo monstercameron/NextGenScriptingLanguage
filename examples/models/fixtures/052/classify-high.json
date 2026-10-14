@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "ALT-01\tQuarterly sign-ups by week\tBar chart; blue is current, gray is prior year\tWeeks 1-4: 12,18,21,27\n",
+    "question": "Which image records have enough supplied text to draft a cautious alt-text review candidate?",
+    "minimum": 80,
+    "labels": [
+      "text-evidence-sufficient",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "text-evidence-sufficient",
+        "confidence": 0.94,
+        "probabilities": {
+          "text-evidence-sufficient": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

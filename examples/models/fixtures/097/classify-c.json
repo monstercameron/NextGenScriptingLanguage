@@ -1,0 +1,81 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "consent_cleared": true,
+        "counterexample_span": "OH-97-11",
+        "real_names_present": false,
+        "speaker_ids": [
+          "P-12"
+        ]
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "OH-97-06",
+          "id": "MWI-097-B",
+          "kind": "theme_with_counterexample",
+          "ref": "oral-history/OH-97/transcript#00:18:04"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for index oral-history themes with timestamps and counterexamples with an unresolved detail.",
+          "id": "MWI-097-B-CTX-1",
+          "kind": "uncoded_span",
+          "ref": "oral-history/OH-97/transcript#00:11:20"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied index oral-history themes with timestamps and counterexamples evidence record 2.",
+          "id": "MWI-097-B-CTX-2",
+          "kind": "theme_with_counterexample",
+          "ref": "oral-history/OH-97/transcript#00:11:20"
+        }
+      ],
+      "question": "Which curator theme appears in this span, and what contrasting excerpt should remain visible? The alternate record has incomplete evidence.",
+      "scope": "consent=cleared;pseudonyms=used;alternate=review",
+      "source_id": "MWI-097-B",
+      "source_ref": "oral-history/OH-97/transcript#00:18:04"
+    },
+    "question": "Propose curator-approved themes while retaining low-signal and contrasting transcript spans.",
+    "minimum": 75,
+    "labels": [
+      "theme_with_counterexample",
+      "uncoded_span"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "uncoded_span",
+        "confidence": 0.93,
+        "probabilities": {
+          "uncoded_span": 0.93,
+          "theme_with_counterexample": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

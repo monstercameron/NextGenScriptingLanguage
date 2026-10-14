@@ -1,0 +1,2 @@
+00:01:20.000 --> 00:01:24.000 MEET-11 SPEAKER-A We will revisit the budget next week.
+00:04:02.000 --> 00:04:05.000 MEET-12 SPEAKER-C Please send the draft to the team.

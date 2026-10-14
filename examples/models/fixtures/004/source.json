@@ -1,0 +1,7 @@
+{
+  "episode": "EP-14",
+  "metric": "p95_ms",
+  "healthy": 120,
+  "incident": 240,
+  "unit": "ms"
+}

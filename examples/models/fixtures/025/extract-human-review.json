@@ -1,0 +1,75 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "claims": [
+        {
+          "id": "CLM-1",
+          "references": [
+            "DOC-11"
+          ],
+          "text": "supports offline mode"
+        },
+        {
+          "id": "CLM-2",
+          "references": [],
+          "text": "meets every retention law"
+        }
+      ],
+      "response": "RSP-3"
+    },
+    "instruction": "Return a structured claim inventory with the reference IDs supplied for each claim. Mark claims with no local reference as unsupported-by-this-packet, not false.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "review"
+          ]
+        },
+        "evidence_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "evidence_id",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"route\":\"review\",\"evidence_id\":\"RSP-3\",\"summary\":\"Some evidence for RSP-3 needs a human check before this packet is used.\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 13,
+      "total_tokens": 45
+    }
+  }
+}

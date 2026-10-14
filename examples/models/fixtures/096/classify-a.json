@@ -1,0 +1,72 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "threshold": 12.0,
+        "unit": "ppm",
+        "timezone": "UTC",
+        "maintenance_windows": 2
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied",
+            "value": 14.2,
+            "unit": "ppm"
+          },
+          "excerpt": "SEN-96-3",
+          "id": "MWI-096-A",
+          "kind": "maintenance_window",
+          "ref": "sensors/SEN-96/sample-3"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied",
+            "value": 8.9,
+            "unit": "ppm"
+          },
+          "excerpt": "Contrast record for contextualize sensor anomalies against maintenance records with an unresolved detail.",
+          "id": "MWI-096-A-CTX-1",
+          "kind": "rule_outlier",
+          "ref": "maintenance/SEN-96/calibration-2026-10-12"
+        }
+      ],
+      "question": "Is the threshold-crossing sensor sample inside a recorded maintenance or calibration window?",
+      "scope": "instrument=SEN-96;units=declared",
+      "source_id": "MWI-096-A",
+      "source_ref": "sensors/SEN-96/sample-3"
+    },
+    "question": "Classify sensor points against explicit anomaly rules and exact maintenance windows; correlation is not causation.",
+    "minimum": 75,
+    "labels": [
+      "maintenance_window",
+      "rule_outlier"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "maintenance_window",
+        "confidence": 0.91,
+        "probabilities": {
+          "maintenance_window": 0.91,
+          "rule_outlier": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

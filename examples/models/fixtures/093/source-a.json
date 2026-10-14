@@ -1,0 +1,50 @@
+{
+  "question": "Which transcript segments can receive a topic index, and which require manual listening?",
+  "source_id": "MWI-093-A",
+  "source_ref": "transcript/audio-93/SEG-02@00:14-00:26",
+  "scope": "transcript=provided;audio=not_inferred",
+  "facts": {
+    "duration": "00:05:42",
+    "timestamps_supplied": true,
+    "curator_topics": [
+      "archive",
+      "labels"
+    ],
+    "segments": 3
+  },
+  "transcript_segments": [
+    {
+      "id": "MWI-093-A",
+      "kind": "speech_segment",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "SEG-93-02",
+      "ref": "transcript/audio-93/SEG-02@00:14-00:26",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-093-A-CTX-1",
+      "kind": "uncertain_segment",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for build a timestamped index from a supplied audio transcript with an unresolved detail.",
+      "ref": "metadata/audio-93/duration-05:42",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-093-A-CTX-2",
+      "kind": "speech_segment",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied build a timestamped index from a supplied audio transcript evidence record 2.",
+      "ref": "metadata/audio-93/duration-05:42",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

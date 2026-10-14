@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "plain-language-risk",
+      "confidence_percent": 94,
+      "evidence": "MSG-01\tchars=64\tplaceholders={account}\tAuthentication could not be successfully completed for {account}\n"
+    },
+    "instruction": "Draft a plain-language review for the supplied messages. Preserve each MSG-* identifier, every literal placeholder, the meaning, and the 80-character limit; list a candidate separately from the source text and cite the ID."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: MSG-01\nCandidate: We could not sign you in to {account}. Check the details and try again. Check rendered length and keep {account} intact.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

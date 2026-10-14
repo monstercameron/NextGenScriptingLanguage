@@ -1,0 +1,31 @@
+# Purpose: Map policy rules to evidence in local case files; create a structured source-cited review artifact without modifying source records.
+# Inputs: local source.json evidence, a local strict output schema, an offline model fixture, and a private empty environment file.
+# Outputs: out/policy-evidence-map.json; extracted content remains a human-reviewed candidate.
+accept source_path as text with default "fixtures/022/source.json"
+accept schema_path as text with default "fixtures/022/schema.json"
+accept extract_fixture_path as text with default "fixtures/022/extract-structured-candidate.json"
+accept report_path as text with default "out/policy-evidence-map.json"
+accept generator_model as text with default "gpt-6-luna"
+accept env_file as text with default ".env"
+accept live as boolean with default false
+# Refuse an output path that aliases an existing evidence or schema file.
+run "test" with arguments ["!", source_path, "-ef", report_path]
+run "test" with arguments ["!", schema_path, "-ef", report_path]
+read schema_path as schema
+run cat with path source_path
+then jq with flags ["-c", "-S"] and filter "{case,rules,evidence}" as evidence
+if live is true
+  then llm.extract with model generator_model and instruction "Return a structured matrix of each supplied policy rule and its directly linked evidence IDs. Leave rules with no link uncovered; do not decide compliance." and schema schema and env_file env_file as raw
+otherwise
+  then llm.extract with model generator_model and instruction "Return a structured matrix of each supplied policy rule and its directly linked evidence IDs. Leave rules with no link uncovered; do not decide compliance." and schema schema and fixture extract_fixture_path and env_file env_file as raw
+then parse json as extracted
+take text at "/value/route" from extracted as route
+take text at "/value/evidence_id" from extracted as evidence_id
+take text at "/value/summary" from extracted as summary
+run jq with flags ["-n", "-e", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id] and filter "($evidence | contains($evidence_id))" as citation_check
+if route is "draft"
+  run jq with flags ["-n", "-c", "-S", "--arg", "artifact", "policy_evidence_map", "--arg", "status", "draft-for-human-review", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id, "--arg", "coverage", summary, "--arg", "action", "A reviewer verifies cited records before relying on this extraction."] and filter "{artifact:$artifact,status:$status,evidence_excerpt:$evidence,evidence_id:$evidence_id,coverage:$coverage,action:$action}" as report
+otherwise
+  run jq with flags ["-n", "-c", "-S", "--arg", "artifact", "policy_evidence_map", "--arg", "status", "needs-human-review", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id, "--arg", "coverage", summary, "--arg", "action", "A reviewer verifies cited records before relying on this extraction."] and filter "{artifact:$artifact,status:$status,evidence_excerpt:$evidence,evidence_id:$evidence_id,coverage:$coverage,action:$action}" as report
+then save to report_path
+then cat with path report_path

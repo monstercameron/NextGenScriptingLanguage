@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "# LOC-01\nmsgid \"Delete %d item\"\nmsgstr \"%s élément supprimé\"\n",
+    "question": "Which supplied translation entries need a human placeholder or plural-form review?",
+    "minimum": 80,
+    "labels": [
+      "placeholder-risk",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "placeholder-risk",
+        "confidence": 0.94,
+        "probabilities": {
+          "placeholder-risk": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "request": "RFP-14",
+  "criteria": [
+    {
+      "id": "CR-1",
+      "name": "offline mode"
+    },
+    {
+      "id": "CR-2",
+      "name": "audit export"
+    }
+  ],
+  "proposals": [
+    {
+      "id": "PROP-A",
+      "claims": [
+        {
+          "criterion": "CR-1",
+          "evidence": "page-2"
+        }
+      ]
+    },
+    {
+      "id": "PROP-B",
+      "claims": [
+        {
+          "criterion": "CR-2",
+          "evidence": "page-5"
+        },
+        {
+          "criterion": "CR-X",
+          "evidence": "appendix"
+        }
+      ]
+    }
+  ]
+}

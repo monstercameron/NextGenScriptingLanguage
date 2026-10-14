@@ -1,0 +1,38 @@
+{
+  "question": "Which supplied taxonomy entry is a candidate for the observation, and should it remain expert-reviewable?",
+  "source_id": "MWI-094-A",
+  "source_ref": "ecology/ECO-94/OBS-1",
+  "scope": "site=ECO-94;dictionary=local-v3",
+  "facts": {
+    "dictionary_version": "local-v3",
+    "allowed_ids": [
+      "TAX-94-17",
+      "TAX-94-22"
+    ],
+    "expert_signoff_required": true
+  },
+  "ecology_observations": [
+    {
+      "id": "MWI-094-A",
+      "kind": "dictionary_candidate",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "OBS-94-1",
+      "ref": "ecology/ECO-94/OBS-1",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-094-A-CTX-1",
+      "kind": "expert_review",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for map ecological observations to a supplied taxonomy with an unresolved detail.",
+      "ref": "taxonomy/local-v3/TAX-94-17",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

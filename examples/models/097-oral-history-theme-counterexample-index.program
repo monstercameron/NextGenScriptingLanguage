@@ -1,0 +1,73 @@
+# Purpose: Index oral-history themes with timestamps and counterexamples; low-confidence results go to a review artifact and generated content remains local.
+# Inputs: source_path is structured consent=cleared;pseudonyms=used evidence; source_id/source_ref select its exact citation; model fixtures are offline by default.
+# Outputs: report_path is the only written artifact; supply a matching local provider fixture; model selection is explicit and no live request is sent by fixture runs.
+accept live as boolean with default false
+accept source_path as text with default "fixtures/097/source-a.json"
+accept report_path as text with default "out/097-oral-history-theme-counterexample-index.md"
+accept classifier_fixture_path as text with default "fixtures/097/classify-a.json"
+accept draft_fixture_path as text with default "fixtures/097/draft-a.json"
+accept generator_model as text with default "gpt-6-luna"
+accept env_file_path as text with default ".env"
+accept source_id as text with default "MWI-097-A"
+accept source_ref as text with default "oral-history/OH-97/transcript#00:11:20"
+accept schema_path as text with default "fixtures/097/schema.json"
+# Refuse an output path that aliases an existing evidence or schema file.
+run "test" with arguments ["!", source_path, "-ef", report_path]
+run "test" with arguments ["!", schema_path, "-ef", report_path]
+read schema_path as schema
+run cat with path source_path
+then jq with filter ". as $s | select(.source_id == $source_id) | {question:.question,scope:.scope,source_id:.source_id,source_ref:.source_ref,context_count:(.oral_history_spans|length),facts:.facts,items:(.oral_history_spans|sort_by(.timestamp))}" and flags ["-c", "-S", "--arg", "source_id", source_id]
+then parse json as classifier_context
+take integer at "/context_count" from classifier_context as source_context_count
+if live is true
+  then jev.classify with question "Propose curator-approved themes while retaining low-signal and contrasting transcript spans." and labels ["theme_with_counterexample", "uncoded_span"] and minimum 75 and env_file env_file_path as raw
+otherwise
+  then jev.classify with question "Propose curator-approved themes while retaining low-signal and contrasting transcript spans." and labels ["theme_with_counterexample", "uncoded_span"] and minimum 75 and fixture classifier_fixture_path and env_file env_file_path as raw
+then parse json as classification
+take boolean at "/accepted" from classification as accepted
+take text at "/label" from classification as label
+take integer at "/confidence_percent" from classification as confidence_percent
+run mkdir with flags ["-p"] and paths ["out"]
+if accepted is true
+  if label is "theme_with_counterexample"
+    run cat with path source_path
+    then jq with filter ". as $s | select(.source_id == $source_id) | {question:.question,scope:.scope,source_id:.source_id,source_ref:.source_ref,context_count:(.oral_history_spans|length),facts:.facts,evidence:(.oral_history_spans|map(select(.kind == \"theme_with_counterexample\"))|sort_by(.timestamp))}" and flags ["-c", "-S", "--arg", "source_id", source_id]
+    if live is true
+      then llm.extract with model generator_model and instruction "Index oral-history themes with timestamps and counterexamples. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set span_id to a concise value grounded in the supplied facts." and schema schema and env_file env_file_path as generated_raw
+    otherwise
+      then llm.extract with model generator_model and instruction "Index oral-history themes with timestamps and counterexamples. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set span_id to a concise value grounded in the supplied facts." and schema schema and fixture draft_fixture_path and env_file env_file_path as generated_raw
+    then parse json as generated
+    take text at "/value/source_id" from generated as extracted_source_id
+    take text at "/value/source_ref" from generated as extracted_source_ref
+    take text at "/value/summary" from generated as extracted_summary
+    take text at "/value/evidence_quote" from generated as extracted_quote
+    take integer at "/value/context_count" from generated as extracted_context_count
+    take text at "/value/span_id" from generated as extracted_custom
+    if extracted_source_id is source_id
+      if extracted_source_ref is source_ref
+        if extracted_context_count is source_context_count
+          run cat with path source_path
+          then jq with filter "if ($quote|length)>0 and any(.oral_history_spans[]; .ref == $source_ref and (.excerpt | contains($quote))) then \"evidence-match\" else error(\"quote and reference must match one supplied record\") end" and flags ["-e", "-r", "--arg", "quote", extracted_quote, "--arg", "source_ref", extracted_source_ref]
+          then "printf" with arguments ["source_id=%s\\nsource_ref=%s\\nsummary=%s\\nspan_id=%s\\nevidence_quote=%s\\ncontext_count=%s\\n", extracted_source_id, extracted_source_ref, extracted_summary, extracted_custom, extracted_quote, extracted_context_count]
+          then save to report_path
+          then cat with path report_path
+        otherwise
+          run "printf" with arguments ["decision=review\nreason=context_count_mismatch\nsource_id=%s\n", source_id]
+          then save to report_path
+          then cat with path report_path
+      otherwise
+        run "printf" with arguments ["decision=review\nreason=source_reference_mismatch\nsource_id=%s\n", source_id]
+        then save to report_path
+        then cat with path report_path
+    otherwise
+      run "printf" with arguments ["decision=review\nreason=source_id_mismatch\nsource_id=%s\n", source_id]
+      then save to report_path
+      then cat with path report_path
+  otherwise
+    run "printf" with arguments ["decision=review\nworkflow=097\nclassification=%s\nconfidence_percent=%s\naccepted=%s\nsource_id=%s\nsource_ref=%s\ncontext_records=%s\nreason=alternate_label_requires_human_review\n", label, confidence_percent, accepted, source_id, source_ref, source_context_count]
+    then save to report_path
+    then cat with path report_path
+otherwise
+  run "printf" with arguments ["decision=review\nworkflow=097\nclassification=%s\nconfidence_percent=%s\nsource_id=%s\nsource_ref=%s\n", label, confidence_percent, source_id, source_ref]
+  then save to report_path
+  then cat with path report_path

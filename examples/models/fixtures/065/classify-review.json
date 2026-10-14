@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "device-id\tREQ-11\tSRC-11\tdevice.registry\nprofile-name\tREQ-12\tSRC-12\tprofile.settings\n",
+    "question": "Which indexed local sources match the supplied request terms, and what search gaps remain?",
+    "minimum": 80,
+    "labels": [
+      "indexed-scope-match",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.5801,
+        "probabilities": {
+          "indexed-scope-match": 0.4199,
+          "needs-human": 0.5801
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

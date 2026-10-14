@@ -1,0 +1,17 @@
+{
+  "bundle": "TEST-B-5",
+  "failures": [
+    {
+      "id": "FAIL-4",
+      "test": "parser::quoted_path",
+      "seed": "seed-31",
+      "error": "expected path token"
+    },
+    {
+      "id": "FAIL-5",
+      "test": "parser::quoted_path",
+      "seed": "seed-32",
+      "error": "expected path token"
+    }
+  ]
+}

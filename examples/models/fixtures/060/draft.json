@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "coverage-gap",
+      "confidence_percent": 94,
+      "evidence": "LC-FR\n"
+    },
+    "instruction": "Use the missing LC-* entries to draft a media localization handoff. State the required-versus-delivered scope, request owner and ETA confirmation, and do not imply captions exist when absent."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: LC-FR\nThe required list contains LC-FR and the delivered list does not. Confirm audience and release scope, then assign caption translation and review.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

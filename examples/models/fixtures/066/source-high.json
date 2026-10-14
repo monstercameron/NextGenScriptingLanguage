@@ -1,0 +1,1 @@
+{"required":["consent","retention","access"],"flows":[{"id":"FLOW-01","name":"support-summary","data_classes":["ticket-text"],"controls":["access","retention"]}]}

@@ -138,6 +138,12 @@
     "local_evidence": "../../../work/optimization-all-dimensions-2026-10-14/state.json",
     "gate_updates": [
       {
+        "id": 1,
+        "status": "partial",
+        "evidence_and_gap": "Local candidate Unix matrix: 110 cases across 46 distinct system executables, 100 exact Bash matches and 10 oracle-checked intentional wildcard/failure/output/status differences; repeated 30/40-sample paired runs total 7,700 measured pairs. Explain verifies argv and separate traces verify native spawn identities. This is not 100 distinct tools, native Linux execution, arbitrary shell compatibility or the held-out 100 real Bash-script/model study.",
+        "local_evidence": "../../../work/optimization-all-dimensions-2026-10-14/unix-matrix/report.json"
+      },
+      {
         "id": 4,
         "status": "partial",
         "evidence_and_gap": "Pending candidate adds scalar conditions and typed same-file finite program reuse across finite/service/managed lifetimes. General loops, jobs, parallel execution, environment/redirection variants and complete shell compatibility remain missing."

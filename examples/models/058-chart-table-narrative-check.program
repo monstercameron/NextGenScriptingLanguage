@@ -1,0 +1,42 @@
+# Purpose: Compute supplied table totals and deltas before asking for a review note about accompanying chart narration.
+# Inputs: JSON contains chart series values and a separately stated table total, keyed by CHART-* IDs.
+# Outputs: out/058-chart-table-narrative-check.json: deterministic numeric comparison alongside a cautious narrative review.
+accept live as boolean with default false
+accept source_path as text with default "fixtures/058/source-high.json"
+accept report_path as text with default "out/058-chart-table-narrative-check.json"
+accept classify_fixture_path as text with default "fixtures/058/classify-high.json"
+accept draft_fixture_path as text with default "fixtures/058/draft.json"
+accept generator_model as text with default "gpt-6-luna"
+accept env_file as text with default ".env"
+# Refuse an output path that aliases an existing evidence or schema file.
+run "test" with arguments ["!", source_path, "-ef", report_path]
+run cat with path source_path
+then jq with filter ".checks[] | [.id, .series, .table_total, ([.values[]] | add), (.table_total - ([.values[]] | add))] | @tsv" and flags ["-r"] as evidence
+if live is true
+  then jev.classify with question "Do the supplied chart and table values indicate a narrative discrepancy worth reviewing?" and labels ["numeric-discrepancy", "needs-human"] and minimum 80 and env_file env_file as class_raw
+otherwise
+  then jev.classify with question "Do the supplied chart and table values indicate a narrative discrepancy worth reviewing?" and labels ["numeric-discrepancy", "needs-human"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
+then parse json as classification
+take text at "/label" from classification as label
+take integer at "/confidence_percent" from classification as confidence
+take boolean at "/accepted" from classification as accepted
+if accepted is true
+  if label is "numeric-discrepancy"
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "label", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "{label:$label,confidence_percent:$confidence,evidence:$evidence}"]
+    if live is true
+      then llm.ask with model generator_model and instruction "Explain only the deterministic totals and delta supplied in the evidence. Cite CHART-*; do not infer causation or alter chart data. Suggest checking the narrative against the computed values." and env_file env_file as draft_raw
+    otherwise
+      then llm.ask with model generator_model and instruction "Explain only the deterministic totals and delta supplied in the evidence. Cite CHART-*; do not infer causation or alter chart data. Suggest checking the narrative against the computed values." and fixture draft_fixture_path and env_file env_file as draft_raw
+    then parse json as draft_result
+    take text at "/text" from draft_result as draft
+    run jq with flags ["-n", "-r", "--arg", "draft", draft, "--arg", "evidence", evidence] and filter "($draft | rtrimstr(\"\\n\")) as $candidate | if ($candidate | startswith(\"EVIDENCE:\")) and ([$evidence | scan(\"[A-Z][A-Z0-9]+-[A-Z0-9-]+\") | . as $id | select($candidate | contains($id))] | length > 0) then $candidate else error(\"draft must start with EVIDENCE and cite an ID present in the bounded evidence\") end" as validated_draft
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "chart_table_narrative_review", "--arg", "classification", label, "--argjson", "confidence_percent", confidence, "--arg", "source_path", source_path, "--arg", "evidence", evidence, "--arg", "draft", validated_draft, "--arg", "action", "Analyst verifies source values and revises narrative manually if warranted.", "{artifact:$artifact,status:\"draft-for-human-review\",classification:$classification,confidence_percent:$confidence_percent,source_path:$source_path,evidence_excerpt:$evidence,narrative_value_review:$draft,action:$action}"]
+    then save to report_path
+  otherwise
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "chart_table_narrative_review", "--arg", "classification", label, "--argjson", "confidence_percent", confidence, "--arg", "source_path", source_path, "--arg", "evidence", evidence, "--arg", "review_action", "The computed arithmetic is evidence; semantic meaning still needs review.", "{artifact:$artifact,status:\"needs-human-review\",classification:$classification,confidence_percent:$confidence_percent,source_path:$source_path,evidence_excerpt:$evidence,narrative_value_review:null,reason:\"Classifier selected the human-review label above the confidence threshold; no LLM draft was requested.\",action:$review_action}"]
+    then save to report_path
+  then cat with path report_path
+otherwise
+  then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "chart_table_narrative_review", "--arg", "classification", label, "--argjson", "confidence_percent", confidence, "--arg", "source_path", source_path, "--arg", "evidence", evidence, "--arg", "review_action", "The computed arithmetic is evidence; semantic meaning still needs review.", "{artifact:$artifact,status:\"needs-human-review\",classification:$classification,confidence_percent:$confidence_percent,source_path:$source_path,evidence_excerpt:$evidence,narrative_value_review:null,reason:\"Classifier confidence is below the configured 80 percent threshold; no LLM draft was requested.\",action:$review_action}"]
+  then save to report_path
+then cat with path report_path

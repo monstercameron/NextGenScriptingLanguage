@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod inputs;
 pub mod manifest;
+pub mod models;
 pub mod parser;
 pub mod runtime;
 pub mod schedule;

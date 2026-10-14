@@ -1,0 +1,47 @@
+{
+  "question": "Which service has a current saved drill record and what readiness question remains for the owner?",
+  "source_id": "MWI-099-A",
+  "source_ref": "recovery/SVC-99-1/manifest-22",
+  "scope": "restore_action=prohibited;target=RTO-99",
+  "facts": {
+    "target_rto_minutes": 60,
+    "drill_max_age_days": 30,
+    "manifest_verified": true,
+    "restore_invocations": 0
+  },
+  "recovery_drills": [
+    {
+      "id": "MWI-099-A",
+      "kind": "evidence_current",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "SVC-99-1",
+      "ref": "recovery/SVC-99-1/manifest-22",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-099-A-CTX-1",
+      "kind": "stale_or_missing",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for review disaster-recovery readiness from saved drill evidence with an unresolved detail.",
+      "ref": "drills/SVC-99-1/DR-2026-10-10",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-099-A-CTX-2",
+      "kind": "evidence_current",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied review disaster-recovery readiness from saved drill evidence evidence record 2.",
+      "ref": "drills/SVC-99-1/DR-2026-10-10",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "section_id": "METHOD-33N",
+      "methods_text": "We used Atlas 2.1. Sample size and seed were not reported.",
+      "evidence_id": "METHOD-33N",
+      "checked_fact": "not reported",
+      "case_note": "explicit missing reproducibility fields"
+    },
+    "question": "Does the local evidence support a bounded extract reproducibility details from methods sections draft?",
+    "minimum": 80,
+    "labels": [
+      "draft",
+      "human-review"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "draft",
+        "confidence": 0.92,
+        "probabilities": {
+          "draft": 0.92,
+          "human-review": 0.08
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 30,
+      "output_tokens": 5
+    }
+  }
+}

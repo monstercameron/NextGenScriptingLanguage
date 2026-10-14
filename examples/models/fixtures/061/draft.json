@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "used-exposed-package",
+      "confidence_percent": 94,
+      "evidence": "PKG-01\tlibxml\t2.9.1\tCVE-2026-1001\tcritical\tapi-gateway\trequest-parser\tproduction\n"
+    },
+    "instruction": "Use only joined package/advisory evidence to draft a remediation plan outline. Cite CVE-* and PKG-* IDs, distinguish reported severity from local exposure, and require compatibility tests and owner approval before upgrades."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: PKG-01\nCVE-2026-1001 is associated with PKG-01 in the supplied usage inventory. Confirm affected version ranges and reachable code paths, then plan an isolated fix and regression tests.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

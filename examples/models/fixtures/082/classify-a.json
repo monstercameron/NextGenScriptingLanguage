@@ -1,0 +1,73 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "assessment_count": 2,
+        "course": "BIO-210",
+        "outcomes": [
+          "O-1",
+          "O-2",
+          "O-3"
+        ],
+        "reading_count": 2
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "O-3",
+          "id": "MWI-082-A",
+          "kind": "mapped_outcome",
+          "ref": "syllabus/BIO-210/outcome-O3"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for check syllabus outcomes against readings and assessments with an unresolved detail.",
+          "id": "MWI-082-A-CTX-1",
+          "kind": "unmatched_item",
+          "ref": "assessment/BIO-210/week-06#data"
+        }
+      ],
+      "question": "Which course outcome has an assessment link and which remains unsupported?",
+      "scope": "course=BIO-210;term=fall",
+      "source_id": "MWI-082-A",
+      "source_ref": "syllabus/BIO-210/outcome-O3",
+      "outcome_alignment_summary": "outcomes=3;linked=2;gaps=1"
+    },
+    "question": "Classify course items by outcome coverage, preserving unmatched readings and assessments.",
+    "minimum": 75,
+    "labels": [
+      "mapped_outcome",
+      "unmatched_item"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "mapped_outcome",
+        "confidence": 0.91,
+        "probabilities": {
+          "mapped_outcome": 0.91,
+          "unmatched_item": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

@@ -12,20 +12,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: jq --version
-      - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
-      - run: python3 tests/unix_bench.py
-      - run: cargo build --locked --release
-      - run: python3 tests/replacement_proofs.py
-        env:
-          EXECUTE_PROOF_BINARY: target/release/execute
-      - run: python3 benchmarks/replacement_proofs.py --binary target/release/execute --stream-bytes 1048576 --lifecycle-repetitions 1 --report proof-smoke.json
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: editors/vscode
+      - run: make check
+      - run: make proof-smoke
       - run: npm run package
         working-directory: editors/vscode
         env:

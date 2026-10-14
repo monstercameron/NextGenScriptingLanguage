@@ -1,0 +1,44 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "change": "CHG-81",
+      "high_risk": [
+        {
+          "path": "src/retry.rs",
+          "reason": "retry policy"
+        }
+      ],
+      "service": "checkout"
+    },
+    "instruction": "Draft a risk-review note for CHG-81 using the high-risk file evidence only. Mention that risk is a review priority, not a prediction of failure."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: CHG-81\nReview: Draft a risk-review note for CHG-81 using the high-risk file evidence only. Mention that risk is a review priority, not a prediction of failure.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 27,
+      "total_tokens": 59
+    }
+  }
+}

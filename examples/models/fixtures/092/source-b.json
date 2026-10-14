@@ -1,0 +1,38 @@
+{
+  "question": "Which notebook entry maps to a protocol step, and is the measurement unit explicit? The alternate record has incomplete evidence.",
+  "source_id": "MWI-092-B",
+  "source_ref": "protocol/P-92/step-4",
+  "scope": "protocol=P-92;instrument=I-92;alternate=review",
+  "facts": {
+    "protocol_version": "P-92.1",
+    "measurement_schema": {
+      "mass": "mg",
+      "temperature": "C"
+    },
+    "measurement_count": 1
+  },
+  "notebook_entries": [
+    {
+      "id": "MWI-092-B",
+      "kind": "recorded_step",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "RUN-92-4",
+      "ref": "protocol/P-92/step-4",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-092-B-CTX-1",
+      "kind": "deviation_or_missing",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for reconcile a lab notebook against its recorded protocol with an unresolved detail.",
+      "ref": "notebook/RUN-92/entry-4",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

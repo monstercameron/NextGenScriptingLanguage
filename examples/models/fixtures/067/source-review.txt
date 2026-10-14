@@ -1,0 +1,2 @@
+SEC-11	unsafe-deserialization	MEDIUM
+src/cache.rs

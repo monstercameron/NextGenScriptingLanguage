@@ -1,0 +1,48 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "events": [
+        {
+          "at": "2026-10-14T09:02Z",
+          "id": "EVT-01",
+          "service": "payments",
+          "summary": "latency alert opened"
+        },
+        {
+          "at": "2026-10-14T09:18Z",
+          "id": "EVT-03",
+          "service": "payments",
+          "summary": "queue depth rose"
+        }
+      ],
+      "incident": "INC-104"
+    },
+    "question": "Do these time-ordered event records support drafting an incident timeline?",
+    "minimum": 80,
+    "labels": [
+      "evidence-ready",
+      "insufficient-evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "evidence-ready",
+        "confidence": 0.93,
+        "probabilities": {
+          "evidence-ready": 0.93,
+          "insufficient-evidence": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 4
+    }
+  }
+}

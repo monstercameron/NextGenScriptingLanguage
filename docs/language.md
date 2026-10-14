@@ -620,6 +620,14 @@ use `--` where appropriate. `cat` accepts an ordered `files` list in addition to
 its optional single `path`; when both are supplied, `path` comes first. The explicit `builtin: "cd"` declaration is validated
 against its single path parameter; ordinary manifests always launch their binary.
 
+A non-cacheable external manifest may set `"uncertain_on_failure": true` when a
+failed request may already have caused an external effect, including provider
+billing. Checkpoint resume then requires explicit `--retry-uncertain` after a
+failed attempt. Existing manifests default to false and retain their serialized
+identity. The bundled model manifests use `"binary": "@execute-model"`, resolved
+only to the sibling helper beside the running interpreter. See
+[model operations](models.md) for the provider and offline-fixture contract.
+
 Finite captures default to 16 MiB. This covers terminal results, finite boundaries,
 named reads, and cache input. Intermediate native pipe traffic streams directly.
 An overflow stops the active commands and skips later saves. This version buffers

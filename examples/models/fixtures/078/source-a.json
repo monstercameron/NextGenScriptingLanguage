@@ -1,0 +1,38 @@
+{
+  "question": "Which approved macro fits a user who can sign in but cannot export a report?",
+  "source_id": "MWI-078-A",
+  "source_ref": "support-case/CASE-781",
+  "scope": "product=FieldSense;response=save-only",
+  "facts": {
+    "anonymized": true,
+    "approved_template_ids": [
+      "MACRO-EXPORT-02",
+      "MACRO-ACCESS-01"
+    ],
+    "send_action": false
+  },
+  "approved_templates": [
+    {
+      "id": "MWI-078-A",
+      "kind": "approved_macro",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "MACRO-EXPORT-02",
+      "ref": "support-case/CASE-781",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-078-A-CTX-1",
+      "kind": "clarifying_question",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for draft evidence-linked support reply macros with an unresolved detail.",
+      "ref": "help/export-permissions#check-access",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

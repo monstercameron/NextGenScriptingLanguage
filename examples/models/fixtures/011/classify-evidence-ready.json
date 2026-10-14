@@ -1,0 +1,48 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "bundle": "TEST-B-5",
+      "failures": [
+        {
+          "error": "expected path token",
+          "id": "FAIL-4",
+          "seed": "seed-31",
+          "test": "parser::quoted_path"
+        },
+        {
+          "error": "expected path token",
+          "id": "FAIL-5",
+          "seed": "seed-32",
+          "test": "parser::quoted_path"
+        }
+      ]
+    },
+    "question": "Do the recorded failures share enough exact test and error evidence to propose one reproduction sequence?",
+    "minimum": 80,
+    "labels": [
+      "evidence-ready",
+      "insufficient-evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "evidence-ready",
+        "confidence": 0.93,
+        "probabilities": {
+          "evidence-ready": 0.93,
+          "insufficient-evidence": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 4
+    }
+  }
+}

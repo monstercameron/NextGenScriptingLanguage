@@ -1,0 +1,5 @@
+<main>
+<h1 id="DOC-11">Travel policy</h1>
+<h2 id="DOC-12">Booking rules</h2>
+<h2 id="DOC-13">Exceptions</h2>
+</main>

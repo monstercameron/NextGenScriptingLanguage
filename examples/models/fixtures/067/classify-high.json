@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "SEC-01\tsecret-pattern\tHIGH\t4f9c2d1\tworkflow-221\n",
+    "question": "Are the supplied CI findings traceable to a source revision and concrete location?",
+    "minimum": 80,
+    "labels": [
+      "traceable-finding",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "traceable-finding",
+        "confidence": 0.94,
+        "probabilities": {
+          "traceable-finding": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

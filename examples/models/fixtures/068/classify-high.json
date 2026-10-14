@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "AUD-01\tseq=1001\tgap=0\tlogin\nAUD-02\tseq=1004\tgap=2\trole-change\n",
+    "question": "Do the sequence gaps or order in this local audit slice need an integrity follow-up?",
+    "minimum": 80,
+    "labels": [
+      "sequence-anomaly",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "sequence-anomaly",
+        "confidence": 0.94,
+        "probabilities": {
+          "sequence-anomaly": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

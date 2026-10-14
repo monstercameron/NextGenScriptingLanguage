@@ -1,0 +1,1 @@
+{"set_id":"SET-30","sections":[{"id":"DOC-v2","version":2,"section":"4.2","text":"30 days","supersedes":null},{"id":"DOC-v3","version":3,"section":"4.2","text":"45 days","supersedes":"DOC-v2"}],"pairs":["PAIR-30"],"evidence_id":"DOC-C2","checked_fact":"v2 supersedes v1","case_note":"explicit owner-review condition","case_id":"030-alternate"}

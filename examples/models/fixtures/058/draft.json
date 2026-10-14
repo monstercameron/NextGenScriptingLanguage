@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "numeric-discrepancy",
+      "confidence_percent": 94,
+      "evidence": "CHART-01\tQ1 signups\t59\t51\t8\n"
+    },
+    "instruction": "Explain only the deterministic totals and delta supplied in the evidence. Cite CHART-*; do not infer causation or alter chart data. Suggest checking the narrative against the computed values."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: CHART-01\nThe listed values total 51 while the stated table total is 59 (delta +8). Recheck source rows and the chart narrative before publishing a correction.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

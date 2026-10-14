@@ -1,0 +1,1 @@
+{"case_note":"alternate fixture; local-only evidence.","checked_fact":"All three sampled requirements appear in the implementation inventory.","edition":"2026-C","evidence_id":"DOC-38C","implemented":["TLS 1.2 or newer","encrypted backups","annual access review"],"required":["TLS 1.2 or newer","encrypted backups","annual access review"]}

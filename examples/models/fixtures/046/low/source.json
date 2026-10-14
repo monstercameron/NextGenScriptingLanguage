@@ -1,0 +1,1 @@
+{"batch_id":"ER-B","candidates":[{"birth_score":1.0,"left":"L-1","name_score":0.95,"postal_score":0.8,"right":"R-8"},{"birth_score":0.0,"left":"L-1","name_score":0.83,"postal_score":1.0,"right":"R-9"}],"case_note":"low fixture; local-only evidence.","checked_fact":"The highest-ranked candidate remains a suggestion; no records are merged.","evidence_id":"DOC-46B"}

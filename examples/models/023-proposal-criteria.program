@@ -1,0 +1,31 @@
+# Purpose: Compare proposal submissions against fixed criteria; create a structured source-cited review artifact without modifying source records.
+# Inputs: local source.json evidence, a local strict output schema, an offline model fixture, and a private empty environment file.
+# Outputs: out/proposal-criteria.json; extracted content remains a human-reviewed candidate.
+accept source_path as text with default "fixtures/023/source.json"
+accept schema_path as text with default "fixtures/023/schema.json"
+accept extract_fixture_path as text with default "fixtures/023/extract-structured-candidate.json"
+accept report_path as text with default "out/proposal-criteria.json"
+accept generator_model as text with default "gpt-6-luna"
+accept env_file as text with default ".env"
+accept live as boolean with default false
+# Refuse an output path that aliases an existing evidence or schema file.
+run "test" with arguments ["!", source_path, "-ef", report_path]
+run "test" with arguments ["!", schema_path, "-ef", report_path]
+read schema_path as schema
+run cat with path source_path
+then jq with flags ["-c", "-S"] and filter "{request,criteria,proposals}" as evidence
+if live is true
+  then llm.extract with model generator_model and instruction "Return a structured comparison of proposals against CR-1 and CR-2. Flag unknown criterion IDs and preserve page citations; do not rank vendors." and schema schema and env_file env_file as raw
+otherwise
+  then llm.extract with model generator_model and instruction "Return a structured comparison of proposals against CR-1 and CR-2. Flag unknown criterion IDs and preserve page citations; do not rank vendors." and schema schema and fixture extract_fixture_path and env_file env_file as raw
+then parse json as extracted
+take text at "/value/route" from extracted as route
+take text at "/value/evidence_id" from extracted as evidence_id
+take text at "/value/summary" from extracted as summary
+run jq with flags ["-n", "-e", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id] and filter "($evidence | contains($evidence_id))" as citation_check
+if route is "draft"
+  run jq with flags ["-n", "-c", "-S", "--arg", "artifact", "proposal_criteria_review", "--arg", "status", "draft-for-human-review", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id, "--arg", "comparison", summary, "--arg", "action", "A reviewer verifies cited records before relying on this extraction."] and filter "{artifact:$artifact,status:$status,evidence_excerpt:$evidence,evidence_id:$evidence_id,comparison:$comparison,action:$action}" as report
+otherwise
+  run jq with flags ["-n", "-c", "-S", "--arg", "artifact", "proposal_criteria_review", "--arg", "status", "needs-human-review", "--arg", "evidence", evidence, "--arg", "evidence_id", evidence_id, "--arg", "comparison", summary, "--arg", "action", "A reviewer verifies cited records before relying on this extraction."] and filter "{artifact:$artifact,status:$status,evidence_excerpt:$evidence,evidence_id:$evidence_id,comparison:$comparison,action:$action}" as report
+then save to report_path
+then cat with path report_path

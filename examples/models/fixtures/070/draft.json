@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "fixture-regression",
+      "confidence_percent": 94,
+      "evidence": "FX-01\tclassify label=accessibility\n\tFX-01\tclassify label=security\n"
+    },
+    "instruction": "Explain the exact differing FX-* assertions only. Draft a checklist to inspect input fixtures, semantic request expectations, and normalized result contract; explicitly say this is an offline deterministic test difference, not model quality evidence."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: FX-01\nExpected and observed fixture rows differ for FX-01 in the local comparison. Check the input bundle and normalized label contract before editing the expected output.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

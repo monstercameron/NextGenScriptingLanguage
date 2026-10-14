@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "delta_percent": 100,
+      "episode": "EP-14",
+      "healthy": 120,
+      "incident": 240,
+      "metric": "p95_ms",
+      "unit": "ms"
+    },
+    "question": "Does the supplied measurement differ from its healthy baseline enough to warrant an investigation note?",
+    "minimum": 80,
+    "labels": [
+      "evidence-ready",
+      "insufficient-evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "insufficient-evidence",
+        "confidence": 0.93,
+        "probabilities": {
+          "insufficient-evidence": 0.93,
+          "evidence-ready": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 4
+    }
+  }
+}

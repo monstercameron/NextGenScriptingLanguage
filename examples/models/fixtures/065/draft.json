@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "indexed-scope-match",
+      "confidence_percent": 94,
+      "evidence": "account-email\tREQ-01\tSRC-01\tcrm.contacts\nprofile-name\tREQ-02\tSRC-02\tprofile.settings\n"
+    },
+    "instruction": "Prepare a data-subject request scope index from joined terms and sources. Cite REQ-* and SRC-* IDs; preserve unmatched terms as gaps; do not draft a response, expand the search beyond this index, or claim completeness."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: REQ-01\nMap the supplied account-email term to the matching local source row and retain unmatched terms as explicit search gaps. Confirm scope with the privacy owner.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

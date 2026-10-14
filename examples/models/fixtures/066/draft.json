@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "control-gap",
+      "confidence_percent": 94,
+      "evidence": "FLOW-01\tsupport-summary\tticket-text\tconsent\n"
+    },
+    "instruction": "Draft questions for missing control names in the supplied flow matrix. Cite FLOW-* IDs and data classes, distinguish declared controls from verified implementation, and request the named owner and evidence location."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: FLOW-01\nFLOW-01 declares access and retention but not consent. Ask the data owner where consent is recorded and how withdrawal is handled before approving the flow.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

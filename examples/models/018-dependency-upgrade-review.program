@@ -1,0 +1,42 @@
+# Purpose: Assess a dependency upgrade from local evidence; prepare bounded evidence and save a review-only model-assisted report.
+# Inputs: local usage.tsv evidence, explicit model fixtures, and a private empty environment file.
+# Outputs: out/dependency-upgrade-review.json; the workflow never changes the source evidence.
+accept source_path as text with default "fixtures/018/usage.tsv"
+accept reference_path as text with default "fixtures/018/versions.tsv"
+accept report_path as text with default "out/dependency-upgrade-review.json"
+accept classify_fixture_path as text with default "fixtures/018/classify-evidence-ready.json"
+accept draft_fixture_path as text with default "fixtures/018/draft.json"
+accept generator_model as text with default "gpt-6-luna"
+accept env_file as text with default ".env"
+accept live as boolean with default false
+# Refuse an output path that aliases an existing evidence or schema file.
+run "test" with arguments ["!", source_path, "-ef", report_path]
+run "test" with arguments ["!", reference_path, "-ef", report_path]
+run join with flags ["-t", "\t"] and files [source_path, reference_path] as evidence
+if live is true
+  then jev.classify with question "Do local usage records connect an advisory package/version to a runtime source path?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and env_file env_file as raw
+otherwise
+  then jev.classify with question "Do local usage records connect an advisory package/version to a runtime source path?" and labels ["evidence-ready", "insufficient-evidence"] and minimum 80 and fixture classify_fixture_path and env_file env_file as raw
+then parse json as decision
+take text at "/label" from decision as label
+take boolean at "/accepted" from decision as accepted
+take integer at "/confidence_percent" from decision as confidence
+if accepted is true
+  if label is "evidence-ready"
+    run join with flags ["-t", "\t"] and files [source_path, reference_path]
+    if live is true
+      then llm.ask with model generator_model and instruction "Draft a dependency-upgrade review from exact advisory/package/version joins. Separate package usage evidence from any claim that an upgrade is safe." and env_file env_file as draft_raw
+    otherwise
+      then llm.ask with model generator_model and instruction "Draft a dependency-upgrade review from exact advisory/package/version joins. Separate package usage evidence from any claim that an upgrade is safe." and fixture draft_fixture_path and env_file env_file as draft_raw
+    then parse json as generated
+    take text at "/text" from generated as draft
+    run jq with flags ["-n", "-r", "-j", "--arg", "draft", draft, "--arg", "evidence", evidence] and filter "if ($draft | startswith(\"EVIDENCE:\")) and ([$evidence | scan(\"[A-Z][A-Z0-9]+-[A-Z0-9-]+\") | . as $id | select($draft | contains($id))] | length > 0) then $draft else error(\"draft must start with EVIDENCE and cite an ID in bounded local evidence\") end" as validated_draft
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "dependency_upgrade_review", "--arg", "status", "draft-for-human-review", "--arg", "classification", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "compatibility_note", validated_draft, "--arg", "action", "A human owner reviews this proposed analysis before acting.", "{artifact:$artifact,status:$status,confidence_percent:$confidence,evidence_excerpt:$evidence,compatibility_note:$compatibility_note,action:$action,classification:$classification}"]
+    then save to report_path
+  otherwise
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "dependency_upgrade_review", "--arg", "status", "needs-human-review", "--arg", "classification", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "reason", "The accepted result did not match this workflow’s positive label, decision, or score level; generated analysis was withheld.", "--arg", "action", "An owner checks the original records and decides the next step.", "{artifact:$artifact,status:$status,confidence_percent:$confidence,evidence_excerpt:$evidence,compatibility_note:null,reason:$reason,action:$action,classification:$classification}"]
+    then save to report_path
+otherwise
+  then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "dependency_upgrade_review", "--arg", "status", "needs-human-review", "--arg", "classification", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "reason", "The model signal is below the configured 80 percent floor; no generated analysis was requested.", "--arg", "action", "An owner checks the original records and decides the next step.", "{artifact:$artifact,status:$status,confidence_percent:$confidence,evidence_excerpt:$evidence,compatibility_note:null,reason:$reason,action:$action,classification:$classification}"]
+  then save to report_path
+then cat with path report_path

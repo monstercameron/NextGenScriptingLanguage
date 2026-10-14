@@ -1,0 +1,15 @@
+{
+  "service": "catalog",
+  "windows": [
+    {
+      "id": "WIN-8",
+      "errors": 18,
+      "requests": 900
+    },
+    {
+      "id": "WIN-9",
+      "errors": 2,
+      "requests": 1000
+    }
+  ]
+}

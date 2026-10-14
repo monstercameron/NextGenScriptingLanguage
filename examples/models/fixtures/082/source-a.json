@@ -1,0 +1,40 @@
+{
+  "question": "Which course outcome has an assessment link and which remains unsupported?",
+  "source_id": "MWI-082-A",
+  "source_ref": "syllabus/BIO-210/outcome-O3",
+  "scope": "course=BIO-210;term=fall",
+  "facts": {
+    "course": "BIO-210",
+    "outcomes": [
+      "O-1",
+      "O-2",
+      "O-3"
+    ],
+    "reading_count": 2,
+    "assessment_count": 2
+  },
+  "course_items": [
+    {
+      "id": "MWI-082-A",
+      "kind": "mapped_outcome",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "O-3",
+      "ref": "syllabus/BIO-210/outcome-O3",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-082-A-CTX-1",
+      "kind": "unmatched_item",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for check syllabus outcomes against readings and assessments with an unresolved detail.",
+      "ref": "assessment/BIO-210/week-06#data",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

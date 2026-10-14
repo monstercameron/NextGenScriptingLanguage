@@ -1,0 +1,42 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "delta_percent": 100,
+      "episode": "EP-14",
+      "healthy": 120,
+      "incident": 240,
+      "metric": "p95_ms",
+      "unit": "ms"
+    },
+    "instruction": "Describe the computed EP-14 baseline delta without inferring a cause. Cite the metric and values exactly and list at least one testable hypothesis."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: EP-14\nReview: Describe the computed EP-14 baseline delta without inferring a cause. Cite the metric and values exactly and list at least one testable hypothesis.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 26,
+      "total_tokens": 58
+    }
+  }
+}

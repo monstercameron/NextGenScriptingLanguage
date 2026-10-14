@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "redaction-candidate",
+      "confidence_percent": 94,
+      "evidence": "RED-01\temail\t18\t39\tcontact field in export\n"
+    },
+    "instruction": "For each RED-* span, explain why the supplied category may require redaction and what surrounding context to retain. Cite offsets and IDs. Never reproduce a secret value or claim the redacted copy is ready to share."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: RED-01\nReview the proposed email span at offsets 18–39 in the generated copy; retain the field label and confirm neighboring text stays readable.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

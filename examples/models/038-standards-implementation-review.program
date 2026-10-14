@@ -1,0 +1,43 @@
+# Purpose: Review a standards update against local implementations. Derive domain evidence, gate model assistance, verify a cited fact, and save a human-review artifact.
+# Inputs: local source paths, offline fixtures, selected model, and private environment file.
+# Outputs: out/038-standards-implementation-review.json; no source files are modified.
+accept live as boolean with default false
+accept source_path as text with default "fixtures/038/high/source.json"
+accept report_path as text with default "out/038-standards-implementation-review.json"
+accept classify_fixture_path as text with default "fixtures/038/classify-high.json"
+accept draft_fixture_path as text with default "fixtures/038/draft-high.json"
+accept generator_model as text with default "gpt-6-luna"
+accept env_file as text with default ".env"
+accept evidence_id as text
+accept required_text as text
+# Refuse an output path that aliases an existing evidence or schema file.
+run "test" with arguments ["!", source_path, "-ef", report_path]
+run cat with path source_path
+then "jq" with arguments ["-c", "-S", "--", ". as $d | ({edition,required,implemented,missing:[$d.required[] as $r|select(($d.implemented|index($r))==null)|$r]}) + {evidence_id:$d.evidence_id,checked_fact:$d.checked_fact,case_note:$d.case_note}"] as evidence
+if live is true
+  then jev.classify with question "Does the local evidence support a bounded review a standards update against local implementations draft?" and labels ["draft","human-review"] and minimum 80 and env_file env_file as class_raw
+otherwise
+  then jev.classify with question "Does the local evidence support a bounded review a standards update against local implementations draft?" and labels ["draft","human-review"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
+then parse json as decision
+take text at "/label" from decision as label
+take integer at "/confidence_percent" from decision as confidence
+take boolean at "/accepted" from decision as accepted
+if accepted is true
+  if label is "draft"
+    then "printf" with arguments ["%s", evidence] as bounded
+    if live is true
+      then llm.ask with model generator_model and instruction "Draft a concise review artifact from bounded local evidence. Cite the supplied source ID, include the checked fact verbatim, distinguish fact from interpretation, and make no external change." and env_file env_file as raw
+    otherwise
+      then llm.ask with model generator_model and instruction "Draft a concise review artifact from bounded local evidence. Cite the supplied source ID, include the checked fact verbatim, distinguish fact from interpretation, and make no external change." and fixture draft_fixture_path and env_file env_file as raw
+    then parse json as generated
+    take text at "/text" from generated as draft
+    run "jq" with arguments ["-n", "-r", "--arg", "draft", draft, "--arg", "evidence_id", evidence_id, "--arg", "required_text", required_text, "--", "if ($draft|startswith(\"EVIDENCE:\")) and ($draft|contains($evidence_id)) and ($draft|contains($required_text)) then $draft else error(\"draft must cite evidence and preserve checked fact\") end"] as checked
+    run "jq" with arguments ["-n", "-c", "-S", "--arg", "workflow", "standards-implementation-review", "--arg", "status", "draft-for-human-review", "--arg", "classification", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "draft", checked, "--arg", "action", "A human owner reviews the evidence-linked draft before acting.", "--", "{workflow:$workflow,status:$status,classification:$classification,confidence_percent:$confidence,evidence_excerpt:$evidence,proposed_analysis:$draft,action:$action}"] as report
+    then save to report_path
+  otherwise
+    run "jq" with arguments ["-n", "-c", "-S", "--arg", "workflow", "standards-implementation-review", "--arg", "status", "needs-human-review", "--arg", "classification", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "reason", "Classifier selected human-review; no generation was requested.", "--arg", "action", "A reviewer determines whether any draft is appropriate.", "--", "{workflow:$workflow,status:$status,classification:$classification,confidence_percent:$confidence,evidence_excerpt:$evidence,proposed_analysis:null,reason:$reason,action:$action}"] as report
+    then save to report_path
+otherwise
+  run "jq" with arguments ["-n", "-c", "-S", "--arg", "workflow", "standards-implementation-review", "--arg", "status", "needs-human-review", "--arg", "classification", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "--arg", "reason", "Confidence is below 80 percent; no generation was requested.", "--arg", "action", "A reviewer checks original records and decides the next step.", "--", "{workflow:$workflow,status:$status,classification:$classification,confidence_percent:$confidence,evidence_excerpt:$evidence,proposed_analysis:null,reason:$reason,action:$action}"] as report
+  then save to report_path
+then cat with path report_path

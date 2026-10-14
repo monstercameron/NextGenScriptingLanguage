@@ -1,0 +1,2 @@
+SEC-01	secret-pattern	HIGH
+src/config.sample

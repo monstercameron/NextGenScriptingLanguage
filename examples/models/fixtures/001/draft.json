@@ -1,0 +1,51 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "events": [
+        {
+          "at": "2026-10-14T09:02Z",
+          "id": "EVT-01",
+          "service": "payments",
+          "summary": "latency alert opened"
+        },
+        {
+          "at": "2026-10-14T09:18Z",
+          "id": "EVT-03",
+          "service": "payments",
+          "summary": "queue depth rose"
+        }
+      ],
+      "incident": "INC-104"
+    },
+    "instruction": "Draft a compact, timestamp-ordered incident timeline using only the supplied event records. Cite INC-104 and label causal links as unverified."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: INC-104\nReview: Draft a compact, timestamp-ordered incident timeline using only the supplied event records. Cite INC-104 and label causal links as unverified.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 23,
+      "total_tokens": 55
+    }
+  }
+}

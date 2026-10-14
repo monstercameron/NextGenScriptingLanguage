@@ -1,0 +1,2 @@
+REQ-11	device-id
+REQ-12	profile-name

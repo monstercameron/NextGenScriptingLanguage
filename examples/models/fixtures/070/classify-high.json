@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "FX-01\tclassify label=accessibility\n\tFX-01\tclassify label=security\n",
+    "question": "Do these local expected-versus-actual fixture differences require a workflow contract review?",
+    "minimum": 80,
+    "labels": [
+      "fixture-regression",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "fixture-regression",
+        "confidence": 0.94,
+        "probabilities": {
+          "fixture-regression": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

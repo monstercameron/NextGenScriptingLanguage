@@ -1,0 +1,93 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "areas": [
+        {
+          "area": "core",
+          "files": [
+            {
+              "id": "FILE-2",
+              "path": "src/runtime.rs",
+              "role": "execution engine"
+            }
+          ]
+        },
+        {
+          "area": "entry",
+          "files": [
+            {
+              "id": "FILE-1",
+              "path": "src/main.rs",
+              "role": "CLI dispatch"
+            }
+          ]
+        },
+        {
+          "area": "tests",
+          "files": [
+            {
+              "id": "FILE-3",
+              "path": "tests/runtime.rs",
+              "role": "runtime tests"
+            }
+          ]
+        }
+      ],
+      "repo": "REPO-3"
+    },
+    "instruction": "Extract a concise onboarding map with repository areas, paths, and roles. Do not infer architecture beyond the provided file inventory.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "review"
+          ]
+        },
+        "evidence_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "evidence_id",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"route\":\"draft\",\"evidence_id\":\"REPO-3\",\"summary\":\"Structured review for REPO-3 is based only on the listed local records.\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 12,
+      "total_tokens": 44
+    }
+  }
+}

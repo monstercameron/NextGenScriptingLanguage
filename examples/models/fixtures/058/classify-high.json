@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "CHART-01\tQ1 signups\t59\t51\t8\n",
+    "question": "Do the supplied chart and table values indicate a narrative discrepancy worth reviewing?",
+    "minimum": 80,
+    "labels": [
+      "numeric-discrepancy",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "numeric-discrepancy",
+        "confidence": 0.94,
+        "probabilities": {
+          "numeric-discrepancy": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

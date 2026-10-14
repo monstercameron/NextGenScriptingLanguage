@@ -1,0 +1,49 @@
+{
+  "question": "Which records are direct observations and what timestamp/location should remain in the index?",
+  "source_id": "MWI-091-A",
+  "source_ref": "notebook/FN-91/page-4#FN-91-2",
+  "scope": "notebook=FN-91;coordinates=provided-only",
+  "facts": {
+    "timestamps_are_metadata": true,
+    "coordinates": [
+      "42.103,-71.244",
+      "42.104,-71.240"
+    ],
+    "interpretation_count": 1
+  },
+  "field_observations": [
+    {
+      "id": "MWI-091-A",
+      "kind": "observation",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "FN-91-2",
+      "ref": "notebook/FN-91/page-4#FN-91-2",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-091-A-CTX-1",
+      "kind": "interpretation",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for index field observations by time, location, and source with an unresolved detail.",
+      "ref": "metadata/FN-91/gps-row-2",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-091-A-CTX-2",
+      "kind": "observation",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied index field observations by time, location, and source evidence record 2.",
+      "ref": "metadata/FN-91/gps-row-2",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

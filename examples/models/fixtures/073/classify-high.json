@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "SHOT-01\tbutton\tContinue\tx=410,y=612,w=128,h=44\n",
+    "question": "Does this OCR and role snapshot provide a specific reproducible UI accessibility bug lead?",
+    "minimum": 80,
+    "labels": [
+      "reproducible-ui-lead",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "reproducible-ui-lead",
+        "confidence": 0.94,
+        "probabilities": {
+          "reproducible-ui-lead": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

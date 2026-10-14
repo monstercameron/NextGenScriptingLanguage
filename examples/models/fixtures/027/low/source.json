@@ -1,0 +1,1 @@
+{"report_id":"TR-27","claims":[{"id":"CL-27","statement":"Latency fell after rollout","source_ids":["SRC-27"]}],"sources":[{"id":"SRC-27","locator":"Table 6","excerpt":"p95 410 ms before; 302 ms after"}],"evidence_id":"SRC-27B","checked_fact":"no linked measurement","case_note":"weak or incomplete source detail","case_id":"027-low"}

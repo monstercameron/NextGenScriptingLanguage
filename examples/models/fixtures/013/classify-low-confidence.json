@@ -1,0 +1,41 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "public_candidates": [
+        {
+          "area": "export",
+          "id": "COM-11",
+          "summary": "Added archive manifest output"
+        }
+      ],
+      "release": "v2.4.0"
+    },
+    "question": "Are any merged user-facing changes available as candidates for release notes?",
+    "minimum": 80,
+    "labels": [
+      "evidence-ready",
+      "insufficient-evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "evidence-ready",
+        "confidence": 0.64,
+        "probabilities": {
+          "evidence-ready": 0.64,
+          "insufficient-evidence": 0.36
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 4
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "question": "Which quality record violates a supplied acceptance criterion and what work-order evidence is linked?",
+  "source_id": "MWI-098-A",
+  "source_ref": "qc/PLANT-98/LOT-98-4/measurement-3",
+  "scope": "plant=PLANT-98;production_action=none",
+  "facts": {
+    "criteria_version": "AC-98.2",
+    "units": "mm",
+    "acceptance": {
+      "width_max": 12.0
+    },
+    "signoff_blank": true
+  },
+  "qc_records": [
+    {
+      "id": "MWI-098-A",
+      "kind": "criterion_deviation",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "LOT-98-4",
+      "ref": "qc/PLANT-98/LOT-98-4/measurement-3",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-098-A-CTX-1",
+      "kind": "incomplete_evidence",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for assemble a manufacturing nonconformance evidence packet with an unresolved detail.",
+      "ref": "work-orders/WO-98-7#inspection",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

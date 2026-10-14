@@ -1,0 +1,44 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "public_candidates": [
+        {
+          "area": "export",
+          "id": "COM-11",
+          "summary": "Added archive manifest output"
+        }
+      ],
+      "release": "v2.4.0"
+    },
+    "instruction": "Draft concise release-note candidates for v2.4.0 from merged user-facing changes only. Preserve change IDs and omit internal or unmerged work."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: COM-11\nReview: Draft concise release-note candidates for v2.4.0 from merged user-facing changes only. Preserve change IDs and omit internal or unmerged work.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 23,
+      "total_tokens": 55
+    }
+  }
+}

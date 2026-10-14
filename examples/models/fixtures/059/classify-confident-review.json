@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "CTRL-11\ttextbox\tEmail address\tEnter the address used for sign-in\n",
+    "question": "Which joined control messages appear to need an error-recovery or accessible-label review?",
+    "minimum": 80,
+    "labels": [
+      "message-review",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.94,
+        "probabilities": {
+          "message-review": 0.06,
+          "needs-human": 0.94
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

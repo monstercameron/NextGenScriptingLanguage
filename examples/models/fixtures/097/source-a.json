@@ -1,0 +1,50 @@
+{
+  "question": "Which curator theme appears in this span, and what contrasting excerpt should remain visible?",
+  "source_id": "MWI-097-A",
+  "source_ref": "oral-history/OH-97/transcript#00:11:20",
+  "scope": "consent=cleared;pseudonyms=used",
+  "facts": {
+    "consent_cleared": true,
+    "speaker_ids": [
+      "P-07",
+      "P-12"
+    ],
+    "counterexample_span": "OH-97-09",
+    "real_names_present": false
+  },
+  "oral_history_spans": [
+    {
+      "id": "MWI-097-A",
+      "kind": "theme_with_counterexample",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "OH-97-06",
+      "ref": "oral-history/OH-97/transcript#00:11:20",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-097-A-CTX-1",
+      "kind": "uncoded_span",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for index oral-history themes with timestamps and counterexamples with an unresolved detail.",
+      "ref": "oral-history/OH-97/transcript#00:18:04",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-097-A-CTX-2",
+      "kind": "theme_with_counterexample",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied index oral-history themes with timestamps and counterexamples evidence record 2.",
+      "ref": "oral-history/OH-97/transcript#00:18:04",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

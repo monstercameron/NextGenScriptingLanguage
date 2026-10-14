@@ -1,0 +1,66 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "score",
+    "model": "jev-latest",
+    "state": {
+      "failures": 2,
+      "passes": 2,
+      "run_count": 4,
+      "runs": [
+        {
+          "result": "fail",
+          "run": "RUN-1",
+          "seed": "a1"
+        },
+        {
+          "result": "pass",
+          "run": "RUN-2",
+          "seed": "a2"
+        },
+        {
+          "result": "fail",
+          "run": "RUN-3",
+          "seed": "a3"
+        },
+        {
+          "result": "pass",
+          "run": "RUN-4",
+          "seed": "a4"
+        }
+      ],
+      "test": "TEST-9"
+    },
+    "question": "How strong is the local evidence for inconsistent outcomes across repeated runs of this exact test?",
+    "minimum": 80,
+    "levels": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "score",
+        "score": 2,
+        "confidence": 0.64,
+        "legend": {
+          "0": "low",
+          "1": "medium",
+          "2": "high"
+        },
+        "probabilities": {
+          "0": 0.36,
+          "1": 0.0,
+          "2": 0.64
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 3
+    }
+  }
+}

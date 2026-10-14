@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "KBT-01\tcheckout\tTAB\tfocus-lost\nKBT-02\tcheckout\tENTER\tno-activation\n",
+    "question": "Which keyboard scenarios show repeatable focus or activation barriers in these logged events?",
+    "minimum": 80,
+    "labels": [
+      "keyboard-barrier",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "keyboard-barrier",
+        "confidence": 0.94,
+        "probabilities": {
+          "keyboard-barrier": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

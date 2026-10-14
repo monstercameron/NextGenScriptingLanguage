@@ -1,0 +1,3 @@
+KBT-01|checkout|TAB|focus-lost|submit
+KBT-02|checkout|ENTER|no-activation|place-order
+KBT-03|checkout|TAB|focus-moved|address

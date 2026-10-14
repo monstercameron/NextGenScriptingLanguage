@@ -1,0 +1,80 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "customer_feature_ids": [
+          "ARCHIVE-RETENTION"
+        ],
+        "date_promise_allowed": false,
+        "release": "4.8"
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "CHG-481",
+          "id": "MWI-079-B",
+          "kind": "requested_change",
+          "ref": "product-docs/audit-export#timezone"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for explain a release change for a specified customer context with an unresolved detail.",
+          "id": "MWI-079-B-CTX-1",
+          "kind": "no_matching_change",
+          "ref": "release/4.8/CHG-481"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied explain a release change for a specified customer context evidence record 2.",
+          "id": "MWI-079-B-CTX-2",
+          "kind": "requested_change",
+          "ref": "release/4.8/CHG-481"
+        }
+      ],
+      "question": "Which release change affects the clinic west audit export workflow? The alternate record has incomplete evidence.",
+      "scope": "release=4.8;customer=clinic-west;alternate=review",
+      "source_id": "MWI-079-B",
+      "source_ref": "product-docs/audit-export#timezone"
+    },
+    "question": "Route only to a release item matching the supplied customer feature context, or no match.",
+    "minimum": 75,
+    "labels": [
+      "requested_change",
+      "no_matching_change"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "no_matching_change",
+        "confidence": 0.93,
+        "probabilities": {
+          "no_matching_change": 0.93,
+          "requested_change": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

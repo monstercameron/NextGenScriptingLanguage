@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "review-eligible",
+      "confidence_percent": 94,
+      "evidence": "RET-01\tsupport-log\t430\t365\tfalse\treview-eligible\n"
+    },
+    "instruction": "Use the explicit age, retention, and hold fields to draft a retention review checklist. Cite RET-* IDs and state that eligibility is not deletion authority; request legal-hold, jurisdiction, owner, and schedule verification."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: RET-01\nRET-01 is 65 days beyond its supplied 365-day period and has no listed hold. Verify jurisdiction, owner, schedule version, and any unrecorded hold before disposition.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

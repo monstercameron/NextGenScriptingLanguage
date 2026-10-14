@@ -1,0 +1,23 @@
+{
+  "repo": "REPO-3",
+  "files": [
+    {
+      "id": "FILE-1",
+      "area": "entry",
+      "path": "src/main.rs",
+      "role": "CLI dispatch"
+    },
+    {
+      "id": "FILE-2",
+      "area": "core",
+      "path": "src/runtime.rs",
+      "role": "execution engine"
+    },
+    {
+      "id": "FILE-3",
+      "area": "tests",
+      "path": "tests/runtime.rs",
+      "role": "runtime tests"
+    }
+  ]
+}

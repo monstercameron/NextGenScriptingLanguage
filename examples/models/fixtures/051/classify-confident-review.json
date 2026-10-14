@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "<h1 id=\"DOC-11\">Travel policy</h1>\n<h2 id=\"DOC-12\">Booking rules</h2>\n<h2 id=\"DOC-13\">Exceptions</h2>\n",
+    "question": "Are these headings sufficient evidence of a document outline defect that needs accessibility review?",
+    "minimum": 80,
+    "labels": [
+      "outline-gap",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.94,
+        "probabilities": {
+          "outline-gap": 0.06,
+          "needs-human": 0.94
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

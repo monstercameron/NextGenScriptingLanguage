@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "KBT-11\tprofile\tESC\tdialog-stayed-open\nKBT-12\tprofile\tTAB\tfocus-lost\n",
+    "question": "Which keyboard scenarios show repeatable focus or activation barriers in these logged events?",
+    "minimum": 80,
+    "labels": [
+      "keyboard-barrier",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.5801,
+        "probabilities": {
+          "keyboard-barrier": 0.4199,
+          "needs-human": 0.5801
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

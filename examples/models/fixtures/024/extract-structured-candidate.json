@@ -1,0 +1,83 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "meeting": "MTG-6",
+      "minutes": [
+        {
+          "id": "ACT-1",
+          "owner": "Dana",
+          "text": "publish revised schedule"
+        },
+        {
+          "id": "ACT-2",
+          "owner": "Lee",
+          "text": "confirm budget"
+        }
+      ],
+      "transcript": [
+        {
+          "id": "ACT-1",
+          "text": "publish revised schedule"
+        },
+        {
+          "id": "ACT-3",
+          "text": "ask finance about budget"
+        }
+      ]
+    },
+    "instruction": "Return a structured reconciliation of exact action IDs that match, occur only in the minutes, or occur only in the transcript. Treat wording-only similarity as unresolved.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "review"
+          ]
+        },
+        "evidence_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "evidence_id",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"route\":\"draft\",\"evidence_id\":\"MTG-6\",\"summary\":\"Structured review for MTG-6 is based only on the listed local records.\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 12,
+      "total_tokens": 44
+    }
+  }
+}

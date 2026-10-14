@@ -1,0 +1,106 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "SEG-93-02",
+          "id": "MWI-093-A",
+          "kind": "speech_segment",
+          "ref": "transcript/audio-93/SEG-02@00:14-00:26"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied build a timestamped index from a supplied audio transcript evidence record 2.",
+          "id": "MWI-093-A-CTX-2",
+          "kind": "speech_segment",
+          "ref": "metadata/audio-93/duration-05:42"
+        }
+      ],
+      "facts": {
+        "curator_topics": [
+          "archive",
+          "labels"
+        ],
+        "duration": "00:05:42",
+        "segments": 3,
+        "timestamps_supplied": true
+      },
+      "question": "Which transcript segments can receive a topic index, and which require manual listening?",
+      "scope": "transcript=provided;audio=not_inferred",
+      "source_id": "MWI-093-A",
+      "source_ref": "transcript/audio-93/SEG-02@00:14-00:26"
+    },
+    "instruction": "Build a timestamped index from a supplied audio transcript. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set segment_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "segment_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "segment_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-093-A\",\"source_ref\":\"transcript/audio-93/SEG-02@00:14-00:26\",\"summary\":\"Segment SEG-93-02 spans 00:14–00:26 and the supplied transcript discusses the archive label change.\",\"evidence_quote\":\"SEG-93-02\",\"context_count\":3,\"segment_id\":\"segment_id:93-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

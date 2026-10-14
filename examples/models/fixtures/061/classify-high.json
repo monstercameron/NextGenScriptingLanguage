@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "PKG-01\tlibxml\t2.9.1\tCVE-2026-1001\tcritical\tapi-gateway\trequest-parser\tproduction\n",
+    "question": "Does the local package-use evidence justify prioritizing an advisory for engineering review?",
+    "minimum": 80,
+    "labels": [
+      "used-exposed-package",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "used-exposed-package",
+        "confidence": 0.94,
+        "probabilities": {
+          "used-exposed-package": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

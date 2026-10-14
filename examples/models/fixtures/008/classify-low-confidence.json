@@ -1,0 +1,43 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "handoff": "SHIFT-7",
+      "open_cases": [
+        {
+          "id": "CASE-1",
+          "last_note": "recheck queue lag",
+          "owner": "team-a",
+          "status": "open",
+          "updated": "09:10Z"
+        }
+      ]
+    },
+    "question": "Does the packet contain unresolved cases that need an explicit next-shift handoff?",
+    "minimum": 80,
+    "labels": [
+      "evidence-ready",
+      "insufficient-evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "evidence-ready",
+        "confidence": 0.64,
+        "probabilities": {
+          "evidence-ready": 0.64,
+          "insufficient-evidence": 0.36
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 4
+    }
+  }
+}

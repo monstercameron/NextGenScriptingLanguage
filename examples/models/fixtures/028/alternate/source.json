@@ -1,0 +1,1 @@
+{"invoice_id":"INV-28","claimed_cents":152500,"po":[{"line":"L1","cents":100000},{"line":"L2","cents":50000}],"receipts":[{"id":"RCPT-28A","line":"L1","cents":100000},{"id":"RCPT-28B","line":"L2","cents":50000}],"evidence_id":"INV-28C","checked_fact":"receipt_cents=0","case_note":"explicit owner-review condition","case_id":"028-alternate"}

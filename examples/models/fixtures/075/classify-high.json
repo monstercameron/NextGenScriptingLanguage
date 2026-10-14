@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "MEDIA-01\t8a31ff\t1920x1080\t12.0\tintro-v1.mp4\nMEDIA-02\t8a31ff\t1920x1080\t12.0\tintro-copy.mp4\nMEDIA-03\tca1200\t1280x720\t18.0\thelp-clip.mp4\n",
+    "question": "Which sorted media rows are plausible near-duplicate review candidates based on the supplied hash and metadata?",
+    "minimum": 80,
+    "labels": [
+      "similar-media-group",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "similar-media-group",
+        "confidence": 0.94,
+        "probabilities": {
+          "similar-media-group": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "meeting": "MTG-6",
+  "minutes": [
+    {
+      "id": "ACT-1",
+      "text": "publish revised schedule",
+      "owner": "Dana"
+    },
+    {
+      "id": "ACT-2",
+      "text": "confirm budget",
+      "owner": "Lee"
+    }
+  ],
+  "transcript": [
+    {
+      "id": "ACT-1",
+      "text": "publish revised schedule"
+    },
+    {
+      "id": "ACT-3",
+      "text": "ask finance about budget"
+    }
+  ]
+}

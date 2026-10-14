@@ -1,0 +1,51 @@
+{
+  "question": "Which local feature and event record can be joined by exact ID for the incident report?",
+  "source_id": "MWI-095-A",
+  "source_ref": "geojson/incidents/FEAT-95-8",
+  "scope": "crs=EPSG:4326;causality=not_inferred",
+  "facts": {
+    "crs": "EPSG:4326",
+    "coordinate_bounds": [
+      -71.3,
+      42.0,
+      -71.0,
+      42.2
+    ],
+    "feature_count": 3
+  },
+  "geo_features": [
+    {
+      "id": "MWI-095-A",
+      "kind": "feature_match",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "FEAT-95-8",
+      "ref": "geojson/incidents/FEAT-95-8",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-095-A-CTX-1",
+      "kind": "unmapped_geometry",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for create a geospatial incident evidence report with an unresolved detail.",
+      "ref": "events/EVT-95-8#row",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-095-A-CTX-2",
+      "kind": "feature_match",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied create a geospatial incident evidence report evidence record 2.",
+      "ref": "events/EVT-95-8#row",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

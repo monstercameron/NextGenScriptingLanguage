@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "adjacent_edges": [],
+      "change": "CHG-90",
+      "service": "payments"
+    },
+    "instruction": "Explain the immediate dependency edges listed for CHG-90 and mark downstream impact as unverified; do not infer transitive reach."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: CHG-90\nReview: Explain the immediate dependency edges listed for CHG-90 and mark downstream impact as unverified; do not infer transitive reach.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 22,
+      "total_tokens": 54
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "suite": "SUITE-4",
+  "baseline": {
+    "failed": [
+      "TEST-A"
+    ],
+    "passed": [
+      "TEST-B"
+    ]
+  },
+  "candidate": {
+    "failed": [
+      "TEST-A",
+      "TEST-C"
+    ],
+    "passed": [
+      "TEST-B"
+    ]
+  }
+}

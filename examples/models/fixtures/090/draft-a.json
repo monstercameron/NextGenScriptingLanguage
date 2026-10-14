@@ -1,0 +1,92 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "CASE-9007",
+          "id": "MWI-090-A",
+          "kind": "closed_with_record",
+          "ref": "escalations/CASE-9007/handoff-H2"
+        }
+      ],
+      "facts": {
+        "chronology_required": true,
+        "closure_requires_status": "resolved",
+        "join_key": "case_id",
+        "records": 3
+      },
+      "question": "Does the handoff have an explicit matching resolution record or remain open/conflicting?",
+      "scope": "case=deidentified;closure_requires_exact_record",
+      "source_id": "MWI-090-A",
+      "source_ref": "escalations/CASE-9007/handoff-H2"
+    },
+    "instruction": "Reconcile escalation handoffs with recorded resolution evidence. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set resolution_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "resolution_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "resolution_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-090-A\",\"source_ref\":\"escalations/CASE-9007/handoff-H2\",\"summary\":\"The handoff and resolution log share case CASE-9007, but the log records a later reopened state.\",\"evidence_quote\":\"CASE-9007\",\"context_count\":2,\"resolution_id\":\"resolution_id:90-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

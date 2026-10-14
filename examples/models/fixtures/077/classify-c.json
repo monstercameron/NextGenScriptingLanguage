@@ -1,0 +1,81 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "case_count": 2,
+        "deidentified": true,
+        "rare_case_ids": [
+          "CASE-882"
+        ],
+        "tree_version": "4"
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "CASE-771: reconnect succeeds only after a fresh token is issued.",
+          "id": "MWI-077-B",
+          "kind": "documented_branch",
+          "ref": "troubleshooting-tree/BR-4#token-refresh"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for find diagnostic-flow gaps in de-identified support cases with an unresolved detail.",
+          "id": "MWI-077-B-CTX-1",
+          "kind": "diagnostic_gap",
+          "ref": "support-case/CASE-771"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied find diagnostic-flow gaps in de-identified support cases evidence record 2.",
+          "id": "MWI-077-B-CTX-2",
+          "kind": "documented_branch",
+          "ref": "support-case/CASE-771"
+        }
+      ],
+      "question": "Which diagnostic step is missing for the silent reconnect cases? The alternate record has incomplete evidence.",
+      "scope": "support_queue=Q4;identifiers=removed;alternate=review",
+      "source_id": "MWI-077-B",
+      "source_ref": "troubleshooting-tree/BR-4#token-refresh"
+    },
+    "question": "Route de-identified cases to a covered diagnostic branch or a documented flow gap.",
+    "minimum": 75,
+    "labels": [
+      "documented_branch",
+      "diagnostic_gap"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "diagnostic_gap",
+        "confidence": 0.93,
+        "probabilities": {
+          "diagnostic_gap": 0.93,
+          "documented_branch": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "baseline_failures": [
+        "TEST-A"
+      ],
+      "candidate_failures": [
+        "TEST-A",
+        "TEST-C"
+      ],
+      "cleared_failures": [],
+      "new_failures": [
+        "TEST-C"
+      ],
+      "suite": "SUITE-4"
+    },
+    "instruction": "Explain the exact difference between the baseline and candidate failures in SUITE-4. Do not attribute cause from test names alone."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: SUITE-4\nReview: Explain the exact difference between the baseline and candidate failures in SUITE-4. Do not attribute cause from test names alone.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 23,
+      "total_tokens": 55
+    }
+  }
+}

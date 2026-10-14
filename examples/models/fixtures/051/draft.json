@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "outline-gap",
+      "confidence_percent": 94,
+      "evidence": "<h1 id=\"DOC-01\">Account recovery</h1>\n<h3 id=\"DOC-02\">Confirm address</h3>\n<h2 id=\"DOC-03\">Choose a new password</h2>\n"
+    },
+    "instruction": "Compare the heading sequence. Draft one review note about ordering only when directly supported; cite the DOC-* element ID, distinguish a skipped level from a proven assistive-technology failure, and recommend a human check."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: DOC-02\nReview: DOC-02 is level 3 between level 1 and level 2 headings; confirm the intended hierarchy in the rendered document.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

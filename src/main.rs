@@ -8,6 +8,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -48,6 +49,13 @@ fn execute() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     if arguments.first().is_some_and(|a| a == "live") {
         return flow::live::cli(&arguments[1..], default_manifest_dir(), workflow_path);
+    }
+    if arguments.first().is_some_and(|a| a == "model") {
+        let helper = runtime::bundled_model_applet()?;
+        let error = std::process::Command::new(helper)
+            .args(&arguments[1..])
+            .exec();
+        return Err(error).context("starting the bundled model applet");
     }
     let args = match parse_args(arguments)? {
         Some(args) => args,
@@ -667,7 +675,7 @@ fn default_manifest_dir() -> PathBuf {
 }
 
 fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  --manifest-dir DIR       Directory containing applet manifests\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  --manifest-dir DIR       Directory containing applet manifests\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

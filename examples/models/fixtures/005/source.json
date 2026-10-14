@@ -1,0 +1,20 @@
+{
+  "release": "REL-31",
+  "checks": [
+    {
+      "id": "CHK-1",
+      "name": "previous image retained",
+      "result": "pass"
+    },
+    {
+      "id": "CHK-2",
+      "name": "database rollback tested",
+      "result": "unknown"
+    },
+    {
+      "id": "CHK-3",
+      "name": "owner available",
+      "result": "pass"
+    }
+  ]
+}

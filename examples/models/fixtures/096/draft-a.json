@@ -1,0 +1,62 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied",
+            "value": 14.2,
+            "unit": "ppm"
+          },
+          "excerpt": "SEN-96-3",
+          "id": "MWI-096-A",
+          "kind": "maintenance_window",
+          "ref": "sensors/SEN-96/sample-3"
+        }
+      ],
+      "facts": {
+        "threshold": 12.0,
+        "unit": "ppm",
+        "timezone": "UTC",
+        "maintenance_windows": 2
+      },
+      "question": "Is the threshold-crossing sensor sample inside a recorded maintenance or calibration window?",
+      "scope": "instrument=SEN-96;units=declared",
+      "source_id": "MWI-096-A",
+      "source_ref": "sensors/SEN-96/sample-3"
+    },
+    "instruction": "Contextualize sensor anomalies against maintenance records. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set instrument_id to a concise value grounded in the supplied facts."
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Draft for contextualize sensor anomalies against maintenance records: Sample SEN-96-3 occurred during the logged calibration window; treat the signal as a review candidate, not a cause. [source_id=MWI-096-A; source_ref=sensors/SEN-96/sample-3]",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

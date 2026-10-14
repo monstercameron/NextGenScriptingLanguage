@@ -1,0 +1,3 @@
+# LOC-11
+msgid "Open settings"
+msgstr "Paramètres ouverts"

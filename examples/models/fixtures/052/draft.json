@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "text-evidence-sufficient",
+      "confidence_percent": 94,
+      "evidence": "ALT-01\tQuarterly sign-ups by week\tBar chart; blue is current, gray is prior year\tWeeks 1-4: 12,18,21,27\n"
+    },
+    "instruction": "For records with supplied evidence, draft concise candidate alt text and explain what cannot be inferred. Cite the ALT-* ID and avoid inventing visual details. Output a review memo, not replacement source markup."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: ALT-01\nCandidate: Bar chart of weekly sign-ups, rising from 12 in week 1 to 27 in week 4; blue shows the current period and gray the prior year. Verify the series comparison against the original chart.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

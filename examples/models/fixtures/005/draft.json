@@ -1,0 +1,61 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "blockers": [
+        {
+          "id": "CHK-2",
+          "name": "database rollback tested",
+          "result": "unknown"
+        }
+      ],
+      "checks": [
+        {
+          "id": "CHK-1",
+          "name": "previous image retained",
+          "result": "pass"
+        },
+        {
+          "id": "CHK-2",
+          "name": "database rollback tested",
+          "result": "unknown"
+        },
+        {
+          "id": "CHK-3",
+          "name": "owner available",
+          "result": "pass"
+        }
+      ],
+      "release": "REL-31"
+    },
+    "instruction": "Summarize the rollback prerequisites for REL-31. Preserve unknown checks as blockers and do not initiate a rollback."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: REL-31\nReview: Summarize the rollback prerequisites for REL-31. Preserve unknown checks as blockers and do not initiate a rollback.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 20,
+      "total_tokens": 52
+    }
+  }
+}

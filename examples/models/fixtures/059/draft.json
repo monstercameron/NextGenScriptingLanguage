@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "message-review",
+      "confidence_percent": 94,
+      "evidence": "CTRL-01\tbutton\tSave form\tError: press the button again\n"
+    },
+    "instruction": "For each joined CTRL-* row, draft a short review question grounded in the control type and message text. Preserve source IDs; flag unclear next steps without claiming a WCAG failure."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: CTRL-01\nReview whether the save failure message names the form action and tells the user how to recover; verify its association with the button.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

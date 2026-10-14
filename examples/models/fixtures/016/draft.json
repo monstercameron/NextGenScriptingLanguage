@@ -1,0 +1,62 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "failures": 2,
+      "passes": 2,
+      "run_count": 4,
+      "runs": [
+        {
+          "result": "fail",
+          "run": "RUN-1",
+          "seed": "a1"
+        },
+        {
+          "result": "pass",
+          "run": "RUN-2",
+          "seed": "a2"
+        },
+        {
+          "result": "fail",
+          "run": "RUN-3",
+          "seed": "a3"
+        },
+        {
+          "result": "pass",
+          "run": "RUN-4",
+          "seed": "a4"
+        }
+      ],
+      "test": "TEST-9"
+    },
+    "instruction": "Draft a rerun-policy review for TEST-9 from the listed runs. Preserve the observed pass/fail counts and require a human decision before changing CI policy."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: TEST-9\nReview: Draft a rerun-policy review for TEST-9 from the listed runs. Preserve the observed pass/fail counts and require a human decision before changing CI policy.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 27,
+      "total_tokens": 59
+    }
+  }
+}

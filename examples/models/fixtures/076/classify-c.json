@@ -1,0 +1,69 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "product": "FieldSense",
+        "search_roots": [
+          "faq/fieldsense-3.3"
+        ],
+        "version": "3.3"
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "Restart the pairing service after clearing the stale pairing entry.",
+          "id": "MWI-076-B",
+          "kind": "answerable",
+          "ref": "runbook/fieldsense-3.2/RB-02#discovery"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for answer a troubleshooting question from a closed local knowledge set with an unresolved detail.",
+          "id": "MWI-076-B-CTX-1",
+          "kind": "no_scoped_source",
+          "ref": "faq/fieldsense-3.2/FAQ-14#pairing"
+        }
+      ],
+      "question": "Why does the sensor pair but remain absent from the app? The alternate record has incomplete evidence.",
+      "scope": "product=FieldSense;version=3.2;alternate=review",
+      "source_id": "MWI-076-B",
+      "source_ref": "runbook/fieldsense-3.2/RB-02#discovery"
+    },
+    "question": "Route to a version-scoped local FAQ or runbook answer, or no scoped source.",
+    "minimum": 75,
+    "labels": [
+      "answerable",
+      "no_scoped_source"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "no_scoped_source",
+        "confidence": 0.93,
+        "probabilities": {
+          "no_scoped_source": 0.93,
+          "answerable": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

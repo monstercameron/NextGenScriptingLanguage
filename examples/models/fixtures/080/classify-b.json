@@ -1,0 +1,73 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "deidentified": true,
+        "preserve_minority": true,
+        "theme_taxonomy": [
+          "export",
+          "accessibility"
+        ],
+        "versions": [
+          "3.2"
+        ]
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "FB-803",
+          "id": "MWI-080-B",
+          "kind": "common_theme",
+          "ref": "feedback/3.1/FB-792"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for analyze feedback while preserving rare themes with an unresolved detail.",
+          "id": "MWI-080-B-CTX-1",
+          "kind": "rare_or_conflicting_theme",
+          "ref": "feedback/3.2/FB-803"
+        }
+      ],
+      "question": "Which themes differ by product version, including low-frequency concerns? The alternate record has incomplete evidence.",
+      "scope": "feedback=deidentified;versions=3.1,3.2;alternate=review",
+      "source_id": "MWI-080-B",
+      "source_ref": "feedback/3.1/FB-792"
+    },
+    "question": "Classify feedback into common, rare, or conflicting theme evidence without dropping minority records.",
+    "minimum": 75,
+    "labels": [
+      "common_theme",
+      "rare_or_conflicting_theme"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "rare_or_conflicting_theme",
+        "confidence": 0.42,
+        "probabilities": {
+          "common_theme": 0.5800000000000001,
+          "rare_or_conflicting_theme": 0.42
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

@@ -1,0 +1,2 @@
+LIC-01	libalpha	1.4	MIT
+LIC-02	libbeta	2.0	Apache-2.0

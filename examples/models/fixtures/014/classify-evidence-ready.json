@@ -1,0 +1,64 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "clients": [
+        {
+          "files": [
+            "web/api.ts"
+          ],
+          "name": "web",
+          "new_calls": [
+            "/v2/items"
+          ],
+          "old_calls": [
+            "/v1/items"
+          ],
+          "remaining_old_calls": [
+            "/v1/items"
+          ]
+        },
+        {
+          "files": [
+            "worker/sync.rs"
+          ],
+          "name": "worker",
+          "new_calls": [],
+          "old_calls": [
+            "/v1/items"
+          ],
+          "remaining_old_calls": [
+            "/v1/items"
+          ]
+        }
+      ],
+      "migration": "API-MIG-3"
+    },
+    "question": "Do any supplied clients still list calls to the legacy endpoint after the migration?",
+    "minimum": 80,
+    "labels": [
+      "evidence-ready",
+      "insufficient-evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "evidence-ready",
+        "confidence": 0.93,
+        "probabilities": {
+          "evidence-ready": 0.93,
+          "insufficient-evidence": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 4
+    }
+  }
+}

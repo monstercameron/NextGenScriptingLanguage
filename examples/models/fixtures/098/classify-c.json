@@ -1,0 +1,70 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "acceptance": {
+          "width_max": 12.0
+        },
+        "criteria_version": "AC-98.2",
+        "signoff_blank": true,
+        "units": "mm"
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "LOT-98-4",
+          "id": "MWI-098-B",
+          "kind": "criterion_deviation",
+          "ref": "work-orders/WO-98-7#inspection"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for assemble a manufacturing nonconformance evidence packet with an unresolved detail.",
+          "id": "MWI-098-B-CTX-1",
+          "kind": "incomplete_evidence",
+          "ref": "qc/PLANT-98/LOT-98-4/measurement-3"
+        }
+      ],
+      "question": "Which quality record violates a supplied acceptance criterion and what work-order evidence is linked? The alternate record has incomplete evidence.",
+      "scope": "plant=PLANT-98;production_action=none;alternate=review",
+      "source_id": "MWI-098-B",
+      "source_ref": "work-orders/WO-98-7#inspection"
+    },
+    "question": "Classify QC evidence against supplied criteria and keep unknown or incomplete records for human review.",
+    "minimum": 75,
+    "labels": [
+      "criterion_deviation",
+      "incomplete_evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "incomplete_evidence",
+        "confidence": 0.93,
+        "probabilities": {
+          "incomplete_evidence": 0.93,
+          "criterion_deviation": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

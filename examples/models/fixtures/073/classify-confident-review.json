@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "SHOT-11\timage\tbrand mark\tx=18,y=20,w=80,h=36\n",
+    "question": "Does this OCR and role snapshot provide a specific reproducible UI accessibility bug lead?",
+    "minimum": 80,
+    "labels": [
+      "reproducible-ui-lead",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.94,
+        "probabilities": {
+          "reproducible-ui-lead": 0.06,
+          "needs-human": 0.94
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

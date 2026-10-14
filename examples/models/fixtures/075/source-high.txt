@@ -1,0 +1,3 @@
+MEDIA-01	8a31ff	1920x1080	12.0	intro-v1.mp4
+MEDIA-02	8a31ff	1920x1080	12.0	intro-copy.mp4
+MEDIA-03	ca1200	1280x720	18.0	help-clip.mp4

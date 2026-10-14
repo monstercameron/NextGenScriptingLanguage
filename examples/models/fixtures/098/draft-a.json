@@ -1,0 +1,94 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "LOT-98-4",
+          "id": "MWI-098-A",
+          "kind": "criterion_deviation",
+          "ref": "qc/PLANT-98/LOT-98-4/measurement-3"
+        }
+      ],
+      "facts": {
+        "acceptance": {
+          "width_max": 12.0
+        },
+        "criteria_version": "AC-98.2",
+        "signoff_blank": true,
+        "units": "mm"
+      },
+      "question": "Which quality record violates a supplied acceptance criterion and what work-order evidence is linked?",
+      "scope": "plant=PLANT-98;production_action=none",
+      "source_id": "MWI-098-A",
+      "source_ref": "qc/PLANT-98/LOT-98-4/measurement-3"
+    },
+    "instruction": "Assemble a manufacturing nonconformance evidence packet. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set lot_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "lot_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "lot_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-098-A\",\"source_ref\":\"qc/PLANT-98/LOT-98-4/measurement-3\",\"summary\":\"Lot LOT-98-4 has a measured width of 12.6 mm against the supplied 12.0 mm maximum; linked work order WO-98-7 remains unchanged.\",\"evidence_quote\":\"LOT-98-4\",\"context_count\":2,\"lot_id\":\"lot_id:98-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

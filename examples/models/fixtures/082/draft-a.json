@@ -1,0 +1,96 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "O-3",
+          "id": "MWI-082-A",
+          "kind": "mapped_outcome",
+          "ref": "syllabus/BIO-210/outcome-O3"
+        }
+      ],
+      "facts": {
+        "assessment_count": 2,
+        "course": "BIO-210",
+        "outcomes": [
+          "O-1",
+          "O-2",
+          "O-3"
+        ],
+        "reading_count": 2
+      },
+      "question": "Which course outcome has an assessment link and which remains unsupported?",
+      "scope": "course=BIO-210;term=fall",
+      "source_id": "MWI-082-A",
+      "source_ref": "syllabus/BIO-210/outcome-O3"
+    },
+    "instruction": "Check syllabus outcomes against readings and assessments. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set outcome_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "outcome_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "outcome_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-082-A\",\"source_ref\":\"syllabus/BIO-210/outcome-O3\",\"summary\":\"Outcome O-3 appears in the field-lab reading and the week-six data interpretation assessment.\",\"evidence_quote\":\"O-3\",\"context_count\":2,\"outcome_id\":\"outcome_id:82-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

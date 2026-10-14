@@ -1,0 +1,37 @@
+{
+  "question": "Which approved macro fits a user who can sign in but cannot export a report? The alternate record has incomplete evidence.",
+  "source_id": "MWI-078-B",
+  "source_ref": "help/export-permissions#check-access",
+  "scope": "product=FieldSense;response=save-only;alternate=review",
+  "facts": {
+    "anonymized": true,
+    "approved_template_ids": [
+      "MACRO-ACCESS-01"
+    ],
+    "send_action": false
+  },
+  "approved_templates": [
+    {
+      "id": "MWI-078-B",
+      "kind": "approved_macro",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "MACRO-EXPORT-02",
+      "ref": "help/export-permissions#check-access",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-078-B-CTX-1",
+      "kind": "clarifying_question",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for draft evidence-linked support reply macros with an unresolved detail.",
+      "ref": "support-case/CASE-781",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

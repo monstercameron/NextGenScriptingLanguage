@@ -1,0 +1,22 @@
+{
+  "alerts": [
+    {
+      "id": "ALR-03",
+      "fingerprint": "fp-a",
+      "started": "09:01Z",
+      "service": "worker"
+    },
+    {
+      "id": "ALR-01",
+      "fingerprint": "fp-a",
+      "started": "09:00Z",
+      "service": "worker"
+    },
+    {
+      "id": "ALR-02",
+      "fingerprint": "fp-b",
+      "started": "09:02Z",
+      "service": "api"
+    }
+  ]
+}

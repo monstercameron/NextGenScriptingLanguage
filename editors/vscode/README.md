@@ -33,7 +33,9 @@ language-mode picker in the bottom-right corner. The language ID is
   lists, cache modifiers, service triggers, and the implemented TUI vocabulary.
 - `#` comment toggling, list bracket matching, quote/bracket pairing, indentation
   folding, two-space defaults, and indentation after event/component/widget headers.
-- Nineteen snippets in the source candidate, including `program-filter` for finite stdin stages. The packaged 0.2.0 extension retains its eighteen-snippet release. Start with `program-input`, `program-command`, `program-pipeline`, `program-cache`,
+- Source snippets cover finite stdin, conditions, JSON selection and same-file reuse
+  as well as the released command/service/TUI forms. The packaged 0.2.0 extension
+  predates these additions. Start with `program-input`, `program-command`, `program-pipeline`, `program-cache`,
   `program-listener`, `program-stream`, `program-interval`, `program-schedule`,
   `program-screen`, or `program-components`. Use **Snippets: Fill File with
   Snippet** for a complete program, or type a prefix and accept the suggestion.
@@ -66,7 +68,7 @@ words can still be invoked explicitly with `run`.
 From this directory, with Node.js 22+ and npm:
 
 ```sh
-npm ci
+npm ci --ignore-scripts --no-audit --no-fund
 npm test
 npm run package
 ```
@@ -81,6 +83,8 @@ by VS Code, rather than approximating the grammar with JavaScript regexes. They
 check token scopes, line-state recovery, editor configuration, snippet expansion,
 and the repository's real `.program` corpus. Complete snippet defaults are also
 validated with `execute check` when the runtime is available in the checkout.
+The repository's `make check` passes the freshly built source interpreter through
+`EXECUTE_TEST_BINARY`; set that variable when testing against another build.
 
 The implementation follows the official [syntax highlighting guide](https://code.visualstudio.com/api/language-extensions/syntax-highlight-guide)
 and [language configuration guide](https://code.visualstudio.com/api/language-extensions/language-configuration-guide).

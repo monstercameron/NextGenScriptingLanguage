@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "route": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "review"
+      ]
+    },
+    "evidence_id": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "route",
+    "evidence_id",
+    "summary"
+  ],
+  "additionalProperties": false
+}

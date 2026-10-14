@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "keyboard-barrier",
+      "confidence_percent": 94,
+      "evidence": "KBT-01\tcheckout\tTAB\tfocus-lost\nKBT-02\tcheckout\tENTER\tno-activation\n"
+    },
+    "instruction": "Cluster the failed events by scenario, key, and target. Draft a minimal reproduction checklist citing KBT-* IDs; separate logged behavior from hypotheses and include no automatic remediation."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: KBT-01\nReproduce checkout focus loss after TAB at submit, then test ENTER activation for place-order; preserve KBT-01 and KBT-02 as separate observations.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

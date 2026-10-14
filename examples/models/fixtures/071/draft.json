@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "filing-pattern",
+      "confidence_percent": 94,
+      "evidence": "FILE-02\tproject-logo.svg\timage\t2026-10-04\nFILE-01\tboarding-pass.pdf\tpdf\t2026-10-02\nFILE-03\tmeeting-notes.txt\ttext\t2026-10-04\n"
+    },
+    "instruction": "Group records by visible extension and name clues, proposing destination folders only. Cite FILE-* IDs and preserve every original filename; flag ambiguous items for user review and do not move or rename anything."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: FILE-01\nSuggest reviewing FILE-01 under Travel/itineraries and FILE-02 under Design/assets; keep exact names and check for duplicate or sensitive files before any move.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

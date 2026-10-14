@@ -1,0 +1,1 @@
+PKG-01	libxml	2.9.1	CVE-2026-1001	critical

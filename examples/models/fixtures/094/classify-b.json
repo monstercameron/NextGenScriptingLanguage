@@ -1,0 +1,70 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "allowed_ids": [
+          "TAX-94-22"
+        ],
+        "dictionary_version": "local-v3",
+        "expert_signoff_required": true
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "OBS-94-1",
+          "id": "MWI-094-B",
+          "kind": "dictionary_candidate",
+          "ref": "taxonomy/local-v3/TAX-94-17"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for map ecological observations to a supplied taxonomy with an unresolved detail.",
+          "id": "MWI-094-B-CTX-1",
+          "kind": "expert_review",
+          "ref": "ecology/ECO-94/OBS-1"
+        }
+      ],
+      "question": "Which supplied taxonomy entry is a candidate for the observation, and should it remain expert-reviewable? The alternate record has incomplete evidence.",
+      "scope": "site=ECO-94;dictionary=local-v3;alternate=review",
+      "source_id": "MWI-094-B",
+      "source_ref": "taxonomy/local-v3/TAX-94-17",
+      "unmapped_taxonomy_ids": "TAX-94-17\n"
+    },
+    "question": "Propose only a supplied taxonomy key for the field observation or route ambiguity to expert review.",
+    "minimum": 75,
+    "labels": [
+      "dictionary_candidate",
+      "expert_review"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "expert_review",
+        "confidence": 0.42,
+        "probabilities": {
+          "dictionary_candidate": 0.5800000000000001,
+          "expert_review": 0.42
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

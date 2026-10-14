@@ -1,0 +1,2 @@
+ACL-11	analyst	warehouse	read
+ACL-12	service-bot	queue	read

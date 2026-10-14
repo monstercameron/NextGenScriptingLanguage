@@ -1,0 +1,70 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "final_answer_in_early_levels": false,
+        "hint_levels": [
+          "nudge",
+          "strategy"
+        ],
+        "instructor_approved": true
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "STEP-ALG6-03",
+          "id": "MWI-084-B",
+          "kind": "concept_hint",
+          "ref": "hint-template/ALG-6#level-1"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for draft a graded hint ladder from an approved solution with an unresolved detail.",
+          "id": "MWI-084-B-CTX-1",
+          "kind": "answer_leak_risk",
+          "ref": "solutions/ALG-6/step-03"
+        }
+      ],
+      "question": "Which approved solution step can support a hint without revealing the final answer? The alternate record has incomplete evidence.",
+      "scope": "assignment=ALG-6;owner=instructor;alternate=review",
+      "source_id": "MWI-084-B",
+      "source_ref": "hint-template/ALG-6#level-1"
+    },
+    "question": "Route solution steps to an approved concept hint or answer-leak review.",
+    "minimum": 75,
+    "labels": [
+      "concept_hint",
+      "answer_leak_risk"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "answer_leak_risk",
+        "confidence": 0.93,
+        "probabilities": {
+          "answer_leak_risk": 0.93,
+          "concept_hint": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

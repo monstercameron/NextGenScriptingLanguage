@@ -1,0 +1,99 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "V-44",
+          "id": "MWI-086-A",
+          "kind": "alternative_listed",
+          "ref": "course/M-4/resources/video-V44"
+        }
+      ],
+      "facts": {
+        "alternative_types": [
+          "captions",
+          "transcript",
+          "alt_text"
+        ],
+        "resource_types": [
+          "video",
+          "image",
+          "table"
+        ],
+        "student_diagnosis_ingested": false
+      },
+      "question": "Which resource is missing a declared accessible alternative?",
+      "scope": "module=M-4;checklist=AC-2",
+      "source_id": "MWI-086-A",
+      "source_ref": "course/M-4/resources/video-V44"
+    },
+    "instruction": "Audit course materials for declared accessible alternatives. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set resource_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "resource_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "resource_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-086-A\",\"source_ref\":\"course/M-4/resources/video-V44\",\"summary\":\"The video resource V-44 has captions but no declared transcript alternative in the manifest.\",\"evidence_quote\":\"V-44\",\"context_count\":2,\"resource_id\":\"resource_id:86-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

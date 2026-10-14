@@ -1,0 +1,51 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "archive": "INC-ARCH-9",
+      "incident_scenarios": [
+        {
+          "control": "cache expiry alert",
+          "id": "INC-22",
+          "impact": "delayed reads",
+          "trigger": "stale cache"
+        },
+        {
+          "control": "worker saturation alert",
+          "id": "INC-25",
+          "impact": "backlog",
+          "trigger": "queue growth"
+        }
+      ]
+    },
+    "instruction": "Draft a tabletop outline based only on the supplied archived incident scenarios. Use injects as questions for participants and require a facilitator to approve the exercise."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: INC-22\nReview: Draft a tabletop outline based only on the supplied archived incident scenarios. Use injects as questions for participants and require a facilitator to approve the exercise.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 29,
+      "total_tokens": 61
+    }
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "anonymized": true,
+        "approved_template_ids": [
+          "MACRO-ACCESS-01"
+        ],
+        "send_action": false
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "MACRO-EXPORT-02",
+          "id": "MWI-078-B",
+          "kind": "approved_macro",
+          "ref": "help/export-permissions#check-access"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for draft evidence-linked support reply macros with an unresolved detail.",
+          "id": "MWI-078-B-CTX-1",
+          "kind": "clarifying_question",
+          "ref": "support-case/CASE-781"
+        }
+      ],
+      "question": "Which approved macro fits a user who can sign in but cannot export a report? The alternate record has incomplete evidence.",
+      "scope": "product=FieldSense;response=save-only;alternate=review",
+      "source_id": "MWI-078-B",
+      "source_ref": "help/export-permissions#check-access"
+    },
+    "question": "Select an approved reply template or a clarifying-question route.",
+    "minimum": 75,
+    "labels": [
+      "approved_macro",
+      "clarifying_question"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "clarifying_question",
+        "confidence": 0.93,
+        "probabilities": {
+          "clarifying_question": 0.93,
+          "approved_macro": 0.07
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

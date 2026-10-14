@@ -1,0 +1,50 @@
+{
+  "question": "Which rubric criterion is supported by the cited student-work span?",
+  "source_id": "MWI-081-A",
+  "source_ref": "submission/SUB-081/span-S2",
+  "scope": "submission=deidentified;rubric=R-5",
+  "facts": {
+    "rubric_id": "R-5",
+    "criteria": [
+      "C1-claim",
+      "E2-evidence",
+      "R3-reasoning"
+    ],
+    "scores_authorized": false
+  },
+  "rubric_spans": [
+    {
+      "id": "MWI-081-A",
+      "kind": "criterion_evidence",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "SUB-081-S2: The sample rose from 4 to 7 units across both trials.",
+      "ref": "submission/SUB-081/span-S2",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-081-A-CTX-1",
+      "kind": "insufficient_evidence",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for map student-work evidence to a supplied rubric with an unresolved detail.",
+      "ref": "rubric/R-5/criterion-E2",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-081-A-CTX-2",
+      "kind": "criterion_evidence",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied map student-work evidence to a supplied rubric evidence record 2.",
+      "ref": "rubric/R-5/criterion-E2",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "label": "reproducible-ui-lead",
+      "confidence_percent": 94,
+      "evidence": "SHOT-01\tbutton\tContinue\tx=410,y=612,w=128,h=44\n"
+    },
+    "instruction": "Draft a bug evidence bundle from supplied SHOT-* rows: expected versus visible role/text, coordinates, and reproduction questions. Cite IDs; identify OCR uncertainty and never infer hidden behavior from pixels alone."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: SHOT-01\nBundle the visible Continue button at x=410,y=612,w=128,h=44. Reproduce with keyboard and screen reader; confirm the OCR label and role in the live interface.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 40,
+      "output_tokens": 34,
+      "total_tokens": 74
+    }
+  }
+}

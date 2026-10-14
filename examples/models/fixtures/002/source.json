@@ -1,0 +1,19 @@
+{
+  "alert": {
+    "id": "ALT-22",
+    "service": "payments",
+    "symptom": "queue depth"
+  },
+  "runbooks": [
+    {
+      "id": "RB-07",
+      "service": "payments",
+      "section": "Queue saturation checks"
+    },
+    {
+      "id": "RB-11",
+      "service": "catalog",
+      "section": "Cache recovery"
+    }
+  ]
+}

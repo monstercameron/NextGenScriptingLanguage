@@ -1,0 +1,67 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "clients": [
+        {
+          "files": [
+            "web/api.ts"
+          ],
+          "name": "web",
+          "new_calls": [
+            "/v2/items"
+          ],
+          "old_calls": [
+            "/v1/items"
+          ],
+          "remaining_old_calls": [
+            "/v1/items"
+          ]
+        },
+        {
+          "files": [
+            "worker/sync.rs"
+          ],
+          "name": "worker",
+          "new_calls": [],
+          "old_calls": [
+            "/v1/items"
+          ],
+          "remaining_old_calls": [
+            "/v1/items"
+          ]
+        }
+      ],
+      "migration": "API-MIG-3"
+    },
+    "instruction": "Draft a client-by-client API migration review from API-MIG-3. Name remaining legacy calls and do not edit any client."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: API-MIG-3\nReview: Draft a client-by-client API migration review from API-MIG-3. Name remaining legacy calls and do not edit any client.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 21,
+      "total_tokens": 53
+    }
+  }
+}

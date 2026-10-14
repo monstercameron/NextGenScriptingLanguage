@@ -1,0 +1,7 @@
+1
+00:00:01,000 --> 00:00:02,000
+[CAP-01] Welcome to the setup guide.
+
+2
+00:00:02,000 --> 00:00:03,000
+[CAP-02] Select the account menu.

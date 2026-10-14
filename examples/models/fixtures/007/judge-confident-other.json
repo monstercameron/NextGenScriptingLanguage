@@ -1,0 +1,41 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": [
+      {
+        "alert_ids": [
+          "ALR-01",
+          "ALR-03"
+        ],
+        "count": 2,
+        "fingerprint": "fp-a",
+        "service": "worker"
+      },
+      {
+        "alert_ids": [
+          "ALR-02"
+        ],
+        "count": 1,
+        "fingerprint": "fp-b",
+        "service": "api"
+      }
+    ],
+    "question": "Is it safe to propose grouping only alerts with identical fingerprints while preserving their individual IDs?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "noul",
+        "noul": 0.07
+      }
+    },
+    "usage": {
+      "input_tokens": 27,
+      "output_tokens": 2
+    }
+  }
+}

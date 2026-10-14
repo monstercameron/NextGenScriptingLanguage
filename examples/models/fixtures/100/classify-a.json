@@ -1,0 +1,71 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "imputation_allowed": false,
+        "method_schema": "3.1",
+        "missing_measurements": [
+          "P-3.soil_moisture"
+        ],
+        "observed_plots": 2,
+        "planned_plots": 3
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "FS-100",
+          "id": "MWI-100-A",
+          "kind": "measurement_present",
+          "ref": "field-survey/FS-100/method-3.1"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for summarize a field survey against its method schema with an unresolved detail.",
+          "id": "MWI-100-A-CTX-1",
+          "kind": "missing_measurement",
+          "ref": "field-survey/FS-100/plan#plots"
+        }
+      ],
+      "question": "Which survey rows have required measurements, and what planned measurements remain missing?",
+      "scope": "survey=FS-100;imputation=prohibited",
+      "source_id": "MWI-100-A",
+      "source_ref": "field-survey/FS-100/method-3.1"
+    },
+    "question": "Classify survey rows by observation, sampling event, equipment note, or missing required metadata.",
+    "minimum": 75,
+    "labels": [
+      "measurement_present",
+      "missing_measurement"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "measurement_present",
+        "confidence": 0.91,
+        "probabilities": {
+          "measurement_present": 0.91,
+          "missing_measurement": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

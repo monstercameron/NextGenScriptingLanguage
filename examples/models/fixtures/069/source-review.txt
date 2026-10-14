@@ -1,0 +1,2 @@
+LIC-11	libgamma	3.1	BSD-3-Clause
+LIC-12	libdelta	5.0	MIT

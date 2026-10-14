@@ -1,0 +1,83 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "article_ids": [
+          "HC-22"
+        ],
+        "deidentified": true,
+        "query_count": 2,
+        "rare_clusters": [
+          "CL-89-8"
+        ]
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "CL-89-3",
+          "id": "MWI-089-B",
+          "kind": "partial_result",
+          "ref": "help-center/index-v14#article-map"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for find help-center gaps from anonymized search queries with an unresolved detail.",
+          "id": "MWI-089-B-CTX-1",
+          "kind": "no_result",
+          "ref": "help-search/clusters/CL-89-3"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied find help-center gaps from anonymized search queries evidence record 2.",
+          "id": "MWI-089-B-CTX-2",
+          "kind": "partial_result",
+          "ref": "help-search/clusters/CL-89-3"
+        }
+      ],
+      "question": "Which recurring query cluster has no matching local help article, retaining rare clusters? The alternate record has incomplete evidence.",
+      "scope": "query_log=anonymized;article_index=local;alternate=review",
+      "source_id": "MWI-089-B",
+      "source_ref": "help-center/index-v14#article-map"
+    },
+    "question": "Classify local help search results as partial or no-result while preserving rare query clusters.",
+    "minimum": 75,
+    "labels": [
+      "partial_result",
+      "no_result"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "no_result",
+        "confidence": 0.42,
+        "probabilities": {
+          "partial_result": 0.5800000000000001,
+          "no_result": 0.42
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

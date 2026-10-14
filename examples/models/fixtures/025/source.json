@@ -1,0 +1,17 @@
+{
+  "response": "RSP-3",
+  "claims": [
+    {
+      "id": "CLM-1",
+      "text": "supports offline mode",
+      "references": [
+        "DOC-11"
+      ]
+    },
+    {
+      "id": "CLM-2",
+      "text": "meets every retention law",
+      "references": []
+    }
+  ]
+}

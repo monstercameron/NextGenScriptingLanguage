@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "SEC-11\tunsafe-deserialization\tMEDIUM\ta8170b0\tworkflow-319\n",
+    "question": "Are the supplied CI findings traceable to a source revision and concrete location?",
+    "minimum": 80,
+    "labels": [
+      "traceable-finding",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.94,
+        "probabilities": {
+          "traceable-finding": 0.06,
+          "needs-human": 0.94
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

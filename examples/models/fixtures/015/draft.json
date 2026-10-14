@@ -1,0 +1,61 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "scan": "SCAN-44",
+      "themes": [
+        {
+          "count": 1,
+          "ids": [
+            "FND-3"
+          ],
+          "locations": [
+            "src/c.rs:41"
+          ],
+          "rule": "path-unwrap"
+        },
+        {
+          "count": 2,
+          "ids": [
+            "FND-1",
+            "FND-2"
+          ],
+          "locations": [
+            "src/b.rs:9",
+            "src/a.rs:20"
+          ],
+          "rule": "unchecked-result"
+        }
+      ]
+    },
+    "instruction": "Summarize SCAN-44 findings by exact rule group, retaining every finding ID and location. Suggest review order only; do not modify source."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: FND-1\nReview: Summarize SCAN-44 findings by exact rule group, retaining every finding ID and location. Suggest review order only; do not modify source.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 24,
+      "total_tokens": 56
+    }
+  }
+}

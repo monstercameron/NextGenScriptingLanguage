@@ -1,0 +1,48 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "alert": {
+        "id": "ALT-22",
+        "service": "payments",
+        "symptom": "queue depth"
+      },
+      "matching_runbooks": [
+        {
+          "id": "RB-07",
+          "section": "Queue saturation checks",
+          "service": "payments"
+        }
+      ]
+    },
+    "instruction": "Explain which supplied runbook section matches ALT-22 by exact service name. Do not claim that any command was run."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: ALT-22\nReview: Explain which supplied runbook section matches ALT-22 by exact service name. Do not claim that any command was run.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 22,
+      "total_tokens": 54
+    }
+  }
+}

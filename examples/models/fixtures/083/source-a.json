@@ -1,0 +1,50 @@
+{
+  "question": "What misconception might explain the repeated wrong answer, retaining question IDs and counterexamples?",
+  "source_id": "MWI-083-A",
+  "source_ref": "quiz/QZ-18/question-4",
+  "scope": "quiz=QZ-18;key_version=3",
+  "facts": {
+    "deidentified": true,
+    "key_version": "3",
+    "question_ids": [
+      "Q18-4",
+      "Q18-7"
+    ],
+    "response_count": 3
+  },
+  "quiz_responses": [
+    {
+      "id": "MWI-083-A",
+      "kind": "known_distractor",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "Q18-4",
+      "ref": "quiz/QZ-18/question-4",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-083-A-CTX-1",
+      "kind": "unclassified_error",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for summarize quiz error patterns as misconception candidates with an unresolved detail.",
+      "ref": "answer-key/QZ-18/v3#Q18-4",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-083-A-CTX-2",
+      "kind": "known_distractor",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied summarize quiz error patterns as misconception candidates evidence record 2.",
+      "ref": "answer-key/QZ-18/v3#Q18-4",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

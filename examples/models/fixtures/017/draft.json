@@ -1,0 +1,35 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": "--legacy-mode # DOC-CLI-7\n",
+    "instruction": "Draft a documentation review note listing only options present in the docs fixture but absent from the captured help fixture. Do not claim the flag has been removed from every version."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: DOC-CLI-7\nReview: Draft a documentation review note listing only options present in the docs fixture but absent from the captured help fixture. Do not claim the flag has been removed from every version.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 34,
+      "total_tokens": 66
+    }
+  }
+}

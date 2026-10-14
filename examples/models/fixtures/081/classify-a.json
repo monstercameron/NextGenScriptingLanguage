@@ -1,0 +1,82 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "criteria": [
+          "C1-claim",
+          "E2-evidence",
+          "R3-reasoning"
+        ],
+        "rubric_id": "R-5",
+        "scores_authorized": false
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "SUB-081-S2: The sample rose from 4 to 7 units across both trials.",
+          "id": "MWI-081-A",
+          "kind": "criterion_evidence",
+          "ref": "submission/SUB-081/span-S2"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for map student-work evidence to a supplied rubric with an unresolved detail.",
+          "id": "MWI-081-A-CTX-1",
+          "kind": "insufficient_evidence",
+          "ref": "rubric/R-5/criterion-E2"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied map student-work evidence to a supplied rubric evidence record 2.",
+          "id": "MWI-081-A-CTX-2",
+          "kind": "criterion_evidence",
+          "ref": "rubric/R-5/criterion-E2"
+        }
+      ],
+      "question": "Which rubric criterion is supported by the cited student-work span?",
+      "scope": "submission=deidentified;rubric=R-5",
+      "source_id": "MWI-081-A",
+      "source_ref": "submission/SUB-081/span-S2"
+    },
+    "question": "Route a de-identified work span to a rubric criterion or insufficient evidence.",
+    "minimum": 75,
+    "labels": [
+      "criterion_evidence",
+      "insufficient_evidence"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "criterion_evidence",
+        "confidence": 0.91,
+        "probabilities": {
+          "criterion_evidence": 0.91,
+          "insufficient_evidence": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

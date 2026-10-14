@@ -1,0 +1,99 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "FB-803",
+          "id": "MWI-080-A",
+          "kind": "common_theme",
+          "ref": "feedback/3.2/FB-803"
+        }
+      ],
+      "facts": {
+        "deidentified": true,
+        "preserve_minority": true,
+        "theme_taxonomy": [
+          "export",
+          "accessibility",
+          "latency"
+        ],
+        "versions": [
+          "3.1",
+          "3.2"
+        ]
+      },
+      "question": "Which themes differ by product version, including low-frequency concerns?",
+      "scope": "feedback=deidentified;versions=3.1,3.2",
+      "source_id": "MWI-080-A",
+      "source_ref": "feedback/3.2/FB-803"
+    },
+    "instruction": "Analyze feedback while preserving rare themes. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set rare_theme_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "rare_theme_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "rare_theme_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-080-A\",\"source_ref\":\"feedback/3.2/FB-803\",\"summary\":\"Version 3.2 comments include one low-frequency report that screen-reader focus is lost after export.\",\"evidence_quote\":\"FB-803\",\"context_count\":2,\"rare_theme_id\":\"rare_theme_id:80-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

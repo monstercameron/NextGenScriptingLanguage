@@ -1,0 +1,79 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "drill_max_age_days": 30,
+        "manifest_verified": true,
+        "restore_invocations": 0,
+        "target_rto_minutes": 60
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "SVC-99-1",
+          "id": "MWI-099-A",
+          "kind": "evidence_current",
+          "ref": "recovery/SVC-99-1/manifest-22"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for review disaster-recovery readiness from saved drill evidence with an unresolved detail.",
+          "id": "MWI-099-A-CTX-1",
+          "kind": "stale_or_missing",
+          "ref": "drills/SVC-99-1/DR-2026-10-10"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied review disaster-recovery readiness from saved drill evidence evidence record 2.",
+          "id": "MWI-099-A-CTX-2",
+          "kind": "evidence_current",
+          "ref": "drills/SVC-99-1/DR-2026-10-10"
+        }
+      ],
+      "question": "Which service has a current saved drill record and what readiness question remains for the owner?",
+      "scope": "restore_action=prohibited;target=RTO-99",
+      "source_id": "MWI-099-A",
+      "source_ref": "recovery/SVC-99-1/manifest-22"
+    },
+    "question": "Classify only saved recovery evidence as present, stale, failed, or unknown; never start a restore.",
+    "minimum": 75,
+    "labels": [
+      "evidence_current",
+      "stale_or_missing"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "evidence_current",
+        "confidence": 0.91,
+        "probabilities": {
+          "evidence_current": 0.91,
+          "stale_or_missing": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

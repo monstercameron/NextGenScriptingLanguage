@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "PROD-11\tkeyboard\t2024-03-10\tRCPT-11\t2024-03-10\t2025-03-10\tRCPT-11\tEmail receipt 4C\n",
+    "question": "Does the local product and receipt evidence form a complete enough cross-reference for a support lookup?",
+    "minimum": 80,
+    "labels": [
+      "cross-reference-complete",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.5801,
+        "probabilities": {
+          "cross-reference-complete": 0.4199,
+          "needs-human": 0.5801
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

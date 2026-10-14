@@ -1,0 +1,49 @@
+{
+  "question": "Which transcript segments can receive a topic index, and which require manual listening? The alternate record has incomplete evidence.",
+  "source_id": "MWI-093-B",
+  "source_ref": "metadata/audio-93/duration-05:42",
+  "scope": "transcript=provided;audio=not_inferred;alternate=review",
+  "facts": {
+    "duration": "00:04:11",
+    "timestamps_supplied": true,
+    "curator_topics": [
+      "archive"
+    ],
+    "segments": 3
+  },
+  "transcript_segments": [
+    {
+      "id": "MWI-093-B",
+      "kind": "speech_segment",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "SEG-93-02",
+      "ref": "metadata/audio-93/duration-05:42",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-093-B-CTX-1",
+      "kind": "uncertain_segment",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for build a timestamped index from a supplied audio transcript with an unresolved detail.",
+      "ref": "transcript/audio-93/SEG-02@00:14-00:26",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-093-B-CTX-2",
+      "kind": "speech_segment",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied build a timestamped index from a supplied audio transcript evidence record 2.",
+      "ref": "transcript/audio-93/SEG-02@00:14-00:26",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

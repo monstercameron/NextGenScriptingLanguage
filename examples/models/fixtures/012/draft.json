@@ -1,0 +1,56 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "issue": {
+        "id": "ISSUE-72",
+        "labels": [
+          "cli",
+          "timeout"
+        ],
+        "title": "Timeout on export"
+      },
+      "repository_matches": [
+        {
+          "label": "timeout",
+          "path": "src/export.rs",
+          "symbol": "write_archive"
+        },
+        {
+          "label": "cli",
+          "path": "src/parse.rs",
+          "symbol": "parse_flags"
+        }
+      ]
+    },
+    "instruction": "Draft an evidence route for ISSUE-72 using only the matching file and symbol names. Treat matches as search leads, not confirmed root cause."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: ISSUE-72\nReview: Draft an evidence route for ISSUE-72 using only the matching file and symbol names. Treat matches as search leads, not confirmed root cause.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 26,
+      "total_tokens": 58
+    }
+  }
+}

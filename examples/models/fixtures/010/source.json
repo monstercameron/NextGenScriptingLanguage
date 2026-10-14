@@ -1,0 +1,17 @@
+{
+  "archive": "INC-ARCH-9",
+  "incidents": [
+    {
+      "id": "INC-22",
+      "trigger": "stale cache",
+      "control": "cache expiry alert",
+      "impact": "delayed reads"
+    },
+    {
+      "id": "INC-25",
+      "trigger": "queue growth",
+      "control": "worker saturation alert",
+      "impact": "backlog"
+    }
+  ]
+}

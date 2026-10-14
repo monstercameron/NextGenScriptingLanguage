@@ -1,0 +1,107 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "FEAT-95-8",
+          "id": "MWI-095-A",
+          "kind": "feature_match",
+          "ref": "geojson/incidents/FEAT-95-8"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied create a geospatial incident evidence report evidence record 2.",
+          "id": "MWI-095-A-CTX-2",
+          "kind": "feature_match",
+          "ref": "events/EVT-95-8#row"
+        }
+      ],
+      "facts": {
+        "coordinate_bounds": [
+          -71.3,
+          42.0,
+          -71.0,
+          42.2
+        ],
+        "crs": "EPSG:4326",
+        "feature_count": 3
+      },
+      "question": "Which local feature and event record can be joined by exact ID for the incident report?",
+      "scope": "crs=EPSG:4326;causality=not_inferred",
+      "source_id": "MWI-095-A",
+      "source_ref": "geojson/incidents/FEAT-95-8"
+    },
+    "instruction": "Create a geospatial incident evidence report. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set feature_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "feature_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "feature_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-095-A\",\"source_ref\":\"geojson/incidents/FEAT-95-8\",\"summary\":\"Feature FEAT-95-8 matches event EVT-95-8 at the supplied coordinates and timestamp; no causal claim is supported.\",\"evidence_quote\":\"FEAT-95-8\",\"context_count\":3,\"feature_id\":\"feature_id:95-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

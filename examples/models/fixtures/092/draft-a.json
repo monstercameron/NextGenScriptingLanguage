@@ -1,0 +1,94 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "RUN-92-4",
+          "id": "MWI-092-A",
+          "kind": "recorded_step",
+          "ref": "notebook/RUN-92/entry-4"
+        }
+      ],
+      "facts": {
+        "measurement_count": 2,
+        "measurement_schema": {
+          "mass": "mg",
+          "temperature": "C"
+        },
+        "protocol_version": "P-92.1"
+      },
+      "question": "Which notebook entry maps to a protocol step, and is the measurement unit explicit?",
+      "scope": "protocol=P-92;instrument=I-92",
+      "source_id": "MWI-092-A",
+      "source_ref": "notebook/RUN-92/entry-4"
+    },
+    "instruction": "Reconcile a lab notebook against its recorded protocol. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set protocol_step_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "protocol_step_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "protocol_step_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-092-A\",\"source_ref\":\"notebook/RUN-92/entry-4\",\"summary\":\"Run R-92 records 18.4 mg for protocol step P-92-4; the units match the measurement schema.\",\"evidence_quote\":\"RUN-92-4\",\"context_count\":2,\"protocol_step_id\":\"protocol_step_id:92-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

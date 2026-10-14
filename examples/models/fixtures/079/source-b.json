@@ -1,0 +1,48 @@
+{
+  "question": "Which release change affects the clinic west audit export workflow? The alternate record has incomplete evidence.",
+  "source_id": "MWI-079-B",
+  "source_ref": "product-docs/audit-export#timezone",
+  "scope": "release=4.8;customer=clinic-west;alternate=review",
+  "facts": {
+    "customer_feature_ids": [
+      "ARCHIVE-RETENTION"
+    ],
+    "release": "4.8",
+    "date_promise_allowed": false
+  },
+  "release_changes": [
+    {
+      "id": "MWI-079-B",
+      "kind": "requested_change",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "CHG-481",
+      "ref": "product-docs/audit-export#timezone",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-079-B-CTX-1",
+      "kind": "no_matching_change",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for explain a release change for a specified customer context with an unresolved detail.",
+      "ref": "release/4.8/CHG-481",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-079-B-CTX-2",
+      "kind": "requested_change",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied explain a release change for a specified customer context evidence record 2.",
+      "ref": "release/4.8/CHG-481",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

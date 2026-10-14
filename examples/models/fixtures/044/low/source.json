@@ -1,0 +1,1 @@
+{"case_note":"low fixture; local-only evidence.","checked_fact":"Operations and finance totals differ by one case.","evidence_id":"DOC-44B","metric":"eligible_cases","reports":[{"line_items":[{"amount":4},{"amount":6}],"reported_total":10,"source":"operations"},{"line_items":[{"amount":4},{"amount":5}],"reported_total":9,"source":"finance"}]}

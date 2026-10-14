@@ -1,0 +1,81 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "curator_topics": [
+          "archive"
+        ],
+        "duration": "00:04:11",
+        "segments": 3,
+        "timestamps_supplied": true
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "SEG-93-02",
+          "id": "MWI-093-B",
+          "kind": "speech_segment",
+          "ref": "metadata/audio-93/duration-05:42"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for build a timestamped index from a supplied audio transcript with an unresolved detail.",
+          "id": "MWI-093-B-CTX-1",
+          "kind": "uncertain_segment",
+          "ref": "transcript/audio-93/SEG-02@00:14-00:26"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied build a timestamped index from a supplied audio transcript evidence record 2.",
+          "id": "MWI-093-B-CTX-2",
+          "kind": "speech_segment",
+          "ref": "transcript/audio-93/SEG-02@00:14-00:26"
+        }
+      ],
+      "question": "Which transcript segments can receive a topic index, and which require manual listening? The alternate record has incomplete evidence.",
+      "scope": "transcript=provided;audio=not_inferred;alternate=review",
+      "source_id": "MWI-093-B",
+      "source_ref": "metadata/audio-93/duration-05:42"
+    },
+    "question": "Classify transcript segments using supplied text and curator tags only; do not infer unheard audio.",
+    "minimum": 75,
+    "labels": [
+      "speech_segment",
+      "uncertain_segment"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "uncertain_segment",
+        "confidence": 0.42,
+        "probabilities": {
+          "speech_segment": 0.5800000000000001,
+          "uncertain_segment": 0.42
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

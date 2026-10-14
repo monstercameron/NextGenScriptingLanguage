@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "00:00:01,000 --> 00:00:02,000\n[CAP-01] Welcome to the setup guide.\n00:00:02,000 --> 00:00:03,000\n[CAP-02] Select the account menu.\n",
+    "question": "Do the cue sequence and timestamps expose a likely caption-transcript alignment issue?",
+    "minimum": 80,
+    "labels": [
+      "alignment-risk",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "alignment-risk",
+        "confidence": 0.94,
+        "probabilities": {
+          "alignment-risk": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

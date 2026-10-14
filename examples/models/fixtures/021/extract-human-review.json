@@ -1,0 +1,81 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "contract": "CTR-8",
+      "new_obligations": [
+        {
+          "id": "OB-1",
+          "text": "retain audit logs for 90 days"
+        },
+        {
+          "id": "OB-3",
+          "text": "notify on breach"
+        }
+      ],
+      "old_obligations": [
+        {
+          "id": "OB-1",
+          "text": "retain audit logs for 30 days"
+        },
+        {
+          "id": "OB-2",
+          "text": "notify on breach"
+        }
+      ]
+    },
+    "instruction": "Return a structured, source-cited comparison of changed, retained, and newly listed obligation IDs. Mark interpretation for counsel review.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "route": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "review"
+          ]
+        },
+        "evidence_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "route",
+        "evidence_id",
+        "summary"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"route\":\"review\",\"evidence_id\":\"CTR-8\",\"summary\":\"Some evidence for CTR-8 needs a human check before this packet is used.\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 13,
+      "total_tokens": 45
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "handoff": "SHIFT-7",
+  "cases": [
+    {
+      "id": "CASE-1",
+      "status": "open",
+      "updated": "09:10Z",
+      "owner": "team-a",
+      "last_note": "recheck queue lag"
+    },
+    {
+      "id": "CASE-2",
+      "status": "resolved",
+      "updated": "08:55Z",
+      "owner": "team-b",
+      "last_note": "closed by owner"
+    }
+  ]
+}

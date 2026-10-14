@@ -1,0 +1,82 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "coordinates": [
+          "42.103,-71.244",
+          "42.104,-71.240"
+        ],
+        "interpretation_count": 1,
+        "timestamps_are_metadata": true
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "FN-91-2",
+          "id": "MWI-091-A",
+          "kind": "observation",
+          "ref": "notebook/FN-91/page-4#FN-91-2"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for index field observations by time, location, and source with an unresolved detail.",
+          "id": "MWI-091-A-CTX-1",
+          "kind": "interpretation",
+          "ref": "metadata/FN-91/gps-row-2"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied index field observations by time, location, and source evidence record 2.",
+          "id": "MWI-091-A-CTX-2",
+          "kind": "observation",
+          "ref": "metadata/FN-91/gps-row-2"
+        }
+      ],
+      "question": "Which records are direct observations and what timestamp/location should remain in the index?",
+      "scope": "notebook=FN-91;coordinates=provided-only",
+      "source_id": "MWI-091-A",
+      "source_ref": "notebook/FN-91/page-4#FN-91-2",
+      "coordinate_range_check": "points=2;range=valid"
+    },
+    "question": "Classify supplied field-note rows as direct observation or interpretation without changing metadata.",
+    "minimum": 75,
+    "labels": [
+      "observation",
+      "interpretation"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "observation",
+        "confidence": 0.91,
+        "probabilities": {
+          "observation": 0.91,
+          "interpretation": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

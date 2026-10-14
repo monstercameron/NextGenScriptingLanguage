@@ -1,0 +1,53 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": [
+      {
+        "alert_ids": [
+          "ALR-01",
+          "ALR-03"
+        ],
+        "count": 2,
+        "fingerprint": "fp-a",
+        "service": "worker"
+      },
+      {
+        "alert_ids": [
+          "ALR-02"
+        ],
+        "count": 1,
+        "fingerprint": "fp-b",
+        "service": "api"
+      }
+    ],
+    "instruction": "Draft a cautious grouping recommendation from exact fingerprints only. Preserve alert IDs and leave the final grouping to an operator."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: ALR-01\nReview: Draft a cautious grouping recommendation from exact fingerprints only. Preserve alert IDs and leave the final grouping to an operator.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 23,
+      "total_tokens": 55
+    }
+  }
+}

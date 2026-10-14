@@ -1,0 +1,42 @@
+# Purpose: Estimate copy length and preserve control IDs and placeholders before drafting plain-language alternatives for human review.
+# Inputs: TSV fields are MSG-* ID, component, placeholders, and current copy; max copy length is 80 characters.
+# Outputs: out/054-plain-language-ui-copy-review.json: a copy review draft with each claim tied to the source message.
+accept live as boolean with default false
+accept source_path as text with default "fixtures/054/source-high.txt"
+accept report_path as text with default "out/054-plain-language-ui-copy-review.json"
+accept classify_fixture_path as text with default "fixtures/054/classify-high.json"
+accept draft_fixture_path as text with default "fixtures/054/draft.json"
+accept generator_model as text with default "gpt-6-luna"
+accept env_file as text with default ".env"
+# Refuse an output path that aliases an existing evidence or schema file.
+run "test" with arguments ["!", source_path, "-ef", report_path]
+run cat with path source_path
+then awk with delimiter "\t" and program "NR > 1 { printf \"%s\\tchars=%d\\tplaceholders=%s\\t%s\\n\", $1, length($4), $3, $4 }" as evidence
+if live is true
+  then jev.classify with question "Which interface messages may need a plain-language review while preserving placeholders and the stated length limit?" and labels ["plain-language-risk", "needs-human"] and minimum 80 and env_file env_file as class_raw
+otherwise
+  then jev.classify with question "Which interface messages may need a plain-language review while preserving placeholders and the stated length limit?" and labels ["plain-language-risk", "needs-human"] and minimum 80 and fixture classify_fixture_path and env_file env_file as class_raw
+then parse json as classification
+take text at "/label" from classification as label
+take integer at "/confidence_percent" from classification as confidence
+take boolean at "/accepted" from classification as accepted
+if accepted is true
+  if label is "plain-language-risk"
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "label", label, "--argjson", "confidence", confidence, "--arg", "evidence", evidence, "{label:$label,confidence_percent:$confidence,evidence:$evidence}"]
+    if live is true
+      then llm.ask with model generator_model and instruction "Draft a plain-language review for the supplied messages. Preserve each MSG-* identifier, every literal placeholder, the meaning, and the 80-character limit; list a candidate separately from the source text and cite the ID." and env_file env_file as draft_raw
+    otherwise
+      then llm.ask with model generator_model and instruction "Draft a plain-language review for the supplied messages. Preserve each MSG-* identifier, every literal placeholder, the meaning, and the 80-character limit; list a candidate separately from the source text and cite the ID." and fixture draft_fixture_path and env_file env_file as draft_raw
+    then parse json as draft_result
+    take text at "/text" from draft_result as draft
+    run jq with flags ["-n", "-r", "--arg", "draft", draft, "--arg", "evidence", evidence] and filter "($draft | rtrimstr(\"\\n\")) as $candidate | if ($candidate | startswith(\"EVIDENCE:\")) and ([$evidence | scan(\"[A-Z][A-Z0-9]+-[A-Z0-9-]+\") | . as $id | select($candidate | contains($id))] | length > 0) then $candidate else error(\"draft must start with EVIDENCE and cite an ID present in the bounded evidence\") end" as validated_draft
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "plain_language_copy_review", "--arg", "classification", label, "--argjson", "confidence_percent", confidence, "--arg", "source_path", source_path, "--arg", "evidence", evidence, "--arg", "draft", validated_draft, "--arg", "action", "Content designer approves a candidate and verifies placeholder rendering.", "{artifact:$artifact,status:\"draft-for-human-review\",classification:$classification,confidence_percent:$confidence_percent,source_path:$source_path,evidence_excerpt:$evidence,copy_review_candidates:$draft,action:$action}"]
+    then save to report_path
+  otherwise
+    then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "plain_language_copy_review", "--arg", "classification", label, "--argjson", "confidence_percent", confidence, "--arg", "source_path", source_path, "--arg", "evidence", evidence, "--arg", "review_action", "No message is changed automatically.", "{artifact:$artifact,status:\"needs-human-review\",classification:$classification,confidence_percent:$confidence_percent,source_path:$source_path,evidence_excerpt:$evidence,copy_review_candidates:null,reason:\"Classifier selected the human-review label above the confidence threshold; no LLM draft was requested.\",action:$review_action}"]
+    then save to report_path
+  then cat with path report_path
+otherwise
+  then "jq" with arguments ["-n", "-c", "-S", "--arg", "artifact", "plain_language_copy_review", "--arg", "classification", label, "--argjson", "confidence_percent", confidence, "--arg", "source_path", source_path, "--arg", "evidence", evidence, "--arg", "review_action", "No message is changed automatically.", "{artifact:$artifact,status:\"needs-human-review\",classification:$classification,confidence_percent:$confidence_percent,source_path:$source_path,evidence_excerpt:$evidence,copy_review_candidates:null,reason:\"Classifier confidence is below the configured 80 percent threshold; no LLM draft was requested.\",action:$review_action}"]
+  then save to report_path
+then cat with path report_path

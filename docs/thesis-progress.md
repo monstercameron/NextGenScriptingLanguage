@@ -31,6 +31,37 @@ structured data and reuse, async jobs and supervision, reactive state/program
 composition, complete TUIs, and finally GUI support. Existing TUI work should
 continue using the shared core rather than hiding missing control flow in Rust.
 
+### Long-term direction, clarified October 14, 2026
+
+The long-term objective includes complete Linux desktop applications and shell
+components, particularly within Omarchy. The immediate priority remains a
+superior Bash replacement with a compact Unix core and explicit proof gates.
+Desktop integration should build on that foundation in this order:
+
+1. Fast, AI-friendly Unix scripting backed by Rust.
+2. Reactive orchestration through events, timers, streams, state and composable programs.
+3. Interactive TUI applications through generic Rust widgets.
+4. Optional Quickshell GUI integration, retaining its Wayland and Hyprland integrations.
+5. Native desktop utilities, panels, launchers and dashboards defined in `.program` files.
+6. Desktop shell replacement as a stretch goal, potentially replacing QML/JavaScript
+   application logic while reusing established desktop infrastructure.
+
+The guiding principle is one language for Unix automation, interactive
+applications and desktop interfaces, with no traditional application source-code
+generation or user-facing compilation. Quickshell and native desktop support are
+roadmap goals, not implemented backends or completed proof gates.
+
+AI-capable CLIs may also become explicit applets for classification and control
+decisions. Begin with the existing native invocation, structured JSON, typed
+selection and conditional primitives: the CLI returns a result, and `.program`
+owns the branch. A compact dedicated AI syntax should follow a real, verified
+CLI contract and demonstrated need. Provider/model selection, timeouts, failure
+behavior, data sent and any cache use must stay explicit; there is no implicit
+model invocation in ordinary control flow. The later human request explicitly authorized implementing TypeSafe Jev System
+One and LLM integration, with keys supplied privately and 100 runnable fixture
+workflows. Two bounded synthetic live calls verified Jev and `gpt-6-luna` through
+`.program`; these are connectivity proofs, not latency or accuracy benchmarks.
+
 The candidate's compact JSON boundary replaces simple helper-based extraction
 without adding an expression language. Parsing retains original bytes; typed
 selection feeds native argv/conditions; encoding is explicit and byte-bounded.
@@ -209,3 +240,24 @@ blocks require explicit retry, and checkpointed cwd changes must move before the
 block. Conditions remain scalar equality rather than an arithmetic language.
 Structured transforms, reusable programs, environment/redirection/job primitives
 and wider comparative evidence remain core gaps. Installed 0.8.0 is unchanged.
+
+## Explicit model applets (source candidate)
+
+The human-requested model layer reuses native invocations, typed JSON selection
+and existing conditions. A bundled `execute-model` helper implements Jev choice,
+judgment and score, and OpenAI generation/strict extraction. Five named manifests
+map explicit parameters to its literal argv. No AI grammar or implicit decision
+engine was added. `.program` owns every branch and downstream native command.
+
+Provider requests have bounded inputs/responses/timeouts, sanitized error classes,
+explicit output token limits and no automatic retries or caching. Checkpoints
+restore completed results and mark failed requests uncertain before retries.
+Fixtures validate exact semantic requests, use the same response validation, and
+remain distinct from actual inference. The offline environment guard blocks every
+fixtureless request before credentials or network access. Model quality, prompt
+robustness and confidence calibration still need representative live evaluation.
+
+The separate 100-workflow collection adds authored fixture inputs and output
+oracles; it does not satisfy the held-out Bash replacement study or platform
+proof gates. Batch Jev questions, token streams, embeddings and provider failover
+remain future work. Installed 0.8.0 artifacts remain unchanged.

@@ -1,0 +1,3 @@
+--format json # DOC-CLI-1
+--output PATH # DOC-CLI-2
+--strict # DOC-CLI-3

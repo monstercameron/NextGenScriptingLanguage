@@ -1,0 +1,41 @@
+{
+  "question": "Which resource is missing a declared accessible alternative? The alternate record has incomplete evidence.",
+  "source_id": "MWI-086-B",
+  "source_ref": "accessibility-manifest/AC-2/alternatives",
+  "scope": "module=M-4;checklist=AC-2;alternate=review",
+  "facts": {
+    "resource_types": [
+      "video",
+      "image"
+    ],
+    "alternative_types": [
+      "captions",
+      "alt_text"
+    ],
+    "student_diagnosis_ingested": false
+  },
+  "course_resources": [
+    {
+      "id": "MWI-086-B",
+      "kind": "alternative_listed",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "V-44",
+      "ref": "accessibility-manifest/AC-2/alternatives",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-086-B-CTX-1",
+      "kind": "missing_or_unknown",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for audit course materials for declared accessible alternatives with an unresolved detail.",
+      "ref": "course/M-4/resources/video-V44",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

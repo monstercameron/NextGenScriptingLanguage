@@ -1,0 +1,106 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "OH-97-06",
+          "id": "MWI-097-A",
+          "kind": "theme_with_counterexample",
+          "ref": "oral-history/OH-97/transcript#00:11:20"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied index oral-history themes with timestamps and counterexamples evidence record 2.",
+          "id": "MWI-097-A-CTX-2",
+          "kind": "theme_with_counterexample",
+          "ref": "oral-history/OH-97/transcript#00:18:04"
+        }
+      ],
+      "facts": {
+        "consent_cleared": true,
+        "counterexample_span": "OH-97-09",
+        "real_names_present": false,
+        "speaker_ids": [
+          "P-07",
+          "P-12"
+        ]
+      },
+      "question": "Which curator theme appears in this span, and what contrasting excerpt should remain visible?",
+      "scope": "consent=cleared;pseudonyms=used",
+      "source_id": "MWI-097-A",
+      "source_ref": "oral-history/OH-97/transcript#00:11:20"
+    },
+    "instruction": "Index oral-history themes with timestamps and counterexamples. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set span_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "span_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "span_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-097-A\",\"source_ref\":\"oral-history/OH-97/transcript#00:11:20\",\"summary\":\"Theme seasonal-return is linked to span OH-97-06 and paired with a contrasting account in OH-97-09.\",\"evidence_quote\":\"OH-97-06\",\"context_count\":3,\"span_id\":\"span_id:97-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

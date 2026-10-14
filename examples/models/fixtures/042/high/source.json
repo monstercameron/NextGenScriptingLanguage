@@ -1,0 +1,1 @@
+{"aliases":{"acct":"account_id","postal":"postal_code"},"case_note":"high fixture; local-only evidence.","checked_fact":"Two feed fields map to canonical fields; tier_code is unmapped.","evidence_id":"DOC-42A","external_fields":[{"example":"A-17","name":"acct"},{"example":"02139","name":"postal"},{"example":"gold","name":"tier_code"}],"feed_id":"FEED-A"}

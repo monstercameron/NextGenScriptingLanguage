@@ -1,0 +1,50 @@
+{
+  "question": "Which checklist item should the instructor review for the solvent transfer step?",
+  "source_id": "MWI-085-A",
+  "source_ref": "lab/CHEM-12/step-05",
+  "scope": "lab=CHEM-12;review_only=true",
+  "facts": {
+    "handout_version": "2",
+    "checklist_ids": [
+      "SC-12-eye",
+      "SC-12-ventilation",
+      "SC-12-waste"
+    ],
+    "verdict_authorized": false
+  },
+  "lab_steps": [
+    {
+      "id": "MWI-085-A",
+      "kind": "checklist_match",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "LAB-STEP-05: transfer solvent to the sealed vial.",
+      "ref": "lab/CHEM-12/step-05",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-085-A-CTX-1",
+      "kind": "hazard_unclear",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for review lab instructions against a supplied safety checklist with an unresolved detail.",
+      "ref": "safety-checklist/SC-12/ventilation",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-085-A-CTX-2",
+      "kind": "checklist_match",
+      "at": "2026-10-12T09:00:00Z",
+      "excerpt": "Additional supplied review lab instructions against a supplied safety checklist evidence record 2.",
+      "ref": "safety-checklist/SC-12/ventilation",
+      "attributes": {
+        "ordinal": 3,
+        "status": "supplied"
+      }
+    }
+  ]
+}

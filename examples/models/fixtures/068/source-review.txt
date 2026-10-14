@@ -1,0 +1,2 @@
+2001	AUD-11	login
+2002	AUD-12	logout

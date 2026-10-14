@@ -1,0 +1,39 @@
+{
+  "question": "Which survey rows have required measurements, and what planned measurements remain missing?",
+  "source_id": "MWI-100-A",
+  "source_ref": "field-survey/FS-100/method-3.1",
+  "scope": "survey=FS-100;imputation=prohibited",
+  "facts": {
+    "method_schema": "3.1",
+    "planned_plots": 3,
+    "observed_plots": 2,
+    "missing_measurements": [
+      "P-3.soil_moisture"
+    ],
+    "imputation_allowed": false
+  },
+  "survey_rows": [
+    {
+      "id": "MWI-100-A",
+      "kind": "measurement_present",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "FS-100",
+      "ref": "field-survey/FS-100/method-3.1",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-100-A-CTX-1",
+      "kind": "missing_measurement",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for summarize a field survey against its method schema with an unresolved detail.",
+      "ref": "field-survey/FS-100/plan#plots",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

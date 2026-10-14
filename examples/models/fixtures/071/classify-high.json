@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "FILE-02\tproject-logo.svg\timage\t2026-10-04\nFILE-01\tboarding-pass.pdf\tpdf\t2026-10-02\nFILE-03\tmeeting-notes.txt\ttext\t2026-10-04\n",
+    "question": "How should these supplied Downloads inventory records be grouped for a human filing review?",
+    "minimum": 80,
+    "labels": [
+      "filing-pattern",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "filing-pattern",
+        "confidence": 0.94,
+        "probabilities": {
+          "filing-pattern": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

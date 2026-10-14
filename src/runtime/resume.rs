@@ -185,6 +185,22 @@ pub(super) fn retry_safe(
     }
     Ok(true)
 }
+
+pub(super) fn uncertain_on_failure(
+    program: &Program,
+    start: usize,
+    end: usize,
+    registry: &Registry,
+) -> Result<bool> {
+    for step in &program.steps[start..end] {
+        if let StepKind::Invoke { call, .. } = &step.kind {
+            if registry.resolve_call(call)?.uncertain_on_failure {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
 pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registry) -> Result<()> {
     let mut depth = 0;
     for step in &program.steps {

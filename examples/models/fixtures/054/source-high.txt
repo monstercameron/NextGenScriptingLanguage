@@ -1,0 +1,2 @@
+ID	component	placeholders	copy
+MSG-01	reset	{account}	Authentication could not be successfully completed for {account}

@@ -1,0 +1,41 @@
+{
+  "question": "Which themes differ by product version, including low-frequency concerns? The alternate record has incomplete evidence.",
+  "source_id": "MWI-080-B",
+  "source_ref": "feedback/3.1/FB-792",
+  "scope": "feedback=deidentified;versions=3.1,3.2;alternate=review",
+  "facts": {
+    "deidentified": true,
+    "versions": [
+      "3.2"
+    ],
+    "theme_taxonomy": [
+      "export",
+      "accessibility"
+    ],
+    "preserve_minority": true
+  },
+  "feedback_records": [
+    {
+      "id": "MWI-080-B",
+      "kind": "common_theme",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "FB-803",
+      "ref": "feedback/3.1/FB-792",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-080-B-CTX-1",
+      "kind": "rare_or_conflicting_theme",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for analyze feedback while preserving rare themes with an unresolved detail.",
+      "ref": "feedback/3.2/FB-803",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "threshold": 12.0,
+        "unit": "ppm",
+        "timezone": "UTC",
+        "maintenance_windows": 1
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied",
+            "value": 10.5,
+            "unit": "ppm"
+          },
+          "excerpt": "SEN-96-3",
+          "id": "MWI-096-B",
+          "kind": "maintenance_window",
+          "ref": "maintenance/SEN-96/calibration-2026-10-12"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied",
+            "value": 14.8,
+            "unit": "ppm"
+          },
+          "excerpt": "Contrast record for contextualize sensor anomalies against maintenance records with an unresolved detail.",
+          "id": "MWI-096-B-CTX-1",
+          "kind": "rule_outlier",
+          "ref": "sensors/SEN-96/sample-3"
+        }
+      ],
+      "question": "Is the threshold-crossing sensor sample inside a recorded maintenance or calibration window? The alternate record has incomplete evidence.",
+      "scope": "instrument=SEN-96;units=declared;alternate=review",
+      "source_id": "MWI-096-B",
+      "source_ref": "maintenance/SEN-96/calibration-2026-10-12"
+    },
+    "question": "Classify sensor points against explicit anomaly rules and exact maintenance windows; correlation is not causation.",
+    "minimum": 75,
+    "labels": [
+      "maintenance_window",
+      "rule_outlier"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "rule_outlier",
+        "confidence": 0.42,
+        "probabilities": {
+          "maintenance_window": 0.5800000000000001,
+          "rule_outlier": 0.42
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

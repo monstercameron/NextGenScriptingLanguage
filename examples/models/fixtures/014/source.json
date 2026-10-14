@@ -1,0 +1,27 @@
+{
+  "migration": "API-MIG-3",
+  "clients": [
+    {
+      "name": "web",
+      "files": [
+        "web/api.ts"
+      ],
+      "old_calls": [
+        "/v1/items"
+      ],
+      "new_calls": [
+        "/v2/items"
+      ]
+    },
+    {
+      "name": "worker",
+      "files": [
+        "worker/sync.rs"
+      ],
+      "old_calls": [
+        "/v1/items"
+      ],
+      "new_calls": []
+    }
+  ]
+}

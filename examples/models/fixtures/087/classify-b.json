@@ -1,0 +1,80 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 3,
+      "facts": {
+        "learner_profiles_used": false,
+        "prerequisite_concepts": [
+          "vector-components"
+        ],
+        "reading_count": 2
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "READ-PHY140-02",
+          "id": "MWI-087-B",
+          "kind": "prerequisite_match",
+          "ref": "course-prerequisites/PHY-140/vector-basics"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for review reading lists against stated prerequisites with an unresolved detail.",
+          "id": "MWI-087-B-CTX-1",
+          "kind": "uncertain_match",
+          "ref": "reading-list/PHY-140/READ-02"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied review reading lists against stated prerequisites evidence record 2.",
+          "id": "MWI-087-B-CTX-2",
+          "kind": "prerequisite_match",
+          "ref": "reading-list/PHY-140/READ-02"
+        }
+      ],
+      "question": "Which assigned reading introduces the stated vector prerequisite before the first application? The alternate record has incomplete evidence.",
+      "scope": "course=PHY-140;prerequisites=declared;alternate=review",
+      "source_id": "MWI-087-B",
+      "source_ref": "course-prerequisites/PHY-140/vector-basics"
+    },
+    "question": "Route reading passages by instructor-declared prerequisite concept; do not infer learner ability.",
+    "minimum": 75,
+    "labels": [
+      "prerequisite_match",
+      "uncertain_match"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "uncertain_match",
+        "confidence": 0.42,
+        "probabilities": {
+          "prerequisite_match": 0.5800000000000001,
+          "uncertain_match": 0.42
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

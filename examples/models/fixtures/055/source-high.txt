@@ -1,0 +1,3 @@
+# LOC-01
+msgid "Delete %d item"
+msgstr "%s élément supprimé"

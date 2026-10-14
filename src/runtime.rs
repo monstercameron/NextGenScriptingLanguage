@@ -1214,6 +1214,9 @@ impl Drop for Signals {
     }
 }
 fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
+    if binary == "@execute-model" {
+        return bundled_model_applet();
+    }
     // Keep the selected path spelling: multicall tools and symlink aliases
     // dispatch on argv[0], so canonicalizing to the target changes behavior.
     if binary.contains('/') {
@@ -1227,6 +1230,19 @@ fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
         let path = std::env::var_os("PATH").unwrap_or_default();
         binary_path_from_path(binary, cwd, &path)
     }
+}
+
+/// Locate the version-matched native model applet beside this executable.
+pub fn bundled_model_applet() -> Result<PathBuf> {
+    let executable = std::env::current_exe().context("locating the running interpreter")?;
+    let helper = executable.with_file_name("execute-model");
+    let metadata = fs::metadata(&helper).with_context(|| {
+        "bundled execute-model helper missing; build both binaries with cargo build --release"
+    })?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        bail!("bundled execute-model helper is not an executable file");
+    }
+    Ok(helper)
 }
 
 fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Result<PathBuf> {
@@ -1965,7 +1981,7 @@ fn run_finite_state(
         bindings.extend(crate::inputs::resolve(&program.inputs, &bindings, true)?);
     }
     let mut journal_end = None;
-    let mut journal_conditional = false;
+    let mut journal_uncertain = false;
     while index < program.steps.len() {
         if signals.cancelled.load(Ordering::Relaxed) {
             bail!("workflow cancelled by signal");
@@ -1974,10 +1990,10 @@ fn run_finite_state(
         if let Some(journal) = journal.as_deref_mut().filter(|_| journal_end.is_none()) {
             let end = resume::node_end(program, index);
             journal_end = Some(end);
-            journal_conditional = matches!(
+            journal_uncertain = matches!(
                 step.kind,
                 StepKind::If { .. } | StepKind::CallProgram { .. }
-            );
+            ) || resume::uncertain_on_failure(program, index, end, registry)?;
             let fingerprint = resume::node_fingerprint(program, index, end, registry, &cwd)?;
             journal.begin_node(
                 &fingerprint,
@@ -2282,7 +2298,7 @@ fn run_finite_state(
                         &format!("{error:#}"),
                         signals.cancelled.load(Ordering::Relaxed)
                             || error.is::<CommandTimedOut>()
-                            || journal_conditional,
+                            || journal_uncertain,
                     )?;
                 }
             }
@@ -2294,7 +2310,7 @@ fn run_finite_state(
             .filter(|_| journal_end == Some(index))
         {
             journal_end = None;
-            journal_conditional = false;
+            journal_uncertain = false;
             let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                 options.max_output_bytes,
                 signals,

@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "MSG-01\tchars=64\tplaceholders={account}\tAuthentication could not be successfully completed for {account}\n",
+    "question": "Which interface messages may need a plain-language review while preserving placeholders and the stated length limit?",
+    "minimum": 80,
+    "labels": [
+      "plain-language-risk",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "plain-language-risk",
+        "confidence": 0.94,
+        "probabilities": {
+          "plain-language-risk": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

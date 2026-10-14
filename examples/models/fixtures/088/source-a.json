@@ -1,0 +1,41 @@
+{
+  "question": "Which approved FAQ entry contains a warning or policy statement that needs extra review when simplified?",
+  "source_id": "MWI-088-A",
+  "source_ref": "faq/approved/FAQ-88-A",
+  "scope": "faq=approved;links=preserve",
+  "facts": {
+    "audiences": [
+      "new-user",
+      "administrator"
+    ],
+    "required_terms": [
+      "shared link",
+      "recipient"
+    ],
+    "warnings_must_remain": true
+  },
+  "faq_entries": [
+    {
+      "id": "MWI-088-A",
+      "kind": "definition_or_procedure",
+      "at": "2026-10-10T09:00:00Z",
+      "excerpt": "FAQ-88-A",
+      "ref": "faq/approved/FAQ-88-A",
+      "attributes": {
+        "ordinal": 1,
+        "status": "supplied"
+      }
+    },
+    {
+      "id": "MWI-088-A-CTX-1",
+      "kind": "warning_or_policy",
+      "at": "2026-10-11T09:00:00Z",
+      "excerpt": "Contrast record for create audience-level variants of an approved faq with an unresolved detail.",
+      "ref": "faq/approved/links#shared-access",
+      "attributes": {
+        "ordinal": 2,
+        "status": "supplied"
+      }
+    }
+  ]
+}

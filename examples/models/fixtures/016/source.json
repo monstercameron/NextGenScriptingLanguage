@@ -1,0 +1,25 @@
+{
+  "test": "TEST-9",
+  "runs": [
+    {
+      "run": "RUN-1",
+      "result": "fail",
+      "seed": "a1"
+    },
+    {
+      "run": "RUN-2",
+      "result": "pass",
+      "seed": "a2"
+    },
+    {
+      "run": "RUN-3",
+      "result": "fail",
+      "seed": "a3"
+    },
+    {
+      "run": "RUN-4",
+      "result": "pass",
+      "seed": "a4"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "issue": {
+    "id": "ISSUE-72",
+    "title": "Timeout on export",
+    "labels": [
+      "cli",
+      "timeout"
+    ]
+  },
+  "matches": [
+    {
+      "path": "src/export.rs",
+      "symbol": "write_archive",
+      "label": "timeout"
+    },
+    {
+      "path": "src/parse.rs",
+      "symbol": "parse_flags",
+      "label": "cli"
+    }
+  ]
+}

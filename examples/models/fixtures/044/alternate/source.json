@@ -1,0 +1,1 @@
+{"case_note":"alternate fixture; local-only evidence.","checked_fact":"Both reports total ten eligible cases.","evidence_id":"DOC-44C","metric":"eligible_cases","reports":[{"line_items":[{"amount":4},{"amount":6}],"reported_total":10,"source":"operations"},{"line_items":[{"amount":4},{"amount":5}],"reported_total":10,"source":"finance"}]}

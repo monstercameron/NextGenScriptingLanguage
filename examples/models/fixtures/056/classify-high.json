@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "STR-01\t4\ttable\tmissing-header-association\tData table with 3 columns and 8 body rows\n",
+    "question": "Which structural findings have enough local context to prioritize a document remediation review?",
+    "minimum": 80,
+    "labels": [
+      "structure-finding",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "structure-finding",
+        "confidence": 0.94,
+        "probabilities": {
+          "structure-finding": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": "parser\tCVE-7\t1.2\t1.2\tsrc/parse.rs\ntransport\tCVE-9\t3.1\t3.1\tdev\n",
+    "instruction": "Draft a dependency-upgrade review from exact advisory/package/version joins. Separate package usage evidence from any claim that an upgrade is safe."
+  },
+  "response": {
+    "id": "resp-test",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-test",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "EVIDENCE: CVE-7\nReview: Draft a dependency-upgrade review from exact advisory/package/version joins. Separate package usage evidence from any claim that an upgrade is safe.\n",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 32,
+      "output_tokens": 23,
+      "total_tokens": 55
+    }
+  }
+}

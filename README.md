@@ -23,6 +23,11 @@ is deterministic; running a program requires no LLM, API key, or model inference
 
 **0.8.0 · macOS + Linux · Rust · [MIT](LICENSE)**
 
+The packaged runtime is 0.8.0. Building the working source also includes pending
+stdin, discovery, status, conditional, JSON, reusable-program and explicit model
+applet features. See
+[release and source status](#release-and-source-status) before choosing a binary.
+
 [Quickstart](#quickstart) · [Language](#the-language-in-one-minute) ·
 [Live services](#one-file-several-lifetimes) · [Terminal apps](#terminal-apps-with-control-flow-you-can-read) ·
 [Agent control](#inspect-and-edit-a-running-app) · [Performance](#performance-with-receipts) ·
@@ -75,14 +80,10 @@ sam@example.com
 native arguments. Neither runs the applets. Relative paths resolve from your
 **calling directory**, including when the script lives elsewhere.
 
-The current source candidate also adds [`execute inspect FILE`](docs/language.md#agent-interface-discovery)
-for JSON input types, defaults, missing values, and TUI component ports. It runs
-no applets. It is not yet included in the installed 0.8.0 release.
-
-The source candidate also supports [`read from stdin`](docs/language.md#finite-stdin-and-unix-composition)
-for finite Unix pipeline stages. Try `examples/unique-lines.program` or
-`examples/checksum-stdin.program` with the candidate build; this syntax is pending
-release integration too.
+Source builds add [`execute inspect FILE`](docs/language.md#agent-interface-discovery)
+for typed input interfaces and component ports, and
+[`execute check FILE --json`](docs/language.md#machine-readable-checks-pending-source-candidate)
+for a versioned static diagnostic result. Both inspect without running applets.
 
 Local file URIs work too: `execute "file:///absolute/path/clean-contacts.program"`.
 Quoted executable calls need no applet manifests: `run "git" with arguments
@@ -106,6 +107,7 @@ files. Install its VSIX through **Extensions: Install from VSIX…**.
 | `then tr with from "a-z" and to "A-Z"` | Wait for success, then pass finite output to the next command. |
 | `pipe to wc with flags ["-l"]` | Connect adjacent native commands with an OS pipe. |
 | `read "input.txt"` | Read a file without starting `cat`. |
+| `read from stdin` | Inherit stdin for a finite pipeline stage (source candidate). |
 | `as report` | Bind finite UTF-8 output to a name. |
 | `and keep status as code` | Bind a native exit code as an integer and continue after ordinary nonzero exits (source candidate). |
 | `if code is 0` / `otherwise` | Choose an indented native command body using scalar equality (source candidate). |
@@ -140,6 +142,41 @@ Named results can supply later parameters. Their bytes, including a trailing
 newline, are preserved. Wildcards, `$variables`, and command substitution do not
 expand automatically. See the [language reference](docs/language.md) for exact
 value, quoting, error, and output contracts.
+
+## Explicit AI decisions, ordinary program control flow
+
+The source candidate adds TypeSafe Jev classification, yes/no judgment and
+scoring, plus OpenAI text generation and strict JSON extraction. Rust handles
+the provider protocol. Your `.program` checks typed results and chooses the branch:
+
+```text
+accept message as text
+accept env_file as text
+run "printf" with arguments ["%s", message]
+then jev.classify with question "Does this message describe a storage failure?" and labels ["storage", "other"] and minimum 85 and env_file env_file
+then parse json as result
+take boolean at "/accepted" from result as accepted
+take text at "/label" from result as label
+if accepted is true
+  if label is "storage"
+    run "printf" with arguments ["Queue a storage investigation\n"]
+  otherwise
+    run "printf" with arguments ["Queue general review\n"]
+otherwise
+  run "printf" with arguments ["Request human classification\n"]
+```
+
+Confidence and label are separate decisions. A confident negative result must
+still take its own branch. Calls have explicit limits, sanitized errors and
+checkpoint protection against accidental repeat requests. There are no automatic
+model calls, retries, or model-result caches.
+
+Explore [100 runnable model workflows](examples/models/README.md), covering
+operations, development, research, accessibility, education and more. Each has
+input fixtures, expected output artifacts, and multiple routing cases. They run
+offline by default; a typed `live` switch enables real inference. Build both
+`execute` and `execute-model` beside each other, then see the
+[model operations guide](docs/models.md) for credentials, limits and examples.
 
 ## One file, several lifetimes
 
@@ -423,9 +460,11 @@ python3 benchmarks/live_control.py --binary target/release/execute --report /tmp
 ## Scope and current limits
 
 Execute is a focused orchestration language for trusted Unix workflows. It is
-not yet a general Bash replacement. There are no general-purpose loops or
-conditionals, arbitrary parallel job syntax, or reusable imported/nested programs.
-Terminal components currently live in one file.
+not yet a general Bash replacement. Source builds support scalar equality
+conditions and same-file nested finite calls. General-purpose loops, arbitrary
+parallel jobs, external modules and lifecycle-owned nested services remain open.
+Terminal components currently live in one file. The [roadmap](docs/thesis-progress.md)
+places Linux desktop and optional Quickshell integration after the Unix foundation.
 
 Applets run with your permissions; process supervision is not sandboxing. Native
 pipeline failures stop ordinary execution and produce CLI status 1 with the child
@@ -438,43 +477,67 @@ implemented contracts, known gaps, and acceptance criteria.
 
 ## Build and verify
 
-From the project directory, with current stable Rust, Python 3, and `jq` available:
+The [contributor guide](CONTRIBUTING.md) covers prerequisites, source layout,
+test boundaries and measurement policy. Local development and CI share one check
+sequence:
 
 ```sh
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-cargo build --locked --release
+make check
 ```
+
+Use `make rust-check` for the Rust suite alone and `make proof-smoke` for a small
+streaming/lifecycle proof. Reports go under ignored `target/`. The full check also
+runs Python harness acceptance tests and the editor tests against the fresh build;
+install its locked npm dependencies as described in the contributor guide.
 
 Recorded 0.8.0 validation on macOS arm64: **262 regular Rust tests**, including
 38 live CLI/socket/TUI scenarios, plus 150 utilities, 146 alternate-input checks,
 one invalid-input guard, and nine failure/recovery fixtures. All 14 opt-in probes also passed, including the isolated signal
 compatibility check. These counts describe overlapping suites, not
-independent totals. [Current validation evidence](docs/validation-v0.8.0.json)
+independent totals. [Release 0.8.0 validation](docs/validation-v0.8.0.json)
 includes source/binary hashes and paired latency reports. The preceding
 [0.6.1 full audit](docs/full-validation-v0.6.1.json) retains coverage and longer
-lifecycle-stress evidence; those measurements were not repeated for 0.7.0.
+lifecycle-stress evidence for that historical version.
 
 Tests use owned temporary workspaces and bounded subprocesses. The calendar case
 can wait up to 75 seconds for a real minute. macOS and Ubuntu CI are configured;
 native Linux runtime validation has not been performed on this development host.
-Linux-target Clippy has passed.
+Linux-target Clippy passed before the model adapter was added. The current
+HTTP/TLS dependency needs a Linux C cross-compiler for local cross-checks; native
+Ubuntu CI remains the validation route for this source candidate.
 
-For contributions, start with the relevant runtime contract, add a regression for
-the behavior you change, and run the checks above. Performance changes should
-include reproducible measurements with output correctness checked separately.
+## Release and source status
+
+| Capability | Packaged 0.8.0 | Working source |
+| --- | --- | --- |
+| Direct native calls, argv, pipes, typed CLI inputs, services and TUIs | Available | Available |
+| Finite `read from stdin` | Pending | Available |
+| `inspect` and `check --json` | Pending | Available |
+| Native status bindings and scalar `if`/`otherwise` | Pending | Available |
+| Finite JSON parse, typed selection, encoding and JSON inputs | Pending | Available |
+| Same-file finite definitions/calls with local scope | Pending | Available |
+| Jev classification/judgment/scoring and OpenAI generation/extraction | Pending | Available through model applets |
+| External modules, jobs, GUI backends and dedicated AI syntax | Roadmap | Roadmap |
+
+`bin/execute` and existing VSIX packages retain their recorded release contents.
+Use `target/release/execute` after building for source features. Validation and
+performance reports apply to their recorded hashes and versions; historical
+reports do not describe every subsequent source edit. The
+[thesis ledger](docs/thesis-progress.md) and [proof gates](docs/replacement-gates.json)
+retain the remaining gaps.
 
 ## Documentation
 
 | Guide | What it covers |
 | --- | --- |
 | [Thesis and progress](docs/thesis-progress.md) | Full project objective, implemented capabilities, and unfinished requirements |
+| [Contributing](CONTRIBUTING.md) | Setup, shared checks, source map, safe fixtures and evidence policy |
 | [VS Code extension](editors/vscode/README.md) | Installable highlighting, editor support, snippets, and grammar tests |
 | [Language and runtime](docs/language.md) | Syntax, values, pipes, manifests, scheduling, limits, cache, and recovery |
 | [Persistent streams](docs/streaming.md) | Live native pipelines, framing, buffering, and cleanup |
 | [Live control](docs/live-control.md) | Runtime/widget CRUD, JSON protocol, revisions, and lifecycle controls |
 | [Live examples](examples/live/README.md) | An editable queue monitor and operator console |
+| [Model operations](docs/models.md) / [100 workflows](examples/models/README.md) | Explicit Jev/LLM calls, typed routing, offline fixtures and live mode |
 | [150 utilities](examples/ladder/README.md) | Searchable programs, data contracts, fixtures, and exports |
 | [CPU monitor](docs/top-cpu.md) / [GitHub tracker](docs/github-stars.md) | Complete single-file terminal apps |
 | [UI element catalog](docs/tui-catalog.md) | Widget design inventory and implementation status |
@@ -486,9 +549,3 @@ include reproducible measurements with output correctness checked separately.
 | [Adversarial refinement](docs/refinement.md) | Reproduced issues, fixes, and evidence gates |
 
 Licensed under the [MIT License](LICENSE).
-
-The pending source candidate also supports `execute check FILE --json`: one
-versioned static result for validation/repair tools, including the complete error
-chain and lossless Unix path bytes. Ordinary check output stays unchanged. See
-[the diagnostic protocol](docs/language.md#machine-readable-checks-pending-source-candidate)
-for its first-error/static-only scope. Installed 0.8.0 does not include this option.

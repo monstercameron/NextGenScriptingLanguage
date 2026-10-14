@@ -1,0 +1,1 @@
+{"case_note":"alternate fixture; local-only evidence.","checked_fact":"The region field has one missing value and observed string values.","dataset":"EXP-C","evidence_id":"DOC-41C","fields":["record_id","region","amount"],"rows":[{"amount":12.5,"record_id":"C01","region":"north"},{"amount":9.0,"record_id":"C02","region":null},{"amount":null,"record_id":"C03","region":"south"}]}

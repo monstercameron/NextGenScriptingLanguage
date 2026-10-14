@@ -1,0 +1,17 @@
+{
+  "incident": "INC-104",
+  "events": [
+    {
+      "id": "EVT-03",
+      "at": "2026-10-14T09:18Z",
+      "service": "payments",
+      "summary": "queue depth rose"
+    },
+    {
+      "id": "EVT-01",
+      "at": "2026-10-14T09:02Z",
+      "service": "payments",
+      "summary": "latency alert opened"
+    }
+  ]
+}

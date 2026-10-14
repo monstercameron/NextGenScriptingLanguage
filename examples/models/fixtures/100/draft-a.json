@@ -1,0 +1,95 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "FS-100",
+          "id": "MWI-100-A",
+          "kind": "measurement_present",
+          "ref": "field-survey/FS-100/method-3.1"
+        }
+      ],
+      "facts": {
+        "imputation_allowed": false,
+        "method_schema": "3.1",
+        "missing_measurements": [
+          "P-3.soil_moisture"
+        ],
+        "observed_plots": 2,
+        "planned_plots": 3
+      },
+      "question": "Which survey rows have required measurements, and what planned measurements remain missing?",
+      "scope": "survey=FS-100;imputation=prohibited",
+      "source_id": "MWI-100-A",
+      "source_ref": "field-survey/FS-100/method-3.1"
+    },
+    "instruction": "Summarize a field survey against its method schema. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set method_id to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "method_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "method_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-100-A\",\"source_ref\":\"field-survey/FS-100/method-3.1\",\"summary\":\"Survey FS-100 records two observed plots and explicitly leaves soil moisture missing for plot P-3.\",\"evidence_quote\":\"FS-100\",\"context_count\":2,\"method_id\":\"method_id:100-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

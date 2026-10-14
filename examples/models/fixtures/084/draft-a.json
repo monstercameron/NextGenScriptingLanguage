@@ -1,0 +1,63 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 2,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "STEP-ALG6-03",
+          "id": "MWI-084-A",
+          "kind": "concept_hint",
+          "ref": "solutions/ALG-6/step-03"
+        }
+      ],
+      "facts": {
+        "final_answer_in_early_levels": false,
+        "hint_levels": [
+          "nudge",
+          "strategy",
+          "worked-step"
+        ],
+        "instructor_approved": true
+      },
+      "question": "Which approved solution step can support a hint without revealing the final answer?",
+      "scope": "assignment=ALG-6;owner=instructor",
+      "source_id": "MWI-084-A",
+      "source_ref": "solutions/ALG-6/step-03"
+    },
+    "instruction": "Draft a graded hint ladder from an approved solution. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set step_id to a concise value grounded in the supplied facts."
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Draft for draft a graded hint ladder from an approved solution: Offer a first hint to isolate the common factor, then ask the learner to check each term before expanding. [source_id=MWI-084-A; source_ref=solutions/ALG-6/step-03]",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "change": "CHG-81",
+  "service": "checkout",
+  "files": [
+    {
+      "path": "src/retry.rs",
+      "risk": "high",
+      "reason": "retry policy"
+    },
+    {
+      "path": "docs/retry.md",
+      "risk": "low",
+      "reason": "documentation"
+    }
+  ]
+}

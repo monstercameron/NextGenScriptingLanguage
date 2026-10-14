@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "00:01:20.000 --> 00:01:24.000 MEET-11 SPEAKER-A We will revisit the budget next week.\n00:04:02.000 --> 00:04:05.000 MEET-12 SPEAKER-C Please send the draft to the team.\n",
+    "question": "Which supplied transcript cues make useful timestamped review clips for the meeting index?",
+    "minimum": 80,
+    "labels": [
+      "clip-candidate",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "needs-human",
+        "confidence": 0.5801,
+        "probabilities": {
+          "clip-candidate": 0.4199,
+          "needs-human": 0.5801
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

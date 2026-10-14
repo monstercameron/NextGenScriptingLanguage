@@ -1,0 +1,69 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "context_count": 2,
+      "facts": {
+        "chronology_required": true,
+        "closure_requires_status": "resolved",
+        "join_key": "case_id",
+        "records": 3
+      },
+      "items": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "CASE-9007",
+          "id": "MWI-090-A",
+          "kind": "closed_with_record",
+          "ref": "escalations/CASE-9007/handoff-H2"
+        },
+        {
+          "at": "2026-10-11T09:00:00Z",
+          "attributes": {
+            "ordinal": 2,
+            "status": "supplied"
+          },
+          "excerpt": "Contrast record for reconcile escalation handoffs with recorded resolution evidence with an unresolved detail.",
+          "id": "MWI-090-A-CTX-1",
+          "kind": "conflicting_or_open",
+          "ref": "resolution-log/CASE-9007/event-R4"
+        }
+      ],
+      "question": "Does the handoff have an explicit matching resolution record or remain open/conflicting?",
+      "scope": "case=deidentified;closure_requires_exact_record",
+      "source_id": "MWI-090-A",
+      "source_ref": "escalations/CASE-9007/handoff-H2",
+      "event_chronology_summary": "events=2;first=2026-10-10T09:00:00Z;last=2026-10-11T09:00:00Z"
+    },
+    "question": "Classify a handoff only from an exact local resolution record; otherwise keep it open.",
+    "minimum": 75,
+    "labels": [
+      "closed_with_record",
+      "conflicting_or_open"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "closed_with_record",
+        "confidence": 0.91,
+        "probabilities": {
+          "closed_with_record": 0.91,
+          "conflicting_or_open": 0.08999999999999997
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 4
+    }
+  }
+}

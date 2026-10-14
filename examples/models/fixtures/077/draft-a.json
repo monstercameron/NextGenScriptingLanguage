@@ -1,0 +1,105 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": {
+      "context_count": 3,
+      "evidence": [
+        {
+          "at": "2026-10-10T09:00:00Z",
+          "attributes": {
+            "ordinal": 1,
+            "status": "supplied"
+          },
+          "excerpt": "CASE-771: reconnect succeeds only after a fresh token is issued.",
+          "id": "MWI-077-A",
+          "kind": "documented_branch",
+          "ref": "support-case/CASE-771"
+        },
+        {
+          "at": "2026-10-12T09:00:00Z",
+          "attributes": {
+            "ordinal": 3,
+            "status": "supplied"
+          },
+          "excerpt": "Additional supplied find diagnostic-flow gaps in de-identified support cases evidence record 2.",
+          "id": "MWI-077-A-CTX-2",
+          "kind": "documented_branch",
+          "ref": "troubleshooting-tree/BR-4#token-refresh"
+        }
+      ],
+      "facts": {
+        "case_count": 3,
+        "deidentified": true,
+        "rare_case_ids": [
+          "CASE-771"
+        ],
+        "tree_version": "4"
+      },
+      "question": "Which diagnostic step is missing for the silent reconnect cases?",
+      "scope": "support_queue=Q4;identifiers=removed",
+      "source_id": "MWI-077-A",
+      "source_ref": "support-case/CASE-771"
+    },
+    "instruction": "Find diagnostic-flow gaps in de-identified support cases. Use only the supplied structured evidence. Produce a concise candidate for human review; never execute, send, publish, certify, grade, or infer causality. Include the exact source_id and source_ref, preserve evidence_quote verbatim, and report context_count exactly. Set gap_type to a concise value grounded in the supplied facts.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "evidence_quote": {
+          "type": "string"
+        },
+        "context_count": {
+          "type": "integer"
+        },
+        "gap_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_ref",
+        "summary",
+        "evidence_quote",
+        "context_count",
+        "gap_type"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-model-workflow-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-model-workflow-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"source_id\":\"MWI-077-A\",\"source_ref\":\"support-case/CASE-771\",\"summary\":\"Several de-identified cases stop before checking whether the reconnect token expired.\",\"evidence_quote\":\"CASE-771: reconnect succeeds only after a fresh token is issued.\",\"context_count\":3,\"gap_type\":\"gap_type:77-A\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 18,
+      "output_tokens": 12,
+      "total_tokens": 30
+    }
+  }
+}

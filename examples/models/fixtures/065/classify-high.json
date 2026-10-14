@@ -1,0 +1,32 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "account-email\tREQ-01\tSRC-01\tcrm.contacts\nprofile-name\tREQ-02\tSRC-02\tprofile.settings\n",
+    "question": "Which indexed local sources match the supplied request terms, and what search gaps remain?",
+    "minimum": 80,
+    "labels": [
+      "indexed-scope-match",
+      "needs-human"
+    ]
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "indexed-scope-match",
+        "confidence": 0.94,
+        "probabilities": {
+          "indexed-scope-match": 0.94,
+          "needs-human": 0.06
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 28,
+      "output_tokens": 5
+    }
+  }
+}

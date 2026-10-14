@@ -1,3 +1,32 @@
+use std::os::windows::io::AsRawHandle;
+
+// Native child pipes can be observed directly. Only inherited stdin needs a
+// cancellable reader worker; a quiet producer must never block a worker join.
+enum WindowsListenerReader {
+    Stdin(crate::platform::windows::Pump),
+    Child(std::process::ChildStdout),
+}
+impl Read for WindowsListenerReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        match self {
+            Self::Stdin(reader) => reader.read(buffer),
+            Self::Child(reader) => {
+                match crate::platform::windows::available(reader.as_raw_handle())? {
+                    None => Ok(0),
+                    Some(0) => Err(std::io::ErrorKind::WouldBlock.into()),
+                    Some(count) => {
+                        let length = buffer.len().min(count);
+                        reader.read(&mut buffer[..length])
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn listen(
     source: &ListenSource,
@@ -12,8 +41,10 @@ fn listen(
     mut journal: Option<&mut Journal>,
 ) -> Result<()> {
     let mut children = Children::default();
-    let reader: Box<dyn Read + Send> = match source {
-        ListenSource::Stdin => Box::new(std::io::stdin()),
+    let mut reader = match source {
+        ListenSource::Stdin => {
+            WindowsListenerReader::Stdin(crate::platform::windows::Pump::new(std::io::stdin()))
+        }
         ListenSource::Applet(call) => {
             let manifest = registry.resolve_call(call)?;
             let binary = binary_path(manifest.binary_for(call), &options.working_directory)?;
@@ -29,7 +60,7 @@ fn listen(
                 .with_context(|| format!("starting listener {:?}", manifest.name))?;
             let pid = child.id();
             result.launched_processes += 1;
-            let reader = Box::new(child.stdout.take().expect("listener stdout"));
+            let reader = child.stdout.take().expect("listener stdout");
             children.0.push(ManagedChild {
                 child,
                 job,
@@ -42,10 +73,9 @@ fn listen(
                 signals,
                 || serde_json::json!({"event":"listener_spawn","applet":manifest.name_for(call),"pid":pid}),
             )?;
-            reader
+            WindowsListenerReader::Child(reader)
         }
     };
-    let mut reader = crate::platform::windows::Pump::new(reader);
     let mut record = Vec::new();
     let mut buffer = [0u8; 8192];
     let mut eof = false;
@@ -119,5 +149,71 @@ fn listen(
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
+mod native_listener_tests {
+    use super::*;
+
+    #[test]
+    fn a_quiet_native_listener_cancels_without_waiting_for_producer_eof() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("examples/native-fixture.exe");
+        assert!(fixture.is_file(), "build the native fixture example first");
+        let binary = serde_json::to_string(fixture.to_str().unwrap()).unwrap();
+        let program = crate::parser::parse(&format!(
+            "listen to {binary} with arguments [\"sleep\", \"5000\"]\nwhenever a line arrives as event\n  run {binary} with arguments [\"copy\"]\n"
+        )).unwrap();
+        let (_, body) = split_program(&program);
+        let Trigger::Listen {
+            source, binding, ..
+        } = program.trigger.as_ref().unwrap()
+        else {
+            panic!("listener trigger")
+        };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancelled.clone();
+        let cancellation = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            worker_cancel.store(true, Ordering::Relaxed);
+        });
+        let signals = Signals::with_cancellation(cancelled, false).unwrap();
+        let options = RunOptions {
+            inputs: Default::default(),
+            working_directory: directory.path().to_path_buf(),
+            cache_directory: None,
+            trace: false,
+            max_output_bytes: 1024,
+            command_timeout: Some(Duration::from_secs(1)),
+        };
+        let started = Instant::now();
+        let result = listen(
+            source,
+            binding,
+            &body,
+            &Registry::default(),
+            &options,
+            &ServiceLimits {
+                max_runs: None,
+                max_record_bytes: 1024,
+            },
+            &signals,
+            &mut |_, _| Ok(()),
+            &mut ServiceResult::default(),
+            None,
+        );
+        cancellation.join().unwrap();
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "quiet producer blocked cancellation"
+        );
     }
 }

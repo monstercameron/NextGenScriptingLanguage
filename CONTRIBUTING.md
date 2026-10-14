@@ -25,7 +25,16 @@ interpreter. Rust tests include the utility collection and live CLI/socket/TUI
 scenarios. It also runs all 100 model workflows against local fixtures; no provider
 keys or paid requests are needed. The real calendar-minute test may wait up to 75 seconds. Ignored
 profiling and timing probes are opt-in; passing this command does not run them.
-CI uses the same command on macOS and Ubuntu.
+CI uses the same command on macOS and Ubuntu. Native Windows runs portable
+library/model tests and the PE fixture suite on x64 and ARM64:
+
+```powershell
+cargo build --locked --release --bins --example native-fixture
+cargo test --locked --release --test windows_native --test models --test opt_manifest_regressions
+cargo test --locked --release --lib
+```
+
+See [Windows contracts](docs/windows.md) and the [release workflow](docs/releases.md).
 
 Use `make rust-check` when working only on Rust, `make build` for a release build,
 and `make proof-smoke` for a small streaming/lifecycle check. The smoke report
@@ -40,6 +49,8 @@ names. Existing toolchain environment variables continue to work normally.
 | Syntax and same-file definitions | `src/parser.rs`, `src/parser/reusable.rs`, `src/ast.rs` |
 | Native execution and structured values | `src/runtime.rs`, `src/runtime/`, `src/structured.rs` |
 | Live state and control socket | `src/live/` |
+| Platform jobs, handles, ACLs and signals | `src/platform.rs`, `src/platform/`, `src/runtime/*_process.rs` |
+| SemVer, archives and installers | `tools/release.py`, `tools/package.py`, `.github/workflows/` |
 | Terminal UI | `src/ui/` |
 | Model transport and provider validation | `src/models.rs`, `src/bin/execute-model.rs`, `tests/model_control.rs` |
 | Model workflows and exact offline oracles | `examples/models/`, `tests/model_catalog.py` |

@@ -7,7 +7,23 @@ on:
   workflow_call:
 permissions:
   contents: read
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
+  workflows:
+    name: Release contracts and workflow lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 tests/releases.py
+      - run: python3 -O tests/releases.py
+      - name: Install pinned workflow validator
+        run: GOBIN="$RUNNER_TEMP/actionlint" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - run: '"$RUNNER_TEMP/actionlint/actionlint" -color'
   unix:
     name: Unix (${{ matrix.os }})
     strategy:

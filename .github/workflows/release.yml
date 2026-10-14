@@ -1,0 +1,61 @@
+name: SemVer release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Enforce version tag and source agreement
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_REF" == refs/tags/* ]] || { echo 'Select an existing version tag, not a branch'; exit 1; }
+          python3 tools/release.py verify-tag "$RELEASE_TAG"
+  checks:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+  build:
+    needs: checks
+    uses: ./.github/workflows/packages.yml
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: packages-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: flatpak-*
+          path: dist
+          merge-multiple: true
+      - run: python3 tools/release.py verify-tag "$GITHUB_REF_NAME"
+      - run: python3 tools/release.py verify-assets dist
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      - name: Publish verified complete release
+        run: python3 tools/publish_release.py
+        env:
+          GH_TOKEN: ${{ github.token }}

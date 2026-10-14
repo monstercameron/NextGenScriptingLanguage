@@ -6,6 +6,8 @@ NPM ?= npm
 
 # Keep this sequence shared by local development and macOS/Linux CI.
 check: rust-check
+	$(PYTHON) tests/releases.py
+	$(PYTHON) -O tests/releases.py
 	$(PYTHON) tests/model_catalog.py
 	$(PYTHON) -O tests/model_catalog.py
 	EXECUTE_TEST_BINARY="$(CURDIR)/target/release/execute" $(PYTHON) tests/omarchy_interfaces.py

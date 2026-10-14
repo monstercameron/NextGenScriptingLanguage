@@ -1,0 +1,6 @@
+# Purpose: Normalize severity labels in a live authentication event feed.
+# Inputs: timestamp|severity|source|message records.
+# Outputs: One normalized event line per input record.
+listen to stdin
+whenever a line arrives as event
+  then awk with delimiter "|" and program "NF>=4 { print $1 \"|\" toupper($2) \"|\" $3 \"|\" $4 }"

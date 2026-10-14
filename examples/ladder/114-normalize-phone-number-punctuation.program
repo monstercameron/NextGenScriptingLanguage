@@ -1,0 +1,6 @@
+# Purpose: Remove spaces, parentheses, periods, and hyphens from the phone field while retaining country-code plus signs.
+# Inputs: phonebook.csv: Unquoted CSV with header: contact_id,name,phone.
+# Outputs: stdout: The same CSV with phone punctuation removed.
+accept phonebook_path as text with default "phonebook.csv"
+run cat with path phonebook_path
+then awk with program "BEGIN { FS=\",\"; OFS=\",\" } NR==1 { print; next } { gsub(/[ ().-]/,\"\",$3); print $1,$2,$3 }"

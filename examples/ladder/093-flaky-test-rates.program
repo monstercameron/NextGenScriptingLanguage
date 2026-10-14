@@ -1,0 +1,6 @@
+# Purpose: Rank tests that both passed and failed across retry or repeat-test runs as likely flaky tests.
+# Inputs: ci/repeated-tests.json contains pass and failure totals from repeated CI executions per test.
+# Outputs: Mixed-outcome tests with rounded failure percentage and run counts, highest failure rate first.
+accept repeated_tests_path as text with default "ci/repeated-tests.json"
+run cat with path repeated_tests_path
+then jq with flags ["-r"] and filter "[.tests[] | select(.passes > 0 and .failures > 0) | {name, passes, failures, total:(.passes + .failures), fail_pct:(100 * .failures / (.passes + .failures))}] | sort_by(-.fail_pct)[] | \"\\((.fail_pct | round))%\\t\\(.name)\\t\\(.failures) failed / \\(.total) runs\""

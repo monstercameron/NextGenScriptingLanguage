@@ -1,0 +1,8 @@
+# Purpose: Compare shipment due dates to the tracker as-of date and list overdue shipments that are not delivered.
+# Inputs: shipping/tracker.json: as-of ISO date and shipment records with ID, supplier, due date, and status.
+# Outputs: reports/overdue-shipments.tsv: overdue shipment IDs, suppliers, and due dates; stdout echoes the report.
+accept tracker_path as text with default "shipping/tracker.json"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path tracker_path
+pipe to jq with flags ["-r"] and filter ".as_of as $asof | .shipments[] | select(.status != \"delivered\" and .expected_by < $asof) | [.id, .supplier, .expected_by] | @tsv"
+then save to "reports/overdue-shipments.tsv"

@@ -1,0 +1,11 @@
+# Count each file through one reusable native pipeline.
+define a program named lines
+  accept path as text
+  read path
+  pipe to "wc" with arguments ["-l"]
+  pipe to "tr" with arguments ["-d", "[:space:]"]
+accept first as text
+accept second as text
+run program lines with path first as first_count
+run program lines with path second as second_count
+then "printf" with arguments ["%s: %s lines\n%s: %s lines\n", first, first_count, second, second_count]

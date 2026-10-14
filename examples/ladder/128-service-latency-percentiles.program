@@ -1,0 +1,6 @@
+# Purpose: Detect per-source timestamps that move backwards in the order records arrived.
+# Inputs: events.jsonl is an interleaved stream of source and ISO timestamp fields.
+# Outputs: stdout lists each out-of-order transition with its input positions.
+accept events_path as text with default "events.jsonl"
+run cat with path events_path
+pipe to jq with flags ["-s", "-c"] and filter "to_entries | reduce .[] as $entry ({last: {}, anomalies: []}; .last[$entry.value.source] as $previous | .anomalies += (if $previous != null and $entry.value.time < $previous.time then [{source: $entry.value.source, previous_index: $previous.index, current_index: $entry.key, previous_time: $previous.time, current_time: $entry.value.time}] else [] end) | .last[$entry.value.source] = {time: $entry.value.time, index: $entry.key}) | .anomalies[]"

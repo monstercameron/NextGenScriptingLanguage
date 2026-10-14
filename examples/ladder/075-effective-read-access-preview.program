@@ -1,0 +1,6 @@
+# Purpose: Evaluate saved role grants against users and resources without changing policy.
+# Inputs: fixtures/075/access-policy.json contains Offline users, resources, and role-based action grants from a policy export.
+# Outputs: JSON rows of users and resources readable through matching grants.
+accept access_policy_path as text with default "fixtures/075/access-policy.json"
+run cat with path access_policy_path
+then jq with filter ".users as $users | .grants as $grants | .resources as $resources | [$users[] as $user | {user_id: $user.id, role: $user.role, readable_resources: [$resources[] as $resource | select([$grants[] | select(.role == $user.role and (.resource == $resource.name or .resource == \"*\") and (.actions | index(\"read\") != null))] | length > 0) | $resource.name]}]" and flags ["-c", "-S"]

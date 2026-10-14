@@ -1,0 +1,4 @@
+# 43. Validate every parameter before effects
+run printf with message "prefix"
+then save to "must-not-exist.txt"
+then tr with from "a"

@@ -1,0 +1,6 @@
+# Purpose: Group undelivered webhook attempts by endpoint and show the retry burden.
+# Inputs: operations/webhook-deliveries.json is an outgoing webhook delivery export with endpoint, status and attempts.
+# Outputs: Endpoints with failed deliveries, failure count and maximum attempt count.
+accept webhook_deliveries_path as text with default "operations/webhook-deliveries.json"
+run cat with path webhook_deliveries_path
+then jq with flags ["-r"] and filter ".deliveries | group_by(.endpoint)[] | . as $group | [$group[] | select(.status != \"delivered\")] as $failed | select(($failed | length) > 0) | \"\\($group[0].endpoint)\\t\\($failed | length) failed\\tmax_attempts=\\([$failed[].attempts] | max)\""

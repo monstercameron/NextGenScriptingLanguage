@@ -1,0 +1,6 @@
+# Purpose: Preview the first actions in a recovery checklist and cache the selection.
+# Inputs: recovery-checklist.txt, ordered recovery steps.
+# Outputs: The first three actions on stdout.
+accept recovery_checklist_path as text with default "recovery-checklist.txt"
+run cat with path recovery_checklist_path
+then head with lines 3 and cache

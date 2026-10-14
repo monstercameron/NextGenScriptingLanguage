@@ -1,0 +1,21 @@
+{
+  "name": "sort",
+  "binary": "sort",
+  "accepts_stdin": true,
+  "parameters": {
+    "flags": {
+      "type": "list",
+      "items": "string"
+    }
+  },
+  "arguments": [
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    }
+  ]
+}

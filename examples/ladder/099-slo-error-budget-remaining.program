@@ -1,0 +1,6 @@
+# Purpose: Show remaining or exhausted error-budget minutes per service for the current SLO window.
+# Inputs: observability/error-budgets.json contains allocated and consumed error-budget minutes per SLO.
+# Outputs: Remaining budget minutes per service, with exhausted budgets appearing first.
+accept error_budgets_path as text with default "observability/error-budgets.json"
+run cat with path error_budgets_path
+then jq with flags ["-r"] and filter "[.slos[] | {service, budget_minutes, remaining:(.budget_minutes - .consumed_minutes)}] | sort_by(.remaining)[] | \"\\(.service)\\tremaining=\\(.remaining) of \\(.budget_minutes) min\""

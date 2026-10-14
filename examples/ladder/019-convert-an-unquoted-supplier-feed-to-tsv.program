@@ -1,0 +1,8 @@
+# Purpose: Convert a simple unquoted comma-separated supplier feed into tab-separated form for a downstream importer.
+# Inputs: imports/suppliers.csv: unquoted CSV with no embedded commas or quotes.
+# Outputs: staging/suppliers.tsv: tab-separated supplier rows; stdout echoes the converted feed.
+accept suppliers_path as text with default "imports/suppliers.csv"
+run mkdir with flags ["-p"] and paths ["staging"]
+run cat with path suppliers_path
+pipe to tr with from "," and to "\t"
+then save to "staging/suppliers.tsv"

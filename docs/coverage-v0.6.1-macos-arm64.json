@@ -1,0 +1,541 @@
+{
+  "source_files": 18,
+  "totals": {
+    "lines": {
+      "count": 12102,
+      "covered": 10567,
+      "percent": 87.32
+    },
+    "functions": {
+      "count": 868,
+      "covered": 747,
+      "percent": 86.06
+    },
+    "regions": {
+      "count": 20313,
+      "covered": 17422,
+      "percent": 85.77
+    }
+  },
+  "files": [
+    {
+      "path": "src/live/mod.rs",
+      "lines": {
+        "count": 579,
+        "covered": 483,
+        "percent": 83.41968911917098
+      },
+      "functions": {
+        "count": 28,
+        "covered": 24,
+        "percent": 85.71428571428571
+      }
+    },
+    {
+      "path": "src/live/state.rs",
+      "lines": {
+        "count": 672,
+        "covered": 580,
+        "percent": 86.30952380952381
+      },
+      "functions": {
+        "count": 47,
+        "covered": 42,
+        "percent": 89.36170212765957
+      }
+    },
+    {
+      "path": "src/live/worker.rs",
+      "lines": {
+        "count": 412,
+        "covered": 353,
+        "percent": 85.67961165048543
+      },
+      "functions": {
+        "count": 12,
+        "covered": 11,
+        "percent": 91.66666666666666
+      }
+    },
+    {
+      "path": "src/main.rs",
+      "lines": {
+        "count": 442,
+        "covered": 403,
+        "percent": 91.17647058823529
+      },
+      "functions": {
+        "count": 28,
+        "covered": 21,
+        "percent": 75
+      }
+    },
+    {
+      "path": "src/manifest.rs",
+      "lines": {
+        "count": 816,
+        "covered": 782,
+        "percent": 95.83333333333334
+      },
+      "functions": {
+        "count": 57,
+        "covered": 50,
+        "percent": 87.71929824561403
+      }
+    },
+    {
+      "path": "src/parser.rs",
+      "lines": {
+        "count": 815,
+        "covered": 781,
+        "percent": 95.8282208588957
+      },
+      "functions": {
+        "count": 60,
+        "covered": 59,
+        "percent": 98.33333333333333
+      }
+    },
+    {
+      "path": "src/runtime.rs",
+      "lines": {
+        "count": 1853,
+        "covered": 1521,
+        "percent": 82.0831084727469
+      },
+      "functions": {
+        "count": 133,
+        "covered": 108,
+        "percent": 81.203007518797
+      }
+    },
+    {
+      "path": "src/runtime/checkpoint.rs",
+      "lines": {
+        "count": 1114,
+        "covered": 1030,
+        "percent": 92.45960502692998
+      },
+      "functions": {
+        "count": 93,
+        "covered": 74,
+        "percent": 79.56989247311827
+      }
+    },
+    {
+      "path": "src/runtime/live.rs",
+      "lines": {
+        "count": 95,
+        "covered": 93,
+        "percent": 97.89473684210527
+      },
+      "functions": {
+        "count": 5,
+        "covered": 5,
+        "percent": 100
+      }
+    },
+    {
+      "path": "src/runtime/resume.rs",
+      "lines": {
+        "count": 204,
+        "covered": 199,
+        "percent": 97.54901960784314
+      },
+      "functions": {
+        "count": 8,
+        "covered": 8,
+        "percent": 100
+      }
+    },
+    {
+      "path": "src/runtime/service.rs",
+      "lines": {
+        "count": 534,
+        "covered": 455,
+        "percent": 85.2059925093633
+      },
+      "functions": {
+        "count": 39,
+        "covered": 31,
+        "percent": 79.48717948717949
+      }
+    },
+    {
+      "path": "src/runtime/stdio.rs",
+      "lines": {
+        "count": 167,
+        "covered": 151,
+        "percent": 90.41916167664671
+      },
+      "functions": {
+        "count": 14,
+        "covered": 14,
+        "percent": 100
+      }
+    },
+    {
+      "path": "src/runtime/streaming.rs",
+      "lines": {
+        "count": 209,
+        "covered": 202,
+        "percent": 96.65071770334929
+      },
+      "functions": {
+        "count": 18,
+        "covered": 17,
+        "percent": 94.44444444444444
+      }
+    },
+    {
+      "path": "src/schedule.rs",
+      "lines": {
+        "count": 157,
+        "covered": 153,
+        "percent": 97.45222929936305
+      },
+      "functions": {
+        "count": 13,
+        "covered": 12,
+        "percent": 92.3076923076923
+      }
+    },
+    {
+      "path": "src/stream.rs",
+      "lines": {
+        "count": 212,
+        "covered": 194,
+        "percent": 91.50943396226415
+      },
+      "functions": {
+        "count": 20,
+        "covered": 19,
+        "percent": 95
+      }
+    },
+    {
+      "path": "src/ui/app.rs",
+      "lines": {
+        "count": 2575,
+        "covered": 2069,
+        "percent": 80.3495145631068
+      },
+      "functions": {
+        "count": 197,
+        "covered": 162,
+        "percent": 82.23350253807106
+      }
+    },
+    {
+      "path": "src/ui/live.rs",
+      "lines": {
+        "count": 594,
+        "covered": 523,
+        "percent": 88.04713804713805
+      },
+      "functions": {
+        "count": 52,
+        "covered": 47,
+        "percent": 90.38461538461539
+      }
+    },
+    {
+      "path": "src/ui/syntax.rs",
+      "lines": {
+        "count": 652,
+        "covered": 595,
+        "percent": 91.25766871165644
+      },
+      "functions": {
+        "count": 44,
+        "covered": 43,
+        "percent": 97.72727272727273
+      }
+    }
+  ],
+  "scope": "All src/ mappings, including inline cfg(test) unit/benchmark code; external dependencies excluded.",
+  "production_executable": {
+    "source_files": 18,
+    "totals": {
+      "lines": {
+        "count": 8885,
+        "covered": 7939,
+        "percent": 89.35
+      },
+      "functions": {
+        "count": 644,
+        "covered": 560,
+        "percent": 86.96
+      },
+      "regions": {
+        "count": 14331,
+        "covered": 12465,
+        "percent": 86.98
+      }
+    },
+    "files": [
+      {
+        "path": "src/live/mod.rs",
+        "lines": {
+          "count": 579,
+          "covered": 483,
+          "percent": 83.41968911917098
+        },
+        "functions": {
+          "count": 28,
+          "covered": 24,
+          "percent": 85.71428571428571
+        }
+      },
+      {
+        "path": "src/live/state.rs",
+        "lines": {
+          "count": 672,
+          "covered": 580,
+          "percent": 86.30952380952381
+        },
+        "functions": {
+          "count": 47,
+          "covered": 42,
+          "percent": 89.36170212765957
+        }
+      },
+      {
+        "path": "src/live/worker.rs",
+        "lines": {
+          "count": 412,
+          "covered": 353,
+          "percent": 85.67961165048543
+        },
+        "functions": {
+          "count": 12,
+          "covered": 11,
+          "percent": 91.66666666666666
+        }
+      },
+      {
+        "path": "src/main.rs",
+        "lines": {
+          "count": 442,
+          "covered": 403,
+          "percent": 91.17647058823529
+        },
+        "functions": {
+          "count": 28,
+          "covered": 21,
+          "percent": 75
+        }
+      },
+      {
+        "path": "src/manifest.rs",
+        "lines": {
+          "count": 407,
+          "covered": 362,
+          "percent": 88.94348894348894
+        },
+        "functions": {
+          "count": 42,
+          "covered": 34,
+          "percent": 80.95238095238095
+        }
+      },
+      {
+        "path": "src/parser.rs",
+        "lines": {
+          "count": 542,
+          "covered": 510,
+          "percent": 94.0959409594096
+        },
+        "functions": {
+          "count": 38,
+          "covered": 35,
+          "percent": 92.10526315789474
+        }
+      },
+      {
+        "path": "src/runtime.rs",
+        "lines": {
+          "count": 1278,
+          "covered": 1174,
+          "percent": 91.8622848200313
+        },
+        "functions": {
+          "count": 93,
+          "covered": 82,
+          "percent": 88.17204301075269
+        }
+      },
+      {
+        "path": "src/runtime/checkpoint.rs",
+        "lines": {
+          "count": 704,
+          "covered": 596,
+          "percent": 84.6590909090909
+        },
+        "functions": {
+          "count": 64,
+          "covered": 45,
+          "percent": 70.3125
+        }
+      },
+      {
+        "path": "src/runtime/live.rs",
+        "lines": {
+          "count": 95,
+          "covered": 93,
+          "percent": 97.89473684210527
+        },
+        "functions": {
+          "count": 5,
+          "covered": 5,
+          "percent": 100
+        }
+      },
+      {
+        "path": "src/runtime/resume.rs",
+        "lines": {
+          "count": 146,
+          "covered": 141,
+          "percent": 96.57534246575342
+        },
+        "functions": {
+          "count": 7,
+          "covered": 7,
+          "percent": 100
+        }
+      },
+      {
+        "path": "src/runtime/service.rs",
+        "lines": {
+          "count": 498,
+          "covered": 421,
+          "percent": 84.53815261044177
+        },
+        "functions": {
+          "count": 34,
+          "covered": 27,
+          "percent": 79.41176470588235
+        }
+      },
+      {
+        "path": "src/runtime/stdio.rs",
+        "lines": {
+          "count": 98,
+          "covered": 81,
+          "percent": 82.6530612244898
+        },
+        "functions": {
+          "count": 7,
+          "covered": 7,
+          "percent": 100
+        }
+      },
+      {
+        "path": "src/runtime/streaming.rs",
+        "lines": {
+          "count": 93,
+          "covered": 89,
+          "percent": 95.6989247311828
+        },
+        "functions": {
+          "count": 8,
+          "covered": 8,
+          "percent": 100
+        }
+      },
+      {
+        "path": "src/schedule.rs",
+        "lines": {
+          "count": 103,
+          "covered": 97,
+          "percent": 94.1747572815534
+        },
+        "functions": {
+          "count": 8,
+          "covered": 7,
+          "percent": 87.5
+        }
+      },
+      {
+        "path": "src/stream.rs",
+        "lines": {
+          "count": 173,
+          "covered": 157,
+          "percent": 90.7514450867052
+        },
+        "functions": {
+          "count": 17,
+          "covered": 16,
+          "percent": 94.11764705882352
+        }
+      },
+      {
+        "path": "src/ui/app.rs",
+        "lines": {
+          "count": 1405,
+          "covered": 1289,
+          "percent": 91.74377224199289
+        },
+        "functions": {
+          "count": 111,
+          "covered": 100,
+          "percent": 90.09009009009009
+        }
+      },
+      {
+        "path": "src/ui/live.rs",
+        "lines": {
+          "count": 594,
+          "covered": 523,
+          "percent": 88.04713804713805
+        },
+        "functions": {
+          "count": 52,
+          "covered": 47,
+          "percent": 90.38461538461539
+        }
+      },
+      {
+        "path": "src/ui/syntax.rs",
+        "lines": {
+          "count": 644,
+          "covered": 587,
+          "percent": 91.14906832298136
+        },
+        "functions": {
+          "count": 43,
+          "covered": 42,
+          "percent": 97.67441860465115
+        }
+      }
+    ],
+    "scope": "Production execute binary source mappings; inline cfg(test) code and dependencies excluded. Merged instrumented test and child-process profiles supply execution counts."
+  },
+  "release": "0.6.1",
+  "platform": "macOS arm64",
+  "profile_files": 2471,
+  "instrumentation": "Rust -C instrument-coverage; matching toolchain llvm-profdata/llvm-cov",
+  "source_sha256": {
+    "src/ast.rs": "60cbb334b2dd74904773fb21cc2b117e96bcab8892122a16cd037cc91748f999",
+    "src/lib.rs": "ca1a065aa0aaeb1ad052c3b4cead2587e454738733a5ebac4fe15ab9cd38a646",
+    "src/live/mod.rs": "a7bab16fa7d691d859762d324161c77a3cbc95e855fdbcf22c0aa22b85cd98ba",
+    "src/live/state.rs": "7e4b462aa325b18f2a7fada86f1b256b154391f7bdf47eba5c45d210ccb14fd9",
+    "src/live/worker.rs": "1b715b47e93dba5f49bbe2388c74765baf86760025c2743da26a1205898f438d",
+    "src/main.rs": "303869ddea3c6915791604ff4f83925311a64fa202a0210507e012517db9fc96",
+    "src/manifest.rs": "e6f309faeeb2d2464948e5f5eb031c5e893b3f8104736c8fd25717b6823b4dd9",
+    "src/parser.rs": "b5894cbfdd91c4156851810c28810506e3c49db2f2590dc916f505783f5c4475",
+    "src/runtime/checkpoint.rs": "b83a3a2ee43a60b6b6fea32bcbf71a83c803e5873495feba7fb86ff3716d5488",
+    "src/runtime/live.rs": "c7b826d5d5c33a5300b9d69b72628cec9537a7c319e0e4241f7eb03ac2df184a",
+    "src/runtime/resume.rs": "92c503d2eff19b9564955aa912ff77f3666d29f7080b83d1f1a1960a018709e5",
+    "src/runtime/service.rs": "384d084bdcf3fe6234217a7e6f049e3423a6c6e2195342a46aa08e2fa79be330",
+    "src/runtime/stdio.rs": "e1f526c37f4dcfb4a3b7551067d688b5a1c2b28de7c1780b64d318d8fe71eb47",
+    "src/runtime/streaming.rs": "77ffc8f984daf4251dd384ec854e9fb411dd63c209a49dfe2f2cad6c03adeb8b",
+    "src/runtime.rs": "5ddc522c20039d2fc1ddfb99c988f9fc3354fa8968c09bd19934a70a873dab44",
+    "src/schedule.rs": "9850a82039706db4ebdd8da32ef095d5722881d2cdba9c4506fa56e80a73c83f",
+    "src/stream.rs": "065d5be42903d9f54d6c9968f910b6e4a14a7e13daac8f13c685ab726e5774f7",
+    "src/ui/app.rs": "d10d913f38f441d02e80181d9cbb9053030db9b73af2b3720ec09bbd2fbeffc5",
+    "src/ui/live.rs": "b2205588e64f153f4f885d9b242f1b69c5c96e33c9de14208665e43d4baf4cf6",
+    "src/ui/mod.rs": "cfc904a8d22632fa8d9a772df5250366244dd1760b7c5895638fc40d8725cd5f",
+    "src/ui/syntax.rs": "27e71dc0be04e32fef1e9cad19140650779e2b6f1f9aac3b14117eeb4c068797"
+  }
+}

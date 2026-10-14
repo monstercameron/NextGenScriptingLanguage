@@ -1,0 +1,8 @@
+# Purpose: Select failed checks from a machine-readable validation result and project actionable service, check, and message columns.
+# Inputs: quality/check-results.json: check result objects with service, check, status, and message fields.
+# Outputs: reports/failed-checks.tsv: one row per failed check; stdout echoes the report.
+accept check_results_path as text with default "quality/check-results.json"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path check_results_path
+pipe to jq with flags ["-r"] and filter ".checks[] | select(.status == \"failed\") | [.service, .check, .message] | @tsv"
+then save to "reports/failed-checks.tsv"

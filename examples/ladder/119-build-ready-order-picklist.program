@@ -1,0 +1,6 @@
+# Purpose: Project only order,SKU,quantity fields for rows whose fulfillment status is READY.
+# Inputs: fulfillment.csv: Unquoted CSV with header: order_id,sku,quantity,status.
+# Outputs: stdout: order_id,sku,quantity rows awaiting warehouse picking.
+accept fulfillment_path as text with default "fulfillment.csv"
+run cat with path fulfillment_path
+then awk with delimiter "," and program "NR==1 { next } $4==\"READY\" { printf \"%s,%s,%s\\n\",$1,$2,$3 }"

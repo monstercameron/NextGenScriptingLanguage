@@ -1,0 +1,6 @@
+# Purpose: Compare current and baseline artifact byte counts and rank artifacts that grew.
+# Inputs: release/size-comparison.json contains byte-size measurements for current and previous release artifacts.
+# Outputs: Growing artifacts only, ordered by largest byte increase.
+accept size_comparison_path as text with default "release/size-comparison.json"
+run cat with path size_comparison_path
+then jq with flags ["-r"] and filter "[.artifacts[] | select(.current_bytes > .baseline_bytes) | {name, baseline_bytes, current_bytes, delta:(.current_bytes - .baseline_bytes)}] | sort_by(-.delta)[] | \"\\(.name)\\t+\\(.delta) B (\\(.baseline_bytes) -> \\(.current_bytes) B)\""

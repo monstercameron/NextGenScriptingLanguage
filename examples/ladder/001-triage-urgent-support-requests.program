@@ -1,0 +1,8 @@
+# Purpose: Extract only open P1 requests for the daily support triage queue.
+# Inputs: queue/requests.psv: pipe-separated request ID, state, priority, summary, and owner.
+# Outputs: reports/urgent-requests.psv: matching request records; stdout echoes the saved queue.
+accept requests_path as text with default "queue/requests.psv"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path requests_path
+pipe to grep with pattern "|OPEN|P1|" and flags ["-F"]
+then save to "reports/urgent-requests.psv"

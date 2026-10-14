@@ -1,0 +1,6 @@
+# Purpose: Summarize a usage export by owning team using integer cents to avoid decimal rounding.
+# Inputs: finance/cloud-charges.json contains metered charge rows with team ownership and integer cost_cents.
+# Outputs: Total cents and charge-row count per team, alphabetically by team.
+accept cloud_charges_path as text with default "finance/cloud-charges.json"
+run cat with path cloud_charges_path
+then jq with flags ["-r"] and filter "[.charges[]] | group_by(.team)[] | \"\\(.[0].team)\\t\\(map(.cost_cents) | add) cents\\t\\(length) charges\""

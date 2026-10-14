@@ -1,0 +1,6 @@
+# Purpose: List failed or cancelled jobs from a CI build matrix while omitting successful targets.
+# Inputs: ci/matrix-results.json is a CI workflow export containing matrix job, target and final status.
+# Outputs: Failed and cancelled matrix targets ordered by job and target.
+accept matrix_results_path as text with default "ci/matrix-results.json"
+run cat with path matrix_results_path
+then jq with flags ["-r"] and filter "[.jobs[] | select(.status == \"failure\" or .status == \"cancelled\")] | sort_by([.job, .target])[] | \"\\(.job)\\t\\(.target)\\t\\(.status)\""

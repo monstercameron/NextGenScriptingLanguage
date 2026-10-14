@@ -1,0 +1,6 @@
+# Purpose: Export a chronologically ordered audit trail as RFC 4180 CSV.
+# Inputs: audit.jsonl contains time, actor, action, and object fields.
+# Outputs: stdout is quoted CSV with a header row.
+accept audit_path as text with default "audit.jsonl"
+run cat with path audit_path
+pipe to jq with flags ["-r", "-s"] and filter "([\"time\", \"actor\", \"action\", \"object\"] | @csv), (sort_by(.time)[] | [.time, .actor, .action, .object] | @csv)"

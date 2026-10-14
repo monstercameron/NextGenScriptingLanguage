@@ -1,0 +1,263 @@
+{
+  "Native Unix pipeline": {
+    "prefix": [
+      "program-pipeline",
+      "pipeline"
+    ],
+    "description": "A complete native pipeline with a saved output.",
+    "body": [
+      "run cat with path \"${1:input.txt}\"",
+      "pipe to tr with from \"[:lower:]\" and to \"[:upper:]\"",
+      "then save to \"${2:output.txt}\"",
+      "$0"
+    ],
+    "isFileTemplate": true
+  },
+  "Run an applet": {
+    "prefix": "run",
+    "description": "Start an independent native command.",
+    "body": [
+      "run ${1:printf} with ${2:message} \"${3:hello}\"$0"
+    ]
+  },
+  "Sequence an applet": {
+    "prefix": "then",
+    "description": "Pass finite output to the next applet.",
+    "body": [
+      "then ${1:cat}$0"
+    ]
+  },
+  "Native pipe": {
+    "prefix": "pipe",
+    "description": "Connect a concurrently running native stage.",
+    "body": [
+      "pipe to ${1:wc} with flags [\"${2:-l}\"]$0"
+    ]
+  },
+  "Read a file": {
+    "prefix": "read",
+    "description": "Read bytes from a file.",
+    "body": [
+      "read \"${1:input.txt}\"$0"
+    ]
+  },
+  "Save current output": {
+    "prefix": "save",
+    "description": "Atomically save the current finite output.",
+    "body": [
+      "then save to \"${1:output.txt}\"$0"
+    ]
+  },
+  "Cached transformation": {
+    "prefix": "program-cache",
+    "description": "Read, normalize, cache, and save a finite value.",
+    "body": [
+      "read \"${1:input.txt}\"",
+      "then tr with from \"[:upper:]\" and to \"[:lower:]\" and cache",
+      "then save to \"${2:output.txt}\"",
+      "$0"
+    ],
+    "isFileTemplate": true
+  },
+  "Stdin event listener": {
+    "prefix": [
+      "program-listener",
+      "listener"
+    ],
+    "description": "A fresh transform for each text record from stdin.",
+    "body": [
+      "listen to stdin",
+      "whenever a line arrives as ${1:message}",
+      "  then tr with from \"[:lower:]\" and to \"[:upper:]\"",
+      "$0"
+    ],
+    "isFileTemplate": true
+  },
+  "Persistent native stream": {
+    "prefix": [
+      "program-stream",
+      "stream"
+    ],
+    "description": "Keep tail and cat alive; stop after three final records.",
+    "body": [
+      "stream from tail with flags [\"-n\", \"0\", \"-F\"] and path \"${1:events.log}\"",
+      "pipe to cat",
+      "take the first ${2:3} lines",
+      "show each line",
+      "$0"
+    ],
+    "isFileTemplate": true
+  },
+  "Interval service": {
+    "prefix": [
+      "program-interval",
+      "interval"
+    ],
+    "description": "Run the body on a monotonic interval.",
+    "body": [
+      "every ${1:30} seconds",
+      "  run pwd",
+      "$0"
+    ],
+    "isFileTemplate": true
+  },
+  "Calendar service": {
+    "prefix": [
+      "program-schedule",
+      "schedule"
+    ],
+    "description": "Run on matching local five-field cron minutes.",
+    "body": [
+      "on schedule \"${1:0 9 * * 1-5}\"",
+      "  run pwd",
+      "$0"
+    ],
+    "isFileTemplate": true
+  },
+  "Terminal screen": {
+    "prefix": [
+      "program-screen",
+      "screen"
+    ],
+    "description": "A complete single-component terminal app.",
+    "body": [
+      "open a screen titled \"${1:Operator console}\"",
+      "place app on the left",
+      "",
+      "define a program named app",
+      "  show a heading named title with text \"${2:Status}\"",
+      "  show a text panel named output",
+      "  show a button named refresh labelled \"Refresh\"",
+      "",
+      "  whenever the program opens",
+      "    press refresh",
+      "",
+      "  whenever refresh is pressed",
+      "    run printf with message \"${3:ready}\"",
+      "    then show the result in output",
+      "",
+      "  whenever key \"Ctrl-Q\" is pressed",
+      "    close the screen",
+      "$0"
+    ],
+    "isFileTemplate": true
+  },
+  "Connected terminal components": {
+    "prefix": "program-components",
+    "description": "A document chooser connected to a file preview.",
+    "body": [
+      "open a screen titled \"${1:Document preview}\"",
+      "divide the screen into two columns",
+      "place chooser on the left",
+      "place preview on the right",
+      "give chooser 30 percent of the width",
+      "connect selected from chooser to file in preview",
+      "",
+      "define a program named chooser",
+      "  offer selected as text",
+      "  show a list named files",
+      "    include \"${2:README.md}\"",
+      "  whenever an item is chosen in files",
+      "    send that item as selected",
+      "  whenever key \"Ctrl-Q\" is pressed",
+      "    close the screen",
+      "",
+      "define a program named preview",
+      "  accept file as text",
+      "  show a text panel named contents",
+      "  whenever file arrives",
+      "    run cat with path file",
+      "    then show the result in contents",
+      "$0"
+    ],
+    "isFileTemplate": true
+  },
+  "Named finite output": {
+    "prefix": "result",
+    "description": "Bind a finite applet result without trimming its newline.",
+    "body": [
+      "run printf with message \"${1:value}\" as ${2:result}$0"
+    ]
+  },
+  "Text widget": {
+    "prefix": "widget-text",
+    "description": "Declare a named text panel in a component.",
+    "body": [
+      "show a text panel named ${1:status} with text \"${2:Waiting}\"$0"
+    ]
+  },
+  "Widget handler": {
+    "prefix": "handler",
+    "description": "Handle a button press within a component.",
+    "body": [
+      "whenever ${1:refresh} is pressed",
+      "  run printf with message \"${2:updated}\"",
+      "  then show the result in ${3:output}",
+      "$0"
+    ]
+  },
+  "Direct executable program": {
+    "prefix": "program-command",
+    "description": "Run an installed executable directly without an applet manifest (Execute 0.7.0+).",
+    "isFileTemplate": true,
+    "body": [
+      "run \"${1:printf}\" with arguments [\"%s\\n\", \"${2:hello}\"]"
+    ]
+  },
+  "Program with declared input": {
+    "prefix": "program-input",
+    "description": "Accept a required path and pass it directly to a native command (Execute 0.8.0+).",
+    "isFileTemplate": true,
+    "body": [
+      "accept ${1:path} as text",
+      "run \"${2:cksum}\" with arguments [${1:path}]"
+    ]
+  },
+  "Unix pipeline stage": {
+    "prefix": "program-filter",
+    "description": "Sort and deduplicate stdin using a native pipeline stage.",
+    "isFileTemplate": true,
+    "body": [
+      "read from stdin",
+      "pipe to \"sort\" with arguments [\"-u\"]",
+      "$0"
+    ]
+  },
+  "Conditional native commands": {
+    "prefix": "program-condition",
+    "description": "A complete typed input and native command branch.",
+    "body": [
+      "accept enabled as boolean with default false",
+      "if enabled is true",
+      "  run \"printf\" with arguments [\"enabled\\n\"]",
+      "otherwise",
+      "  run \"printf\" with arguments [\"disabled\\n\"]",
+      "$0"
+    ],
+    "isFileTemplate": true
+  },
+  "Typed JSON field": {
+    "prefix": "program-json",
+    "description": "Read JSON, select a typed field using a JSON pointer and pass it to a native command. Pending source candidate.",
+    "isFileTemplate": true,
+    "body": [
+      "accept path as text",
+      "read path",
+      "then parse json as document",
+      "take text at \"${1:/name}\" from document as selected",
+      "then \"printf\" with arguments [\"%s\\n\", selected]"
+    ]
+  },
+  "Reusable finite program": {
+    "prefix": "program-reuse",
+    "description": "Define a same-file finite program with explicit inputs, local variables and stdout output. Pending source candidate.",
+    "isFileTemplate": true,
+    "body": [
+      "define a program named greet",
+      "  accept name as text",
+      "  run \"printf\" with arguments [\"hello %s\\n\", name]",
+      "accept user as text with default \"world\"",
+      "run program greet with name user"
+    ]
+  }
+}

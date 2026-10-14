@@ -1,0 +1,70 @@
+{
+  "environment": {
+    "os": "Darwin",
+    "release": "25.6.0",
+    "architecture": "arm64",
+    "version": "execute 0.3.1",
+    "binary_sha256": "1bb41573892f98b1c437fe7a86ac5e300361287c3be64d6bb9660701c9629fe7"
+  },
+  "method": {
+    "samples_per_case": 200,
+    "warmups": 10,
+    "timer": "perf_counter_ns",
+    "cli": "new process, warmed filesystem caches; fixture/directory preparation excluded",
+    "listener": "one process, sequential stdin request to complete handler output; startup excluded",
+    "durability": "local filesystem fsync + rename + directory sync; not a power-loss simulation",
+    "ordering": "shuffled CLI cases; separate sequential listener batches",
+    "safety": "temporary files only; no external API or Git operations"
+  },
+  "cli_ms": {
+    "normal_read": {
+      "samples": 200,
+      "p50": 9.619146,
+      "p95": 14.119167,
+      "p99": 15.038041
+    },
+    "checkpoint_read": {
+      "samples": 200,
+      "p50": 78.989812,
+      "p95": 91.123375,
+      "p99": 98.167
+    },
+    "completed_resume": {
+      "samples": 200,
+      "p50": 10.1327085,
+      "p95": 14.630583,
+      "p99": 15.556083
+    },
+    "normal_pipeline_save": {
+      "samples": 200,
+      "p50": 21.872562000000002,
+      "p95": 30.025208,
+      "p99": 32.061583
+    },
+    "checkpoint_pipeline_save": {
+      "samples": 200,
+      "p50": 148.2894375,
+      "p95": 171.183083,
+      "p99": 178.56425
+    }
+  },
+  "listener_us": {
+    "normal_read_handler": {
+      "samples": 200,
+      "p50": 36.2505,
+      "p95": 48.583,
+      "p99": 52.417
+    },
+    "checkpoint_read_handler": {
+      "samples": 200,
+      "p50": 59160.146,
+      "p95": 65540.875,
+      "p99": 69317.083
+    }
+  },
+  "scripts": {
+    "read.program": "read \"input.txt\"\n",
+    "pipeline.program": "run printf with message \"checkpoint fixture\"\nthen tr with from \"[:lower:]\" and to \"[:upper:]\"\nthen save to file \"output.txt\"\n",
+    "listener.program": "listen to stdin\nwhenever a line arrives as record\n  read \"input.txt\"\n"
+  }
+}

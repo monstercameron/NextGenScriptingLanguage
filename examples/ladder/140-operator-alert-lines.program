@@ -1,0 +1,6 @@
+# Purpose: Format enabled alert records as concise operator notifications.
+# Inputs: alerts.jsonl contains enabled, severity, service, and summary fields.
+# Outputs: stdout contains one human-readable line for each enabled alert.
+accept alerts_path as text with default "alerts.jsonl"
+run cat with path alerts_path
+pipe to jq with flags ["-r"] and filter "select(.enabled == true) | \"\\(.severity | ascii_upcase) [\\(.service)] \\(.summary)\""

@@ -1,0 +1,9 @@
+# Preview a regular file, or print a useful missing-file message.
+# Inputs: path, optional positive native head line count. Output: preview/message.
+accept path as text
+accept lines as integer with default 10
+run "test" with arguments ["-f", path] and keep status as file_status
+if file_status is 0
+  run "head" with arguments ["-n", lines, "--", path]
+otherwise
+  run "printf" with arguments ["Missing regular file: %s\n", path]

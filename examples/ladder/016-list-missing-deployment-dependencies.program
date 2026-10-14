@@ -1,0 +1,8 @@
+# Purpose: Compare requested and installed package arrays and report the tools that must be added before deployment.
+# Inputs: build/dependencies.json: requested and installed package-name arrays.
+# Outputs: reports/missing-dependencies.txt: one missing package per line; stdout echoes the report.
+accept dependencies_path as text with default "build/dependencies.json"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path dependencies_path
+pipe to jq with flags ["-r"] and filter "(.requested - .installed)[]"
+then save to "reports/missing-dependencies.txt"

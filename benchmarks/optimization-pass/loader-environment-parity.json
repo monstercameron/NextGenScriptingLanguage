@@ -1,0 +1,17 @@
+{
+  "baseline": {
+    "PATH": "/usr/bin:/bin",
+    "LC_ALL": "C",
+    "LANG": "C",
+    "HOME": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-loader-env-gqnrtiuo",
+    "TMPDIR": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-loader-env-gqnrtiuo",
+    "__CF_USER_TEXT_ENCODING": "0x1F5:0x0:0x0"
+  },
+  "candidate": {
+    "PATH": "/usr/bin:/bin",
+    "LC_ALL": "C",
+    "LANG": "C",
+    "HOME": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-loader-env-gqnrtiuo",
+    "TMPDIR": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-loader-env-gqnrtiuo"
+  }
+}

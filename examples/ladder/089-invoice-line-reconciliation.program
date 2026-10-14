@@ -1,0 +1,6 @@
+# Purpose: Recompute invoice totals from quantity and unit-price rows and expose declared-total discrepancies.
+# Inputs: finance/invoices.json contains invoice totals and line-item quantities and unit prices in cents.
+# Outputs: Computed and declared totals plus the signed discrepancy for each invoice.
+accept invoices_path as text with default "finance/invoices.json"
+run cat with path invoices_path
+then jq with flags ["-r"] and filter ".invoices | sort_by(.invoice)[] as $invoice | ([$invoice.lines[] | .quantity * .unit_price_cents] | add) as $computed | \"\\($invoice.invoice)\\tcomputed=\\($computed)\\tdeclared=\\($invoice.total_cents)\\tdelta=\\($computed - $invoice.total_cents)\""

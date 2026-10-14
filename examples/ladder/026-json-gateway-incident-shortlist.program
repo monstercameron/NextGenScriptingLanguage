@@ -1,0 +1,8 @@
+# Purpose: Reduce JSON gateway logs to a response-ready list of server failures.
+# Inputs: gateway.jsonl (one JSON event per line).
+# Outputs: Sorted TSV on stdout and incidents.tsv.
+accept gateway_path as text with default "gateway.jsonl"
+run cat with path gateway_path
+then jq with flags ["-r"] and filter "select(.status >= 500) | [.timestamp, .service, (.status|tostring), .request_id] | @tsv"
+then sort
+then save to "incidents.tsv"

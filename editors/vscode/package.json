@@ -1,0 +1,76 @@
+{
+  "name": "execute-program",
+  "displayName": "Execute .program",
+  "description": "Syntax highlighting and snippets for Execute Unix workflows, streams, services, and terminal apps.",
+  "version": "0.2.0",
+  "publisher": "execute-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "execute",
+    "program",
+    "unix",
+    "pipeline",
+    "tui"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": true
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "execute-program",
+        "aliases": [
+          "Execute Program",
+          ".program"
+        ],
+        "extensions": [
+          ".program"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "execute-program",
+        "scopeName": "source.execute",
+        "path": "./syntaxes/execute.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "execute-program",
+        "path": "./snippets/execute.code-snippets"
+      }
+    ],
+    "configurationDefaults": {
+      "[execute-program]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "vscode:prepublish": "npm test",
+    "package": "vsce package --allow-missing-repository --out execute-program-0.2.0.vsix"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "4.0.0",
+    "vscode-textmate": "9.3.2",
+    "vscode-oniguruma": "2.0.1"
+  }
+}

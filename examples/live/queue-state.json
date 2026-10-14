@@ -1,0 +1,10 @@
+{
+  "bindings": {
+    "input_path": "queue.json",
+    "output_path": "queue-report.json",
+    "threshold": "30"
+  },
+  "user": {
+    "description": "Local overdue-job monitor; threshold is supplied to jq through --argjson."
+  }
+}

@@ -1,0 +1,6 @@
+# Purpose: Extract the changed paths and change type from a deployment review export without querying Git.
+# Inputs: release/deployment-diff.json is a deployment service export listing paths and change states.
+# Outputs: Only added, modified or deleted paths, sorted by path.
+accept deployment_diff_path as text with default "release/deployment-diff.json"
+run cat with path deployment_diff_path
+then jq with flags ["-r"] and filter "[.changes[] | select(.change != \"unchanged\")] | sort_by(.path)[] | \"\\(.change)\\t\\(.path)\""

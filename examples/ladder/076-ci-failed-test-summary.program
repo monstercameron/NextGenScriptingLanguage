@@ -1,0 +1,6 @@
+# Purpose: Turn a CI test-result export into an actionable suite-by-suite failure summary.
+# Inputs: reports/test-results.json is a JSON CI export with test suite, test name and status records.
+# Outputs: One line per failing suite with the failed test names and count.
+accept test_results_path as text with default "reports/test-results.json"
+run cat with path test_results_path
+then jq with flags ["-r"] and filter "[.tests[] | select(.status == \"failed\")] | group_by(.suite)[] | \"\\(.[0].suite): \\(length) failed: \\(map(.name) | join(\", \"))\""

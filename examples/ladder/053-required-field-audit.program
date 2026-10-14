@@ -1,0 +1,6 @@
+# Purpose: Audit an API record batch against its required fields and report incomplete records.
+# Inputs: fixtures/053/records.json contains API export with required field names and customer records.
+# Outputs: JSON array of record IDs and missing field names.
+accept records_path as text with default "fixtures/053/records.json"
+run cat with path records_path
+then jq with filter ".required as $required | [.records[] | . as $record | {id: ($record.id // null), missing: [$required[] as $field | select(($record | has($field)) | not) | $field]} | select(.missing | length > 0)]" and flags ["-c", "-S"]

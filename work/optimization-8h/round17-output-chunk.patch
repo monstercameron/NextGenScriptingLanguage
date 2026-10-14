@@ -1,0 +1,186 @@
+--- a/src/runtime.rs
++++ b/src/runtime.rs
+@@ -791,7 +791,7 @@
+     }
+     let mut output = Vec::new();
+     let mut eof = false;
+-    let mut chunk = [0u8; 32768];
++    let mut chunk = [0u8; 64 * 1024];
+     loop {
+         check_deadline(signals.deadline)?;
+         if signals.cancelled.load(Ordering::Relaxed) {
+--- a/tests/opt_output_chunk.rs
++++ b/tests/opt_output_chunk.rs
+@@ -0,0 +1,172 @@
++use flow::ast::Program;
++use flow::manifest::Registry;
++use flow::runtime::RunOptions;
++use sha2::{Digest, Sha256};
++use std::collections::BTreeMap;
++use std::fmt::Write as _;
++use std::fs;
++use std::path::Path;
++use std::sync::atomic::AtomicBool;
++use std::sync::Arc;
++use std::time::{Duration, Instant};
++
++const MIB: usize = 1024 * 1024;
++
++fn cat_registry(directory: &Path) -> Registry {
++    fs::write(
++        directory.join("cat.json"),
++        r#"{"name":"cat","binary":"/bin/cat","accepts_stdin":true,"arguments":[]}"#,
++    )
++    .unwrap();
++    Registry::load(directory).unwrap()
++}
++
++fn options(directory: &Path, max_output_bytes: usize) -> RunOptions {
++    RunOptions {
++        working_directory: directory.to_path_buf(),
++        cache_directory: None,
++        trace: false,
++        max_output_bytes,
++        command_timeout: Some(Duration::from_secs(60)),
++    }
++}
++
++fn execute(
++    directory: &Path,
++    registry: &Registry,
++    program: &Program,
++    input: Vec<u8>,
++    max_output_bytes: usize,
++) -> anyhow::Result<flow::runtime::RunResult> {
++    flow::runtime::run_with_context(
++        program,
++        registry,
++        &options(directory, max_output_bytes),
++        BTreeMap::new(),
++        input,
++        Arc::new(AtomicBool::new(false)),
++    )
++}
++
++fn binary_payload(length: usize) -> Vec<u8> {
++    (0..length)
++        .map(|index| ((index.wrapping_mul(37) + index / 11) & 0xff) as u8)
++        .collect()
++}
++
++fn sha256_hex(bytes: &[u8]) -> String {
++    let digest = Sha256::digest(bytes);
++    let mut encoded = String::with_capacity(64);
++    for byte in digest.iter() {
++        write!(&mut encoded, "{byte:02x}").unwrap();
++    }
++    encoded
++}
++
++#[test]
++fn binary_output_at_and_over_limit_keeps_exact_bytes_and_error() {
++    let directory = tempfile::tempdir().unwrap();
++    let registry = cat_registry(directory.path());
++    let payload = binary_payload(64 * 1024 + 1);
++    let program = flow::parser::parse("then cat\n").unwrap();
++
++    let exact = execute(
++        directory.path(),
++        &registry,
++        &program,
++        payload.clone(),
++        payload.len(),
++    )
++    .unwrap();
++    assert_eq!(exact.output, payload);
++
++    let limit = payload.len() - 1;
++    let error = match execute(
++        directory.path(),
++        &registry,
++        &program,
++        payload.clone(),
++        limit,
++    ) {
++        Ok(_) => panic!("output larger than the configured limit succeeded"),
++        Err(error) => error,
++    };
++    let message = format!("{error:#}");
++    assert!(
++        message.contains(&format!("output exceeds maximum of {limit} bytes")),
++        "{message}"
++    );
++}
++
++fn emit_samples(
++    case: &str,
++    directory: &Path,
++    registry: &Registry,
++    program: &Program,
++    expected: &[u8],
++    in_memory_input: bool,
++) {
++    let expected_hash = sha256_hex(expected);
++    let configured = options(directory, 16 * MIB);
++    for iteration in 0..6 {
++        // Exclude fixture cloning from the measured run while exercising the
++        // same large owned Vec that the runtime buffers to /bin/cat stdin.
++        let input = if in_memory_input {
++            expected.to_vec()
++        } else {
++            Vec::new()
++        };
++        let bindings = BTreeMap::new();
++        let cancelled = Arc::new(AtomicBool::new(false));
++        let started = Instant::now();
++        let result = flow::runtime::run_with_context(
++            program,
++            registry,
++            &configured,
++            bindings,
++            input,
++            cancelled,
++        )
++        .unwrap();
++        let elapsed_ns = started.elapsed().as_nanos();
++
++        assert_eq!(result.output.len(), expected.len(), "case={case}");
++        assert_eq!(result.output, expected, "case={case}");
++        let output_hash = sha256_hex(&result.output);
++        assert_eq!(output_hash, expected_hash, "case={case}");
++        eprintln!(
++            "case={case},iteration={iteration},elapsed_ns={elapsed_ns},bytes={},sha256={output_hash}",
++            result.output.len()
++        );
++    }
++}
++
++#[test]
++#[ignore = "manual capture-throughput probe; run with --ignored --nocapture"]
++fn final_stdout_capture_bulk_throughput_probe() {
++    assert!(Path::new("/bin/cat").is_file(), "benchmark requires /bin/cat");
++    let directory = tempfile::tempdir().unwrap();
++    let registry = cat_registry(directory.path());
++
++    for (case, filename, length) in [
++        ("owned-file-1m", "payload-1m.bin", MIB),
++        ("owned-file-11m", "payload-11m.bin", 11 * MIB),
++    ] {
++        let expected = binary_payload(length);
++        fs::write(directory.path().join(filename), &expected).unwrap();
++        let source = format!("read file \"{filename}\"\nthen cat\n");
++        let program = flow::parser::parse(&source).unwrap();
++        emit_samples(case, directory.path(), &registry, &program, &expected, false);
++    }
++
++    let expected = binary_payload(11 * MIB);
++    let program = flow::parser::parse("then cat\n").unwrap();
++    emit_samples(
++        "buffered-memory-11m",
++        directory.path(),
++        &registry,
++        &program,
++        &expected,
++        true,
++    );
++}

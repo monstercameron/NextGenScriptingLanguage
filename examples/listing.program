@@ -1,0 +1,2 @@
+run cd with path "."
+then ls with flags ["-la"] and path "."

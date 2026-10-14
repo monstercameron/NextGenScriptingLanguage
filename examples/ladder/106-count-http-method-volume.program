@@ -1,0 +1,7 @@
+# Purpose: Count GET, POST, and other request methods from a tab-separated access export.
+# Inputs: requests.tsv: TSV: timestamp,method,path,status; one request per row.
+# Outputs: stdout: Sorted method,count rows.
+accept requests_path as text with default "requests.tsv"
+run cat with path requests_path
+then awk with delimiter "\t" and program "NR>1 { methods[$2]++ } END { for (m in methods) printf \"%s\\t%d\\n\",m,methods[m] }"
+then sort

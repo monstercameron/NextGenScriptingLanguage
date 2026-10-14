@@ -1,0 +1,6 @@
+# Purpose: Produce a one-line incident notification for each event delivered on stdin.
+# Inputs: stdin supplies incident events with time, priority, service, id, and summary.
+# Outputs: stdout emits a due-to-priority ordered message only after each input record arrives.
+listen to stdin
+whenever a line arrives as record
+  then jq with flags ["-r"] and filter "\"\\(.time) P\\(.priority) \\(.service) #\\(.id): \\(.summary)\""

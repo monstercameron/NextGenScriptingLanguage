@@ -1,0 +1,7 @@
+# Purpose: Print the first requested number of lines from a text file.
+# Input: --input path=FILE; optional --input lines=N (positive integer for BSD head).
+# Output: The requested prefix on stdout. The input file is unchanged.
+accept path as text
+accept lines as integer with default 20
+read path
+pipe to "head" with arguments ["-n", lines]

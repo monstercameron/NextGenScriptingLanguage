@@ -1,0 +1,6 @@
+# macOS: tr -u flushes each output line without waiting for EOF.
+# Create events.log in the caller's folder, then append lines from another terminal.
+stream from tail with flags ["-n", "0", "-F"] and path "events.log"
+pipe to tr with flags ["-u"] and from "[:lower:]" and to "[:upper:]"
+take the first 3 lines
+show each line

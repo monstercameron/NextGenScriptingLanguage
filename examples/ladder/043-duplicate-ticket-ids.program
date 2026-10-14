@@ -1,0 +1,9 @@
+# Purpose: Detect repeated ticket identifiers before importing a CSV export.
+# Inputs: tickets.csv (ticket_id,queue,priority).
+# Outputs: Each duplicate ticket ID once, sorted.
+accept tickets_path as text with default "tickets.csv"
+run cat with path tickets_path
+then cut with delimiter "," and fields "1"
+then tail with flags ["-n", "+2"]
+then sort
+then uniq with flags ["-d"]

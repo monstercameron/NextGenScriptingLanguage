@@ -1,0 +1,6 @@
+# Purpose: Produce stable DEBUG, INFO, WARN, and ERROR totals from whitespace-delimited application log lines.
+# Inputs: service.log: Plain text: timestamp service severity followed by a message.
+# Outputs: stdout: One severity,count row for each of the four standard levels, including zero counts.
+accept service_path as text with default "service.log"
+run cat with path service_path
+then awk with program " { counts[$3]++ } END { printf \"DEBUG,%d\\n\",counts[\"DEBUG\"]; printf \"INFO,%d\\n\",counts[\"INFO\"]; printf \"WARN,%d\\n\",counts[\"WARN\"]; printf \"ERROR,%d\\n\",counts[\"ERROR\"] }"

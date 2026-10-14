@@ -1,0 +1,7 @@
+# Purpose: Join each warehouse quantity to its unit price and calculate extended value in integer cents.
+# Inputs: stock.csv: Unquoted CSV without a header: sorted sku,warehouse,units rows.; prices.csv: Unquoted CSV without a header: sorted sku,unit_cents rows.
+# Outputs: stdout: Joined inventory and extended value in cents, with a report header.
+accept stock_path as text with default "stock.csv"
+accept prices_path as text with default "prices.csv"
+run join with flags ["-t,", "-1", "1", "-2", "1"] and files [stock_path, prices_path]
+then awk with delimiter "," and program "BEGIN { print \"sku,warehouse,units,unit_cents,extended_cents\" } { printf \"%s,%s,%s,%s,%d\\n\", $1,$2,$3,$4,$3*$4 }"

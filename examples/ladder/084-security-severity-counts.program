@@ -1,0 +1,6 @@
+# Purpose: Convert a vulnerability scanner export into a severity distribution for release triage.
+# Inputs: security/findings.json contains findings from a dependency or container scanner with severity labels.
+# Outputs: Finding counts by normalized severity, ordered alphabetically.
+accept findings_path as text with default "security/findings.json"
+run cat with path findings_path
+then jq with flags ["-r"] and filter "[.findings[] | .severity | ascii_downcase] | group_by(.)[] | \"\\(.[0])\\t\\(length)\""

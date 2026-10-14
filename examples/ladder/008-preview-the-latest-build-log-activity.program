@@ -1,0 +1,7 @@
+# Purpose: Save the most recent four lines from a build log for a concise handoff.
+# Inputs: logs/build.log: chronological build log with one event per line.
+# Outputs: reports/latest-build-activity.log: final four log lines; stdout echoes the preview.
+accept build_path as text with default "logs/build.log"
+run mkdir with flags ["-p"] and paths ["reports"]
+run tail with flags ["-n", "4"] and path build_path
+then save to "reports/latest-build-activity.log"

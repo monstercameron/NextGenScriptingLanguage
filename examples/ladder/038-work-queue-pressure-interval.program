@@ -1,0 +1,7 @@
+# Purpose: Poll queue pressure once per second and stop after two report ticks.
+# Inputs: jobs.csv (job,team,state,units).
+# Outputs: queued units, running units, and total jobs per sample.
+accept jobs_path as text with default "jobs.csv"
+every 1 second
+  run cat with path jobs_path
+  pipe to awk with delimiter "," and program "NR>1 { jobs++; if ($3 == \"queued\") queued += $4; if ($3 == \"running\") running += $4 } END { printf \"queued=%d running=%d jobs=%d\\n\", queued, running, jobs }"

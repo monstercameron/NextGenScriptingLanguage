@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "output": "ONE\nTWO\nTHREE\n",
+  "native_launches": 2,
+  "applets": [
+    "tail",
+    "tr"
+  ],
+  "owned_children_gone_after_exit": [
+    true,
+    true
+  ],
+  "records_written": 4,
+  "records_emitted": 3,
+  "incremental_responses_before_source_eof": true,
+  "platform": "macOS arm64",
+  "tr_flush_flag": "-u"
+}

@@ -1,0 +1,7 @@
+# Purpose: Preserve externally supplied text byte-for-byte in a named archive copy without interpreting shell-looking content.
+# Inputs: intake/clipboard-capture.txt: externally supplied plain text.
+# Outputs: archive/intake/clipboard-capture.txt: literal archived copy; stdout echoes the saved text.
+accept clipboard_capture_path as text with default "intake/clipboard-capture.txt"
+run mkdir with flags ["-p"] and paths ["archive/intake"]
+run cat with path clipboard_capture_path
+then save to "archive/intake/clipboard-capture.txt"

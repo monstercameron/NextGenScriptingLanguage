@@ -1,0 +1,6 @@
+# Purpose: Recursively apply later site and service layers over defaults.
+# Inputs: fixtures/051/settings.json contains Offline settings export with ordered configuration layers.
+# Outputs: Compact sorted JSON containing effective merged settings.
+accept settings_path as text with default "fixtures/051/settings.json"
+run cat with path settings_path
+then jq with filter "reduce .layers[] as $layer ({}; . * $layer)" and flags ["-c", "-S"]

@@ -1,0 +1,6 @@
+# Purpose: Identify unresolved incidents already beyond their severity-specific response window.
+# Inputs: operations/incidents.json contains incident status, elapsed age and response SLA in minutes.
+# Outputs: Unresolved incidents past SLA, ordered by largest SLA overrun.
+accept incidents_path as text with default "operations/incidents.json"
+run cat with path incidents_path
+then jq with flags ["-r"] and filter "[.incidents[] | select((.status != \"resolved\") and (.age_minutes > .sla_minutes)) | {id, severity, overrun:(.age_minutes - .sla_minutes)}] | sort_by(-.overrun)[] | \"\\(.id)\\t\\(.severity)\\toverdue=\\(.overrun)m\""

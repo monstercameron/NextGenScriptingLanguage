@@ -1,0 +1,7 @@
+# Purpose: Aggregate SKU quantities by storage bin to help staff prioritize replenishment and cycle counts.
+# Inputs: bin-snapshot.csv: Unquoted CSV header: sku,bin,units.
+# Outputs: stdout: Alphabetically sorted bin,total_units rows.
+accept bin_snapshot_path as text with default "bin-snapshot.csv"
+run cat with path bin_snapshot_path
+then awk with delimiter "," and program "NR>1 { units[$2]+=$3 } END { for (bin in units) printf \"%s,%d\\n\",bin,units[bin] }"
+then sort

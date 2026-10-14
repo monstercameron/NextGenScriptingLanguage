@@ -1,0 +1,24 @@
+{
+  "batch_count": 100,
+  "iterations_per_batch": 1000,
+  "operations": {
+    "parser_parse": {
+      "p50_ns": 1865.625,
+      "p95_ns": 2258.584,
+      "p99_ns": 2463.291
+    },
+    "printf_manifest_build_arguments": {
+      "p50_ns": 105.75,
+      "p95_ns": 108.375,
+      "p99_ns": 109.5
+    },
+    "runtime_validate_loaded_registry": {
+      "p50_ns": 291.084,
+      "p95_ns": 294.584,
+      "p99_ns": 313.458
+    }
+  },
+  "percentiles_are": "batch averages in nanoseconds per operation, not individual requests",
+  "script_text": "read file \"input.txt\" as source\nrun printf with message source\nthen tr with from \"[:lower:]\" and to \"[:upper:]\"\nthen save to file \"output.txt\"\n",
+  "binary_sha256": "00bb2e2e16cda0dfd918ca659fb42a386c95d27936ecd9dabb5fb345c0ca1143"
+}

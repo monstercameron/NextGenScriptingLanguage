@@ -1,0 +1,6 @@
+# Purpose: Summarize an event export into daily event-type counts for operational reporting.
+# Inputs: operations/events.json contains timestamped deployment, alert and incident records.
+# Outputs: Event count for each UTC calendar day and event type.
+accept events_path as text with default "operations/events.json"
+run cat with path events_path
+then jq with flags ["-r"] and filter "[.events[] | {day:(.timestamp[0:10]), type:.type}] | sort_by([.day, .type]) | group_by([.day, .type])[] | \"\\(.[0].day)\\t\\(.[0].type)\\t\\(length)\""

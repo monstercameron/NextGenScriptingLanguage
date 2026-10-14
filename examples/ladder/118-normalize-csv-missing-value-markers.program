@@ -1,0 +1,6 @@
+# Purpose: Convert whole-field NULL and N/A placeholders to empty CSV fields in an unquoted import.
+# Inputs: supplier-feed.csv: Unquoted CSV with header; quoted CSV fields are not supported.
+# Outputs: stdout: Same CSV with NULL and N/A cells empty.
+accept supplier_feed_path as text with default "supplier-feed.csv"
+run cat with path supplier_feed_path
+then awk with program "BEGIN { FS=\",\"; OFS=\",\" } NR==1 { print; next } { for (i=1;i<=NF;i++) if ($i==\"NULL\" || $i==\"N/A\") $i=\"\"; print }"

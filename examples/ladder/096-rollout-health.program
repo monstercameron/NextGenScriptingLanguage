@@ -1,0 +1,6 @@
+# Purpose: Identify services whose rollout export shows fewer healthy instances than desired or any unavailable instances.
+# Inputs: deploy/rollout-status.json is a deployment controller export with desired, healthy and unavailable replica counts.
+# Outputs: Services with rollout health deficits, sorted by service name.
+accept rollout_status_path as text with default "deploy/rollout-status.json"
+run cat with path rollout_status_path
+then jq with flags ["-r"] and filter "[.services[] | select(.healthy < .desired or .unavailable > 0)] | sort_by(.service)[] | \"\\(.service)\\t\\(.healthy)/\\(.desired) healthy\\tunavailable=\\(.unavailable)\""

@@ -1,0 +1,6 @@
+# Purpose: Retain request paths and status while dropping query parameters that may contain user-supplied values.
+# Inputs: access.tsv: TSV header: timestamp,method,url,status; URL is in field three.
+# Outputs: stdout: Sanitized access TSV with query strings removed.
+accept access_path as text with default "access.tsv"
+run cat with path access_path
+then awk with program "BEGIN { FS=\"\\t\"; OFS=\"\\t\"; print \"timestamp\\tmethod\\tpath\\tstatus\" } NR>1 { sub(/\\?.*/,\"\",$3); print $1,$2,$3,$4 }"

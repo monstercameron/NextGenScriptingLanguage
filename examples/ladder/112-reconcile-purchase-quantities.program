@@ -1,0 +1,7 @@
+# Purpose: Join sorted purchase lines to receipt quantities and report only short or over-received lines.
+# Inputs: purchase-lines.csv: Unquoted CSV without a header: sorted line_id,sku,ordered_quantity rows.; receipts.csv: Unquoted CSV without a header: sorted line_id,received_quantity rows.
+# Outputs: stdout: Mismatched line quantities with signed received-minus-ordered variance.
+accept purchase_lines_path as text with default "purchase-lines.csv"
+accept receipts_path as text with default "receipts.csv"
+run join with flags ["-t,", "-1", "1", "-2", "1"] and files [purchase_lines_path, receipts_path]
+then awk with delimiter "," and program "BEGIN { print \"line_id,sku,ordered,received,variance\" } $3+0 != $4+0 { printf \"%s,%s,%s,%s,%d\\n\",$1,$2,$3,$4,$4-$3 }"

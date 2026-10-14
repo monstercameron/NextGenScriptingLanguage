@@ -1,0 +1,6 @@
+# Purpose: Calculate count, failed responses, rounded mean latency, and maximum latency for each route.
+# Inputs: fixtures/064/requests.json contains API telemetry events with route, status, and elapsed milliseconds.
+# Outputs: Sorted JSON summary with one aggregate row per route.
+accept requests_path as text with default "fixtures/064/requests.json"
+run cat with path requests_path
+then jq with filter "[.requests[]] | sort_by(.route) | group_by(.route) | map({route: .[0].route, requests: length, failed: (map(select(.status >= 400)) | length), mean_ms: ((map(.duration_ms) | add) / length | round), max_ms: (map(.duration_ms) | max)})" and flags ["-c", "-S"]

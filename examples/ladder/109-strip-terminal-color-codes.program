@@ -1,0 +1,6 @@
+# Purpose: Remove ANSI SGR color sequences so log text can be searched and attached to a plain-text report.
+# Inputs: colored-build.log: UTF-8 text containing ANSI SGR color escapes.
+# Outputs: stdout: The same readable text without SGR color escapes.
+accept colored_build_path as text with default "colored-build.log"
+run cat with path colored_build_path
+then sed with program "s/\u001b\\[[0-9;]*m//g"

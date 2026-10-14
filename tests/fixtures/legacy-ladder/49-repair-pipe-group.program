@@ -1,0 +1,5 @@
+# 49. Retry a failed group from frozen input
+read "fruit.txt"
+pipe to tr with from "[:lower:]" and to "[:upper:]"
+pipe to grep with pattern "NO MATCH"
+then save to "group.txt"

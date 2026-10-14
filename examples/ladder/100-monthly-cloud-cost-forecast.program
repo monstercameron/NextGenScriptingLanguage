@@ -1,0 +1,6 @@
+# Purpose: Extrapolate current monthly spend linearly from elapsed billing days and compare it with budget.
+# Inputs: finance/monthly-spend.json contains month-to-date spend, the billing period length and approved service budgets.
+# Outputs: Month-to-date and linear month-end projected cents, budget and projected variance per service.
+accept monthly_spend_path as text with default "finance/monthly-spend.json"
+run cat with path monthly_spend_path
+then jq with flags ["-r"] and filter ". as $root | [.services[] | {service, spend_cents, budget_cents, projected_cents:((.spend_cents * $root.period_days / $root.days_elapsed) | round)}] | sort_by(-.projected_cents)[] | \"\\(.service)\\tMTD=\\(.spend_cents)c\\tprojected=\\(.projected_cents)c\\tbudget=\\(.budget_cents)c\\tvariance=\\(.projected_cents - .budget_cents)c\""

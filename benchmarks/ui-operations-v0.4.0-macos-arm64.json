@@ -1,0 +1,37 @@
+{
+  "batches": 100,
+  "chart_points": 120,
+  "operations": {
+    "parse": {
+      "p50_us": 27.12625,
+      "p95_us": 28.30958,
+      "p99_us": 28.84875
+    },
+    "render_100x30_120_points": {
+      "p50_us": 102.87875,
+      "p95_us": 105.95291999999999,
+      "p99_us": 106.64417000000002
+    },
+    "route_text_message": {
+      "p50_us": 0.26125,
+      "p95_us": 0.28042,
+      "p99_us": 0.33708000000000005
+    },
+    "validate": {
+      "p50_us": 1.5220799999999999,
+      "p95_us": 1.755,
+      "p99_us": 2.42875
+    }
+  },
+  "operations_per_batch": 100,
+  "percentiles": "batch averages; render includes in-memory diff, excludes terminal I/O; routing excludes applets",
+  "terminal_cells": [
+    100,
+    30
+  ],
+  "warmup_batches": 10,
+  "version": "execute 0.4.0",
+  "build": "release unit-test binary; optimized library functions, not CLI timing",
+  "binary_sha256": "7bc27d00c3694cc377cc9e7c73bc93c82f55ccde81fc798a2b2f26444e2f99d2",
+  "manifest_sha256": "821dd80054f78029446e963d5ee30375a8c2ec5dc8dab0c8411bafcea837a2bc"
+}

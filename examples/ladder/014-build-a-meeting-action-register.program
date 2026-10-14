@@ -1,0 +1,9 @@
+# Purpose: Extract TODO action IDs and descriptions from the meeting record for the follow-up tracker.
+# Inputs: meetings/platform-review.txt: meeting notes with TODO and non-action lines.
+# Outputs: reports/platform-actions.txt: action ID and description rows; stdout echoes the register.
+accept platform_review_path as text with default "meetings/platform-review.txt"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path platform_review_path
+pipe to grep with pattern "^TODO:"
+pipe to cut with delimiter ":" and fields "2-"
+then save to "reports/platform-actions.txt"

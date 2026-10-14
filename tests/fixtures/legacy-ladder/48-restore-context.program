@@ -1,0 +1,6 @@
+# 48. Restore cwd, named parameters, and frozen results
+run cd with path "sub"
+read "filename.txt" as selected
+then cat with path selected as content
+then false
+then save to "recovered.txt"

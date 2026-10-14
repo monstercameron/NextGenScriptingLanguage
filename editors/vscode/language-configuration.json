@@ -1,0 +1,51 @@
+{
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [
+    [
+      "[",
+      "]"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "[",
+      "close": "]",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "[",
+      "]"
+    ],
+    [
+      "\"",
+      "\""
+    ]
+  ],
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_.-]*",
+  "folding": {
+    "offSide": true
+  },
+  "onEnterRules": [
+    {
+      "beforeText": "^\\s*(?:if\\b[^\\n]*|otherwise|define\\s+a\\s+program\\s+named\\s+[A-Za-z][A-Za-z0-9_]*|whenever\\b[^\\n]*|every\\s+[0-9]+\\s+(?:milliseconds?|seconds?|minutes?|hours?)|show\\s+a\\s+(?:list|table|bar\\s+chart)\\s+named\\s+[A-Za-z][A-Za-z0-9_]*)\\s*(?:#.*)?$",
+      "action": {
+        "indent": "indent"
+      }
+    }
+  ]
+}

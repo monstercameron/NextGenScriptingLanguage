@@ -1,0 +1,6 @@
+# Purpose: Count empty unquoted CSV cells per header column to direct cleanup work.
+# Inputs: accounts.csv: Unquoted CSV with a header row; every data row uses the same field count.
+# Outputs: stdout: column,blank_count,data_rows followed by a row for each input column.
+accept accounts_path as text with default "accounts.csv"
+run cat with path accounts_path
+then awk with program "BEGIN { FS=\",\" } NR==1 { nfields=NF; print \"column,blank_count,data_rows\"; for(i=1;i<=NF;i++) names[i]=$i; next } { rows++; for(i=1;i<=nfields;i++) if($i==\"\") blanks[i]++ } END { for(i=1;i<=nfields;i++) printf \"%s,%d,%d\\n\",names[i],blanks[i],rows }"

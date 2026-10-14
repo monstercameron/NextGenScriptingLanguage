@@ -1,0 +1,153 @@
+    Finished `release` profile [optimized] target(s) in 0.15s
+     Running unittests src/lib.rs (target/release/deps/flow-dd2100aee100fd40)
+
+running 10 tests
+test runtime::argv_construction_tests::opt_runtime_command_construction_benchmark_raw_samples ... ok
+test runtime::child_observer_tests::runtime_observer_preserves_host_sigchld_ignore ... ok
+test runtime::opt_manifest_binary_path_tests::opt_manifest_binary_path_benchmark_raw_samples ... ok
+test runtime::opt_manifest_path_cache_tests::opt_manifest_cache_key_benchmark_raw_samples ... ok
+test ui::app::tests::benchmark_large_rows_dispatch_changed_and_unchanged ... ok
+test ui::app::tests::benchmark_large_snapshot_projection ... ok
+test ui::app::tests::benchmark_large_table_viewport ... ok
+test ui::app::tests::benchmark_ui_dispatch_32_widgets_32_literals ... ok
+test ui::app::tests::benchmark_ui_dispatch_large_field_projection ... ok
+test ui::app::tests::benchmark_ui_operations ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 104 filtered out; finished in 5.32s
+
+     Running unittests src/main.rs (target/release/deps/execute-38ffa8da8fc68eb5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adversarial.rs (target/release/deps/adversarial-9301d6a0f79fe9ac)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/cli.rs (target/release/deps/cli-9bb8fdccac90145a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.00s
+
+     Running tests/cpu.rs (target/release/deps/cpu-90bb82b676764f38)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/direct_commands.rs (target/release/deps/direct_commands-7777b0cc9e40e80c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/ladder.rs (target/release/deps/ladder-3256117d39f99813)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/live.rs (target/release/deps/live-1425a49c05812916)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/opt_allocations.rs (target/release/deps/opt_allocations-7a05ee79f3b3fa35)
+
+running 1 test
+test report_release_allocation_counts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/opt_child_wakeup.rs (target/release/deps/opt_child_wakeup-b0b2f0c1ed2a6bcc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/opt_core_bench.rs (target/release/deps/opt_core_bench-8c5127fd27e0bcf2)
+
+running 1 test
+test core_operations ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+     Running tests/opt_diagnostics_poll.rs (target/release/deps/opt_diagnostics_poll-d719982077bf5ea7)
+
+running 1 test
+test profile_captured_one_mib_stderr_against_quiet_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.77s
+
+     Running tests/opt_local_child_observer.rs (target/release/deps/opt_local_child_observer-782bb5f0be931fa0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/opt_manifest_regressions.rs (target/release/deps/opt_manifest_regressions-d076659d864af53a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/opt_services_checkpoint_listener.rs (target/release/deps/opt_services_checkpoint_listener-675e3b601def0c03)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/opt_small_input.rs (target/release/deps/opt_small_input-b6c6ef023ef3a69d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/opt_stdin_prefill.rs (target/release/deps/opt_stdin_prefill-20eaa3e91dbde60a)
+
+running 1 test
+test benchmark_run_with_context_cat_payloads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.07s
+
+     Running tests/resume.rs (target/release/deps/resume-1e8491ee60df84ea)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+     Running tests/robustness.rs (target/release/deps/robustness-3e4df5413a3e86f3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/streaming.rs (target/release/deps/streaming-57dac000b1e19d7e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/timeout.rs (target/release/deps/timeout-e2f316a8bd88d913)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/ui.rs (target/release/deps/ui-32018efa68200c51)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+   Doc-tests flow
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

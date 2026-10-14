@@ -1,0 +1,8 @@
+# Purpose: Project only enabled service names and endpoint URLs from the service registry for a deployment handoff.
+# Inputs: ops/services.json: service registry records with name, endpoint, and enabled fields.
+# Outputs: reports/enabled-endpoints.tsv: enabled service and endpoint columns; stdout echoes the TSV.
+accept services_path as text with default "ops/services.json"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path services_path
+pipe to jq with flags ["-r"] and filter ".services[] | select(.enabled == true) | [.name, .endpoint] | @tsv"
+then save to "reports/enabled-endpoints.tsv"

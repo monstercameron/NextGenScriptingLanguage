@@ -1,0 +1,10 @@
+# Purpose: Select the Japanese glossary rows, omit the locale column, and sort the term-definition export.
+# Inputs: glossary/master.psv: pipe-separated locale, term, and definition rows.
+# Outputs: exports/glossary-ja.psv: sorted Japanese term-definition pairs; stdout echoes the export.
+accept master_path as text with default "glossary/master.psv"
+run mkdir with flags ["-p"] and paths ["exports"]
+run cat with path master_path
+pipe to grep with pattern "^ja"
+pipe to cut with delimiter "|" and fields "2-"
+pipe to sort
+then save to "exports/glossary-ja.psv"

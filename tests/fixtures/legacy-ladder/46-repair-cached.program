@@ -1,0 +1,5 @@
+# 46. Repair a suffix after a cached checkpoint
+run printf with message "recover"
+then tr with from "[:lower:]" and to "[:upper:]" and cache
+then false
+then save to "recovered.txt"

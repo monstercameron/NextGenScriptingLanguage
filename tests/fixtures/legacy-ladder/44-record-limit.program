@@ -1,0 +1,5 @@
+# 44. Reject an oversized event before its handler
+listen to stdin
+whenever a line arrives as record
+  then cat
+  then save to "must-not-exist.txt"

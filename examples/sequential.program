@@ -1,0 +1,3 @@
+run printf with message "hello from execute"
+then tr with from "[:lower:]" and to "[:upper:]" and cache
+then save to "output.txt"

@@ -1,0 +1,8 @@
+# Purpose: Read the relative profile path chosen by the deployment workspace and archive that profile as a named snapshot.
+# Inputs: deployment/active-profile.path: selected profile path; deployment/profiles/*.env: candidate profile files.
+# Outputs: reports/active-profile.snapshot: exact selected configuration; stdout echoes the snapshot.
+accept active_profile_path as text with default "deployment/active-profile.path"
+run mkdir with flags ["-p"] and paths ["reports"]
+read active_profile_path as profile
+then cat with path profile
+then save to "reports/active-profile.snapshot"

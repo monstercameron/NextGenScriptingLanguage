@@ -1,0 +1,6 @@
+# Purpose: Check whether a paginated response matches its reported total and contains duplicate IDs.
+# Inputs: fixtures/068/paged-export.json contains Paginated API export with reported total and IDs in each page.
+# Outputs: JSON integrity summary with counts, duplicate IDs, and total-match status.
+accept paged_export_path as text with default "fixtures/068/paged-export.json"
+run cat with path paged_export_path
+then jq with filter ".pages as $pages | ([$pages[].items[].id]) as $ids | {page_count: ($pages | length), reported_total: .total_count, received_total: ($ids | length), unique_total: ($ids | unique | length), duplicate_ids: ($ids | group_by(.) | map(select(length > 1) | .[0])), count_matches: (($ids | length) == .total_count)}" and flags ["-c", "-S"]

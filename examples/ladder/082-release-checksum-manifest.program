@@ -1,0 +1,6 @@
+# Purpose: Create a stable checksum manifest from digests already emitted by the release pipeline; this workflow does not compute hashes.
+# Inputs: release/checksums.json contains paths and sha256 digests exported by signing or publication infrastructure.
+# Outputs: Unquoted checksum-manifest rows in the conventional digest-two-spaces-path format, sorted by path.
+accept checksums_path as text with default "release/checksums.json"
+run cat with path checksums_path
+then jq with flags ["-r"] and filter ".artifacts | sort_by(.path)[] | \"\\(.sha256)  \\(.path)\""

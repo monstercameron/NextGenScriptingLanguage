@@ -1,0 +1,6 @@
+# Purpose: Preview deterministic request batches using the target API batch size.
+# Inputs: fixtures/071/batch.json contains API batch limit and ordered records awaiting submission.
+# Outputs: JSON array of numbered batches with every record preserved once in order.
+accept batch_path as text with default "fixtures/071/batch.json"
+run cat with path batch_path
+then jq with filter ".batch_size as $size | .records as $records | [range(0; ($records | length); $size) as $start | {batch: ((($start / $size) | floor) + 1), items: $records[$start:($start + $size)]}]" and flags ["-c", "-S"]

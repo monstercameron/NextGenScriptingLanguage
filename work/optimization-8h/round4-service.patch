@@ -1,0 +1,262 @@
+--- a/src/runtime/service.rs
++++ b/src/runtime/service.rs
+@@ -1,5 +1,5 @@
+ //! Reuse a parsed body for interval ticks, calendar ticks, or streamed line events.
+-use super::checkpoint::{CheckpointOptions, ExecutionState, Journal};
++use super::checkpoint::{CheckpointOptions, Journal};
+ use super::resume;
+ use super::*;
+ use crate::schedule::CronSchedule;
+@@ -117,25 +117,28 @@
+         Input::Bytes(bytes) => bytes.len(),
+         _ => 0,
+     };
+-    let initial_output = match &input {
+-        Input::Bytes(bytes) if journal.is_some() => bytes.clone(),
+-        _ => Vec::new(),
+-    };
+-    if let Some(journal) = journal.as_deref_mut() {
++    let state_source = if let Some(journal) = journal.as_deref_mut() {
+         if journal.has_pending() {
+             resume::prepare(body, registry, journal)?;
++            FiniteStateSource::Restore
+         } else {
+-            let mut bindings = BTreeMap::new();
+-            if let Some((name, value)) = binding.clone() {
+-                bindings.insert(name, value);
+-            }
+-            journal.begin_execution(&ExecutionState {
+-                cwd: options.working_directory.clone(),
+-                output: initial_output,
+-                bindings,
+-            })?;
+-        }
+-    }
++            let snapshot_output = match &input {
++                Input::Bytes(bytes) => bytes.as_slice(),
++                _ => &[],
++            };
++            let snapshot_bindings = binding
++                .as_ref()
++                .map(|(name, value)| (name.as_str(), value));
++            journal.begin_execution_parts(
++                &options.working_directory,
++                snapshot_output,
++                snapshot_bindings,
++            )?;
++            FiniteStateSource::Fresh
++        }
++    } else {
++        FiniteStateSource::Fresh
++    };
+     if binding.is_some() {
+         trace_event(
+             options.trace,
+@@ -149,7 +152,7 @@
+         || serde_json::json!({"event":"handler_start","run":result.runs + 1}),
+     )?;
+     let finite = if let Some(journal) = journal.as_deref_mut() {
+-        run_finite_inner(
++        run_finite_inner_with_state_source(
+             body,
+             registry,
+             options,
+@@ -157,6 +160,7 @@
+             input,
+             binding,
+             Some(journal),
++            state_source,
+         )?
+     } else {
+         run_finite(body, registry, options, signals, input, binding)?
+--- a/src/runtime.rs
++++ b/src/runtime.rs
+@@ -837,6 +837,12 @@
+     )
+ }
+ 
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum FiniteStateSource {
++    Fresh,
++    Restore,
++}
++
+ #[allow(clippy::too_many_arguments)]
+ fn run_finite_inner(
+     program: &Program,
+@@ -847,6 +853,34 @@
+     initial_binding: Option<(String, Value)>,
+     journal: Option<&mut checkpoint::Journal>,
+ ) -> Result<RunResult> {
++    let state_source = if journal.is_some() {
++        FiniteStateSource::Restore
++    } else {
++        FiniteStateSource::Fresh
++    };
++    run_finite_inner_with_state_source(
++        program,
++        registry,
++        options,
++        signals,
++        initial_input,
++        initial_binding,
++        journal,
++        state_source,
++    )
++}
++
++#[allow(clippy::too_many_arguments)]
++fn run_finite_inner_with_state_source(
++    program: &Program,
++    registry: &Registry,
++    options: &RunOptions,
++    signals: &Signals,
++    initial_input: Input,
++    initial_binding: Option<(String, Value)>,
++    journal: Option<&mut checkpoint::Journal>,
++    state_source: FiniteStateSource,
++) -> Result<RunResult> {
+     run_finite_state(
+         program,
+         registry,
+@@ -855,6 +889,7 @@
+         initial_input,
+         initial_binding.into_iter().collect(),
+         journal,
++        state_source,
+     )
+ }
+ 
+@@ -867,6 +902,7 @@
+     initial_input: Input,
+     initial_bindings: BTreeMap<String, Value>,
+     mut journal: Option<&mut checkpoint::Journal>,
++    state_source: FiniteStateSource,
+ ) -> Result<RunResult> {
+     let mut cwd = fs::canonicalize(&options.working_directory)?;
+     let cache_override = options.cache_directory.as_ref().map(|path| cwd.join(path));
+@@ -879,16 +915,21 @@
+     };
+     let mut index = 0;
+     if let Some(journal) = journal.as_deref_mut() {
+-        let state = journal.take_restored_state()?;
+-        index = journal.completed_nodes().last().map_or(0, |node| node.end);
+-        cwd = state.cwd;
++        if state_source == FiniteStateSource::Restore {
++            let state = journal.take_restored_state()?;
++            index = journal.completed_nodes().last().map_or(0, |node| node.end);
++            cwd = state.cwd;
++            bindings = state.bindings;
++            data = Input::Bytes(state.output);
++            if index == program.steps.len() {
++                journal.discard_removed_tail()?;
++            }
++        } else {
++            // The service just committed this exact path with the event snapshot.
++            cwd = options.working_directory.clone();
++        }
+         if !cwd.is_dir() {
+             bail!("checkpoint working directory no longer exists");
+-        }
+-        bindings = state.bindings;
+-        data = Input::Bytes(state.output);
+-        if index == program.steps.len() {
+-            journal.discard_removed_tail()?;
+         }
+         lazy_event(
+             options.trace,
+@@ -1067,11 +1108,11 @@
+         if let Some(journal) = journal.as_deref_mut() {
+             let bytes =
+                 std::mem::replace(&mut data, Input::Empty).materialize(options.max_output_bytes)?;
+-            journal.complete_node(&checkpoint::ExecutionState {
+-                cwd: cwd.clone(),
+-                output: bytes.clone(),
+-                bindings: bindings.clone(),
+-            })?;
++            journal.complete_node_parts(
++                &cwd,
++                &bytes,
++                bindings.iter().map(|(name, value)| (name.as_str(), value)),
++            )?;
+             data = Input::Bytes(bytes);
+             lazy_event(
+                 options.trace,
+@@ -1115,6 +1156,7 @@
+         Input::Bytes(input),
+         bindings,
+         None,
++        FiniteStateSource::Fresh,
+     )
+ }
+ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
+--- /dev/null
++++ b/tests/opt_services_checkpoint_listener.rs
+@@ -0,0 +1,67 @@
++use std::io::{Read, Write};
++use std::path::Path;
++use std::process::{Child, Command, ExitStatus, Stdio};
++use std::thread;
++use std::time::{Duration, Instant};
+++
++fn wait_bounded(child: &mut Child) -> ExitStatus {
++    let deadline = Instant::now() + Duration::from_secs(5);
++    loop {
++        match child.try_wait() {
++            Ok(Some(status)) => return status,
++            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
++            Ok(None) | Err(_) => {
++                let _ = child.kill();
++                let _ = child.wait();
++                panic!("checkpointed listener exceeded its five-second test deadline");
++            }
++        }
++    }
++}
++
++#[test]
++fn fresh_checkpointed_listener_keeps_each_record_and_binding() {
++    let directory = tempfile::tempdir().unwrap();
++    let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
++    let workflow = directory.path().join("listener.program");
++    let checkpoint = directory.path().join("checkpoint");
++    std::fs::write(
++        &workflow,
++        "listen to stdin\nwhenever a line arrives as record\n  run printf with message record\n",
++    )
++    .unwrap();
++
++    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
++        .current_dir(directory.path())
++        .arg(&workflow)
++        .arg("--manifest-dir")
++        .arg(&manifests)
++        .arg("--checkpoint")
++        .arg(&checkpoint)
++        .arg("--max-runs")
++        .arg("2")
++        .stdin(Stdio::piped())
++        .stdout(Stdio::piped())
++        .stderr(Stdio::piped())
++        .spawn()
++        .unwrap();
++    child
++        .stdin
++        .as_mut()
++        .unwrap()
++        .write_all(b"first record\nsecond record\n")
++        .unwrap();
++    drop(child.stdin.take());
++
++    let status = wait_bounded(&mut child);
++    let mut output = Vec::new();
++    let mut errors = Vec::new();
++    child.stdout.take().unwrap().read_to_end(&mut output).unwrap();
++    child.stderr.take().unwrap().read_to_end(&mut errors).unwrap();
++    assert!(
++        status.success(),
++        "{}",
++        String::from_utf8_lossy(&errors)
++    );
++    assert_eq!(output, b"first record\nsecond record\n");
++}

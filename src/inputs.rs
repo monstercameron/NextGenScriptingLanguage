@@ -1,0 +1,228 @@
+//! Declared program inputs: one schema for CLI values, runtime calls and live edits.
+use crate::ast::{InputDeclaration, InputType, Value};
+use anyhow::{anyhow, bail, Context, Result};
+use std::collections::{BTreeMap, BTreeSet};
+
+impl std::fmt::Display for InputType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Text => "text",
+            Self::Integer => "integer",
+            Self::Boolean => "boolean",
+            Self::TextList => "list of text",
+            Self::Json => "json",
+        })
+    }
+}
+
+impl InputDeclaration {
+    pub fn validate_value(&self, value: &Value) -> Result<()> {
+        let valid = match (self.kind, value) {
+            (InputType::Text, Value::String(s)) => !s.contains('\0'),
+            (InputType::Integer, Value::Integer(_)) | (InputType::Boolean, Value::Bool(_)) => true,
+            (InputType::TextList, Value::List(items)) => items
+                .iter()
+                .all(|v| matches!(v, Value::String(s) if !s.contains('\0'))),
+            (InputType::Json, value) => crate::structured::literal(value),
+            _ => false,
+        };
+        if !valid {
+            bail!(
+                "line {}: input {:?} expects {}{}",
+                self.line,
+                self.name,
+                self.kind,
+                if self.kind == InputType::Json {
+                    " as a literal value"
+                } else {
+                    " without NUL bytes"
+                }
+            );
+        }
+        Ok(())
+    }
+
+    pub fn parse_cli(&self, text: &str) -> Result<Value> {
+        let value = match self.kind {
+            InputType::Text => Value::String(text.into()),
+            InputType::Integer => Value::Integer(
+                text.parse()
+                    .with_context(|| format!("input {:?} requires an integer", self.name))?,
+            ),
+            InputType::Boolean => match text {
+                "true" => Value::Bool(true),
+                "false" => Value::Bool(false),
+                _ => bail!("input {:?} requires true or false", self.name),
+            },
+            InputType::TextList => {
+                let items: Vec<String> = serde_json::from_str(text).with_context(|| {
+                    format!("input {:?} requires a JSON list of text", self.name)
+                })?;
+                Value::List(items.into_iter().map(Value::String).collect())
+            }
+            InputType::Json => crate::structured::parse(text.as_bytes())
+                .with_context(|| format!("input {:?} requires JSON", self.name))?,
+        };
+        self.validate_value(&value)?;
+        Ok(value)
+    }
+
+    pub(crate) fn parse_json(&self, value: &serde_json::Value) -> Result<Value> {
+        let result = match (self.kind, value) {
+            (InputType::Json, value) => crate::structured::from_json(value.clone()),
+            (InputType::Text, serde_json::Value::String(s)) => Value::String(s.clone()),
+            (InputType::Integer, serde_json::Value::Number(n)) if n.as_i64().is_some() => {
+                Value::Integer(n.as_i64().unwrap())
+            }
+            (InputType::Boolean, serde_json::Value::Bool(b)) => Value::Bool(*b),
+            (InputType::TextList, serde_json::Value::Array(items))
+                if items.iter().all(serde_json::Value::is_string) =>
+            {
+                Value::List(
+                    items
+                        .iter()
+                        .map(|v| Value::String(v.as_str().unwrap().into()))
+                        .collect(),
+                )
+            }
+            _ => bail!(
+                "line {}: input {:?} expects {}",
+                self.line,
+                self.name,
+                self.kind
+            ),
+        };
+        self.validate_value(&result)?;
+        Ok(result)
+    }
+}
+
+pub fn validate(declarations: &[InputDeclaration]) -> Result<()> {
+    let mut names = BTreeSet::new();
+    for input in declarations {
+        if !crate::parser::is_identifier(&input.name)
+            || matches!(input.name.as_str(), "true" | "false")
+        {
+            bail!("line {}: invalid input name {:?}", input.line, input.name);
+        }
+        if !names.insert(input.name.as_str()) {
+            bail!("line {}: duplicate input {:?}", input.line, input.name);
+        }
+        if let Some(default) = &input.default {
+            input.validate_value(default)?;
+        }
+    }
+    Ok(())
+}
+
+/// Return resolved declared values. `allow_extra` permits host-provided local
+/// bindings; the returned map still contains declared inputs only.
+pub fn resolve(
+    declarations: &[InputDeclaration],
+    supplied: &BTreeMap<String, Value>,
+    allow_extra: bool,
+) -> Result<BTreeMap<String, Value>> {
+    validate(declarations)?;
+    if !allow_extra {
+        for name in supplied.keys() {
+            if !declarations.iter().any(|d| d.name == *name) {
+                bail!("unknown program input {name:?}");
+            }
+        }
+    }
+    declarations
+        .iter()
+        .map(|input| {
+            let value = supplied
+                .get(&input.name)
+                .or(input.default.as_ref())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "line {}: missing required input {:?}; supply --input {}=VALUE",
+                        input.line,
+                        input.name,
+                        input.name
+                    )
+                })?;
+            input.validate_value(value)?;
+            Ok((input.name.clone(), value.clone()))
+        })
+        .collect()
+}
+
+/// CLI checks/explanations validate provided values but may leave required inputs
+/// absent, allowing agents to inspect a program before choosing its arguments.
+pub fn parse_cli(
+    declarations: &[InputDeclaration],
+    supplied: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, Value>> {
+    validate(declarations)?;
+    supplied
+        .iter()
+        .map(|(name, text)| {
+            let spec = declarations
+                .iter()
+                .find(|d| d.name == *name)
+                .ok_or_else(|| anyhow!("unknown program input {name:?}"))?;
+            Ok((name.clone(), spec.parse_cli(text)?))
+        })
+        .collect()
+}
+
+/// Describe a partial input interface without requiring values or running effects.
+/// Types use language spellings; defaults and effective values use native JSON.
+pub fn describe(
+    declarations: &[InputDeclaration],
+    supplied: &BTreeMap<String, Value>,
+) -> Result<serde_json::Value> {
+    let known = known_values(declarations, supplied)?;
+    let mut inputs = Vec::with_capacity(declarations.len());
+    let mut missing = Vec::new();
+    for input in declarations {
+        let mut spec = serde_json::json!({
+            "name": input.name, "type": input.kind.to_string(),
+            "line": input.line, "required": input.default.is_none()
+        });
+        if let Some(default) = &input.default {
+            spec["default"] = literal_json(default)?;
+        }
+        if let Some(value) = known.get(&input.name) {
+            spec["value"] = literal_json(value)?;
+        } else {
+            missing.push(&input.name);
+        }
+        inputs.push(spec);
+    }
+    Ok(serde_json::json!({
+        "protocol": "execute.inspect/1", "validation": "static",
+        "inputs": inputs, "inputs_complete": missing.is_empty(), "missing_inputs": missing
+    }))
+}
+
+fn literal_json(value: &Value) -> Result<serde_json::Value> {
+    crate::structured::to_json(value).context("input inspection requires literal values")
+}
+
+pub(crate) fn known_values(
+    declarations: &[InputDeclaration],
+    supplied: &BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>> {
+    validate(declarations)?;
+    let mut values = declarations
+        .iter()
+        .filter_map(|d| {
+            d.default
+                .as_ref()
+                .map(|value| (d.name.clone(), value.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (name, value) in supplied {
+        let input = declarations
+            .iter()
+            .find(|d| &d.name == name)
+            .ok_or_else(|| anyhow!("unknown program input {name:?}"))?;
+        input.validate_value(value)?;
+        values.insert(name.clone(), value.clone());
+    }
+    Ok(values)
+}

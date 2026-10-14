@@ -1,0 +1,71 @@
+--- a/src/manifest.rs
++++ b/src/manifest.rs
+@@ -78,10 +78,15 @@
+ /// Loaded manifest catalog. `resolve` accepts either a canonical name or phrase.
+ #[derive(Debug, Clone, Default)]
+ pub struct Registry {
+-    manifests: Arc<Vec<Manifest>>,
+-    names: Arc<BTreeMap<String, usize>>,
++    data: Arc<RegistryData>,
+ }
+ 
++#[derive(Debug, Default)]
++struct RegistryData {
++    manifests: Vec<Manifest>,
++    names: BTreeMap<String, usize>,
++}
++
+ impl Registry {
+     /// Load one JSON manifest file or all `.json` files in a directory.
+     pub fn load(path: &Path) -> Result<Self> {
+@@ -100,37 +105,39 @@
+             bail!("no JSON manifests found in {}", path.display());
+         }
+ 
+-        let mut manifests: Vec<Manifest> = Vec::with_capacity(paths.len());
+-        let mut names = BTreeMap::new();
++        let mut data = RegistryData {
++            manifests: Vec::with_capacity(paths.len()),
++            names: BTreeMap::new(),
++        };
+         for manifest_path in paths {
+             let raw = fs::read_to_string(&manifest_path)
+                 .with_context(|| format!("reading manifest {}", manifest_path.display()))?;
+             let manifest = parse_manifest(&raw)
+                 .with_context(|| format!("invalid manifest {}", manifest_path.display()))?;
+-            let index = manifests.len();
++            let index = data.manifests.len();
+             for key in std::iter::once(&manifest.name).chain(manifest.phrases.iter()) {
+-                if let Some(previous) = names.insert(key.clone(), index) {
+-                    let previous_name = &manifests[previous].name;
++                if let Some(previous) = data.names.insert(key.clone(), index) {
++                    let previous_name = &data.manifests[previous].name;
+                     bail!("duplicate manifest name or phrase {key:?} (used by {previous_name:?} and {:?})", manifest.name);
+                 }
+             }
+-            manifests.push(manifest);
++            data.manifests.push(manifest);
+         }
+         Ok(Self {
+-            manifests: Arc::new(manifests),
+-            names: Arc::new(names),
++            data: Arc::new(data),
+         })
+     }
+ 
+     pub fn resolve(&self, name_or_phrase: &str) -> Result<&Manifest> {
+-        self.names
++        self.data
++            .names
+             .get(name_or_phrase)
+-            .map(|&index| &self.manifests[index])
++            .map(|&index| &self.data.manifests[index])
+             .ok_or_else(|| anyhow!("unknown applet {name_or_phrase:?}"))
+     }
+ 
+     pub fn manifests(&self) -> &[Manifest] {
+-        &self.manifests
++        &self.data.manifests
+     }
+ }
+ 

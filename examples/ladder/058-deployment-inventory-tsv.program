@@ -1,0 +1,8 @@
+# Purpose: Create a stable tab-delimited inventory from a deployment JSON export.
+# Inputs: fixtures/058/deployment.json contains Service names, images, replica counts, and regions from an offline deployment export.
+# Outputs: Unquoted TSV with a header row, saved as services.tsv and echoed.
+accept deployment_path as text with default "fixtures/058/deployment.json"
+run cat with path deployment_path
+then jq with filter "([\"service\", \"image\", \"replicas\", \"region\"] | @tsv), (.services[] | [.name, .image, (.replicas | tostring), .region] | @tsv)" and flags ["-r"]
+then save to "services.tsv"
+then cat with path "services.tsv"

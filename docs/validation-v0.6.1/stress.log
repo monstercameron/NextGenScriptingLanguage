@@ -1,0 +1,23 @@
+bulk: 8,388,608 bytes, exact SHA-256, two native launches
+bulk: 1,000,000,000 bytes, exact SHA-256, two native launches
+lifecycle: 50/1000 cycles, 350 probes
+lifecycle: 100/1000 cycles, 700 probes
+lifecycle: 150/1000 cycles, 1050 probes
+lifecycle: 200/1000 cycles, 1400 probes
+lifecycle: 250/1000 cycles, 1750 probes
+lifecycle: 300/1000 cycles, 2100 probes
+lifecycle: 350/1000 cycles, 2450 probes
+lifecycle: 400/1000 cycles, 2800 probes
+lifecycle: 450/1000 cycles, 3150 probes
+lifecycle: 500/1000 cycles, 3500 probes
+lifecycle: 550/1000 cycles, 3850 probes
+lifecycle: 600/1000 cycles, 4200 probes
+lifecycle: 650/1000 cycles, 4550 probes
+lifecycle: 700/1000 cycles, 4900 probes
+lifecycle: 750/1000 cycles, 5250 probes
+lifecycle: 800/1000 cycles, 5600 probes
+lifecycle: 850/1000 cycles, 5950 probes
+lifecycle: 900/1000 cycles, 6300 probes
+lifecycle: 950/1000 cycles, 6650 probes
+lifecycle: 1000/1000 cycles, 7000 probes
+report: /Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow/benchmarks/replacement-proofs-v0.6.1-macos-arm64.json

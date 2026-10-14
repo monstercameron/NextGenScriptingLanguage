@@ -1,0 +1,51 @@
+{
+  "validated_at_utc": "2026-10-14T05:33:16.208480+00:00",
+  "release": "0.6.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "architecture": "arm64",
+  "binary_sha256": "5d313852ae3f209e4d17f353adec7a48b28389159864d2e1974f964c2875db60",
+  "regular_rust_tests_passed": 230,
+  "live_control_scenarios_passed": 24,
+  "real_tui_pty": "passed: CLI edit rendered on real terminal; keyboard Enter used edited value in native printf; socket removal and terminal restoration verified",
+  "supported_modes": [
+    "finite",
+    "interval",
+    "calendar",
+    "managed stdin listener",
+    "native applet listener",
+    "persistent stream",
+    "interactive TUI",
+    "persistent headless TUI"
+  ],
+  "canonical_utilities_passed": 150,
+  "alternate_inputs_passed": 146,
+  "invalid_inputs_rejected": 1,
+  "retained_failure_recovery_regressions_passed": 9,
+  "isolated_sigchld_test": "passed separately",
+  "format": "passed",
+  "macos_clippy_warnings_denied": "passed",
+  "linux_target_clippy_warnings_denied": "passed",
+  "linux_native_runtime": "not run",
+  "benchmark": "../benchmarks/live-control-v0.6.0-macos-arm64.json",
+  "benchmark_caveat": "Warm filesystem/executable caches. Ten warmups; shuffled/interleaved local trials against one paused server with no native jobs during measurements. RPC includes Python JSON/client overhead and a new Unix socket connection. CLI includes fresh process startup and JSON handling; version is a startup reference. UI phase: 10 warmups then 50 sequential edits; applied latency includes polling/IPC until the actual headless renderer publishes the edit, with frame content checked outside timing. Small payloads only. Background activity uncontrolled; low-sample CLI tails are descriptive. No Linux runtime claim or hard realtime guarantee.",
+  "limits": "Opt-in local control; state is ephemeral, writes apply at safe boundaries, derived supervision fields are read-only, active native argv is fixed until restart. No hard realtime claim.",
+  "source_sha256": {
+    "src/live/mod.rs": "7a2a8310a671c432561a41d1edc9dc61f52227951e3b6d15afda4c86c77cda3b",
+    "src/live/state.rs": "7e4b462aa325b18f2a7fada86f1b256b154391f7bdf47eba5c45d210ccb14fd9",
+    "src/live/worker.rs": "1b715b47e93dba5f49bbe2388c74765baf86760025c2743da26a1205898f438d",
+    "src/runtime/checkpoint.rs": "b83a3a2ee43a60b6b6fea32bcbf71a83c803e5873495feba7fb86ff3716d5488",
+    "src/runtime/live.rs": "c7b826d5d5c33a5300b9d69b72628cec9537a7c319e0e4241f7eb03ac2df184a",
+    "src/runtime/resume.rs": "92c503d2eff19b9564955aa912ff77f3666d29f7080b83d1f1a1960a018709e5",
+    "src/runtime/service.rs": "384d084bdcf3fe6234217a7e6f049e3423a6c6e2195342a46aa08e2fa79be330",
+    "src/runtime/stdio.rs": "e1f526c37f4dcfb4a3b7551067d688b5a1c2b28de7c1780b64d318d8fe71eb47",
+    "src/runtime/streaming.rs": "77ffc8f984daf4251dd384ec854e9fb411dd63c209a49dfe2f2cad6c03adeb8b",
+    "src/ui/app.rs": "d10d913f38f441d02e80181d9cbb9053030db9b73af2b3720ec09bbd2fbeffc5",
+    "src/ui/live.rs": "b2205588e64f153f4f885d9b242f1b69c5c96e33c9de14208665e43d4baf4cf6",
+    "src/ui/mod.rs": "cfc904a8d22632fa8d9a772df5250366244dd1760b7c5895638fc40d8725cd5f",
+    "src/ui/syntax.rs": "27e71dc0be04e32fef1e9cad19140650779e2b6f1f9aac3b14117eeb4c068797"
+  },
+  "test_sha256": {
+    "tests/live.rs": "0c5523320be562fff34f2bcc4397c2c4187691cd876a4ac25e2e15a0e6e629c3",
+    "tests/live_control.py": "0c4bb38cb25cc8357edb17a69f8b817e40042775fca5aa125593e0b41c2a6b53"
+  }
+}

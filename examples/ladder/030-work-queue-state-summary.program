@@ -1,0 +1,7 @@
+# Purpose: Sum queue work units by state and save a single-line report.
+# Inputs: jobs.csv (job,team,state,units).
+# Outputs: blocked/active/done totals on stdout and queue-summary.txt.
+accept jobs_path as text with default "jobs.csv"
+run cat with path jobs_path
+then awk with delimiter "," and program "NR>1 { count[$3] += $4 } END { printf \"blocked=%d active=%d done=%d\\n\", count[\"blocked\"], count[\"active\"], count[\"done\"] }"
+then save to "queue-summary.txt"

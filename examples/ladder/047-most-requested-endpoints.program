@@ -1,0 +1,11 @@
+# Purpose: Count and rank endpoint paths from a combined access log.
+# Inputs: access.log with request path in whitespace-delimited field seven.
+# Outputs: Up to three endpoint,count rows by request volume.
+accept access_path as text with default "access.log"
+run cat with path access_path
+pipe to cut with delimiter " " and fields "7"
+pipe to sort
+pipe to uniq with flags ["-c"]
+pipe to sort with flags ["-rn"]
+pipe to head with lines 3
+then awk with program "{ $1 = $1; print $1 \",\" $2 }"

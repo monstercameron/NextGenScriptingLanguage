@@ -1,0 +1,8 @@
+{
+  "git-status": "native output verified",
+  "checksums": "native output verified",
+  "process-snapshot": "native output verified",
+  "direct": "three native stages, expected count 3",
+  "0.6.1_checkpoint_resume": "completed prefix resumed by 0.7.0 with unchanged output and zero native launches",
+  "native-log-listener": "actual tail followed a new event, cat forwarded it, and the bounded run exited"
+}

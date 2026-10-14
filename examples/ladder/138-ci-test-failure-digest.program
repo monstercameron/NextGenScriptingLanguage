@@ -1,0 +1,6 @@
+# Purpose: Find missing sequence numbers in event records grouped by producer.
+# Inputs: sequenced-events.jsonl contains a producer name and integer sequence per record.
+# Outputs: stdout lists each detected gap as a compact JSON object.
+accept sequenced_events_path as text with default "sequenced-events.jsonl"
+run cat with path sequenced_events_path
+pipe to jq with flags ["-s", "-c"] and filter "group_by(.source)[] | sort_by(.sequence) as $records | range(1; ($records | length)) as $i | select($records[$i].sequence > $records[$i - 1].sequence + 1) | {source: $records[0].source, after_sequence: $records[$i - 1].sequence, before_sequence: $records[$i].sequence, missing: ($records[$i].sequence - $records[$i - 1].sequence - 1)}"

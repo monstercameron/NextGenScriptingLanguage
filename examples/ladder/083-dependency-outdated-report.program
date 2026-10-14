@@ -1,0 +1,6 @@
+# Purpose: Extract actionable version updates from a dependency scanner export without attempting to resolve or install packages.
+# Inputs: dependency/updates.json is an audit export with locked and latest versions and the suggested update class.
+# Outputs: Only out-of-date packages, sorted by package name with current and candidate versions.
+accept updates_path as text with default "dependency/updates.json"
+run cat with path updates_path
+then jq with flags ["-r"] and filter "[.dependencies[] | select(.current != .latest)] | sort_by(.name)[] | \"\\(.name)\\t\\(.current) -> \\(.latest)\\t\\(.update)\""

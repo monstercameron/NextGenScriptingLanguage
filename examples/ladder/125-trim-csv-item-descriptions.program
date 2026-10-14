@@ -1,0 +1,6 @@
+# Purpose: Remove accidental leading and trailing whitespace from the description field before downstream matching.
+# Inputs: items.csv: Unquoted CSV header: item_id,description,category; commas inside fields are not supported.
+# Outputs: stdout: The same CSV with description values trimmed.
+accept items_path as text with default "items.csv"
+run cat with path items_path
+then awk with program "BEGIN { FS=\",\"; OFS=\",\" } NR==1 { print; next } { sub(/^[[:space:]]+/,\"\",$2); sub(/[[:space:]]+$/,\"\",$2); print }"

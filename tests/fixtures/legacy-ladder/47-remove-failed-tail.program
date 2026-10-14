@@ -1,0 +1,4 @@
+# 47. Finish after removing a failed terminal node
+run printf with message "already done"
+then save to "effect.txt"
+then false

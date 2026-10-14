@@ -1,0 +1,6 @@
+# Purpose: Resolve vendor category names through a sorted mapping table while preserving product identifiers.
+# Inputs: products-by-alias.csv: Unquoted CSV without a header sorted by category_alias: product_id,category_alias,label.; category-aliases.csv: Unquoted CSV without a header sorted by alias: alias,canonical_category.
+# Outputs: stdout: product_id,canonical_category,label rows for mapped aliases.
+accept products_by_alias_path as text with default "products-by-alias.csv"
+accept category_aliases_path as text with default "category-aliases.csv"
+run join with flags ["-t,", "-1", "2", "-2", "1", "-o", "1.1,2.2,1.3"] and files [products_by_alias_path, category_aliases_path]

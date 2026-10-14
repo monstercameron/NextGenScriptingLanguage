@@ -1,0 +1,9 @@
+# Purpose: Read the requested workspace folder from a selector file and save a stable sorted filename inventory.
+# Inputs: inventory/target.path: relative path of the folder to inventory; workspace/deliverables/*: existing workspace files.
+# Outputs: reports/deliverables-inventory.txt: sorted immediate filenames; stdout echoes the inventory.
+accept target_path as text with default "inventory/target.path"
+run mkdir with flags ["-p"] and paths ["reports"]
+read target_path as target
+then ls with flags ["-1"] and path target
+pipe to sort
+then save to "reports/deliverables-inventory.txt"

@@ -1,0 +1,15 @@
+   Compiling execute v0.5.0 (/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow)
+    Finished `release` profile [optimized] target(s) in 3.38s
+     Running tests/streaming.rs (/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/candidate-target/release/deps/streaming-4bcd3ffd5ca1d931)
+
+running 7 tests
+test finite_file_to_tr_preserves_binary_bytes_at_exact_total_output_limit ... ok
+test mac_tail_and_unbuffered_tr_stream_appended_rows_then_reap_tail_at_limit ... ok
+test middle_stage_failure_does_not_emit_records_after_the_failure ... ok
+test check_and_unsupported_resume_checkpoint_max_runs_and_headless_do_not_launch_source ... ok
+test stream_framing_counts_records_preserves_eof_bytes_and_enforces_record_bounds ... ok
+test slow_stdout_consumer_backpressures_a_persistent_source_and_stream_ignores_total_limit ... ok
+test blocked_stdout_remains_deadline_bounded_and_cancellable ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.30s
+

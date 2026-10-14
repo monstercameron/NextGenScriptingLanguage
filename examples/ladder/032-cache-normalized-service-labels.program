@@ -1,0 +1,8 @@
+# Purpose: Normalize a service-label inventory and deduplicate it.
+# Inputs: service-names.txt, one possibly mixed-case label per line.
+# Outputs: Uppercase sorted service names; source mutation invalidates the cached transform.
+accept service_names_path as text with default "service-names.txt"
+run cat with path service_names_path
+then tr with from "[:lower:]" and to "[:upper:]" and cache
+then sort
+then uniq

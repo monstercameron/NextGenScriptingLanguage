@@ -1,0 +1,10 @@
+# Purpose: Assemble the handoff packet, count its lines, and normalize wc padding into a stable single-number report.
+# Inputs: handoff/summary.md and handoff/open-items.md: ordered handoff packet fragments.
+# Outputs: reports/handoff-line-count.txt: one decimal line count; stdout echoes the count.
+accept summary_path as text with default "handoff/summary.md"
+accept open_items_path as text with default "handoff/open-items.md"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with files [summary_path, open_items_path]
+pipe to wc with flags ["-l"]
+pipe to jq with flags ["-Rr"] and filter "tonumber"
+then save to "reports/handoff-line-count.txt"

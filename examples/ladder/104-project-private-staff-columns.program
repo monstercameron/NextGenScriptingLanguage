@@ -1,0 +1,6 @@
+# Purpose: Select only name, email, and active status from a larger unquoted personnel export.
+# Inputs: staff.csv: Unquoted CSV: employee_id,name,department,email,phone,active.
+# Outputs: stdout: TSV with only the name, email, and active columns.
+accept staff_path as text with default "staff.csv"
+run cat with path staff_path
+then awk with delimiter "," and program "NR==1 { print \"name\\temail\\tactive\"; next } { printf \"%s\\t%s\\t%s\\n\", $2,$4,$6 }"

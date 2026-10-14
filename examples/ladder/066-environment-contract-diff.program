@@ -1,0 +1,6 @@
+# Purpose: Compare deployment values with declarations, including required gaps, unexpected names, and defaults used.
+# Inputs: fixtures/066/environment.json contains Environment declarations alongside deployment-specific provided values.
+# Outputs: JSON report of missing required names, unexpected names, and unapplied defaults.
+accept environment_path as text with default "fixtures/066/environment.json"
+run cat with path environment_path
+then jq with filter ".declared as $declared | (.provided | keys) as $provided | {missing_required: [$declared[] as $d | select($d.required == true and (($provided | index($d.name)) == null)) | $d.name], unexpected: [$provided[] as $name | select(([$declared[].name] | index($name)) == null) | $name], defaults_used: [$declared[] as $d | select(($provided | index($d.name)) == null and ($d | has(\"default\"))) | {name: $d.name, value: $d.default}]}" and flags ["-c", "-S"]

@@ -1,0 +1,4 @@
+# 45. Cancel a full native group and skip saving
+run cat with path "large.txt"
+pipe to tr with from "[:lower:]" and to "[:upper:]"
+then save to "must-not-exist.txt"

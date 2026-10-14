@@ -1,0 +1,26 @@
+
+running 1 test
+opt_manifest_binary_path_sample mode=legacy scenario=path1 batch=0 iterations=2000 total_ns=4190208 ns_per_op=2095.1
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path1 batch=0 iterations=2000 total_ns=4324292 ns_per_op=2162.1
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path1 batch=1 iterations=2000 total_ns=3474209 ns_per_op=1737.1
+opt_manifest_binary_path_sample mode=legacy scenario=path1 batch=1 iterations=2000 total_ns=3645042 ns_per_op=1822.5
+opt_manifest_binary_path_sample mode=legacy scenario=path1 batch=2 iterations=2000 total_ns=3583792 ns_per_op=1791.9
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path1 batch=2 iterations=2000 total_ns=3616625 ns_per_op=1808.3
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path1 batch=3 iterations=2000 total_ns=3586667 ns_per_op=1793.3
+opt_manifest_binary_path_sample mode=legacy scenario=path1 batch=3 iterations=2000 total_ns=3555125 ns_per_op=1777.6
+opt_manifest_binary_path_sample mode=legacy scenario=path1 batch=4 iterations=2000 total_ns=3593292 ns_per_op=1796.6
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path1 batch=4 iterations=2000 total_ns=3549416 ns_per_op=1774.7
+opt_manifest_binary_path_sample mode=legacy scenario=path64_miss_prefix_late_hit batch=0 iterations=150 total_ns=14833958 ns_per_op=98893.1
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path64_miss_prefix_late_hit batch=0 iterations=150 total_ns=13463209 ns_per_op=89754.7
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path64_miss_prefix_late_hit batch=1 iterations=150 total_ns=13323333 ns_per_op=88822.2
+opt_manifest_binary_path_sample mode=legacy scenario=path64_miss_prefix_late_hit batch=1 iterations=150 total_ns=14648209 ns_per_op=97654.7
+opt_manifest_binary_path_sample mode=legacy scenario=path64_miss_prefix_late_hit batch=2 iterations=150 total_ns=14648625 ns_per_op=97657.5
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path64_miss_prefix_late_hit batch=2 iterations=150 total_ns=13196666 ns_per_op=87977.8
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path64_miss_prefix_late_hit batch=3 iterations=150 total_ns=13360291 ns_per_op=89068.6
+opt_manifest_binary_path_sample mode=legacy scenario=path64_miss_prefix_late_hit batch=3 iterations=150 total_ns=15268667 ns_per_op=101791.1
+opt_manifest_binary_path_sample mode=legacy scenario=path64_miss_prefix_late_hit batch=4 iterations=150 total_ns=14892167 ns_per_op=99281.1
+opt_manifest_binary_path_sample mode=reused_buffer scenario=path64_miss_prefix_late_hit batch=4 iterations=150 total_ns=13374958 ns_per_op=89166.4
+test runtime::opt_manifest_binary_path_tests::opt_manifest_binary_path_benchmark_raw_samples ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.19s
+

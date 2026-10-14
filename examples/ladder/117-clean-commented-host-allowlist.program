@@ -1,0 +1,6 @@
+# Purpose: Prepare a line-oriented hostname allowlist for a downstream importer.
+# Inputs: hosts.txt: One hostname per line; full-line comments start with #.
+# Outputs: stdout: Nonblank, noncomment hostname rows in source order.
+accept hosts_path as text with default "hosts.txt"
+run cat with path hosts_path
+then grep with pattern "^[[:space:]]*(#|$)" and flags ["-vE"]

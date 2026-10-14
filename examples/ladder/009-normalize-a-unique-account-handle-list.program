@@ -1,0 +1,10 @@
+# Purpose: Normalize account handles, sort them, and remove duplicates before importing an access list.
+# Inputs: access/handles.txt has one ASCII username per line, with inconsistent case and duplicates.
+# Outputs: exports/account-handles.txt is the sorted unique lowercase name list.
+accept handles_path as text with default "access/handles.txt"
+run mkdir with flags ["-p"] and paths ["exports"]
+run cat with path handles_path
+pipe to tr with from "[:upper:]" and to "[:lower:]"
+pipe to sort
+pipe to uniq
+then save to "exports/account-handles.txt"

@@ -1,0 +1,194 @@
+{
+  "version": "execute 0.4.2",
+  "observed_at": "2026-10-14T00:07:57.423888+00:00",
+  "binary_sha256": "0047cfc841a7195e7e070969c8e0b1cf3318ceed1b4440e9fd46e508cc90f6b3",
+  "snapshot": {
+    "completed_jobs": 1,
+    "frame": "Top 10 CPU processes                                                                                \nTop 10 by CPU usage                                              Process details                    \n\u250cusage\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\u250crecords\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u250221153 Google Chrome Helper \u2026 33.8%\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2502\u2502PID         CPU %      Name      \u2502\n\u2502609 WindowServer             21.9%\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588            \u2502\u250221153       33.8       Google Chr\u2502\n\u250242511 Codex (Service)        15.0%\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588                   \u2502\u2502609         21.9       WindowServ\u2502\n\u250228889 Python                 12.4%\u2588\u2588\u2588\u2588\u2588\u2588\u2588                      \u2502\u250242511       15.0       Codex (Ser\u2502\n\u250258899 Google Chrome Helper \u2026 12.3%\u2588\u2588\u2588\u2588\u2588\u2588\u2588                      \u2502\u250228889       12.4       Python    \u2502\n\u2502639 coreaudiod               8.6%\u2588\u2588\u2588\u2588                          \u2502\u250258899       12.3       Google Chr\u2502\n\u250242973 Codex (Renderer)       8.2%\u2588\u2588\u2588\u2588                          \u2502\u2502639         8.6        coreaudiod\u2502\n\u250242972 Codex (Renderer)       5.2%\u2588                             \u2502\u250242973       8.2        Codex (Ren\u2502\n\u25029168 Google Chrome Helper (\u2026 2.7%                              \u2502\u250242972       5.2        Codex (Ren\u2502\n\u250242971 codex                  2.5%                              \u2502\u25029168        2.7        Google Chr\u2502\n\u2502                                                               \u2502\u250242971       2.5        codex     \u2502\n\u2502                                                               \u2502\u2502                                 \u2502\n\u2502                                                               \u2502\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\u2502                                                               \u2502\u250cnote\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502                                                               \u2502\u2502PID identifies each process. CPU \u2502\n\u2502                                                               \u2502\u2502can exceed 100% for a process    \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\nLive. Refreshes every 2 seconds.                                                                    \n                                                                                                    \n\u250crefresh\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510                                   \n\u2502[ Refresh now ]                                                \u2502                                   \n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518                                   \n\u250cnote\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510                                   \n\u2502CPU values come from ps. Bars scale to the busiest process.    \u2502                                   \n\u2502                                                               \u2502                                   \n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518                                   \nKeys Ctrl-R Ctrl-Q | Tab focus  Enter activate  Ctrl-U clear  Ctrl-C interrupt                      ",
+    "programs": {
+      "details": {
+        "error": null,
+        "inputs": {
+          "processes": "[\n  {\n    \"pid\": 21153,\n    \"cpu\": 33.8,\n    \"command\": \"/Applications/Google Chrome Beta.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.12/Helpers/Google Chrome Helper (Aperitif Renderer).app/Contents/MacOS/Google Chrome Helper (Aperitif Renderer)\",\n    \"name\": \"Google Chrome Helper (Aperitif Renderer)\",\n    \"label\": \"21153 Google Chrome Helper (Aperitif Renderer)\"\n  },\n  {\n    \"pid\": 609,\n    \"cpu\": 21.9,\n    \"command\": \"/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer\",\n    \"name\": \"WindowServer\",\n    \"label\": \"609 WindowServer\"\n  },\n  {\n    \"pid\": 42511,\n    \"cpu\": 15.0,\n    \"command\": \"/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/155.0.8059.40/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)\",\n    \"name\": \"Codex (Service)\",\n    \"label\": \"42511 Codex (Service)\"\n  },\n  {\n    \"pid\": 28889,\n    \"cpu\": 12.4,\n    \"command\": \"/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python\",\n    \"name\": \"Python\",\n    \"label\": \"28889 Python\"\n  },\n  {\n    \"pid\": 58899,\n    \"cpu\": 12.3,\n    \"command\": \"/Applications/Google Chrome Beta.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.12/Helpers/Google Chrome Helper (Aperitif).app/Contents/MacOS/Google Chrome Helper (Aperitif)\",\n    \"name\": \"Google Chrome Helper (Aperitif)\",\n    \"label\": \"58899 Google Chrome Helper (Aperitif)\"\n  },\n  {\n    \"pid\": 639,\n    \"cpu\": 8.6,\n    \"command\": \"/usr/sbin/coreaudiod\",\n    \"name\": \"coreaudiod\",\n    \"label\": \"639 coreaudiod\"\n  },\n  {\n    \"pid\": 42973,\n    \"cpu\": 8.2,\n    \"command\": \"/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/155.0.8059.40/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)\",\n    \"name\": \"Codex (Renderer)\",\n    \"label\": \"42973 Codex (Renderer)\"\n  },\n  {\n    \"pid\": 42972,\n    \"cpu\": 5.2,\n    \"command\": \"/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/155.0.8059.40/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)\",\n    \"name\": \"Codex (Renderer)\",\n    \"label\": \"42972 Codex (Renderer)\"\n  },\n  {\n    \"pid\": 9168,\n    \"cpu\": 2.7,\n    \"command\": \"/Applications/Google Chrome Beta.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.12/Helpers/Google Chrome Helper (Aperitif Renderer).app/Contents/MacOS/Google Chrome Helper (Aperitif Renderer)\",\n    \"name\": \"Google Chrome Helper (Aperitif Renderer)\",\n    \"label\": \"9168 Google Chrome Helper (Aperitif Renderer)\"\n  },\n  {\n    \"pid\": 42971,\n    \"cpu\": 2.5,\n    \"command\": \"/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex\",\n    \"name\": \"codex\",\n    \"label\": \"42971 codex\"\n  }\n]\n"
+        },
+        "widgets": {
+          "note": {
+            "active_series": "",
+            "bars": [],
+            "rows": [],
+            "series": {},
+            "text": "PID identifies each process. CPU can exceed 100% for a process using several cores."
+          },
+          "records": {
+            "active_series": "",
+            "bars": [],
+            "rows": [
+              {
+                "command": "/Applications/Google Chrome Beta.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.12/Helpers/Google Chrome Helper (Aperitif Renderer).app/Contents/MacOS/Google Chrome Helper (Aperitif Renderer)",
+                "cpu": 33.8,
+                "label": "21153 Google Chrome Helper (Aperitif Renderer)",
+                "name": "Google Chrome Helper (Aperitif Renderer)",
+                "pid": 21153
+              },
+              {
+                "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+                "cpu": 21.9,
+                "label": "609 WindowServer",
+                "name": "WindowServer",
+                "pid": 609
+              },
+              {
+                "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/155.0.8059.40/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)",
+                "cpu": 15.0,
+                "label": "42511 Codex (Service)",
+                "name": "Codex (Service)",
+                "pid": 42511
+              },
+              {
+                "command": "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python",
+                "cpu": 12.4,
+                "label": "28889 Python",
+                "name": "Python",
+                "pid": 28889
+              },
+              {
+                "command": "/Applications/Google Chrome Beta.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.12/Helpers/Google Chrome Helper (Aperitif).app/Contents/MacOS/Google Chrome Helper (Aperitif)",
+                "cpu": 12.3,
+                "label": "58899 Google Chrome Helper (Aperitif)",
+                "name": "Google Chrome Helper (Aperitif)",
+                "pid": 58899
+              },
+              {
+                "command": "/usr/sbin/coreaudiod",
+                "cpu": 8.6,
+                "label": "639 coreaudiod",
+                "name": "coreaudiod",
+                "pid": 639
+              },
+              {
+                "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/155.0.8059.40/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+                "cpu": 8.2,
+                "label": "42973 Codex (Renderer)",
+                "name": "Codex (Renderer)",
+                "pid": 42973
+              },
+              {
+                "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/155.0.8059.40/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+                "cpu": 5.2,
+                "label": "42972 Codex (Renderer)",
+                "name": "Codex (Renderer)",
+                "pid": 42972
+              },
+              {
+                "command": "/Applications/Google Chrome Beta.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/156.0.8078.12/Helpers/Google Chrome Helper (Aperitif Renderer).app/Contents/MacOS/Google Chrome Helper (Aperitif Renderer)",
+                "cpu": 2.7,
+                "label": "9168 Google Chrome Helper (Aperitif Renderer)",
+                "name": "Google Chrome Helper (Aperitif Renderer)",
+                "pid": 9168
+              },
+              {
+                "command": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+                "cpu": 2.5,
+                "label": "42971 codex",
+                "name": "codex",
+                "pid": 42971
+              }
+            ],
+            "series": {},
+            "text": ""
+          },
+          "title": {
+            "active_series": "",
+            "bars": [],
+            "rows": [],
+            "series": {},
+            "text": "Process details"
+          }
+        }
+      },
+      "monitor": {
+        "error": null,
+        "inputs": {},
+        "widgets": {
+          "note": {
+            "active_series": "",
+            "bars": [],
+            "rows": [],
+            "series": {},
+            "text": "CPU values come from ps. Bars scale to the busiest process."
+          },
+          "refresh": {
+            "active_series": "",
+            "bars": [],
+            "rows": [],
+            "series": {},
+            "text": "Refresh now"
+          },
+          "status": {
+            "active_series": "",
+            "bars": [],
+            "rows": [],
+            "series": {},
+            "text": "Live. Refreshes every 2 seconds."
+          },
+          "title": {
+            "active_series": "",
+            "bars": [],
+            "rows": [],
+            "series": {},
+            "text": "Top 10 by CPU usage"
+          },
+          "usage": {
+            "active_series": "",
+            "bars": [
+              {
+                "label": "21153 Google Chrome Helper (Aperitif Renderer)",
+                "value": 33.8
+              },
+              {
+                "label": "609 WindowServer",
+                "value": 21.9
+              },
+              {
+                "label": "42511 Codex (Service)",
+                "value": 15.0
+              },
+              {
+                "label": "28889 Python",
+                "value": 12.4
+              },
+              {
+                "label": "58899 Google Chrome Helper (Aperitif)",
+                "value": 12.3
+              },
+              {
+                "label": "639 coreaudiod",
+                "value": 8.6
+              },
+              {
+                "label": "42973 Codex (Renderer)",
+                "value": 8.2
+              },
+              {
+                "label": "42972 Codex (Renderer)",
+                "value": 5.2
+              },
+              {
+                "label": "9168 Google Chrome Helper (Aperitif Renderer)",
+                "value": 2.7
+              },
+              {
+                "label": "42971 codex",
+                "value": 2.5
+              }
+            ],
+            "rows": [],
+            "series": {},
+            "text": ""
+          }
+        }
+      }
+    },
+    "screen": "Top 10 CPU processes"
+  }
+}

@@ -1,0 +1,52 @@
+
+> execute-program@0.1.1 package
+> vsce package --allow-missing-repository --out execute-program-0.1.1.vsix
+
+Executing prepublish script 'npm run vscode:prepublish'...
+
+> execute-program@0.1.1 vscode:prepublish
+> npm test
+
+
+> execute-program@0.1.1 test
+> node --test test/*.test.cjs
+
+Tokenized 169 real programs / 1270 lines
+✔ registers a declarative .program language without an activation entrypoint (6.230583ms)
+✔ highlights native stages, dotted and multiword applets, parameters and bindings (8.763167ms)
+✔ quoted executable calls preserve function, string, parameter and binding scopes (5.544542ms)
+✔ keyword-shaped applets, parameter names and references retain their role (1.70125ms)
+✔ strings are literal and JSON escapes are distinct from comments and keywords (0.755417ms)
+✔ comments and malformed single-line strings never leak into subsequent code (0.760333ms)
+✔ numbers, booleans and list punctuation use distinct scopes (1.498834ms)
+✔ highlights lifetime declarations and stream directives (0.65625ms)
+✔ highlights components, all nine widget types, ports, and UI event actions (2.036375ms)
+✔ unsupported control blocks are not advertised as implemented syntax (0.639875ms)
+✔ editor configuration uses two-space blocks and only real syntactic brackets (0.4035ms)
+✔ all real .program files tokenize with bounded lines and closed line states (60.858333ms)
+✔ complete snippet defaults pass the actual execute check without running commands (37.444917ms)
+✔ large single-line strings and malformed lists recover within the tokenization budget (44.814208ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 256.681458
+ INFO  Files included in the VSIX:
+execute-program-0.1.1.vsix
+├─ [Content_Types].xml 
+├─ extension.vsixmanifest 
+└─ extension/
+   ├─ LICENSE.txt [1.05 KB]
+   ├─ changelog.md [0.52 KB]
+   ├─ language-configuration.json [0.87 KB]
+   ├─ package.json [1.66 KB]
+   ├─ readme.md [3.81 KB]
+   ├─ snippets/
+   │  └─ execute.code-snippets [5.65 KB]
+   └─ syntaxes/
+      └─ execute.tmLanguage.json [15.33 KB]
+
+ DONE  Packaged: execute-program-0.1.1.vsix (9 files, 9.79 KB)

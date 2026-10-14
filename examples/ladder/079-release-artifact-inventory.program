@@ -1,0 +1,6 @@
+# Purpose: Aggregate a release artifact inventory by artifact kind and total stored bytes.
+# Inputs: release/artifact-inventory.json is the release publisher inventory; it supplies artifact kind and byte size.
+# Outputs: One row per artifact kind with item count and total bytes.
+accept artifact_inventory_path as text with default "release/artifact-inventory.json"
+run cat with path artifact_inventory_path
+then jq with flags ["-r"] and filter "[.artifacts[]] | group_by(.kind)[] | \"\\(.[0].kind)\\tcount=\\(length)\\tbytes=\\(map(.size_bytes) | add)\""

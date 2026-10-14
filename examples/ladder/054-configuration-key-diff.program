@@ -1,0 +1,6 @@
+# Purpose: Summarize keys added, removed, or changed between two exported configurations.
+# Inputs: fixtures/054/configs.json contains Before and after configuration snapshots from two stages.
+# Outputs: JSON arrays of added keys, removed keys, and changed values.
+accept configs_path as text with default "fixtures/054/configs.json"
+run cat with path configs_path
+then jq with filter ".before as $before | .after as $after | {added: ([$after | keys[]] - [$before | keys[]]), removed: ([$before | keys[]] - [$after | keys[]]), changed: [($before | keys[]) as $key | select($after | has($key)) | select($before[$key] != $after[$key]) | {key: $key, before: $before[$key], after: $after[$key]}]}" and flags ["-c", "-S"]

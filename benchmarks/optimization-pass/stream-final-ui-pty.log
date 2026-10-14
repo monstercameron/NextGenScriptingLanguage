@@ -1,0 +1,1 @@
+5 PTY scenarios passed: keys, resize, error display, cancellation, switching, SIGTERM restoration, script quit in busy component

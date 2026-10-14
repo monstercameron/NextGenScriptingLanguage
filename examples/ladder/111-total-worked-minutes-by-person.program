@@ -1,0 +1,7 @@
+# Purpose: Calculate elapsed minutes between clock-in and clock-out, subtract unpaid breaks, and total the result by employee.
+# Inputs: timeclock.csv: Unquoted CSV without a header: shift_id,employee,start_HH:MM,end_HH:MM,unpaid_break_minutes.
+# Outputs: stdout: Alphabetically sorted employee,total_minutes rows.
+accept timeclock_path as text with default "timeclock.csv"
+run cat with path timeclock_path
+then awk with delimiter "," and program "function to_minutes(t, parts) { split(t,parts,\":\"); return parts[1]*60+parts[2] } { elapsed=to_minutes($4)-to_minutes($3); if (elapsed<0) elapsed+=1440; totals[$2]+=elapsed-$5 } END { for (person in totals) printf \"%s,%d\\n\",person,totals[person] }"
+then sort

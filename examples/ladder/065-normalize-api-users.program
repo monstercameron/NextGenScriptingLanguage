@@ -1,0 +1,6 @@
+# Purpose: Normalize user exports that use legacy name fields or current display_name and active fields.
+# Inputs: fixtures/065/users.json contains User records from mixed schema versions with optional alternate field names.
+# Outputs: Consistent JSON rows with id, display_name, and boolean active values.
+accept users_path as text with default "fixtures/065/users.json"
+run cat with path users_path
+then jq with filter "[.records[] | {id: (.user_id // .id), display_name: (.display_name // ([.first_name, .last_name] | map(select(. != null)) | join(\" \"))), active: (if has(\"active\") then .active else .status == \"active\" end)}]" and flags ["-c", "-S"]

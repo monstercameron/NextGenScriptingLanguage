@@ -1,0 +1,47 @@
+{
+  "method": "three internal repetitions per side per trial; three alternating trials, warmup both paths per trial; capture stderr byte limit unchanged",
+  "results": [
+    {
+      "label": "before",
+      "trial": 0,
+      "sha256": "2c37b95382b11b8201d98bfd763b0bebd5f5bbb6fe8c2518d53b9f209fa7e884",
+      "wall_s": 3.495397917,
+      "log": "\nrunning 1 test\ntest profile_captured_one_mib_stderr_against_quiet_worker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 3.20s\n\nthree runs: 1 MiB stderr captured=2.032716709s; quiet=88.401042ms\n"
+    },
+    {
+      "label": "after",
+      "trial": 0,
+      "sha256": "428ab18862c291579cdca9704ec9afd6f338d7baec988c9aaef37deaac451d8f",
+      "wall_s": 0.7024370419999997,
+      "log": "\nrunning 1 test\ntest profile_captured_one_mib_stderr_against_quiet_worker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.50s\n\nthree runs: 1 MiB stderr captured=82.498834ms; quiet=79.178626ms\n"
+    },
+    {
+      "label": "after",
+      "trial": 1,
+      "sha256": "428ab18862c291579cdca9704ec9afd6f338d7baec988c9aaef37deaac451d8f",
+      "wall_s": 0.5502057919999999,
+      "log": "\nrunning 1 test\ntest profile_captured_one_mib_stderr_against_quiet_worker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.54s\n\nthree runs: 1 MiB stderr captured=81.244417ms; quiet=81.305083ms\n"
+    },
+    {
+      "label": "before",
+      "trial": 1,
+      "sha256": "2c37b95382b11b8201d98bfd763b0bebd5f5bbb6fe8c2518d53b9f209fa7e884",
+      "wall_s": 3.1746894169999997,
+      "log": "\nrunning 1 test\ntest profile_captured_one_mib_stderr_against_quiet_worker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 3.17s\n\nthree runs: 1 MiB stderr captured=2.036659668s; quiet=93.133834ms\n"
+    },
+    {
+      "label": "before",
+      "trial": 2,
+      "sha256": "2c37b95382b11b8201d98bfd763b0bebd5f5bbb6fe8c2518d53b9f209fa7e884",
+      "wall_s": 3.1722357500000005,
+      "log": "\nrunning 1 test\ntest profile_captured_one_mib_stderr_against_quiet_worker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 3.16s\n\nthree runs: 1 MiB stderr captured=2.041188416s; quiet=87.767583ms\n"
+    },
+    {
+      "label": "after",
+      "trial": 2,
+      "sha256": "428ab18862c291579cdca9704ec9afd6f338d7baec988c9aaef37deaac451d8f",
+      "wall_s": 0.5480337500000001,
+      "log": "\nrunning 1 test\ntest profile_captured_one_mib_stderr_against_quiet_worker ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.54s\n\nthree runs: 1 MiB stderr captured=86.481333ms; quiet=82.46625ms\n"
+    }
+  ]
+}

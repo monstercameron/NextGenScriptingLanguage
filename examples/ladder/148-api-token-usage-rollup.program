@@ -1,0 +1,6 @@
+# Purpose: Roll up API token usage by team and model from JSONL billing records.
+# Inputs: usage.jsonl contains team, model, input_tokens, and output_tokens per request.
+# Outputs: stdout emits compact per-team/model call and token totals.
+accept usage_path as text with default "usage.jsonl"
+run cat with path usage_path
+pipe to jq with flags ["-s", "-c"] and filter "group_by([.team, .model])[] | {team: .[0].team, model: .[0].model, calls: length, input_tokens: (map(.input_tokens) | add), output_tokens: (map(.output_tokens) | add), total_tokens: (map(.input_tokens + .output_tokens) | add)}"

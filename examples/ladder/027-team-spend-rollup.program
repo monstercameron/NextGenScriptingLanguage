@@ -1,0 +1,8 @@
+# Purpose: Sum transaction amounts per team and save a stable CSV report.
+# Inputs: costs.csv (date,team,reference,dollars).
+# Outputs: team,total-dollars rows on stdout and team-spend.csv.
+accept costs_path as text with default "costs.csv"
+run cat with path costs_path
+then awk with delimiter "," and program "NR>1 { spend[$2] += $4 } END { for (team in spend) print team \",\" spend[team] }"
+then sort
+then save to "team-spend.csv"

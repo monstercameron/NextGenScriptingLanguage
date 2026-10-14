@@ -1,0 +1,6 @@
+# Purpose: Report approved plugins absent from the sorted installed inventory.
+# Inputs: approved.txt and installed.txt, each sorted in C locale.
+# Outputs: Missing approved names on stdout.
+accept approved_path as text with default "approved.txt"
+accept installed_path as text with default "installed.txt"
+run comm with flags ["-23"] and files [approved_path, installed_path]

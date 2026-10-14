@@ -1,0 +1,8 @@
+# Purpose: Watch the first three deployment records as a bounded rollout verification window.
+# Inputs: deployments.jsonl starts empty; the harness appends JSONL records to that file.
+# Outputs: stdout receives three formatted deployment lines, then the program stops.
+accept deployments_path as text with default "deployments.jsonl"
+stream from tail with flags ["-n", "+1", "-f"] and path deployments_path
+pipe to jq with flags ["--unbuffered", "-r"] and filter "\"\\(.time) \\(.service): \\(.state) (\\(.revision))\""
+take the first 3 lines
+show each line

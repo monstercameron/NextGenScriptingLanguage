@@ -1,0 +1,7 @@
+# Purpose: Format each newly appended incident-log row for the live operator feed.
+# Inputs: incidents.log, appended as timestamp|severity|component|message records.
+# Outputs: One normalized line per new record while tail -f remains open.
+accept incidents_path as text with default "incidents.log"
+listen to tail with flags ["-n", "+1", "-f"] and path incidents_path
+whenever a line arrives as event
+  then awk with delimiter "|" and program "NF>=4 { print $1 \" [\" toupper($2) \"] \" $3 \": \" $4 }"

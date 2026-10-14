@@ -1,0 +1,8 @@
+# Purpose: Produce a stable TSV inventory of deployed service versions and readiness.
+# Inputs: deployment.json containing a services array.
+# Outputs: Sorted TSV on stdout and deployment-inventory.tsv.
+accept deployment_path as text with default "deployment.json"
+run cat with path deployment_path
+then jq with flags ["-r"] and filter ".services[] | [.name, .version, .ready] | @tsv"
+then sort
+then save to "deployment-inventory.tsv"

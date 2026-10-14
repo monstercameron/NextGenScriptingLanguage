@@ -1,0 +1,6 @@
+# Purpose: Find malformed names, duplicate declarations, and required variables without defaults.
+# Inputs: fixtures/056/environment-manifest.json contains Environment variable declarations with required flags and defaults.
+# Outputs: JSON audit of invalid names, duplicates, and required inputs.
+accept environment_manifest_path as text with default "fixtures/056/environment-manifest.json"
+run cat with path environment_manifest_path
+then jq with filter ".variables as $vars | {invalid_names: ([$vars[] | select((.name | test(\"^[A-Z_][A-Z0-9_]*$\")) | not) | .name] | unique), duplicate_names: ([$vars[].name] | sort | group_by(.) | map(select(length > 1) | .[0])), required_without_default: ([$vars[] | select(.required == true and (has(\"default\") | not)) | .name] | unique)}" and flags ["-c", "-S"]

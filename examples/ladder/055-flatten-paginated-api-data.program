@@ -1,0 +1,6 @@
+# Purpose: Combine item arrays from saved API pages while preserving page and item order.
+# Inputs: fixtures/055/pages.json contains Saved API pages containing customer or ticket records.
+# Outputs: One compact JSON array with all page items in order.
+accept pages_path as text with default "fixtures/055/pages.json"
+run cat with path pages_path
+then jq with filter "[.pages[].items[]]" and flags ["-c", "-S"]

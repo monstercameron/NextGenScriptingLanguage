@@ -1,0 +1,33 @@
+{
+  "extension": "execute-lang.execute-program",
+  "version": "0.1.1",
+  "validated_at_utc": "2026-10-14T06:51:20.849366+00:00",
+  "runtime_compatibility": "Execute 0.7.0 syntax",
+  "vscode_tested": "1.141.0 arm64",
+  "minimum_vscode": "1.85.0",
+  "node_tested": "24.19.0",
+  "tests_passed": 14,
+  "real_program_files_tokenized": 169,
+  "program_lines_tokenized": 1270,
+  "snippets": 17,
+  "complete_snippet_templates_checked_by_execute": 9,
+  "line_tokenization_budget_ms": 1000,
+  "package_bytes": 10020,
+  "vsix_sha256": "64cb9478fdb796c8d56991a6f1925f747d1e61bb0e84ee47942649d75d2f21cf",
+  "package_entries": 9,
+  "installed_in_isolated_vscode_profile": true,
+  "default_vscode_profile_modified": false,
+  "runtime_activation_code": false,
+  "marketplace_published": false,
+  "source_sha256": {
+    "package.json": "09847e40ca5267439f7995ff12ba436789814e2bb9a1e34fbd06a0924c467a22",
+    "language-configuration.json": "932f3ed327c39bbdd7c96c4a58d23ccb31e0a6a36d91138b66388f7e400652eb",
+    "syntaxes/execute.tmLanguage.json": "92817b9ec4fc3eb938733e931a62c339f85eb4ee0fcce72541507649a80f5390",
+    "snippets/execute.code-snippets": "4ab914ac28aae373c5f6b667bb97f0c84fa5a89cfa502f08c67b76e6f47a6380",
+    "README.md": "dfb9bce86d55dab59f4d6fda07346a1a19935437c2326e6823ccb4f277b9e8a3",
+    "CHANGELOG.md": "55f2eb07520785a669971d00bc290a08ba4416e53215af55edf015dadf0f02d3",
+    "LICENSE": "6a9b66bec49950d01af41f5b4e25b99863d60799ad3d45c79ec2018fba39ad51"
+  },
+  "test_sha256": "7905803b983634718f6ea93106b35c76b48d6b70284f57e3f5e8fd50a29d753c",
+  "package_lock_sha256": "fd7b413f739e010f7cd8ffe144b810714eec4d1ac6ff568a5faf14731bd93305"
+}

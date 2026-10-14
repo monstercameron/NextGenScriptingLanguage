@@ -1,0 +1,6 @@
+# 50. Resume a partial event before reopening its producer
+listen to cat with path "events.txt"
+whenever a line arrives as record
+  then tr with from "[:lower:]" and to "[:upper:]" as normalized and cache
+  then grep with pattern "PASS"
+  then save to "event.txt"

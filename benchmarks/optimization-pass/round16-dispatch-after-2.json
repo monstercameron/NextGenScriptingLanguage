@@ -1,0 +1,14 @@
+{
+  "batches": 23,
+  "fixture": "32 text panels; each input event writes 32 distinct 512-byte literals; event enqueue plus App::advance",
+  "literal_actions": 32,
+  "literal_bytes_each": 512,
+  "measured_batches": 20,
+  "operation": "ui_dispatch_32_widgets_32_literals_512_bytes",
+  "operations_per_batch": 20,
+  "p50_us": 3.85,
+  "p95_us": 3.8646000000000003,
+  "p99_us": 4.0520499999999995,
+  "warmup_batches": 3,
+  "widgets": 32
+}

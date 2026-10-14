@@ -1,0 +1,6 @@
+# Purpose: Compute nearest-rank p95 latency per route from request timing samples.
+# Inputs: observability/latencies.json contains sampled route latencies in milliseconds for one bounded time window.
+# Outputs: Nearest-rank 95th-percentile latency and sample count per route.
+accept latencies_path as text with default "observability/latencies.json"
+run cat with path latencies_path
+then jq with flags ["-r"] and filter ".samples | group_by(.route)[] | . as $group | ($group | map(.latency_ms) | sort) as $latencies | \"\\($group[0].route)\\tn=\\($latencies | length)\\tp95=\\($latencies[((($latencies | length) * 0.95 | ceil) - 1)])ms\""

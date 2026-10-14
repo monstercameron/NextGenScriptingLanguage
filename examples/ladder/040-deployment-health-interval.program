@@ -1,0 +1,7 @@
+# Purpose: Poll deployment health every second and stop after two samples.
+# Inputs: deployments.csv (cluster,service,state,version).
+# Outputs: Total, failed, and healthy deployment counts per sample.
+accept deployments_path as text with default "deployments.csv"
+every 1 second
+  run cat with path deployments_path
+  pipe to awk with delimiter "," and program "NR>1 { deployments++; if ($3 == \"failed\") failed++ } END { printf \"deployments=%d failed=%d healthy=%d\\n\", deployments, failed, deployments-failed }"

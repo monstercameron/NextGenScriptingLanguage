@@ -1,0 +1,6 @@
+# Purpose: Validate required event fields as each record arrives and return a per-record decision.
+# Inputs: stdin supplies event objects with optional id, at, and type fields.
+# Outputs: stdout prints ACCEPT or REJECT with the missing field list for every input record.
+listen to stdin
+whenever a line arrives as record
+  then jq with flags ["-r"] and filter ". as $e | [(if (($e.id | type) != \"string\" or $e.id == \"\") then \"id\" else empty end), (if (($e.at | type) != \"string\" or $e.at == \"\") then \"at\" else empty end), (if (($e.type | type) != \"string\" or $e.type == \"\") then \"type\" else empty end)] as $missing | if ($missing | length) == 0 then \"ACCEPT \\( $e.id )\" else \"REJECT \\($e.id // \"unknown\") missing \\($missing | join(\",\"))\" end"

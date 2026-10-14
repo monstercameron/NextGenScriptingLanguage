@@ -1,0 +1,6 @@
+# Purpose: Turn current runner-pool snapshots into busy, free and total slots for capacity planning.
+# Inputs: ci/runner-pools.json is a scheduler snapshot with configured capacity and current busy slots per pool.
+# Outputs: Runner occupancy and remaining slots for each pool, sorted by pool name.
+accept runner_pools_path as text with default "ci/runner-pools.json"
+run cat with path runner_pools_path
+then jq with flags ["-r"] and filter "[.pools[]] | sort_by(.name)[] | \"\\(.name)\\tused=\\(.busy)\\tfree=\\(.capacity - .busy)\\ttotal=\\(.capacity)\""

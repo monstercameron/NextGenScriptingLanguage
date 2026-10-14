@@ -1,0 +1,8 @@
+# Purpose: Assemble a stable handoff object from a release file and workspace binding.
+# Inputs: workspace.txt and release.json.
+# Outputs: Compact JSON with release details and workspace context.
+accept workspace_path as text with default "workspace.txt"
+accept release_path as text with default "release.json"
+read workspace_path as workspace
+run cat with path release_path as release
+then jq with flags ["-n", "-c", "-S", "--arg", "workspace", workspace, "--argjson", "release", release] and filter "{workspace:$workspace,release:$release}"

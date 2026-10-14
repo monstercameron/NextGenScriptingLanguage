@@ -1,0 +1,214 @@
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -2,6 +2,7 @@
+ use anyhow::{anyhow, bail, Context, Result};
+ use std::borrow::Cow;
+ use std::collections::BTreeMap;
++use std::ops::Range;
+ 
+ #[derive(Debug, Clone, PartialEq)]
+ pub(crate) enum Token<'source> {
+@@ -12,15 +13,25 @@
+     Comma,
+ }
+ 
+-struct SourceLine<'source> {
++struct SourceLine {
+     number: usize,
+     indent: usize,
+-    tokens: Vec<Token<'source>>,
++    token_range: Range<usize>,
+ }
+ 
++impl SourceLine {
++    fn tokens<'arena, 'source>(
++        &self,
++        token_arena: &'arena [Token<'source>],
++    ) -> &'arena [Token<'source>] {
++        &token_arena[self.token_range.clone()]
++    }
++}
++
+ /// Parse the line-oriented workflow language into its AST.
+ pub fn parse(source: &str) -> Result<Program> {
+     let mut steps: Vec<Step> = Vec::new();
++    let mut token_arena = Vec::new();
+     let mut lines = Vec::new();
+     for (index, source_line) in source.lines().enumerate() {
+         let line_number = index + 1;
+@@ -37,34 +48,37 @@
+             }
+         }
+         let content = line.trim_start_matches(' ');
+-        let tokens = tokenize(content).with_context(|| format!("line {line_number}"))?;
+-        if tokens.is_empty() {
++        let token_start = token_arena.len();
++        tokenize_into(content, &mut token_arena).with_context(|| format!("line {line_number}"))?;
++        let token_range = token_start..token_arena.len();
++        if token_range.is_empty() {
+             continue;
+         }
+         lines.push(SourceLine {
+             number: line_number,
+             indent,
+-            tokens,
++            token_range,
+         });
+     }
+ 
+     let mut cursor = 0;
+     while cursor < lines.len() {
+         let line = &lines[cursor];
++        let line_tokens = line.tokens(&token_arena);
+         if line.indent != 0 {
+             bail!(
+                 "line {}: unexpected indentation outside a trigger body",
+                 line.number
+             );
+         }
+-        if is_trigger_header(&line.tokens) {
++        if is_trigger_header(line_tokens) {
+             if steps.iter().any(|step| !is_trigger_setup(&step.kind)) {
+                 bail!(
+                     "line {}: a trigger must follow only initial folder setup",
+                     line.number
+                 );
+             }
+-            let (trigger, body_start) = parse_trigger_header(&lines, cursor)?;
++            let (trigger, body_start) = parse_trigger_header(&lines, &token_arena, cursor)?;
+             let first_body = lines.get(body_start).ok_or_else(|| {
+                 anyhow!(
+                     "line {}: trigger body must contain at least one indented statement",
+@@ -84,15 +98,16 @@
+                 if body_line.indent != body_indent {
+                     bail!("line {}: trigger body indentation must be consistent; nested blocks are unsupported", body_line.number);
+                 }
+-                if is_trigger_header(&body_line.tokens)
+-                    || is_listener_event_header(&body_line.tokens)
++                let body_tokens = body_line.tokens(&token_arena);
++                if is_trigger_header(body_tokens)
++                    || is_listener_event_header(body_tokens)
+                 {
+                     bail!(
+                         "line {}: nested trigger blocks are unsupported",
+                         body_line.number
+                     );
+                 }
+-                let kind = parse_line(&body_line.tokens)
++                let kind = parse_line(body_tokens)
+                     .map_err(|error| anyhow!("line {}: {error}", body_line.number))?;
+                 body_steps.push(Step {
+                     line: body_line.number,
+@@ -118,14 +133,14 @@
+                 trigger: Some(trigger),
+             });
+         }
+-        if is_listener_event_header(&line.tokens) {
++        if is_listener_event_header(line_tokens) {
+             bail!(
+                 "line {}: listener event header must follow `listen to ...`",
+                 line.number
+             );
+         }
+         let kind =
+-            parse_line(&line.tokens).map_err(|error| anyhow!("line {}: {error}", line.number))?;
++            parse_line(line_tokens).map_err(|error| anyhow!("line {}: {error}", line.number))?;
+         steps.push(Step {
+             line: line.number,
+             kind,
+@@ -154,9 +169,13 @@
+     word_is(tokens.first(), "whenever")
+ }
+ 
+-fn parse_trigger_header(lines: &[SourceLine<'_>], index: usize) -> Result<(Trigger, usize)> {
++fn parse_trigger_header<'source>(
++    lines: &[SourceLine],
++    token_arena: &[Token<'source>],
++    index: usize,
++) -> Result<(Trigger, usize)> {
+     let header = &lines[index];
+-    let tokens = &header.tokens;
++    let tokens = header.tokens(token_arena);
+     if word_is(tokens.first(), "every") {
+         if tokens.len() != 3 {
+             bail!(
+@@ -268,21 +287,22 @@
+             header.number
+         )
+     })?;
+-    if event.indent != 0 || !word_is(event.tokens.first(), "whenever") {
++    let event_tokens = event.tokens(token_arena);
++    if event.indent != 0 || !word_is(event_tokens.first(), "whenever") {
+         bail!("line {}: expected unindented listener event header `whenever a line arrives as <binding>`", event.number);
+     }
+-    if event.tokens.len() != 6
+-        || !word_is(event.tokens.get(1), "a")
+-        || !word_is(event.tokens.get(2), "line")
+-        || !word_is(event.tokens.get(3), "arrives")
+-        || !word_is(event.tokens.get(4), "as")
++    if event_tokens.len() != 6
++        || !word_is(event_tokens.get(1), "a")
++        || !word_is(event_tokens.get(2), "line")
++        || !word_is(event_tokens.get(3), "arrives")
++        || !word_is(event_tokens.get(4), "as")
+     {
+         bail!(
+             "line {}: expected `whenever a line arrives as <binding>`",
+             event.number
+         );
+     }
+-    let binding = parse_binding_identifier(event.tokens.get(5), "listener binding")
++    let binding = parse_binding_identifier(event_tokens.get(5), "listener binding")
+         .map_err(|error| anyhow!("line {}: {error}", event.number))?;
+     Ok((
+         Trigger::Listen {
+@@ -317,8 +337,13 @@
+ }
+ 
+ pub(crate) fn tokenize<'source>(line: &'source str) -> Result<Vec<Token<'source>>> {
+-    let bytes = line.as_bytes();
+     let mut tokens = Vec::new();
++    tokenize_into(line, &mut tokens)?;
++    Ok(tokens)
++}
++
++fn tokenize_into<'source>(line: &'source str, tokens: &mut Vec<Token<'source>>) -> Result<()> {
++    let bytes = line.as_bytes();
+     let mut i = 0;
+     while i < bytes.len() {
+         match bytes[i] {
+@@ -382,7 +407,7 @@
+             }
+         }
+     }
+-    Ok(tokens)
++    Ok(())
+ }
+ 
+ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
+@@ -914,6 +939,25 @@
+             })
+         );
+         assert_eq!(cron.steps[0].line, 2);
++    }
++
++    #[test]
++    fn shared_token_arena_preserves_blank_and_comment_line_positions() {
++        let program = parse(
++            "# heading\n\nuse folder \"work\"\n\n# interval\nevery 2 minutes\n\n  count lines\n\n  then summarize\n\n# trailing comment\n",
++        )
++        .unwrap();
++        assert_eq!(
++            program.trigger,
++            Some(Trigger::Every {
++                interval_ms: 120_000,
++                line: 6,
++            })
++        );
++        assert_eq!(
++            program.steps.iter().map(|step| step.line).collect::<Vec<_>>(),
++            vec![3, 8, 10]
++        );
+     }
+ 
+     #[test]

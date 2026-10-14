@@ -1,0 +1,19 @@
+{
+  "release": "execute 0.5.0",
+  "regular_rust_tests": 227,
+  "isolated_signal_test": 1,
+  "full_suite_log": "stream-full-tests.log",
+  "additional_stream_suite_log": "stream-integration-tests.log",
+  "example_ladder_cases": 50,
+  "ui_pty_scenarios": 5,
+  "formatting": "passed",
+  "macos_clippy_all_targets_warnings_denied": "passed",
+  "linux_x86_64_clippy_all_targets_warnings_denied": "passed",
+  "linux_native_runtime": "not run",
+  "cross_version_cache_and_checkpoint": "passed with identical effective environment",
+  "finite_runtime_differential": "passed15fixedcasepairs",
+  "live_macos_tail_tr_stream": "passed: 2 launches, 3 output lines from4source lines, children reaped",
+  "optimization_campaign": "ended early by user; no8hourcompletionclaim",
+  "binary_sha256": "3387d01c87ed52e1988fb5422d4b5074cbf1ea02363c8cbf1bd9a0167d36c396",
+  "validated_at_utc": "2026-10-14T04:09:42.094288+00:00"
+}

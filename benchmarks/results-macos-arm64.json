@@ -1,0 +1,170 @@
+{
+  "environment": {
+    "os": "Darwin",
+    "os_version": "25.6.0",
+    "architecture": "arm64",
+    "cpu_model": "Apple M1 Pro",
+    "python": "3.9.6",
+    "logical_cpus": 10,
+    "execute_version": "execute 0.2.0",
+    "build": "release",
+    "applets": {
+      "printf": "/usr/bin/printf",
+      "tr": "/usr/bin/tr",
+      "wc": "/usr/bin/wc",
+      "cat": "/bin/cat",
+      "sh": "/bin/sh"
+    },
+    "macos_product_version": "26.6.2",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "binary_sha256": "00bb2e2e16cda0dfd918ca659fb42a386c95d27936ecd9dabb5fb345c0ca1143"
+  },
+  "method": {
+    "timer": "perf_counter_ns",
+    "warmup_runs_per_case": 10,
+    "samples_per_case": 200,
+    "ordering": "deterministic shuffled cases each round",
+    "conditions": "new CLI processes; warmed OS filesystem/executable caches; no cache flushing",
+    "cli_timing": "spawn to exit, includes launcher/capture and complete stdout; preparation excluded",
+    "percentiles": "nearest rank p95/p99; conventional median p50",
+    "safety": "temporary fixture/cache directories; no Git execution or external service calls"
+  },
+  "cli_ms": {
+    "shell_startup_only": {
+      "samples": 200,
+      "p50": 4.323667,
+      "p95": 5.214542,
+      "p99": 5.359333,
+      "min": 3.761167
+    },
+    "execute_check_no_execution": {
+      "samples": 200,
+      "p50": 5.268937,
+      "p95": 6.210708,
+      "p99": 7.322375,
+      "min": 4.609292
+    },
+    "raw_printf": {
+      "samples": 200,
+      "p50": 2.5717084999999997,
+      "p95": 3.030208,
+      "p99": 3.342041,
+      "min": 2.158458
+    },
+    "shell_builtin_printf": {
+      "samples": 200,
+      "p50": 4.380875,
+      "p95": 5.155541,
+      "p99": 5.353708,
+      "min": 3.819458
+    },
+    "execute_printf": {
+      "samples": 200,
+      "p50": 6.80425,
+      "p95": 8.24775,
+      "p99": 9.653125,
+      "min": 6.125042
+    },
+    "shell_small_pipe": {
+      "samples": 200,
+      "p50": 6.748479,
+      "p95": 8.083166,
+      "p99": 9.191208,
+      "min": 6.055166
+    },
+    "execute_small_pipe": {
+      "samples": 200,
+      "p50": 7.464895500000001,
+      "p95": 8.710333,
+      "p99": 9.354542,
+      "min": 6.554167
+    },
+    "shell_1MiB_pipe_count": {
+      "samples": 200,
+      "p50": 49.802604,
+      "p95": 52.196708,
+      "p99": 53.102833,
+      "min": 49.064791
+    },
+    "execute_1MiB_pipe_count": {
+      "samples": 200,
+      "p50": 50.4659375,
+      "p95": 52.8045,
+      "p99": 54.10875,
+      "min": 49.590083
+    },
+    "shell_1MiB_pipe_copy": {
+      "samples": 200,
+      "p50": 50.054854000000006,
+      "p95": 52.265041,
+      "p99": 54.390416,
+      "min": 49.269375
+    },
+    "execute_1MiB_pipe_copy": {
+      "samples": 200,
+      "p50": 52.323125000000005,
+      "p95": 54.444917,
+      "p99": 58.824417,
+      "min": 51.213791
+    },
+    "execute_1MiB_finite_uncached": {
+      "samples": 200,
+      "p50": 52.995958,
+      "p95": 55.92875,
+      "p99": 56.957208,
+      "min": 51.894041
+    },
+    "execute_1MiB_finite_cache_miss": {
+      "samples": 200,
+      "p50": 64.782917,
+      "p95": 70.126542,
+      "p99": 72.332709,
+      "min": 61.499833
+    },
+    "execute_1MiB_finite_cache_hit": {
+      "samples": 200,
+      "p50": 12.033854,
+      "p95": 14.069583,
+      "p99": 15.729708,
+      "min": 11.244958
+    }
+  },
+  "native_pipe_roundtrip_us": {
+    "samples": 2000,
+    "p50": 4.708,
+    "p95": 5.958,
+    "p99": 8.167,
+    "min": 3.5,
+    "includes": "two OS pipes + persistent cat + Python read/write + scheduling; no startup"
+  },
+  "first_byte_ms": {
+    "shell_1MiB_pipe_copy": {
+      "samples": 50,
+      "p50": 7.0698755,
+      "p95": 7.9525,
+      "p99": 8.982833,
+      "min": 6.708417
+    },
+    "execute_1MiB_pipe_copy": {
+      "samples": 50,
+      "p50": 51.450479,
+      "p95": 53.066,
+      "p99": 53.72475,
+      "min": 51.134542
+    },
+    "note": "Execute buffers finite terminal output until completion; shell streams it immediately. Not an event-worker benchmark."
+  },
+  "fixtures": {
+    "small_bytes": 16,
+    "large_bytes": 1048576,
+    "large_lines": 65536
+  },
+  "scripts": {
+    "print.program": "run printf with message \"hello latency\"\n",
+    "small.program": "read \"small.txt\"\npipe to tr with from \"[:lower:]\" and to \"[:upper:]\"\npipe to wc with flags [\"-l\"]\n",
+    "large.program": "read \"large.txt\"\npipe to tr with from \"[:lower:]\" and to \"[:upper:]\"\npipe to wc with flags [\"-l\"]\n",
+    "copy.program": "read \"large.txt\"\npipe to tr with from \"[:lower:]\" and to \"[:upper:]\"\npipe to cat\n",
+    "uncached.program": "read \"large.txt\"\nthen tr with from \"[:lower:]\" and to \"[:upper:]\"\nthen wc with flags [\"-l\"]\n",
+    "cached.program": "read \"large.txt\"\nthen tr with from \"[:lower:]\" and to \"[:upper:]\" and cache\nthen wc with flags [\"-l\"]\n"
+  }
+}

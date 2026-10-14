@@ -1,0 +1,31 @@
+{
+  "name": "sed",
+  "binary": "sed",
+  "accepts_stdin": true,
+  "parameters": {
+    "flags": {
+      "type": "list",
+      "items": "string"
+    },
+    "program": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    },
+    {
+      "literal": "-e"
+    },
+    {
+      "parameter": "program"
+    }
+  ]
+}

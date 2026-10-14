@@ -1,0 +1,27 @@
+{
+  "version": "execute 0.2.0",
+  "conditions": "one warm listener process; sequential requests over pipes; emit before stdin EOF; no runner startup in per-event timing",
+  "latency_includes": "Python pipe write/read, event framing, named binding, finite body, stdout flush, scheduling",
+  "listener_us": {
+    "read_fixture_no_applet_spawn": {
+      "samples": 200,
+      "p50": 27.4795,
+      "p95": 58.125,
+      "p99": 113.208
+    },
+    "tr_external_applet": {
+      "samples": 200,
+      "p50": 1523.708,
+      "p95": 1695.875,
+      "p99": 2646.542
+    }
+  },
+  "interval_5ms_lateness_us": {
+    "samples": 200,
+    "p50": 991.0,
+    "p95": 1779,
+    "p99": 2945
+  },
+  "interval_note": "positive lateness relative to monotonic tick deadline; body reads 16-byte fixture; first 20 ticks excluded; missed ticks skipped",
+  "binary_sha256": "00bb2e2e16cda0dfd918ca659fb42a386c95d27936ecd9dabb5fb345c0ca1143"
+}

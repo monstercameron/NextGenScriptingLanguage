@@ -1,0 +1,8 @@
+# Purpose: Select invoice ID, vendor, and amount columns for review from an explicitly unquoted comma-separated export.
+# Inputs: finance/invoices.csv: unquoted CSV; fields contain no embedded commas or quotes.
+# Outputs: reports/invoice-audit.csv: invoice ID, vendor, and amount columns; stdout echoes the extract.
+accept invoices_path as text with default "finance/invoices.csv"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path invoices_path
+pipe to cut with delimiter "," and fields "1,2,4"
+then save to "reports/invoice-audit.csv"

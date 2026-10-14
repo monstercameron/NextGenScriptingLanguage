@@ -1,0 +1,11 @@
+{
+  "first_failed_applet": "false",
+  "completed_nodes_restored": 2,
+  "resumed_applets": [
+    "cat"
+  ],
+  "cached_tr_not_repeated": true,
+  "output": "RECOVER THIS RESULT",
+  "all_examples_check": true,
+  "all_files_temporary": true
+}

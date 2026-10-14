@@ -1,0 +1,46 @@
+# Purpose: A local operator console editable through live state and normal terminal keys.
+# Inputs: message text, chosen list entries, and the incoming component port.
+# Outputs: visible text, table, bars, chart history, and real printf output on submit.
+open a screen titled "Live operator console"
+divide the screen into two columns
+place console on the left
+place dashboard on the right
+give console 40 percent of the width
+
+define a program named console
+  accept incoming as text
+  show a heading named title with text "Operator console"
+  show a text field named message with value "ready"
+  show a list named choices
+    include "first"
+    include "second"
+  show a text panel named result
+  show a badge named status with text "Waiting"
+  show a button named send labelled "Submit message"
+
+  whenever message is submitted
+    run printf with message message
+    then show the result in result
+
+  whenever send is pressed
+    run printf with message message
+    then show the result in result
+
+  whenever an item is chosen in choices
+    show that item in message
+
+  whenever incoming arrives
+    show the result in status
+
+  whenever key "Ctrl-Q" is pressed
+    close the screen
+
+
+define a program named dashboard
+  show a table named metrics
+    column "Name" from "name"
+    column "Value" from "value"
+  show a bar chart named load
+    label each bar from "name"
+    size each bar from "value"
+  show a line chart named history with key "name"

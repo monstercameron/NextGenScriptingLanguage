@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "release": "0.8.0",
+  "overall_claim": "not_established",
+  "full_replacement_claim_allowed": false,
+  "aggregation": "All critical acceptance requirements must pass; scores are not averaged.",
+  "scope": "Keep the Unix glue language small. Full-platform gates remain unmet and visible.",
+  "source": "replacement-challenge-source.md",
+  "source_sha256": "a3fe715c7e35b723166534039aa7b6afad5a68578ceaf9fd6580606dd889bf7b",
+  "evidence": {
+    "streaming_lifecycle": "../benchmarks/replacement-proofs-v0.6.1-macos-arm64.json",
+    "live_control": "live-control-validation.json",
+    "utility_collection": "utility-validation.json",
+    "historical_bash_comparison": "../benchmarks/unix-workloads-v0.4.6-macos-arm64.json",
+    "full_audit": "full-validation-v0.6.1.json",
+    "direct_commands": "validation-v0.7.0.json",
+    "declared_inputs": "validation-v0.8.0.json"
+  },
+  "scope_boundaries": {
+    "utility_count_is_not_omarchy_port_count": true,
+    "manifest_aliases_are_not_distinct_backend_integrations": true,
+    "warm_cache_startup_is_not_cold_cache_startup": true,
+    "source_length_is_not_ai_productivity_evidence": true,
+    "macos_tui_tests_are_not_linux_desktop_tests": true
+  },
+  "gates": [
+    {
+      "id": 1,
+      "priority": "P0",
+      "requirement": "Unix compatibility",
+      "status": "partial",
+      "evidence_and_gap": "Native pipes, binary files, cwd, signals, and PTY tests exist. No stratified 100-command differential matrix; generic CLI exit 1, finite buffering, and literal arguments differ from Bash."
+    },
+    {
+      "id": 2,
+      "priority": "P0",
+      "requirement": "1 GB real streaming",
+      "status": "partial",
+      "evidence_and_gap": "New local 1,000,000,000-byte probe verifies exact output hash, binary bytes, and two native launches. Compare a small input's high-water usage; Linux execution and broader slow-consumer/memory observations remain open."
+    },
+    {
+      "id": 3,
+      "priority": "P0",
+      "requirement": "Lifecycle, 10,000 repetitions",
+      "status": "partial",
+      "evidence_and_gap": "New seven-case repeatable suite checks record cutoff, signals, timeout, blocked output, failures, and reaping. Local run: 1,000 cycles / 7,000 probes. The 10,000-cycle target, crash/descendant cases, and Linux run remain open."
+    },
+    {
+      "id": 4,
+      "priority": "P0",
+      "requirement": "Complete scripting control flow",
+      "status": "not_implemented",
+      "evidence_and_gap": "Typed CLI input declarations now feed native parameters and argv, services and live bindings; 144 utilities expose 161 path inputs. General conditions, loops, functions and parallel jobs remain missing."
+    },
+    {
+      "id": 5,
+      "priority": "P0",
+      "requirement": "150 real Omarchy ports",
+      "status": "not_measured",
+      "evidence_and_gap": "The 150 local utilities are **not** Omarchy ports. No pinned upstream sample or disposable-desktop differential run exists."
+    },
+    {
+      "id": 6,
+      "priority": "P0",
+      "requirement": "Failure semantics",
+      "status": "partial",
+      "evidence_and_gap": "Pipeline failure, timeout, cancellation, uncertain checkpoint retry, and cleanup tests exist. Numeric statuses and stderr are not structured script-visible results; recovery branches are missing."
+    },
+    {
+      "id": 7,
+      "priority": "P1",
+      "requirement": "1,000 applets across backends",
+      "status": "not_implemented",
+      "evidence_and_gap": "There are 28 shipped manifest entries plus manifest-free direct executable calls in 0.7.0. Arbitrary installed executables can run with literal argv, but this is not 1,000 verified backend integrations. Native/IPC/QML/remote backend abstraction remains absent."
+    },
+    {
+      "id": 8,
+      "priority": "P1",
+      "requirement": "Five levels of nested programs",
+      "status": "not_implemented",
+      "evidence_and_gap": "Same-file terminal components have text ports. A `.program` cannot become an imported, typed, lifecycle-owned applet."
+    },
+    {
+      "id": 9,
+      "priority": "P1",
+      "requirement": "Structured typed dataflow",
+      "status": "partial",
+      "evidence_and_gap": "Typed declared text/integer/boolean/text-list inputs now validate against native parameter contracts, with scalar argv formatting. Raw byte pipelines, text bindings and UI projections exist. Native JSON/CSV record transforms, structured streams and typed component ports remain incomplete."
+    },
+    {
+      "id": 10,
+      "priority": "P1",
+      "requirement": "1,000 concurrent operations",
+      "status": "not_implemented",
+      "evidence_and_gap": "Bounded UI workers and stale-result rejection are covered at current scale. There is no general 1,000-operation concurrency primitive or randomized acceptance run."
+    },
+    {
+      "id": 11,
+      "priority": "P1",
+      "requirement": "Remote reliability",
+      "status": "not_implemented",
+      "evidence_and_gap": "A CLI such as `gh` can perform a request. Runtime-owned auth, reconnection, offline/version semantics, and fault-injected transports are absent."
+    },
+    {
+      "id": 12,
+      "priority": "P1",
+      "requirement": "20 Quickshell integrations",
+      "status": "not_implemented",
+      "evidence_and_gap": "Execute renders terminal widgets. No Quickshell bridge or twenty-widget desktop acceptance suite exists."
+    },
+    {
+      "id": 13,
+      "priority": "P2",
+      "requirement": "Performance and idle behavior",
+      "status": "partial",
+      "evidence_and_gap": "Warm-cache 0.6.0 local control/render measurements and historical matched Bash workloads exist. True cold-cache p95, idle-spawn guards, Linux parity, and representative end-to-end wins are unproven."
+    },
+    {
+      "id": 14,
+      "priority": "P2",
+      "requirement": "AI advantage on 200 tasks",
+      "status": "not_measured",
+      "evidence_and_gap": "No held-out comparative generation study, token ledger, or repair-cost dataset. Source length and this project's successful examples do not establish productivity gains."
+    },
+    {
+      "id": 15,
+      "priority": "P2",
+      "requirement": "Production/security/month of use",
+      "status": "partial",
+      "evidence_and_gap": "Private local control sockets, revision checks, tracing, bounds, and recovery tests exist. Applets retain user privileges; scoped permissions, credential policy, safe contract upgrades, and a month-long deployment study are absent."
+    }
+  ],
+  "pending_candidate": {
+    "status": "verified_local_candidate_not_installed",
+    "binary_sha256": "e02bb889359125968eeb1e9fceee3073c159b926334bdf122e1ac296a3d60e7a",
+    "overall_claim": "not_established",
+    "full_replacement_claim_allowed": false,
+    "local_evidence": "../../../work/optimization-all-dimensions-2026-10-14/state.json",
+    "gate_updates": [
+      {
+        "id": 4,
+        "status": "partial",
+        "evidence_and_gap": "Pending candidate adds scalar conditions and typed same-file finite program reuse across finite/service/managed lifetimes. General loops, jobs, parallel execution, environment/redirection variants and complete shell compatibility remain missing."
+      },
+      {
+        "id": 6,
+        "status": "partial",
+        "evidence_and_gap": "Explicit native numeric statuses and scalar branches are tested; native timeout/cancel/I/O/signal failures remain failures. Whole conditional/call checkpoint nodes require explicit unsafe retry. Structured stderr results, broad recovery policies and exactly-once effects remain absent."
+      },
+      {
+        "id": 8,
+        "status": "partial",
+        "evidence_and_gap": "Owned CLI proofs execute five and sixteen nested finite levels with typed local scopes, exact call/return order, byte results and one native launch. This remains same-file reuse, not imported modules, lifecycle-owned child services or reusable helpers inside screens."
+      },
+      {
+        "id": 9,
+        "status": "partial",
+        "evidence_and_gap": "Native finite JSON parse, typed pointer selection, explicit encoding and JSON CLI/live inputs persist through checkpoints and CRUD state. CSV, structured streaming/map/filter operators and richer typed component ports remain absent."
+      },
+      {
+        "id": 13,
+        "status": "partial",
+        "evidence_and_gap": "Campaign retains paired local release measurements and raw samples for controls, JSON helper avoidance, completed resume and large live state. Reuse overhead is measured against explicit inlining; this is not true cold-cache p95, idle guarantees, native Linux parity or a universal runtime win."
+      }
+    ]
+  }
+}

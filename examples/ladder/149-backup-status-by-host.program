@@ -1,0 +1,6 @@
+# Purpose: Summarize the latest backup result and failure count for each host.
+# Inputs: backups.jsonl contains host, started_at, status, and duration_minutes fields.
+# Outputs: stdout emits a latest-result JSONL report per host.
+accept backups_path as text with default "backups.jsonl"
+run cat with path backups_path
+pipe to jq with flags ["-s", "-c"] and filter "group_by(.host)[] | . as $runs | sort_by(.started_at) | last as $latest | {host: $latest.host, latest_at: $latest.started_at, latest_status: $latest.status, failed_runs: ([$runs[] | select(.status == \"failed\")] | length), duration_minutes: $latest.duration_minutes}"

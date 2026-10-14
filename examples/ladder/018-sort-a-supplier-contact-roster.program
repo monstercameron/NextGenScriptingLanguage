@@ -1,0 +1,8 @@
+# Purpose: Sort a last-name-first supplier roster so it can be reviewed and filed consistently.
+# Inputs: vendors/contacts.txt: one comma-separated last-name, first-name, email row per contact.
+# Outputs: exports/supplier-contacts-sorted.csv: alphabetized contact rows; stdout echoes the roster.
+accept contacts_path as text with default "vendors/contacts.txt"
+run mkdir with flags ["-p"] and paths ["exports"]
+run cat with path contacts_path
+pipe to sort
+then save to "exports/supplier-contacts-sorted.csv"

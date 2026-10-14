@@ -1,0 +1,6 @@
+# Purpose: Surface quarantined tests whose review or expiration date is within the next fourteen days.
+# Inputs: ci/quarantines.json contains owner-assigned quarantine entries with days_remaining from the CI tracking export.
+# Outputs: Quarantines expiring within fourteen days, earliest review first.
+accept quarantines_path as text with default "ci/quarantines.json"
+run cat with path quarantines_path
+then jq with flags ["-r"] and filter "[.quarantines[] | select(.days_remaining <= 14)] | sort_by(.days_remaining)[] | \"\\(.days_remaining)d\\t\\(.test)\\towner=\\(.owner)\""

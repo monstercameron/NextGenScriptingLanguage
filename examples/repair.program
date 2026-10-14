@@ -1,0 +1,5 @@
+# This intentionally fails. Replace "then false" with "then cat" to repair it.
+run printf with message "recover this result"
+then tr with from "[:lower:]" and to "[:upper:]" and cache
+then false
+then save to file "recovered.txt"

@@ -1,0 +1,6 @@
+# Purpose: Compare approved budgets with booked actuals and prioritize the largest overages.
+# Inputs: finance/budget-close.json reports budget and actual integer cents for each cost center.
+# Outputs: Budget, actual and signed variance for each center, largest overage first.
+accept budget_close_path as text with default "finance/budget-close.json"
+run cat with path budget_close_path
+then jq with flags ["-r"] and filter "[.centers[] | {name, budget_cents, actual_cents, variance:(.actual_cents - .budget_cents)}] | sort_by(-.variance)[] | \"\\(.name)\\tbudget=\\(.budget_cents)\\tactual=\\(.actual_cents)\\tvariance=\\(.variance)\""

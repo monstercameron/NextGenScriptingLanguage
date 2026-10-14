@@ -1,0 +1,6 @@
+# Purpose: Convert a saved API response batch into a report with only failed requests and error details.
+# Inputs: fixtures/062/responses.json contains Offline API responses including successful and failed request envelopes.
+# Outputs: JSON array of failed request IDs, routes, status codes, and messages.
+accept responses_path as text with default "fixtures/062/responses.json"
+run cat with path responses_path
+then jq with filter "[.responses[] | select(.status >= 400) | {request_id, route, status, code: (.error.code // \"UNCLASSIFIED\"), message: (.error.message // \"\")}]" and flags ["-c", "-S"]

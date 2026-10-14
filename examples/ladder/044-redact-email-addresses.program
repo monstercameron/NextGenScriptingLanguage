@@ -1,0 +1,7 @@
+# Purpose: Redact email addresses before sharing support-ticket excerpts.
+# Inputs: support-export.txt, plain text with contact addresses.
+# Outputs: Redacted text on stdout and support-share.txt.
+accept support_export_path as text with default "support-export.txt"
+run cat with path support_export_path
+then sed with flags ["-E"] and program "s/[[:alnum:]._%+-]+@[[:alnum:].-]+/[redacted-email]/g"
+then save to "support-share.txt"

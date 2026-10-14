@@ -1,0 +1,6 @@
+# Purpose: Project each JSON audit event into a compact TSV operator feed.
+# Inputs: One JSON object per stdin line with timestamp, level, actor, and action.
+# Outputs: One TSV row per input event while stdin remains open.
+listen to stdin
+whenever a line arrives as event
+  then jq with flags ["-r"] and filter "[.timestamp, .level, .actor, .action] | @tsv"

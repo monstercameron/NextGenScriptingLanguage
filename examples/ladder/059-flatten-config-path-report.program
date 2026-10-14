@@ -1,0 +1,6 @@
+# Purpose: Turn nested JSON scalar settings into searchable path/value TSV, including array indices.
+# Inputs: fixtures/059/config.json contains Nested service configuration with objects, arrays, strings, numbers, and booleans.
+# Outputs: Sorted TSV paths and JSON-encoded scalar values.
+accept config_path as text with default "fixtures/059/config.json"
+run cat with path config_path
+then jq with filter "[paths(scalars) as $path | {key: (reduce $path[] as $part (\"\"; . + (if ($part | type) == \"number\" then \"[\" + ($part | tostring) + \"]\" else (if . == \"\" then \"\" else \".\" end) + $part end))), value: (getpath($path) | tojson)}] | sort_by(.key)[] | [.key, .value] | @tsv" and flags ["-r"]

@@ -1,0 +1,6 @@
+# Purpose: Use the header width as the schema and report unquoted CSV records with a different number of fields.
+# Inputs: import.csv: Unquoted CSV; embedded delimiters and quoted-field CSV are outside this check.
+# Outputs: stdout: line,field_count,expected header followed by malformed row numbers.
+accept import_path as text with default "import.csv"
+run cat with path import_path
+then awk with program "BEGIN { FS=\",\"; print \"line,field_count,expected\" } NR==1 { expected=NF; next } NF!=expected { printf \"%d,%d,%d\\n\",NR,NF,expected }"

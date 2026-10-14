@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "status": "equal",
+  "started_at_utc": "2026-10-14T02:51:50.676856+00:00",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "seed": 1495,
+  "seed_sha256": "3387a06314520240667190fc89d8bc1a2059d83a57c55350cd4b8f24c9b8c32a",
+  "generated_cases_requested": 100000,
+  "total_cases": 100077,
+  "case_counts_by_category": {
+    "catalog_validation": 10004,
+    "depth_boundary": 10000,
+    "indentation": 10000,
+    "nested_lists": 10000,
+    "program_example": 59,
+    "service_header": 10003,
+    "syntax_error": 10002,
+    "ui_error": 1,
+    "ui_example": 2,
+    "ui_mutation": 10000,
+    "ui_template": 1,
+    "unicode_escape_control": 10003,
+    "unicode_word_tokens": 10000,
+    "valid_template": 2,
+    "whitespace": 10000
+  },
+  "corpus_sha256": "68d2dc7f42e61bb250bbefa6f68bd4eae8ab295c7679a4c1fb2479973b1edcd2",
+  "harness_sha256": "c17861b71932f1b143347b90c24858d5d36417092c7a2397aaa687ca9d26ab15",
+  "allow_patterns": [],
+  "normalization": "none; exact response line bytes are compared",
+  "manifest_dir": "/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow/manifests",
+  "manifest_sha256": {
+    "cat.json": "483117c32690b423ab88e9443cc7ce0787545f07833576d678b1d0472f19ab3a",
+    "cd.json": "8c4e620938ddea3864a46a53238bb1c30c6e95e2cf144e3ab762cdc4c461fb3a",
+    "count.lines.json": "9e8c2e8b0a096004a90754c4604b6873e04535f2817cc38b28fdab9631959349",
+    "cut.json": "2eb43493685ece1d739fb1225e40743178cbcb361dc2676470ac22c4bf4eb350",
+    "false.json": "5bf291319570f954bcf54b2847243eaca0c214c6d844c3f4fc5816ec005c6338",
+    "gh.repo.json": "821dd80054f78029446e963d5ee30375a8c2ec5dc8dab0c8411bafcea837a2bc",
+    "git.commit.json": "70e8272197c5974bd76d41e57ea0dde8046927487629fc4cd6a498fa23ff023a",
+    "grep.json": "aa8192ddb8685b19f4a9e49ad87d489d6dcfc946331037328e00721f16869a74",
+    "head.json": "3dcacca6166792ff647dc52a7273f0c102683cb012cad8b1f05fc2a2325f5b07",
+    "jq.json": "2f6585cff672a91e630833a4b3fc7bc61c9a59d82e5478d926a509d5154f1792",
+    "jq.ps.json": "9097df3bdb45dd6c9724acb3377ea0cb8bd068aacd0c55257f95c0f02037c50e",
+    "ls.json": "3c193cb2c0f1397e6600ddf3de9b8219110a26d5ae5661281c5263f50b74d17d",
+    "printf.json": "abe61c4481c94396e230406897d253ff8ba0f9c854fb09ecc098b85870b0237e",
+    "ps.json": "b245d02a68d61d316bd67cdc0b2c01225ed4b36c0257767f31e627dc50136475",
+    "pwd.json": "c7b13a3ffd7b935da4d2b79b9c971ac3e979e43f8d6417c4d917a498217bb50c",
+    "sort.json": "6d953c33eed06e702c5781290d76929b8e19d62d283b999321e42de19d779b50",
+    "tail.follow.json": "2529d2e3820b04ee7593562dd1aad88e891c256056089f368df5141a6ffcf401",
+    "tail.json": "85587f636af5879c435e51eb46fb302f51f0475701ce4c7374a58e27d3678f8d",
+    "tr.json": "971ed4560d7f290983f444a96a1698b932e051ea2667dceb3c523cccb9b09f7d",
+    "uniq.json": "157054ba866d610e03826a7f652bac52529195ccffca9b26f60a041e74f9b246",
+    "upper.json": "40f30b92942374f4694d90a33b24a856de99e79f875261b3e9a2f83c563ad0b5",
+    "wc.json": "be82bb3ac877a6eb53d3b2c699b1de84dcc6fd1d7cb9b05b784edc45d7786579"
+  },
+  "probes": {
+    "baseline": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/round6-baseline-parse-probe",
+      "sha256": "03c1884af3a622fc425c6de88b184ae0526fceb26ed2f3a5dd5db36bb4922418"
+    },
+    "candidate": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/round8-candidate-parse-probe",
+      "sha256": "9c7d876b97b3137f8c409aa911f57ad31cbc81d7da33a11c1dd3cfc33773a14d"
+    }
+  },
+  "response_type_counts": {
+    "baseline": {
+      "program": 57263,
+      "program_parse_error": 27814,
+      "ui": 6239,
+      "ui_parse_error": 8761
+    },
+    "candidate": {
+      "program": 57263,
+      "program_parse_error": 27814,
+      "ui": 6239,
+      "ui_parse_error": 8761
+    }
+  },
+  "validation_counts": {
+    "baseline": {
+      "invalid": 31501,
+      "parse_error": 36575,
+      "valid": 32001
+    },
+    "candidate": {
+      "invalid": 31501,
+      "parse_error": 36575,
+      "valid": 32001
+    }
+  },
+  "completed_cases": 100077,
+  "elapsed_seconds": 7.390164,
+  "first_mismatch": null,
+  "error": null
+}

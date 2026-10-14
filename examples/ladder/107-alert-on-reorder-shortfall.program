@@ -1,0 +1,6 @@
+# Purpose: Select only SKUs whose available quantity is below the reorder point and calculate the shortfall.
+# Inputs: reorder.csv: Unquoted CSV with header: sku,available,reorder_at; rows sorted by SKU.
+# Outputs: stdout: Shortage rows with a calculated shortfall and a header.
+accept reorder_path as text with default "reorder.csv"
+run cat with path reorder_path
+then awk with delimiter "," and program "BEGIN { print \"sku,available,reorder_at,shortfall\" } NR==1 { next } $2+0 < $3+0 { printf \"%s,%s,%s,%d\\n\",$1,$2,$3,$3-$2 }"

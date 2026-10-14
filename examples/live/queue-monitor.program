@@ -1,0 +1,10 @@
+# Purpose: Refresh the overdue-job report using configuration that an agent can edit live.
+# Inputs: input_path (JSON queue file) and threshold (JSON numeric text) are external bindings.
+# Outputs: output_path receives compact JSON with the overdue count and matching jobs.
+accept input_path as text
+accept threshold as text
+accept output_path as text
+every 1 second
+  run cat with path input_path
+  then jq with flags ["-c", "--argjson", "threshold", threshold] and filter ".jobs | map(select(.pending and .age_minutes >= $threshold)) | {overdue:length, jobs:.}" as report
+  then save to output_path

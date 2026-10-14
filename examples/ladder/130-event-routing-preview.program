@@ -1,0 +1,7 @@
+# Purpose: Preview event destinations from a route map without delivering events.
+# Inputs: routes.json maps event types to destinations; events.jsonl contains event records.
+# Outputs: stdout emits a routing decision for each event.
+accept routes_path as text with default "routes.json"
+accept events_path as text with default "events.jsonl"
+run cat with files [routes_path, events_path]
+then jq with flags ["-s", "-c"] and filter ".[0] as $routes | .[1:][] | {id, type, destination: ($routes[.type] // \"unrouted\")}"

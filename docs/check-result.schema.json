@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Execute static check result, protocol 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol",
+    "validation",
+    "ok",
+    "path",
+    "path_bytes",
+    "diagnostics"
+  ],
+  "properties": {
+    "protocol": {
+      "const": "execute.check/1"
+    },
+    "validation": {
+      "const": "static"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "path": {
+      "type": "string"
+    },
+    "path_bytes": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "severity",
+          "code",
+          "message",
+          "causes"
+        ],
+        "properties": {
+          "severity": {
+            "const": "error"
+          },
+          "code": {
+            "const": "check_failed"
+          },
+          "message": {
+            "type": "string"
+          },
+          "causes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "diagnostics": {
+            "maxItems": 0
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "diagnostics": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ]
+}

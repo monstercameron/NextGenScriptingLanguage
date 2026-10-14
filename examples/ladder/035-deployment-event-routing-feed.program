@@ -1,0 +1,6 @@
+# Purpose: Stream a compact deployment status line for each incoming event.
+# Inputs: One pipe-delimited event per stdin line.
+# Outputs: timestamp|service|result for every event while the service stays open.
+listen to stdin
+whenever a line arrives as event
+  then cut with delimiter "|" and fields "1,3,4"

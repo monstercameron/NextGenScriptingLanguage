@@ -1,0 +1,1422 @@
+use crate::ast::{
+    Condition, Connection, InputDeclaration, InputType, Invocation, ListenSource, Program, Step,
+    StepKind, Trigger, Value,
+};
+use anyhow::{anyhow, bail, Context, Result};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::ops::Range;
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Token<'source> {
+    Word(&'source str),
+    String(Cow<'source, str>),
+    LeftBracket,
+    RightBracket,
+    Comma,
+}
+
+struct SourceLine {
+    number: usize,
+    indent: usize,
+    token_range: Range<usize>,
+}
+
+impl SourceLine {
+    fn tokens<'arena, 'source>(
+        &self,
+        token_arena: &'arena [Token<'source>],
+    ) -> &'arena [Token<'source>] {
+        &token_arena[self.token_range.clone()]
+    }
+}
+
+/// Shared block parser input, also used for native command blocks in TUI handlers.
+pub(crate) struct BlockLine<'arena, 'source> {
+    pub number: usize,
+    pub indent: usize,
+    pub tokens: &'arena [Token<'source>],
+}
+
+const MAX_CONTROL_DEPTH: usize = 64;
+mod reusable;
+
+/// Lower one indented statement into forward-only instructions. Offsets remain
+/// valid when a complete conditional is copied into a managed execution node.
+pub(crate) fn parse_statement<'arena, 'source: 'arena>(
+    line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
+    cursor: &mut usize,
+    indent: usize,
+    steps: &mut Vec<Step>,
+    depth: usize,
+) -> Result<()> {
+    let line = line_at(*cursor).expect("statement cursor");
+    if line.indent != indent {
+        bail!("line {}: inconsistent block indentation", line.number);
+    }
+    if is_trigger_header(line.tokens) || is_listener_event_header(line.tokens) {
+        bail!(
+            "line {}: nested trigger blocks are unsupported",
+            line.number
+        );
+    }
+    if word_is(line.tokens.first(), "define") {
+        bail!(
+            "line {}: reusable program definitions must be top-level",
+            line.number
+        );
+    }
+    if word_is(line.tokens.first(), "otherwise") {
+        bail!(
+            "line {}: otherwise must follow a matching if body",
+            line.number
+        );
+    }
+    if !word_is(line.tokens.first(), "if") {
+        let kind =
+            parse_line(line.tokens).map_err(|error| anyhow!("line {}: {error}", line.number))?;
+        steps.push(Step {
+            line: line.number,
+            kind,
+        });
+        *cursor += 1;
+        return Ok(());
+    }
+    if depth >= MAX_CONTROL_DEPTH {
+        bail!(
+            "line {}: conditional nesting exceeds {MAX_CONTROL_DEPTH} levels",
+            line.number
+        );
+    }
+    let mut token = 1;
+    let left = parse_value(line.tokens, &mut token)
+        .map_err(|error| anyhow!("line {}: if left value: {error}", line.number))?;
+    if !word_is(line.tokens.get(token), "is") {
+        bail!(
+            "line {}: expected `if <value> is [not] <value>`",
+            line.number
+        );
+    }
+    token += 1;
+    let negated = word_is(line.tokens.get(token), "not");
+    token += usize::from(negated);
+    let right = parse_value(line.tokens, &mut token)
+        .map_err(|error| anyhow!("line {}: if right value: {error}", line.number))?;
+    ensure_end(line.tokens, token).map_err(|error| anyhow!("line {}: {error}", line.number))?;
+    let start = steps.len();
+    steps.push(Step {
+        line: line.number,
+        kind: StepKind::If {
+            condition: Condition {
+                left,
+                right,
+                negated,
+            },
+            otherwise: 0,
+            end: 0,
+        },
+    });
+    *cursor += 1;
+    let body_indent = line_at(*cursor)
+        .filter(|child| child.indent > indent)
+        .map(|child| child.indent)
+        .ok_or_else(|| {
+            anyhow!(
+                "line {}: if body must contain an indented statement",
+                line.number
+            )
+        })?;
+    while line_at(*cursor).is_some_and(|child| child.indent > indent) {
+        parse_statement(line_at, cursor, body_indent, steps, depth + 1)?;
+    }
+    let mut alternative = None;
+    if let Some(otherwise) = line_at(*cursor)
+        .filter(|child| child.indent == indent && word_is(child.tokens.first(), "otherwise"))
+    {
+        ensure_end(otherwise.tokens, 1)
+            .map_err(|error| anyhow!("line {}: {error}", otherwise.number))?;
+        alternative = Some(steps.len());
+        steps.push(Step {
+            line: otherwise.number,
+            kind: StepKind::Otherwise { end: 0 },
+        });
+        *cursor += 1;
+        if !line_at(*cursor).is_some_and(|child| child.indent > indent) {
+            bail!(
+                "line {}: otherwise body must contain an indented statement",
+                otherwise.number
+            );
+        }
+        while line_at(*cursor).is_some_and(|child| child.indent > indent) {
+            parse_statement(line_at, cursor, body_indent, steps, depth + 1)?;
+        }
+    }
+    steps.push(Step {
+        line: line.number,
+        kind: StepKind::EndIf,
+    });
+    let finish = steps.len();
+    if let StepKind::If { otherwise, end, .. } = &mut steps[start].kind {
+        *otherwise = alternative.map_or(finish, |index| index + 1) - start;
+        *end = finish - start;
+    }
+    if let Some(index) = alternative {
+        steps[index].kind = StepKind::Otherwise {
+            end: finish - index,
+        };
+    }
+    Ok(())
+}
+
+/// Parse the line-oriented workflow language into its AST.
+pub fn parse(source: &str) -> Result<Program> {
+    let mut definitions = BTreeMap::new();
+    let mut inputs = Vec::new();
+    let mut steps: Vec<Step> = Vec::new();
+    let mut token_arena = Vec::new();
+    let mut lines = Vec::new();
+    for (index, source_line) in source.lines().enumerate() {
+        let line_number = index + 1;
+        let line = strip_comment(source_line);
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut indent = 0;
+        for byte in line.bytes() {
+            match byte {
+                b' ' => indent += 1,
+                b'\t' => bail!("line {line_number}: tabs are not allowed for indentation"),
+                _ => break,
+            }
+        }
+        let content = line.trim_start_matches(' ');
+        let token_start = token_arena.len();
+        tokenize_into(content, &mut token_arena).with_context(|| format!("line {line_number}"))?;
+        let token_range = token_start..token_arena.len();
+        if token_range.is_empty() {
+            continue;
+        }
+        lines.push(SourceLine {
+            number: line_number,
+            indent,
+            token_range,
+        });
+    }
+
+    let block_line = |index| {
+        lines.get(index).map(|line: &SourceLine| BlockLine {
+            number: line.number,
+            indent: line.indent,
+            tokens: line.tokens(&token_arena),
+        })
+    };
+    let mut cursor = 0;
+    while cursor < lines.len() {
+        let line = &lines[cursor];
+        let line_tokens = line.tokens(&token_arena);
+        if line.indent != 0 {
+            bail!(
+                "line {}: unexpected indentation outside a trigger body",
+                line.number
+            );
+        }
+        if word_is(line_tokens.first(), "define") {
+            if !steps.is_empty() {
+                bail!(
+                    "line {}: program definitions must precede executable statements",
+                    line.number
+                );
+            }
+            let (name, definition) = reusable::parse_definition(&block_line, &mut cursor)?;
+            if definitions.insert(name.clone(), definition).is_some() {
+                bail!("line {}: duplicate program {name:?}", line.number);
+            }
+            continue;
+        }
+        if word_is(line_tokens.first(), "accept") {
+            if !steps.is_empty() {
+                bail!(
+                    "line {}: input declarations must precede executable statements",
+                    line.number
+                );
+            }
+            inputs.push(
+                parse_input(line_tokens, line.number)
+                    .map_err(|error| anyhow!("line {}: {error:#}", line.number))?,
+            );
+            cursor += 1;
+            continue;
+        }
+        if is_trigger_header(line_tokens) {
+            if steps.iter().any(|step| !is_trigger_setup(&step.kind)) {
+                bail!(
+                    "line {}: a trigger must follow only initial folder setup",
+                    line.number
+                );
+            }
+            let (trigger, body_start) = parse_trigger_header(&lines, &token_arena, cursor)?;
+            let first_body = lines.get(body_start).ok_or_else(|| {
+                anyhow!(
+                    "line {}: trigger body must contain at least one indented statement",
+                    line.number
+                )
+            })?;
+            if first_body.indent == 0 {
+                bail!("line {}: trigger body must be indented", first_body.number);
+            }
+            let body_indent = first_body.indent;
+            cursor = body_start;
+            let mut body_steps = Vec::new();
+            while let Some(body_line) = lines.get(cursor) {
+                if body_line.indent == 0 {
+                    break;
+                }
+                let body_tokens = body_line.tokens(&token_arena);
+                if is_trigger_header(body_tokens) || is_listener_event_header(body_tokens) {
+                    bail!(
+                        "line {}: nested trigger blocks are unsupported",
+                        body_line.number
+                    );
+                }
+                parse_statement(&block_line, &mut cursor, body_indent, &mut body_steps, 0)?;
+            }
+            if body_steps.is_empty() {
+                bail!(
+                    "line {}: trigger body must contain at least one indented statement",
+                    first_body.number
+                );
+            }
+            steps.extend(body_steps);
+            if let Some(extra) = lines.get(cursor) {
+                bail!(
+                    "line {}: statements after the trigger body are unsupported",
+                    extra.number
+                );
+            }
+            crate::inputs::validate(&inputs)?;
+            return reusable::finish(inputs, steps, Some(trigger), definitions);
+        }
+        if is_listener_event_header(line_tokens) {
+            bail!(
+                "line {}: listener event header must follow `listen to ...`",
+                line.number
+            );
+        }
+        parse_statement(&block_line, &mut cursor, 0, &mut steps, 0)?;
+    }
+
+    crate::inputs::validate(&inputs)?;
+    reusable::finish(inputs, steps, None, definitions)
+}
+
+fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
+    let name = parse_binding_identifier(tokens.get(1), "input name")?;
+    if !word_is(tokens.get(2), "as") {
+        bail!("expected `accept <name> as <text|integer|boolean|list of text|json>`");
+    }
+    let (kind, mut cursor) = match tokens.get(3) {
+        Some(Token::Word("text")) => (InputType::Text, 4),
+        Some(Token::Word("integer")) => (InputType::Integer, 4),
+        Some(Token::Word("boolean")) => (InputType::Boolean, 4),
+        Some(Token::Word("json")) => (InputType::Json, 4),
+        Some(Token::Word("list"))
+            if word_is(tokens.get(4), "of") && word_is(tokens.get(5), "text") =>
+        {
+            (InputType::TextList, 6)
+        }
+        _ => bail!("input type must be text, integer, boolean, list of text, or json"),
+    };
+    let default =
+        if word_is(tokens.get(cursor), "with") && word_is(tokens.get(cursor + 1), "default") {
+            cursor += 2;
+            Some(parse_value(tokens, &mut cursor).context("input default")?)
+        } else {
+            None
+        };
+    ensure_end(tokens, cursor)?;
+    Ok(InputDeclaration {
+        name,
+        kind,
+        default,
+        line,
+    })
+}
+
+fn is_trigger_setup(kind: &StepKind) -> bool {
+    matches!(kind, StepKind::UseFolder { .. })
+        || matches!(kind, StepKind::Invoke { call, connection: Connection::Start | Connection::Then } if call.operation == "cd")
+}
+
+fn is_trigger_header(tokens: &[Token<'_>]) -> bool {
+    word_is(tokens.first(), "every")
+        || (word_is(tokens.first(), "on") && word_is(tokens.get(1), "schedule"))
+        || (word_is(tokens.first(), "listen") && word_is(tokens.get(1), "to"))
+}
+
+fn is_listener_event_header(tokens: &[Token<'_>]) -> bool {
+    word_is(tokens.first(), "whenever")
+}
+
+fn parse_trigger_header<'source>(
+    lines: &[SourceLine],
+    token_arena: &[Token<'source>],
+    index: usize,
+) -> Result<(Trigger, usize)> {
+    let header = &lines[index];
+    let tokens = header.tokens(token_arena);
+    if word_is(tokens.first(), "every") {
+        if tokens.len() != 3 {
+            bail!(
+                "line {}: expected `every <positive integer> <milliseconds|seconds|minutes|hours>`",
+                header.number
+            );
+        }
+        let amount = match &tokens[1] {
+            Token::Word(number) => number.parse::<u64>().map_err(|_| {
+                anyhow!(
+                    "line {}: interval must be a positive integer in range",
+                    header.number
+                )
+            })?,
+            _ => bail!(
+                "line {}: interval must be a positive integer",
+                header.number
+            ),
+        };
+        if amount == 0 {
+            bail!("line {}: interval must be greater than zero", header.number);
+        }
+        let unit = match &tokens[2] {
+            Token::Word(unit) => *unit,
+            _ => bail!("line {}: expected an interval unit", header.number),
+        };
+        let factor = match unit {
+            "millisecond" | "milliseconds" => 1,
+            "second" | "seconds" => 1_000,
+            "minute" | "minutes" => 60_000,
+            "hour" | "hours" => 3_600_000,
+            _ => bail!("line {}: unsupported interval unit `{unit}`", header.number),
+        };
+        let interval_ms = amount
+            .checked_mul(factor)
+            .ok_or_else(|| anyhow!("line {}: interval is too large", header.number))?;
+        return Ok((
+            Trigger::Every {
+                interval_ms,
+                line: header.number,
+            },
+            index + 1,
+        ));
+    }
+
+    if word_is(tokens.first(), "on") {
+        if tokens.len() != 3 || !word_is(tokens.get(1), "schedule") {
+            bail!(
+                "line {}: expected `on schedule <quoted cron expression>`",
+                header.number
+            );
+        }
+        let Token::String(expression) = &tokens[2] else {
+            bail!("line {}: cron expression must be quoted", header.number);
+        };
+        if expression.trim().is_empty() {
+            bail!("line {}: cron expression cannot be empty", header.number);
+        }
+        return Ok((
+            Trigger::Cron {
+                expression: expression.clone().into_owned(),
+                line: header.number,
+            },
+            index + 1,
+        ));
+    }
+
+    let source = if tokens.len() == 3 && word_is(tokens.get(2), "stdin") {
+        ListenSource::Stdin
+    } else {
+        if tokens.len() < 3 {
+            bail!(
+                "line {}: expected `listen to stdin` or `listen to <applet phrase>`",
+                header.number
+            );
+        }
+        let source_tokens = &tokens[2..];
+        if word_is(source_tokens.first(), "run")
+            || word_is(source_tokens.first(), "then")
+            || (word_is(source_tokens.first(), "pipe") && word_is(source_tokens.get(1), "to"))
+        {
+            bail!(
+                "line {}: listener source must be an applet phrase without a connection prefix",
+                header.number
+            );
+        }
+        let kind = parse_invocation(source_tokens)
+            .map_err(|error| anyhow!("line {}: invalid listener source: {error}", header.number))?;
+        let StepKind::Invoke {
+            call,
+            connection: Connection::Start,
+        } = kind
+        else {
+            bail!("line {}: listener source must be an applet", header.number);
+        };
+        if call.binding.is_some() || call.status_binding.is_some() || call.cache {
+            bail!(
+                "line {}: listener source cannot bind output/status or use `and cache`",
+                header.number
+            );
+        }
+        ListenSource::Applet(call)
+    };
+
+    let event_index = index + 1;
+    let event = lines.get(event_index).ok_or_else(|| {
+        anyhow!(
+            "line {}: listener requires `whenever a line arrives as <binding>`",
+            header.number
+        )
+    })?;
+    let event_tokens = event.tokens(token_arena);
+    if event.indent != 0 || !word_is(event_tokens.first(), "whenever") {
+        bail!("line {}: expected unindented listener event header `whenever a line arrives as <binding>`", event.number);
+    }
+    if event_tokens.len() != 6
+        || !word_is(event_tokens.get(1), "a")
+        || !word_is(event_tokens.get(2), "line")
+        || !word_is(event_tokens.get(3), "arrives")
+        || !word_is(event_tokens.get(4), "as")
+    {
+        bail!(
+            "line {}: expected `whenever a line arrives as <binding>`",
+            event.number
+        );
+    }
+    let binding = parse_binding_identifier(event_tokens.get(5), "listener binding")
+        .map_err(|error| anyhow!("line {}: {error}", event.number))?;
+    Ok((
+        Trigger::Listen {
+            source,
+            binding,
+            line: header.number,
+        },
+        event_index + 1,
+    ))
+}
+
+pub(crate) fn strip_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut quoted = false;
+    let mut escaped = false;
+    for (i, byte) in bytes.iter().enumerate() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == b'"' {
+                quoted = false;
+            }
+        } else if *byte == b'"' {
+            quoted = true;
+        } else if *byte == b'#' {
+            return &line[..i];
+        }
+    }
+    line
+}
+
+pub(crate) fn tokenize<'source>(line: &'source str) -> Result<Vec<Token<'source>>> {
+    let mut tokens = Vec::new();
+    tokenize_into(line, &mut tokens)?;
+    Ok(tokens)
+}
+
+fn tokenize_into<'source>(line: &'source str, tokens: &mut Vec<Token<'source>>) -> Result<()> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' | b'\t' | b'\r' => i += 1,
+            b'[' => {
+                tokens.push(Token::LeftBracket);
+                i += 1;
+            }
+            b']' => {
+                tokens.push(Token::RightBracket);
+                i += 1;
+            }
+            b',' => {
+                tokens.push(Token::Comma);
+                i += 1;
+            }
+            b'"' => {
+                let start = i;
+                i += 1;
+                let mut escaped = false;
+                let mut closed = false;
+                let mut plain = true;
+                while i < bytes.len() {
+                    let byte = bytes[i];
+                    i += 1;
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                        plain = false;
+                    } else if byte == b'"' {
+                        closed = true;
+                        break;
+                    } else if byte < 0x20 {
+                        plain = false;
+                    }
+                }
+                if !closed {
+                    bail!("unterminated quoted string");
+                }
+                if plain {
+                    tokens.push(Token::String(Cow::Borrowed(&line[start + 1..i - 1])));
+                } else {
+                    let literal = &line[start..i];
+                    let value = serde_json::from_str::<String>(literal)
+                        .map_err(|_| anyhow!("malformed quoted string {literal}"))?;
+                    tokens.push(Token::String(Cow::Owned(value)));
+                }
+            }
+            _ => {
+                let start = i;
+                while i < bytes.len()
+                    && !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'[' | b']' | b',' | b'"')
+                {
+                    // Every delimiter is ASCII. Advancing byte-by-byte is safe
+                    // for UTF-8 here because a delimiter cannot occur inside a
+                    // multibyte character, and we only slice at the delimiter.
+                    i += 1;
+                }
+                tokens.push(Token::Word(&line[start..i]));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
+    if matches!(tokens.first(), Some(Token::Word("run" | "then")))
+        && word_is(tokens.get(1), "program")
+    {
+        let StepKind::Invoke {
+            mut call,
+            connection,
+        } = parse_invocation(tokens)?
+        else {
+            unreachable!()
+        };
+        let name = call
+            .operation
+            .strip_prefix("program ")
+            .context("expected `run program <name>`")?;
+        if !is_identifier(name) {
+            bail!("program name must be an identifier");
+        }
+        call.operation = name.to_owned();
+        if call.cache || call.status_binding.is_some() {
+            bail!("program calls cannot cache or capture native status");
+        }
+        return Ok(StepKind::CallProgram {
+            call,
+            connection,
+            inputs: Vec::new(),
+            end: 0,
+        });
+    }
+    if word_is(tokens.first(), "take") {
+        return parse_take_json(tokens);
+    }
+    if word_is(tokens.first(), "then") && word_is(tokens.get(1), "parse") {
+        if tokens.len() != 5 || !word_is(tokens.get(2), "json") || !word_is(tokens.get(3), "as") {
+            bail!("expected `then parse json as <name>`");
+        }
+        return Ok(StepKind::ParseJson {
+            binding: parse_binding_identifier(tokens.get(4), "JSON binding")?,
+        });
+    }
+    if word_is(tokens.first(), "then") && word_is(tokens.get(1), "encode") {
+        let mut cursor = 2;
+        let source = parse_value(tokens, &mut cursor)?;
+        if !word_is(tokens.get(cursor), "as") || !word_is(tokens.get(cursor + 1), "json") {
+            bail!("expected `then encode <value> as json`");
+        }
+        ensure_end(tokens, cursor + 2)?;
+        return Ok(StepKind::EncodeJson { source });
+    }
+    if word_is(tokens.first(), "accept") {
+        bail!("input declarations must be unindented and precede executable statements");
+    }
+    if word_is(tokens.first(), "use") {
+        return parse_use(tokens);
+    }
+    if word_is(tokens.first(), "read") {
+        return parse_read(tokens);
+    }
+    if word_is(tokens.first(), "then") && word_is(tokens.get(1), "save") {
+        return parse_save(tokens);
+    }
+    if tokens.first().is_some_and(|token| {
+        matches!(token, Token::Word(word) if matches!(*word, "for" | "while" | "if" | "otherwise" | "else" | "loop"))
+    }) {
+        bail!("unsupported control block");
+    }
+    parse_invocation(tokens)
+}
+
+fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
+    let (kind, mut cursor) = match tokens.get(1) {
+        Some(Token::Word("text")) => (InputType::Text, 2),
+        Some(Token::Word("integer")) => (InputType::Integer, 2),
+        Some(Token::Word("boolean")) => (InputType::Boolean, 2),
+        Some(Token::Word("json")) => (InputType::Json, 2),
+        Some(Token::Word("list")) if word_is(tokens.get(2), "of") && word_is(tokens.get(3), "text") => (InputType::TextList, 4),
+        _ => bail!("expected `take <text|integer|boolean|list of text|json> at <quoted pointer> from <value> as <name>`"),
+    };
+    if !word_is(tokens.get(cursor), "at") {
+        bail!("expected at before JSON pointer");
+    }
+    let Some(Token::String(pointer)) = tokens.get(cursor + 1) else {
+        bail!("JSON pointer must be a quoted string");
+    };
+    crate::structured::validate_pointer(pointer)?;
+    cursor += 2;
+    if !word_is(tokens.get(cursor), "from") {
+        bail!("expected from before JSON source");
+    }
+    cursor += 1;
+    let source = parse_value(tokens, &mut cursor)?;
+    if !word_is(tokens.get(cursor), "as") {
+        bail!("expected as before JSON binding");
+    }
+    let binding = parse_binding_identifier(tokens.get(cursor + 1), "JSON binding")?;
+    ensure_end(tokens, cursor + 2)?;
+    Ok(StepKind::TakeJson {
+        pointer: pointer.clone().into_owned(),
+        source,
+        kind,
+        binding,
+    })
+}
+
+pub(crate) fn is_input_header(line: &str) -> bool {
+    line.split_ascii_whitespace().next() == Some("accept")
+}
+
+fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
+    if !word_is(tokens.get(1), "folder") {
+        bail!("expected `use folder <value>`");
+    }
+    let mut cursor = 2;
+    let path = parse_value(tokens, &mut cursor)?;
+    ensure_end(tokens, cursor)?;
+    Ok(StepKind::UseFolder { path })
+}
+
+fn parse_read(tokens: &[Token<'_>]) -> Result<StepKind> {
+    let from_stdin = word_is(tokens.get(1), "from") && word_is(tokens.get(2), "stdin");
+    let mut cursor = if from_stdin { 3 } else { 1 };
+    if !from_stdin && word_is(tokens.get(cursor), "file") {
+        cursor += 1;
+    }
+    let path = if from_stdin {
+        None
+    } else {
+        Some(parse_value(tokens, &mut cursor)?)
+    };
+    let binding = if word_is(tokens.get(cursor), "as") {
+        cursor += 1;
+        Some(parse_binding_identifier(
+            tokens.get(cursor),
+            "binding name",
+        )?)
+    } else {
+        None
+    };
+    if binding.is_some() {
+        cursor += 1;
+    }
+    ensure_end(tokens, cursor)?;
+    Ok(match path {
+        Some(path) => StepKind::Read { path, binding },
+        None => StepKind::ReadStdin { binding },
+    })
+}
+
+fn parse_save(tokens: &[Token<'_>]) -> Result<StepKind> {
+    let mut cursor = 2;
+    if !word_is(tokens.get(cursor), "to") {
+        bail!("expected `then save to <value>`");
+    }
+    cursor += 1;
+    if word_is(tokens.get(cursor), "file") {
+        cursor += 1;
+    }
+    let path = parse_value(tokens, &mut cursor)?;
+    ensure_end(tokens, cursor)?;
+    Ok(StepKind::Save {
+        path,
+        connection: Connection::Then,
+    })
+}
+
+fn is_status_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
+    word_is(tokens.get(cursor), "and")
+        && word_is(tokens.get(cursor + 1), "keep")
+        && word_is(tokens.get(cursor + 2), "status")
+}
+
+fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
+    let (mut cursor, connection) = if word_is(tokens.first(), "run") {
+        (1, Connection::Start)
+    } else if word_is(tokens.first(), "then") {
+        (1, Connection::Then)
+    } else if word_is(tokens.first(), "pipe") && word_is(tokens.get(1), "to") {
+        (2, Connection::Pipe)
+    } else {
+        (0, Connection::Start)
+    };
+
+    let direct = matches!(tokens.get(cursor), Some(Token::String(_)));
+    let operation = if let Some(Token::String(executable)) = tokens.get(cursor) {
+        cursor += 1;
+        if executable.is_empty() || executable.contains('\0') {
+            bail!("executable name must be nonempty and cannot contain a NUL byte");
+        }
+        executable.clone().into_owned()
+    } else {
+        let operation_start = cursor;
+        while cursor < tokens.len() {
+            if cursor > operation_start
+                && (word_is(tokens.get(cursor), "with") || word_is(tokens.get(cursor), "as"))
+            {
+                break;
+            }
+            if cursor > operation_start
+                && word_is(tokens.get(cursor), "and")
+                && ((word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
+                    || is_status_suffix(tokens, cursor))
+            {
+                break;
+            }
+            match tokens.get(cursor) {
+                Some(Token::Word(_)) => cursor += 1,
+                Some(Token::String(_)) => {
+                    bail!("operation name must contain words, not quoted values")
+                }
+                _ => bail!("unexpected punctuation in operation name"),
+            }
+        }
+        if cursor == operation_start {
+            bail!("missing operation name");
+        }
+        let operation_tokens = &tokens[operation_start..cursor];
+        let operation_capacity = operation_tokens
+            .iter()
+            .map(|token| match token {
+                Token::Word(word) => word.len(),
+                _ => unreachable!(),
+            })
+            .sum::<usize>()
+            + operation_tokens.len()
+            - 1;
+        let mut operation = String::with_capacity(operation_capacity);
+        for token in operation_tokens {
+            if !operation.is_empty() {
+                operation.push(' ');
+            }
+            let Token::Word(word) = token else {
+                unreachable!();
+            };
+            operation.push_str(word);
+        }
+        operation
+    };
+
+    let mut parameters = BTreeMap::new();
+    if word_is(tokens.get(cursor), "with") {
+        cursor += 1;
+        loop {
+            let name = parse_identifier(tokens.get(cursor), "parameter name")?;
+            cursor += 1;
+            let value = parse_value(tokens, &mut cursor)
+                .with_context(|| format!("missing or invalid value for parameter `{name}`"))?;
+            match parameters.entry(name) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(value);
+                }
+                std::collections::btree_map::Entry::Occupied(entry) => {
+                    bail!("duplicate parameter `{}`", entry.key());
+                }
+            }
+            if word_is(tokens.get(cursor), "and")
+                && !(word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
+                && !is_status_suffix(tokens, cursor)
+            {
+                cursor += 1;
+                continue;
+            }
+            break;
+        }
+    }
+
+    let binding = if word_is(tokens.get(cursor), "as") {
+        cursor += 1;
+        let name = parse_binding_identifier(tokens.get(cursor), "binding name")?;
+        cursor += 1;
+        Some(name)
+    } else {
+        None
+    };
+    let status_binding = if is_status_suffix(tokens, cursor) {
+        if !word_is(tokens.get(cursor + 2), "status") || !word_is(tokens.get(cursor + 3), "as") {
+            bail!("expected `and keep status as <name>`");
+        }
+        cursor += 4;
+        let name = parse_binding_identifier(tokens.get(cursor), "status binding name")?;
+        cursor += 1;
+        Some(name)
+    } else {
+        None
+    };
+    let cache = if word_is(tokens.get(cursor), "and")
+        && word_is(tokens.get(cursor + 1), "cache")
+        && cursor + 2 == tokens.len()
+    {
+        cursor += 2;
+        true
+    } else {
+        false
+    };
+    ensure_end(tokens, cursor)?;
+
+    Ok(StepKind::Invoke {
+        call: Invocation {
+            operation,
+            direct,
+            parameters,
+            binding,
+            cache,
+            status_binding,
+        },
+        connection,
+    })
+}
+
+const MAX_LIST_NESTING: usize = 64;
+
+fn parse_value(tokens: &[Token<'_>], cursor: &mut usize) -> Result<Value> {
+    parse_value_depth(tokens, cursor, 0)
+}
+
+fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> Result<Value> {
+    let token = tokens
+        .get(*cursor)
+        .ok_or_else(|| anyhow!("missing value"))?;
+    match token {
+        Token::String(value) => {
+            *cursor += 1;
+            Ok(Value::String(value.clone().into_owned()))
+        }
+        Token::Word(word) if *word == "true" || *word == "false" => {
+            *cursor += 1;
+            Ok(Value::Bool(*word == "true"))
+        }
+        Token::Word(word) => {
+            *cursor += 1;
+            if let Ok(integer) = word.parse::<i64>() {
+                Ok(Value::Integer(integer))
+            } else if is_identifier(word) {
+                Ok(Value::Reference((*word).to_owned()))
+            } else {
+                bail!("invalid value `{word}`; quote strings containing spaces or punctuation")
+            }
+        }
+        Token::LeftBracket => {
+            if depth >= MAX_LIST_NESTING {
+                bail!("list nesting exceeds the maximum depth of {MAX_LIST_NESTING}");
+            }
+            *cursor += 1;
+            let mut values = Vec::new();
+            if matches!(tokens.get(*cursor), Some(Token::RightBracket)) {
+                *cursor += 1;
+                return Ok(Value::List(values));
+            }
+            loop {
+                values.push(parse_value_depth(tokens, cursor, depth + 1)?);
+                match tokens.get(*cursor) {
+                    Some(Token::Comma) => {
+                        *cursor += 1;
+                        if matches!(tokens.get(*cursor), Some(Token::RightBracket)) {
+                            bail!("trailing comma in list");
+                        }
+                    }
+                    Some(Token::RightBracket) => {
+                        *cursor += 1;
+                        break;
+                    }
+                    _ => bail!("expected `,` or `]` in list"),
+                }
+            }
+            Ok(Value::List(values))
+        }
+        Token::RightBracket => bail!("unexpected `]` while reading value"),
+        Token::Comma => bail!("unexpected `,` while reading value"),
+    }
+}
+
+fn parse_identifier(token: Option<&Token<'_>>, description: &str) -> Result<String> {
+    match token {
+        Some(Token::Word(word)) if is_identifier(word) => Ok((*word).to_owned()),
+        Some(_) => bail!("invalid {description}; expected an identifier"),
+        None => bail!("missing {description}"),
+    }
+}
+
+fn parse_binding_identifier(token: Option<&Token<'_>>, description: &str) -> Result<String> {
+    let name = parse_identifier(token, description)?;
+    if matches!(name.as_str(), "true" | "false") {
+        bail!("reserved boolean `{name}` cannot be used as a {description}");
+    }
+    Ok(name)
+}
+
+pub(crate) fn is_identifier(word: &str) -> bool {
+    let mut bytes = word.bytes();
+    matches!(bytes.next(), Some(b'_' | b'A'..=b'Z' | b'a'..=b'z'))
+        && bytes.all(|byte| matches!(byte, b'_' | b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'))
+}
+
+fn word_is(token: Option<&Token<'_>>, expected: &str) -> bool {
+    matches!(token, Some(Token::Word(word)) if *word == expected)
+}
+
+fn ensure_end(tokens: &[Token<'_>], cursor: usize) -> Result<()> {
+    if cursor == tokens.len() {
+        Ok(())
+    } else {
+        bail!("stray token `{}`", token_text(&tokens[cursor]))
+    }
+}
+
+fn token_text(token: &Token<'_>) -> String {
+    match token {
+        Token::Word(word) => (*word).to_owned(),
+        Token::String(value) => format!("\"{value}\""),
+        Token::LeftBracket => "[".into(),
+        Token::RightBracket => "]".into(),
+        Token::Comma => ",".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_readable_sample_and_keeps_source_lines() {
+        let program = parse(
+            "# input\nuse folder \"work\"\nread file \"notes.txt\" as notes\ncount lines with source notes and limit 10 as total and cache\nthen save to file \"summary.txt\" # output\n",
+        )
+        .unwrap();
+        assert_eq!(program.steps.len(), 4);
+        assert_eq!(program.steps[0].line, 2);
+        assert_eq!(program.steps[1].line, 3);
+        assert_eq!(program.steps[2].line, 4);
+        assert_eq!(program.steps[3].line, 5);
+        assert_eq!(program.trigger, None);
+        assert!(matches!(&program.steps[2].kind,
+            StepKind::Invoke { call, connection: Connection::Start }
+                if call.operation == "count lines"
+                    && call.binding.as_deref() == Some("total")
+                    && call.cache
+                    && call.parameters.get("limit") == Some(&Value::Integer(10))));
+    }
+
+    #[test]
+    fn strings_keep_keywords_comments_and_escapes_as_literals() {
+        let program =
+            parse(r##"run printf with text "and # as then \"quoted\"" as output # comment"##)
+                .unwrap();
+        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+            panic!()
+        };
+        assert_eq!(
+            call.parameters.get("text"),
+            Some(&Value::String("and # as then \"quoted\"".into()))
+        );
+        assert_eq!(call.binding.as_deref(), Some("output"));
+    }
+
+    #[test]
+    fn tokenization_preserves_multibyte_words_and_quoted_values() {
+        let program = parse("run café printer with label \"naïve 🐈\"").unwrap();
+        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+            panic!()
+        };
+        assert_eq!(call.operation, "café printer");
+        assert_eq!(
+            call.parameters.get("label"),
+            Some(&Value::String("naïve 🐈".into()))
+        );
+    }
+
+    #[test]
+    fn tokenizer_words_borrow_the_original_utf8_source() {
+        let source = String::from("café printer");
+        let tokens = tokenize(&source).unwrap();
+        let Token::Word(word) = &tokens[0] else {
+            panic!()
+        };
+        assert_eq!(*word, "café");
+        assert!(std::ptr::eq::<str>(*word, &source[.."café".len()]));
+    }
+
+    #[test]
+    fn plain_unicode_json_string_tokens_borrow_and_keep_debug_format() {
+        let source = String::from("\"snow 雪\"");
+        let tokens = tokenize(&source).unwrap();
+        let Token::String(Cow::Borrowed(value)) = &tokens[0] else {
+            panic!("unescaped string should borrow from the input")
+        };
+        assert_eq!(*value, "snow 雪");
+        assert!(std::ptr::eq::<str>(*value, &source[1..source.len() - 1]));
+        assert_eq!(format!("{:?}", tokens[0]), "String(\"snow 雪\")");
+        assert_eq!(
+            format!("{:?}", Token::String(Cow::Owned(String::from("plain")))),
+            "String(\"plain\")"
+        );
+    }
+
+    #[test]
+    fn escaped_json_strings_keep_serde_decoding_and_owned_values() {
+        let literal = r#""line\nquote: \" slash: \\ solidus: \/ nul: \u0000 astral: \uD83D\uDE00""#;
+        let tokens = tokenize(literal).unwrap();
+        let Token::String(Cow::Owned(value)) = &tokens[0] else {
+            panic!("escaped string should use the JSON decoder")
+        };
+        assert_eq!(
+            value,
+            "line\nquote: \" slash: \\ solidus: / nul: \0 astral: 😀"
+        );
+    }
+
+    #[test]
+    fn raw_json_controls_fall_back_to_the_same_malformed_string_error() {
+        for control in 0..=0x1f {
+            let control = char::from_u32(control).unwrap();
+            let literal = format!("\"before{control}after\"");
+            let error = tokenize(&literal).unwrap_err().to_string();
+            assert_eq!(error, format!("malformed quoted string {literal}"));
+        }
+    }
+
+    #[test]
+    fn malformed_escape_keeps_later_lexical_error_precedence_and_line_number() {
+        let error = parse("run\nrun printf with message \"bad\\q\"").unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "line 2: malformed quoted string \"bad\\q\""
+        );
+    }
+
+    #[test]
+    fn parsed_plain_string_values_are_owned_after_source_is_dropped() {
+        let program = {
+            let source = String::from("run printf with message \"plain 雪\"");
+            parse(&source).unwrap()
+        };
+        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+            panic!()
+        };
+        assert_eq!(
+            call.parameters.get("message"),
+            Some(&Value::String("plain 雪".into()))
+        );
+    }
+
+    #[test]
+    fn borrowed_word_errors_keep_the_same_token_text() {
+        let error = parse("read file \"notes.txt\" naïve")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "line 1: stray token `naïve`");
+    }
+
+    #[test]
+    fn parses_lists_booleans_references_and_connections() {
+        let program = parse(
+            "run printf with values [1, true, name, \"two words\"] and enabled false\nthen count lines\npipe to filter with pattern \"x\"\n",
+        )
+        .unwrap();
+        assert!(matches!(&program.steps[0].kind,
+        StepKind::Invoke { call, connection: Connection::Start }
+            if call.operation == "printf"
+                && call.parameters.get("values") == Some(&Value::List(vec![
+                    Value::Integer(1), Value::Bool(true), Value::Reference("name".into()), Value::String("two words".into())
+                ]))));
+        assert!(matches!(
+            &program.steps[1].kind,
+            StepKind::Invoke {
+                connection: Connection::Then,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &program.steps[2].kind,
+            StepKind::Invoke {
+                connection: Connection::Pipe,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn allows_keyword_command_names_and_parameter_named_cache() {
+        let as_command = parse("run as with path \"input.s\" as result").unwrap();
+        assert!(matches!(
+            &as_command.steps[0].kind,
+            StepKind::Invoke { call, .. }
+                if call.operation == "as"
+                    && call.parameters.get("path") == Some(&Value::String("input.s".into()))
+                    && call.binding.as_deref() == Some("result")
+        ));
+
+        for (value, expected) in [
+            ("false", Value::Bool(false)),
+            ("\"off\"", Value::String("off".into())),
+            ("cached", Value::Reference("cached".into())),
+        ] {
+            let source = format!("run tool with mode \"x\" and cache {value}");
+            let program = parse(&source).unwrap();
+            let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+                panic!()
+            };
+            assert_eq!(call.parameters.get("cache"), Some(&expected), "{source}");
+            assert!(!call.cache, "{source}");
+        }
+
+        let modifier = parse("run tool with mode \"x\" and cache").unwrap();
+        assert!(matches!(
+            &modifier.steps[0].kind,
+            StepKind::Invoke { call, .. }
+                if call.cache && !call.parameters.contains_key("cache")
+        ));
+    }
+
+    #[test]
+    fn rejects_bad_syntax_with_line_number() {
+        for source in [
+            "run printf with value",
+            "run printf with x [1,]",
+            "read file \"unterminated",
+            "run printf trailing [",
+            "read file path as 3bad",
+        ] {
+            let error = parse(source).unwrap_err().to_string();
+            assert!(error.contains("line 1"), "{source:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_parameters_and_control_blocks() {
+        let duplicate = parse("run printf with x 1 and x 2")
+            .unwrap_err()
+            .to_string();
+        assert!(duplicate.contains("line 1") && duplicate.contains("duplicate parameter `x`"));
+        let loop_error = parse("for each file in inputs").unwrap_err().to_string();
+        assert!(loop_error.contains("line 1") && loop_error.contains("unsupported control block"));
+    }
+
+    #[test]
+    fn parses_every_and_cron_triggers_with_body_line_numbers() {
+        let every =
+            parse("use folder \"work\"\nevery 2 minutes\n  count lines\n  then summarize\n")
+                .unwrap();
+        assert_eq!(
+            every.trigger,
+            Some(Trigger::Every {
+                interval_ms: 120_000,
+                line: 2
+            })
+        );
+        assert_eq!(
+            every.steps.iter().map(|step| step.line).collect::<Vec<_>>(),
+            vec![1, 3, 4]
+        );
+
+        let cron = parse("on schedule \"*/5 * * * *\"\n    refresh\n").unwrap();
+        assert_eq!(
+            cron.trigger,
+            Some(Trigger::Cron {
+                expression: "*/5 * * * *".into(),
+                line: 1
+            })
+        );
+        assert_eq!(cron.steps[0].line, 2);
+    }
+
+    #[test]
+    fn shared_token_arena_preserves_blank_and_comment_line_positions() {
+        let program = parse(
+            "# heading\n\nuse folder \"work\"\n\n# interval\nevery 2 minutes\n\n  count lines\n\n  then summarize\n\n# trailing comment\n",
+        )
+        .unwrap();
+        assert_eq!(
+            program.trigger,
+            Some(Trigger::Every {
+                interval_ms: 120_000,
+                line: 6,
+            })
+        );
+        assert_eq!(
+            program
+                .steps
+                .iter()
+                .map(|step| step.line)
+                .collect::<Vec<_>>(),
+            vec![3, 8, 10]
+        );
+    }
+
+    #[test]
+    fn parses_stdin_and_applet_listeners() {
+        let stdin = parse("listen to stdin\nwhenever a line arrives as message\n  count words with text message\n").unwrap();
+        assert_eq!(
+            stdin.trigger,
+            Some(Trigger::Listen {
+                source: ListenSource::Stdin,
+                binding: "message".into(),
+                line: 1,
+            })
+        );
+        assert_eq!(stdin.steps[0].line, 3);
+
+        let applet = parse("listen to watch queue with topic \"jobs\" and limit 5\nwhenever a line arrives as item\n  process with input item\n").unwrap();
+        let Some(Trigger::Listen {
+            source: ListenSource::Applet(call),
+            binding,
+            line,
+        }) = applet.trigger
+        else {
+            panic!()
+        };
+        assert_eq!(line, 1);
+        assert_eq!(binding, "item");
+        assert_eq!(call.operation, "watch queue");
+        assert_eq!(call.parameters.get("limit"), Some(&Value::Integer(5)));
+
+        let no_parameters = parse(
+            "listen to kernel messages\nwhenever a line arrives as event\n  process with input event\n",
+        )
+        .unwrap();
+        let Some(Trigger::Listen {
+            source: ListenSource::Applet(call),
+            binding,
+            ..
+        }) = no_parameters.trigger
+        else {
+            panic!()
+        };
+        assert_eq!(call.operation, "kernel messages");
+        assert!(call.parameters.is_empty());
+        assert_eq!(binding, "event");
+
+        let one_word =
+            parse("listen to pwd\nwhenever a line arrives as record\n  count lines\n").unwrap();
+        assert!(matches!(
+            one_word.trigger,
+            Some(Trigger::Listen {
+                source: ListenSource::Applet(Invocation { ref operation, ref parameters, .. }),
+                ..
+            }) if operation == "pwd" && parameters.is_empty()
+        ));
+    }
+
+    #[test]
+    fn keeps_builtin_cd_as_setup_before_listener_trigger() {
+        let program = parse(
+            "run cd with path \"./spool\"\nlisten to stdin\nwhenever a line arrives as message\n  process with input message\n",
+        )
+        .unwrap();
+        assert_eq!(program.steps[0].line, 1);
+        assert!(matches!(
+            &program.steps[0].kind,
+            StepKind::Invoke {
+                call,
+                connection: Connection::Start
+            } if call.operation == "cd"
+        ));
+        assert_eq!(program.steps[1].line, 4);
+        assert!(matches!(
+            program.trigger,
+            Some(Trigger::Listen { line: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_trigger_blocks_and_durations() {
+        for source in [
+            "every 0 seconds\n  task",
+            "every 18446744073709551615 hours\n  task",
+            "every 1.5 seconds\n  task",
+            "on schedule \"\"\n  task",
+            "every 1 seconds\n",
+            "every 1 seconds\n  task\n   nested",
+            "every 1 seconds\n  task\nnext",
+            "run first\nevery 1 seconds\n  task",
+            "every 1 seconds\n  task\n  on schedule \"* * * * *\"\n    nested",
+            "listen to watch queue with topic \"jobs\" and cache\nwhenever a line arrives as item\n  task",
+            "listen to stdin\nwhenever a line arrives as 3bad\n  task",
+        ] {
+            let error = parse(source).unwrap_err().to_string();
+            assert!(error.contains("line "), "{source:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_boolean_words_as_result_bindings() {
+        for source in [
+            "run printf with message \"hello\" as true",
+            "read file \"input.txt\" as false",
+            "listen to stdin\nwhenever a line arrives as true\n  run printf with message \"ok\"",
+        ] {
+            let error = parse(source).unwrap_err().to_string();
+            assert!(error.contains("reserved boolean"), "{source:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_excessively_nested_lists_without_recursing_unboundedly() {
+        let depth = MAX_LIST_NESTING + 1;
+        let source = format!(
+            "run printf with message {}1{}",
+            "[".repeat(depth),
+            "]".repeat(depth)
+        );
+        let list = format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+        let tokens = tokenize(&list).unwrap();
+        let mut cursor = 0;
+        let error = parse_value(&tokens, &mut cursor).unwrap_err().to_string();
+        assert!(error.contains("maximum depth of 64"), "{error}");
+        assert!(parse(&source).is_err());
+    }
+    #[test]
+    fn chained_cd_setup_is_allowed_before_a_trigger() {
+        let program = parse("run cd with path \"sub\"\nthen cd with path \"..\"\nlisten to stdin\nwhenever a line arrives as record\n  then cat\n").unwrap();
+        assert!(matches!(
+            program.steps[1].kind,
+            StepKind::Invoke {
+                connection: Connection::Then,
+                ..
+            }
+        ));
+        assert!(matches!(
+            program.trigger,
+            Some(Trigger::Listen { line: 3, .. })
+        ));
+    }
+}

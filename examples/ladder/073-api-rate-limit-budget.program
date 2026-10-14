@@ -1,0 +1,6 @@
+# Purpose: Compute used request units and rounded utilization from saved rate-limit buckets.
+# Inputs: fixtures/073/rate-limits.json contains Rate limit snapshots with limits, remaining requests, and reset times.
+# Outputs: Sorted budget rows with used units and percent consumed.
+accept rate_limits_path as text with default "fixtures/073/rate-limits.json"
+run cat with path rate_limits_path
+then jq with filter "[.buckets[] | {service, used: (.limit - .remaining), limit, remaining, used_percent: (((.limit - .remaining) * 100 / .limit) | round), resets_at}] | sort_by(.service)" and flags ["-c", "-S"]

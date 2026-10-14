@@ -1,0 +1,6 @@
+# Purpose: Audit a finite event file for required identifiers and timestamps.
+# Inputs: events.jsonl contains JSON objects that may omit event_id, occurred_at, or type.
+# Outputs: stdout annotates every record with validity and a list of missing fields.
+accept events_path as text with default "events.jsonl"
+run cat with path events_path
+pipe to jq with flags ["-c"] and filter ". as $r | [(if (($r.event_id | type) != \"string\" or $r.event_id == \"\") then \"event_id\" else empty end), (if (($r.occurred_at | type) != \"string\" or $r.occurred_at == \"\") then \"occurred_at\" else empty end), (if (($r.type | type) != \"string\" or $r.type == \"\") then \"type\" else empty end)] as $missing | {event_id: ($r.event_id // null), valid: ($missing | length == 0), missing: $missing}"

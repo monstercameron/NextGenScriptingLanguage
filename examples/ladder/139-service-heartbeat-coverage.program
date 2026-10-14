@@ -1,0 +1,7 @@
+# Purpose: Compare the configured service inventory with recent heartbeat records.
+# Inputs: services.json lists expected services; heartbeats.jsonl contains timestamped checks.
+# Outputs: stdout shows each service's latest check or marks services with no check as missing.
+accept services_path as text with default "services.json"
+accept heartbeats_path as text with default "heartbeats.jsonl"
+run cat with files [services_path, heartbeats_path]
+then jq with flags ["-s", "-c"] and filter ".[0].services as $services | .[1:] as $checks | [$services[] as $service | ([$checks[] | select(.service == $service)] | sort_by(.checked_at) | last // null) as $latest | {service: $service, state: ($latest.state // \"missing\"), checked_at: ($latest.checked_at // null)}]"

@@ -1,0 +1,6 @@
+# Purpose: Create a due-first handoff list for open high-priority incidents.
+# Inputs: incidents.jsonl contains incident state, numeric priority, due_at, service, id, and summary.
+# Outputs: stdout is a plain-text checklist ordered by due time.
+accept incidents_path as text with default "incidents.jsonl"
+run cat with path incidents_path
+pipe to jq with flags ["-r", "-s"] and filter "map(select(.state == \"open\" and .priority <= 2)) | sort_by(.due_at)[] | \"\\(.due_at) P\\(.priority) \\(.service) #\\(.id): \\(.summary)\""

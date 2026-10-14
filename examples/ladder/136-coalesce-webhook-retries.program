@@ -1,0 +1,6 @@
+# Purpose: Coalesce duplicate webhook deliveries by event_id, keeping the latest delivery attempt.
+# Inputs: deliveries.jsonl contains event IDs and received_at timestamps.
+# Outputs: stdout emits one compact record per event, in latest-delivery time order.
+accept deliveries_path as text with default "deliveries.jsonl"
+run cat with path deliveries_path
+pipe to jq with flags ["-s", "-c"] and filter "group_by(.event_id) | map(sort_by(.received_at) | last) | sort_by(.received_at)[]"

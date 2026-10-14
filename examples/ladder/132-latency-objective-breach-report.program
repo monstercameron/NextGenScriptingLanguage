@@ -1,0 +1,7 @@
+# Purpose: Compare request latency to a configured objective and list each breach.
+# Inputs: objective.json defines objective_ms; requests.jsonl contains request_id and latency_ms.
+# Outputs: stdout is one compact JSON report with total requests and breach identifiers.
+accept objective_path as text with default "objective.json"
+accept requests_path as text with default "requests.jsonl"
+run cat with files [objective_path, requests_path]
+then jq with flags ["-s", "-c"] and filter ".[0] as $policy | .[1:] as $requests | [$requests[] | select(.latency_ms > $policy.objective_ms)] as $breaches | {objective_ms: $policy.objective_ms, total: ($requests | length), breach_count: ($breaches | length), breach_request_ids: ($breaches | map(.request_id) | sort)}"

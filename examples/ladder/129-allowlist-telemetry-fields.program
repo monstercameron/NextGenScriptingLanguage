@@ -1,0 +1,7 @@
+# Purpose: Forward only four explicitly approved fields from each structured event.
+# Inputs: private-events.jsonl contains JSON event objects with arbitrary additional fields.
+# Outputs: stdout is JSONL containing only timestamp, service, level, and event_code. Missing projected fields become null.
+accept private_events_path as text with default "private-events.jsonl"
+stream from cat with path private_events_path
+pipe to jq with flags ["--unbuffered", "-c"] and filter "{timestamp, service, level, event_code}"
+show each line

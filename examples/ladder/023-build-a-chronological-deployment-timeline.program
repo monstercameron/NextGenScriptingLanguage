@@ -1,0 +1,8 @@
+# Purpose: Sort ISO-timestamped deployment records into chronological order for a release audit.
+# Inputs: deploy/events.psv: headerless pipe-separated deployment records whose first column is an ISO-8601 UTC timestamp.
+# Outputs: reports/deployment-timeline.psv: deployment records sorted chronologically; stdout echoes the timeline.
+accept events_path as text with default "deploy/events.psv"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path events_path
+pipe to sort
+then save to "reports/deployment-timeline.psv"

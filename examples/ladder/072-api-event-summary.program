@@ -1,0 +1,6 @@
+# Purpose: Aggregate events into per-service and per-kind counts with the latest timestamp.
+# Inputs: fixtures/072/events.json contains Offline event export with service, kind, and ISO-8601 timestamps.
+# Outputs: Sorted JSON summary with counts and latest time for each pair.
+accept events_path as text with default "fixtures/072/events.json"
+run cat with path events_path
+then jq with filter ".events | sort_by(.service, .kind) | group_by([.service, .kind]) | map({service: .[0].service, kind: .[0].kind, count: length, latest: (map(.occurred_at) | max)})" and flags ["-c", "-S"]

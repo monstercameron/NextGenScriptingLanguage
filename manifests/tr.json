@@ -1,0 +1,36 @@
+{
+  "name": "tr",
+  "binary": "tr",
+  "accepts_stdin": true,
+  "cacheable": true,
+  "parameters": {
+    "from": {
+      "type": "string",
+      "required": true
+    },
+    "to": {
+      "type": "string",
+      "required": true
+    },
+    "flags": {
+      "type": "list",
+      "items": "string"
+    }
+  },
+  "arguments": [
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    },
+    {
+      "parameter": "from"
+    },
+    {
+      "parameter": "to"
+    }
+  ]
+}

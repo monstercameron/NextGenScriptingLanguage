@@ -1,0 +1,152 @@
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -1,11 +1,12 @@
+ use crate::ast::{Connection, Invocation, ListenSource, Program, Step, StepKind, Trigger, Value};
+ use anyhow::{anyhow, bail, Context, Result};
++use std::borrow::Cow;
+ use std::collections::BTreeMap;
+ 
+ #[derive(Debug, Clone, PartialEq)]
+ pub(crate) enum Token<'source> {
+     Word(&'source str),
+-    String(String),
++    String(Cow<'source, str>),
+     LeftBracket,
+     RightBracket,
+     Comma,
+@@ -216,7 +217,7 @@
+         }
+         return Ok((
+             Trigger::Cron {
+-                expression: expression.clone(),
++                expression: expression.clone().into_owned(),
+                 line: header.number,
+             },
+             index + 1,
+@@ -339,6 +340,7 @@
+                 i += 1;
+                 let mut escaped = false;
+                 let mut closed = false;
++                let mut plain = true;
+                 while i < bytes.len() {
+                     let byte = bytes[i];
+                     i += 1;
+@@ -346,18 +348,25 @@
+                         escaped = false;
+                     } else if byte == b'\\' {
+                         escaped = true;
++                        plain = false;
+                     } else if byte == b'"' {
+                         closed = true;
+                         break;
++                    } else if byte < 0x20 {
++                        plain = false;
+                     }
+                 }
+                 if !closed {
+                     bail!("unterminated quoted string");
+                 }
+-                let literal = &line[start..i];
+-                let value = serde_json::from_str::<String>(literal)
+-                    .map_err(|_| anyhow!("malformed quoted string {literal}"))?;
+-                tokens.push(Token::String(value));
++                if plain {
++                    tokens.push(Token::String(Cow::Borrowed(&line[start + 1..i - 1])));
++                } else {
++                    let literal = &line[start..i];
++                    let value = serde_json::from_str::<String>(literal)
++                        .map_err(|_| anyhow!("malformed quoted string {literal}"))?;
++                    tokens.push(Token::String(Cow::Owned(value)));
++                }
+             }
+             _ => {
+                 let start = i;
+@@ -567,7 +576,7 @@
+     match token {
+         Token::String(value) => {
+             *cursor += 1;
+-            Ok(Value::String(value.clone()))
++            Ok(Value::String(value.clone().into_owned()))
+         }
+         Token::Word(word) if *word == "true" || *word == "false" => {
+             *cursor += 1;
+@@ -724,6 +733,68 @@
+     }
+ 
+     #[test]
++    fn plain_unicode_json_string_tokens_borrow_and_keep_debug_format() {
++        let source = String::from("\"snow 雪\"");
++        let tokens = tokenize(&source).unwrap();
++        let Token::String(Cow::Borrowed(value)) = &tokens[0] else {
++            panic!("unescaped string should borrow from the input")
++        };
++        assert_eq!(*value, "snow 雪");
++        assert!(std::ptr::eq::<str>(*value, &source[1..source.len() - 1]));
++        assert_eq!(format!("{:?}", tokens[0]), "String(\"snow 雪\")");
++        assert_eq!(
++            format!("{:?}", Token::String(Cow::Owned(String::from("plain")))),
++            "String(\"plain\")"
++        );
++    }
++
++    #[test]
++    fn escaped_json_strings_keep_serde_decoding_and_owned_values() {
++        let literal = r#""line\nquote: \" slash: \\ solidus: \/ nul: \u0000 astral: \uD83D\uDE00""#;
++        let tokens = tokenize(literal).unwrap();
++        let Token::String(Cow::Owned(value)) = &tokens[0] else {
++            panic!("escaped string should use the JSON decoder")
++        };
++        assert_eq!(
++            value,
++            "line\nquote: \" slash: \\ solidus: / nul: \0 astral: 😀"
++        );
++    }
++
++    #[test]
++    fn raw_json_controls_fall_back_to_the_same_malformed_string_error() {
++        for control in 0..=0x1f {
++            let control = char::from_u32(control).unwrap();
++            let literal = format!("\"before{control}after\"");
++            let error = tokenize(&literal).unwrap_err().to_string();
++            assert_eq!(error, format!("malformed quoted string {literal}"));
++        }
++    }
++
++    #[test]
++    fn malformed_escape_keeps_later_lexical_error_precedence_and_line_number() {
++        let error = parse("run\nrun printf with message \"bad\\q\"")
++            .unwrap_err()
++            .to_string();
++        assert_eq!(error, "line 2: malformed quoted string \"bad\\q\"");
++    }
++
++    #[test]
++    fn parsed_plain_string_values_are_owned_after_source_is_dropped() {
++        let program = {
++            let source = String::from("run printf with message \"plain 雪\"");
++            parse(&source).unwrap()
++        };
++        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
++            panic!()
++        };
++        assert_eq!(
++            call.parameters.get("message"),
++            Some(&Value::String("plain 雪".into()))
++        );
++    }
++
++    #[test]
+     fn borrowed_word_errors_keep_the_same_token_text() {
+         let error = parse("read file \"notes.txt\" naïve")
+             .unwrap_err()
+--- a/src/ui/syntax.rs
++++ b/src/ui/syntax.rs
+@@ -159,7 +159,7 @@
+ }
+ fn text(tokens: &[Token<'_>], n: usize) -> Result<String> {
+     match tokens.get(n) {
+-        Some(Token::String(s)) => Ok(s.clone()),
++        Some(Token::String(s)) => Ok(s.clone().into_owned()),
+         _ => bail!("expected quoted text"),
+     }
+ }

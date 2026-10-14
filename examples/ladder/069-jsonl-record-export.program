@@ -1,0 +1,8 @@
+# Purpose: Write each object from a saved API array as a compact JSONL record for downstream stream tools.
+# Inputs: fixtures/069/export.json contains Saved API export containing an array of event objects.
+# Outputs: Sorted-key compact JSONL written to events.jsonl and echoed.
+accept export_path as text with default "fixtures/069/export.json"
+run cat with path export_path
+then jq with filter ".records[]" and flags ["-c", "-S"]
+then save to "events.jsonl"
+then cat with path "events.jsonl"

@@ -1,0 +1,7 @@
+# Purpose: Join sorted SKU counts from the system and a cycle count, then calculate physical-minus-system variance.
+# Inputs: system-counts.csv: Unquoted CSV without a header, sorted: sku,quantity.; cycle-counts.csv: Unquoted CSV without a header, sorted: sku,quantity.
+# Outputs: stdout: Only mismatched SKUs with signed physical-minus-system variance.
+accept system_counts_path as text with default "system-counts.csv"
+accept cycle_counts_path as text with default "cycle-counts.csv"
+run join with flags ["-t,", "-1", "1", "-2", "1"] and files [system_counts_path, cycle_counts_path]
+then awk with delimiter "," and program "BEGIN { print \"sku,system_qty,physical_qty,variance\" } $2+0!=$3+0 { printf \"%s,%s,%s,%d\\n\",$1,$2,$3,$3-$2 }"

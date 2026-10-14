@@ -1,0 +1,6 @@
+# Purpose: Keep recipient rows whose normalized email key does not occur in the sorted suppression list.
+# Inputs: recipients.csv: Unquoted CSV without a header: sorted email,name,segment rows.; suppressed.csv: One normalized email address per row, sorted using the C locale.
+# Outputs: stdout: Recipient rows not present in the suppression list.
+accept recipients_path as text with default "recipients.csv"
+accept suppressed_path as text with default "suppressed.csv"
+run join with flags ["-t,", "-v", "1"] and files [recipients_path, suppressed_path]

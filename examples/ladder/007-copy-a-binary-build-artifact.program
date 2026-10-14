@@ -1,0 +1,8 @@
+# Purpose: Copy the selected package artifact without text conversion so NUL and non-UTF-8 bytes remain intact.
+# Inputs: build/packages/active.path selects the source; build/packages/agent.bundle is an opaque binary package and alternate.bundle is a plain-text test package.
+# Outputs: archive/agent.bundle: byte-identical archived artifact; stdout returns the same bytes.
+accept active_path as text with default "build/packages/active.path"
+run mkdir with flags ["-p"] and paths ["archive"]
+read active_path as artifact
+then cat with path artifact
+then save to "archive/agent.bundle"

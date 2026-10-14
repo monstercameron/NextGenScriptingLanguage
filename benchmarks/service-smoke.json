@@ -1,0 +1,16 @@
+{
+  "all_example_programs_check": true,
+  "direct_pipe_output": "3",
+  "cd_pwd_ls": true,
+  "saved_output": "HELLO FROM EXECUTE",
+  "cache_hit_second_run": true,
+  "stdin_listener": true,
+  "interval_two_runs": true,
+  "live_tail_two_records": true,
+  "all_run_in_temporary_directory": true,
+  "packaged_binary_resolves_manifests": true,
+  "actual_cron_minute_boundary": true,
+  "cron_wait_seconds": 40.008,
+  "cron_note": "Actual next-minute calendar firing verified earlier in the same 0.2.0 implementation.",
+  "git_manifest_explained_only": true
+}

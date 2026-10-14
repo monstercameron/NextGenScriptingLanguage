@@ -1,0 +1,6 @@
+# Purpose: Calculate girth as length plus twice width plus twice height and report parcels over 300 cm girth or 30 kg.
+# Inputs: parcel-manifest.csv: Unquoted CSV header: package_id,length_cm,width_cm,height_cm,weight_kg.
+# Outputs: stdout: Oversize parcel ID, computed girth, and weight.
+accept parcel_manifest_path as text with default "parcel-manifest.csv"
+run cat with path parcel_manifest_path
+then awk with delimiter "," and program "BEGIN { print \"package_id,girth_cm,weight_kg\" } NR==1 { next } { girth=$2+2*$3+2*$4; if (girth>300 || $5>30) printf \"%s,%d,%s\\n\",$1,girth,$5 }"

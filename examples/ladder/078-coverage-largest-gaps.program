@@ -1,0 +1,6 @@
+# Purpose: Rank source files by uncovered executable lines from a coverage export.
+# Inputs: reports/coverage.json is a coverage export with per-file total and covered line counts.
+# Outputs: Files with uncovered executable lines, ordered by the largest uncovered count.
+accept coverage_path as text with default "reports/coverage.json"
+run cat with path coverage_path
+then jq with flags ["-r"] and filter "[.files[] | select(.lines_total > .lines_covered) | {path, total:.lines_total, uncovered:(.lines_total - .lines_covered)}] | sort_by(-.uncovered)[] | \"\\(.uncovered)/\\(.total) uncovered\\t\\(.path)\""

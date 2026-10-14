@@ -1,0 +1,12 @@
+{
+  "batches": 13,
+  "field_bytes": 65536,
+  "fixture": "one accepted JSON event with one 64 KiB string field; timed enqueue and App::advance through parse and field projection",
+  "measured_batches": 10,
+  "operation": "ui_dispatch_field_projection_64kib",
+  "operations_per_batch": 10,
+  "p50_us": 32.5375,
+  "p95_us": 32.8375,
+  "p99_us": 32.8375,
+  "warmup_batches": 3
+}

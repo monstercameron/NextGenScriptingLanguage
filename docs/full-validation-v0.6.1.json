@@ -1,0 +1,162 @@
+{
+  "release": "0.6.1",
+  "validated_at_utc": "2026-10-14T06:14:35.313596+00:00",
+  "platform": "macOS arm64",
+  "binary_sha256": "72c499a8aa4055ae58a018ea4a97ac4f87ec1752e7e826b032efa008050b88c2",
+  "rust_tests_passed": 237,
+  "ignored_probes_passed_separately": 14,
+  "live_scenarios_passed": 31,
+  "canonical_utilities": 150,
+  "alternate_inputs": 146,
+  "invalid_input_guards": 1,
+  "failure_recovery_fixtures": 9,
+  "python_harness_contracts": 11,
+  "seeded_mutation_trials": {
+    "programs_across_finite_stream_ui_parsers": 4096,
+    "argv_strings": 1024,
+    "manifests": 1024,
+    "cron": 4096,
+    "total": 10240
+  },
+  "stress": {
+    "lifecycle_cycles": 1000,
+    "lifecycle_probes": 7000,
+    "bulk_bytes": [
+      8388608,
+      1000000000
+    ],
+    "exact_sha256": true,
+    "native_launches_per_bulk_pipeline": 2,
+    "report": "../benchmarks/replacement-proofs-v0.6.1-macos-arm64.json"
+  },
+  "coverage": {
+    "production_executable": {
+      "lines": {
+        "count": 8885,
+        "covered": 7939,
+        "percent": 89.35
+      },
+      "functions": {
+        "count": 644,
+        "covered": 560,
+        "percent": 86.96
+      },
+      "regions": {
+        "count": 14331,
+        "covered": 12465,
+        "percent": 86.98
+      }
+    },
+    "report": "coverage-v0.6.1-macos-arm64.json",
+    "source_files": 18
+  },
+  "fixes": [
+    "Non-UTF-8 CLI arguments now return status 1 with a diagnostic instead of panicking.",
+    "Closed stdout in CLI/live JSON responses now propagates a normal I/O error instead of panicking."
+  ],
+  "format": "passed",
+  "clippy_macos_warnings_denied": "passed",
+  "clippy_linux_target_warnings_denied": "passed",
+  "linux_native_runtime": "not run",
+  "observed_test_instability": "One parallel instrumented run failed when the timeout fixture PID file was absent. The timeout applies to startup too. The same test passed in isolation and in a complete serial instrumented rerun; the original failure log is retained. No runtime timeout was relaxed.",
+  "limitations": [
+    "Coverage is not exhaustive and does not prove every branch or input.",
+    "No native Linux/Omarchy/Quickshell execution on this macOS host.",
+    "No 10,000-cycle claim; this stress run used 1,000 cycles.",
+    "No SIGKILL containment or escaped process-group guarantee.",
+    "No live GitHub/network operations, privileged commands, or OS configuration changes in this audit."
+  ],
+  "live_benchmark": "../benchmarks/live-control-v0.6.1-macos-arm64.json",
+  "source_sha256": {
+    "src/ast.rs": "60cbb334b2dd74904773fb21cc2b117e96bcab8892122a16cd037cc91748f999",
+    "src/lib.rs": "ca1a065aa0aaeb1ad052c3b4cead2587e454738733a5ebac4fe15ab9cd38a646",
+    "src/live/mod.rs": "a7bab16fa7d691d859762d324161c77a3cbc95e855fdbcf22c0aa22b85cd98ba",
+    "src/live/state.rs": "7e4b462aa325b18f2a7fada86f1b256b154391f7bdf47eba5c45d210ccb14fd9",
+    "src/live/worker.rs": "1b715b47e93dba5f49bbe2388c74765baf86760025c2743da26a1205898f438d",
+    "src/main.rs": "303869ddea3c6915791604ff4f83925311a64fa202a0210507e012517db9fc96",
+    "src/manifest.rs": "e6f309faeeb2d2464948e5f5eb031c5e893b3f8104736c8fd25717b6823b4dd9",
+    "src/parser.rs": "b5894cbfdd91c4156851810c28810506e3c49db2f2590dc916f505783f5c4475",
+    "src/runtime/checkpoint.rs": "b83a3a2ee43a60b6b6fea32bcbf71a83c803e5873495feba7fb86ff3716d5488",
+    "src/runtime/live.rs": "c7b826d5d5c33a5300b9d69b72628cec9537a7c319e0e4241f7eb03ac2df184a",
+    "src/runtime/resume.rs": "92c503d2eff19b9564955aa912ff77f3666d29f7080b83d1f1a1960a018709e5",
+    "src/runtime/service.rs": "384d084bdcf3fe6234217a7e6f049e3423a6c6e2195342a46aa08e2fa79be330",
+    "src/runtime/stdio.rs": "e1f526c37f4dcfb4a3b7551067d688b5a1c2b28de7c1780b64d318d8fe71eb47",
+    "src/runtime/streaming.rs": "77ffc8f984daf4251dd384ec854e9fb411dd63c209a49dfe2f2cad6c03adeb8b",
+    "src/runtime.rs": "5ddc522c20039d2fc1ddfb99c988f9fc3354fa8968c09bd19934a70a873dab44",
+    "src/schedule.rs": "9850a82039706db4ebdd8da32ef095d5722881d2cdba9c4506fa56e80a73c83f",
+    "src/stream.rs": "065d5be42903d9f54d6c9968f910b6e4a14a7e13daac8f13c685ab726e5774f7",
+    "src/ui/app.rs": "d10d913f38f441d02e80181d9cbb9053030db9b73af2b3720ec09bbd2fbeffc5",
+    "src/ui/live.rs": "b2205588e64f153f4f885d9b242f1b69c5c96e33c9de14208665e43d4baf4cf6",
+    "src/ui/mod.rs": "cfc904a8d22632fa8d9a772df5250366244dd1760b7c5895638fc40d8725cd5f",
+    "src/ui/syntax.rs": "27e71dc0be04e32fef1e9cad19140650779e2b6f1f9aac3b14117eeb4c068797"
+  },
+  "tests_sha256": {
+    "tests/adversarial.rs": "18faef0a5fe824dfb19bcffb974df366c349bc4c8022840a81a4383ce49d0f7e",
+    "tests/cli.rs": "1735a89bc000698761fadb1b7acfa2c5257ec477fef1dc92c9f8701c910015a8",
+    "tests/cpu.rs": "6fa108ebcf4b2de370dade2d87c334042c656e0708ed3892e0f88983b50dc854",
+    "tests/cpu_pty.py": "a8634ae5c941774e7f209f62c6137d174686ce8a0a61e745c08893b0ee32b201",
+    "tests/ladder.rs": "e9c5dda97d12bf573811a042ac3cab581beeb0c4a336e4c211db2b6292df224a",
+    "tests/live.rs": "0c5523320be562fff34f2bcc4397c2c4187691cd876a4ac25e2e15a0e6e629c3",
+    "tests/live_control.py": "2b57a813345957e88a4452a7db025b9c6ab0e2d2df20b65b5e509f0a1fb55023",
+    "tests/opt_allocations.rs": "125df6ca7b36c3adf33bc64a08846a747ffa12e9da4d21a976f7d49b7dd4bfc7",
+    "tests/opt_child_wakeup.rs": "1fae5dce01a26e1dfd8acea6e2541637a6a81de7833eb8f1533eaedb4476dd6d",
+    "tests/opt_core_bench.rs": "af057c538d14c1667d17e89f9441660c0806901f60ec942227b2dfe5fe7c5967",
+    "tests/opt_diagnostics_poll.rs": "deb0ceac003f8ab870830271898d798219c663c4edaaaf1ea1fbe6cceb6132f4",
+    "tests/opt_local_child_observer.rs": "5f51cb7f03adf3c02671d0de70f894cc207d036e6d2e37e233629a9ea0e475ae",
+    "tests/opt_manifest_regressions.rs": "6aa2f37e9cc94ea45062295a8f877874e2c1438b05c0a3c90ea622ed674b9ab5",
+    "tests/opt_services_checkpoint_listener.rs": "a701a5c1d48556303737577299dd106290500b25026c86b607cbc7aa4616e5e5",
+    "tests/opt_small_input.rs": "4a144f6887e0ad3906d022b153d9fe116b85a5b8ea770c40547d46fe85d19552",
+    "tests/opt_stdin_prefill.rs": "c189cc5693686894045ed443668435219d2c234f49aeff67154765c510aed879",
+    "tests/replacement_proofs.py": "1991378962b1566d7b746ae2a32ccbdc110b82916023ee1854f0653bcb70b2bc",
+    "tests/resume.rs": "4f5e07fbd3396c059604a4a320e8c9dc792c43c3136aa3cc5e30c8b0d5645160",
+    "tests/robustness.rs": "0991aff1aac2db40b8baf2d04a6dad20577251b446e015d8c8ade7e3805bbc34",
+    "tests/streaming.rs": "ab4f255ba45a67d5836ac67f7045747ad369d32ec237fa8408dfb4dbc07223d2",
+    "tests/timeout.rs": "4bfcb6f2299d8e448a98ead1a5613bf7c14ef6deeccb9166bc22725a2507371c",
+    "tests/ui.rs": "c9f831d28003ce770dfd0208844de21a7fb3c43e71c1aae260d669d19d1ddff4",
+    "tests/ui_pty.py": "44154461d7ac7a813ca18bb0c2d940df2d4cd97fa3c8a7181e55c22982431ae2",
+    "tests/unix_bench.py": "f3d4e9cc383d7beb010704d9239909c203ba8c4f1bede864f8c71238794b3d21",
+    "tests/utility_catalog.py": "e09cc5dbbab4b7e8d9f746e54c783bea86dfeb8e41662d9c8b1e4b3fc3be8ab4"
+  },
+  "logs": {
+    "release-tests.log": {
+      "path": "validation-v0.6.1/release-tests.log",
+      "sha256": "2d26cb02540b210260d79283714308338c8e817dbc118b3374b7291e26bfd2da"
+    },
+    "coverage-tests.log": {
+      "path": "validation-v0.6.1/coverage-tests.log",
+      "sha256": "d7f2e449230e0ea3bae4d208fdece30cb8d2dbde6e65cae54b1651100f5128ab"
+    },
+    "ignored-probes.log": {
+      "path": "validation-v0.6.1/ignored-probes.log",
+      "sha256": "246e3c18b8dc757a9d44fc33df6cbd8187a9d682a3c31f6987faaebb094110b8"
+    },
+    "live-tests.log": {
+      "path": "validation-v0.6.1/live-tests.log",
+      "sha256": "7161712439353f4df399e08848eb3b638c744e70752ce90b6d35aafbdd2408ad"
+    },
+    "python-contracts.log": {
+      "path": "validation-v0.6.1/python-contracts.log",
+      "sha256": "1051796316cf7c484824f2a678f054544761fcaaeb21aa3a6c025f9d0ed7fd51"
+    },
+    "clippy-macos.log": {
+      "path": "validation-v0.6.1/clippy-macos.log",
+      "sha256": "9e5cf699a44140624755086163af2588f5d6635d383a7aa2a79ade7bcee5f47e"
+    },
+    "clippy-linux.log": {
+      "path": "validation-v0.6.1/clippy-linux.log",
+      "sha256": "9dc27564d27e40a45e6fc4dbcb4e85ed9c43c070cee289080dba7c3374f1428d"
+    },
+    "initial-coverage-failure.log": {
+      "path": "validation-v0.6.1/initial-coverage-failure.log",
+      "sha256": "71c30a5c8fa01a1e57f904fd0fbae63d096e16ad10c312170c474b931b295bcc"
+    },
+    "isolated-timeout-rerun.log": {
+      "path": "validation-v0.6.1/isolated-timeout-rerun.log",
+      "sha256": "c6eddfbdea6e36ac7c95511300a61e210598f8acf6e687c1be015aff9179350a"
+    },
+    "stress.log": {
+      "path": "validation-v0.6.1/stress.log",
+      "sha256": "b165fd3874a5cbadb210ba14dc4aa4e47fe4519e907e804c9ec2f757db4d0b27"
+    }
+  }
+}

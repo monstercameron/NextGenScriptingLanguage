@@ -1,0 +1,6 @@
+# Purpose: Normalize incoming event records while the stdin listener stays open.
+# Inputs: stdin supplies one JSON event per line.
+# Outputs: stdout emits a compact normalized event for each input line.
+listen to stdin
+whenever a line arrives as record
+  then jq with flags ["-c"] and filter "{event_id: .id, occurred_at: .at, kind: .type, source: .source, actor: (.actor // null)}"

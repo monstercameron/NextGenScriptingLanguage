@@ -1,0 +1,8 @@
+# Purpose: Validate all shell variable identifiers before exporting any values, then render a JSON environment block as safely quoted assignments for offline handoff.
+# Inputs: fixtures/057/environment.json contains JSON environment settings including spaces and quotes.
+# Outputs: Sorted shell-escaped KEY=value lines in runtime.env.sh and stdout; invalid names fail before emitting output.
+accept environment_path as text with default "fixtures/057/environment.json"
+run cat with path environment_path
+then jq with filter "if all(.environment | keys[]; test(\"^[A-Za-z_][A-Za-z0-9_]*$\")) then .environment | to_entries | sort_by(.key)[] | [.key, (.value | @sh)] | join(\"=\") else error(\"invalid environment variable name\") end" and flags ["-r"]
+then save to "runtime.env.sh"
+then cat with path "runtime.env.sh"

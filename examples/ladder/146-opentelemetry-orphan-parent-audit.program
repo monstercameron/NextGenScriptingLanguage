@@ -1,0 +1,6 @@
+# Purpose: Find non-root spans whose parent span is absent from the same trace.
+# Inputs: spans.jsonl contains trace_id, span_id, and parent_span_id; root parent IDs are null.
+# Outputs: stdout lists orphan spans as compact JSONL with their missing parent ID.
+accept spans_path as text with default "spans.jsonl"
+run cat with path spans_path
+pipe to jq with flags ["-s", "-c"] and filter "group_by(.trace_id)[] as $spans | $spans[] as $span | select($span.parent_span_id != null and ([$spans[].span_id] | index($span.parent_span_id) == null)) | {trace_id: $span.trace_id, span_id: $span.span_id, missing_parent: $span.parent_span_id}"

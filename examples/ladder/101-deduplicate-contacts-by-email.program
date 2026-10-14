@@ -1,0 +1,6 @@
+# Purpose: Remove repeated contacts using a case-insensitive email key while preserving the original row and first-seen order.
+# Inputs: contacts.csv: Unquoted CSV with contact_id,name,email,team; email addresses are ASCII.
+# Outputs: stdout: Header and first row for each case-insensitive email.
+accept contacts_path as text with default "contacts.csv"
+run cat with path contacts_path
+then awk with delimiter "," and program "NR==1 { print; next } { email=tolower($3); if (!seen[email]++) print }"

@@ -1,0 +1,9 @@
+# Purpose: Keep published entries from the release review queue and remove the decision column for publication.
+# Inputs: release/approval.psv: unquoted pipe-separated decision, version, and note.
+# Outputs: reports/release-notes.psv: approved version and note rows; stdout echoes the file.
+accept approval_path as text with default "release/approval.psv"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path approval_path
+pipe to grep with pattern "PUBLISH|" and flags ["-F"]
+pipe to cut with delimiter "|" and fields "2-"
+then save to "reports/release-notes.psv"

@@ -1,0 +1,16 @@
+{
+  "name": "tail.follow",
+  "phrases": ["follow file"],
+  "binary": "tail",
+  "cacheable": false,
+  "parameters": {
+    "path": { "type": "string", "required": true }
+  },
+  "arguments": [
+    { "literal": "-n" },
+    { "literal": "0" },
+    { "literal": "-F" },
+    { "literal": "--" },
+    { "parameter": "path" }
+  ]
+}

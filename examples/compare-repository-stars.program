@@ -1,0 +1,12 @@
+# Compare two saved `gh api repos/OWNER/REPO` JSON responses.
+define a program named stars
+  accept path as text
+  read path
+  then parse json as repository
+  take integer at "/stargazers_count" from repository as count
+  then encode count as json
+accept first as text
+accept second as text
+run program stars with path first as first_stars
+run program stars with path second as second_stars
+then "printf" with arguments ["%s: %s stars\n%s: %s stars\n", first, first_stars, second, second_stars]

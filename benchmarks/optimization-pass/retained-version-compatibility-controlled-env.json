@@ -1,0 +1,612 @@
+{
+  "applets": {
+    "false": {
+      "manifest_sha256": "f1d33cd3883bfd64945c539df9d70b4333730a7d1bb16139953abdd25fef47a6",
+      "path": "/usr/bin/false",
+      "sha256": "3f23eaf182a6d49e9f41b627944b05678faa20377f223cbf5927b90fcb9f2047"
+    },
+    "printf": {
+      "manifest_sha256": "9fc66a8ac57df3556b78b39f1dd4e335705f482fc058f758b5e18f7d2503959f",
+      "path": "/usr/bin/printf",
+      "sha256": "d7992bc59e048ee061716365839990227ab463d954d87e6c2e7f987c0054fd59"
+    },
+    "tr": {
+      "manifest_sha256": "ca78c160d247939ab527c4dd4b6c81e257eeaf49070cd2bd8c684a6b8b11d043",
+      "path": "/usr/bin/tr",
+      "sha256": "b8ac76bef7c61d9a462e6054d7887108ea632d250049aa5a2abee0ab906aefb4"
+    },
+    "true": {
+      "manifest_sha256": "7f43d6baf4ec0e3ad9f98eeccf904dc78466c3c36a3807410a4434e41503d075",
+      "path": "/usr/bin/true",
+      "sha256": "875c7eea9c66c826091ede3cc44599311dc6818caf17f9e53d97c54c288842b2"
+    }
+  },
+  "binaries": {
+    "baseline": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/original-execute",
+      "sha256": "205a0f198ec0ef81b6c5677f2e53fb2b248552507753841d01413b21620ebdeb"
+    },
+    "candidate": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/round22-candidate-execute",
+      "sha256": "0004a3fc50de3878fb1ff4945612edcf1f5b873fa044399d215b2eec339a7192"
+    }
+  },
+  "cases": {
+    "baseline-cache-to-candidate": {
+      "baseline": {
+        "argv": [
+          "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/original-execute",
+          "run",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/cache-case/cache.program",
+          "--manifest-dir",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/catalog",
+          "--command-timeout-ms",
+          "2000",
+          "--max-output-bytes",
+          "65536",
+          "--trace",
+          "--cache-dir",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/cache-case/cache"
+        ],
+        "cleanup": "not needed",
+        "error": null,
+        "returncode": 0,
+        "saved_file": {
+          "base64": "U01BTEwtQ0FDSEUgU0VFRAo=",
+          "bytes": 17,
+          "sha256": "d0865d54c3d9555142b3c304f285e6fa89daa0d64b01650e02d279257b2ce9b1"
+        },
+        "stderr": {
+          "base64": "eyJhcHBsZXQiOiJ0ciIsImJpbmFyeSI6Ii91c3IvYmluL3RyIiwiZXZlbnQiOiJzcGF3biIsImxpbmUiOjIsInBpZCI6ODgwMTV9CnsiYXBwbGV0IjoidHIiLCJldmVudCI6ImV4aXQiLCJncm91cF9lbGFwc2VkX3VzIjoyODgwLCJsaW5lIjoyLCJzdGF0dXMiOjB9CnsiYXBwbGV0IjoidHIiLCJieXRlcyI6MTcsImV2ZW50IjoiY2FjaGVfc3RvcmUiLCJrZXkiOiIzODFmOTRmNmFkYWU0NjE5N2JlOWIzNDAzZWU3MTI0ZjZmZGRlNzY3MWVlYmU1ZjU5Y2I4OWIwZTAyN2NhNGMyIiwibGluZSI6Mn0KeyJieXRlcyI6MTcsImV2ZW50Ijoic2F2ZSIsImxpbmUiOjN9Cg==",
+          "bytes": 319,
+          "sha256": "9e71b2121ceca957f141f6f65a407be003823d8b1a469e2ab4b81bf166fc3a3e"
+        },
+        "stdout": {
+          "base64": "U01BTEwtQ0FDSEUgU0VFRAo=",
+          "bytes": 17,
+          "sha256": "d0865d54c3d9555142b3c304f285e6fa89daa0d64b01650e02d279257b2ce9b1"
+        },
+        "trace_events": [
+          {
+            "applet": "tr",
+            "binary": "/usr/bin/tr",
+            "event": "spawn",
+            "line": 2,
+            "pid": 88015
+          },
+          {
+            "applet": "tr",
+            "event": "exit",
+            "group_elapsed_us": 2880,
+            "line": 2,
+            "status": 0
+          },
+          {
+            "applet": "tr",
+            "bytes": 17,
+            "event": "cache_store",
+            "key": "381f94f6adae46197be9b3403ee7124f6fdde7671eebe5f59cb89b0e027ca4c2",
+            "line": 2
+          },
+          {
+            "bytes": 17,
+            "event": "save",
+            "line": 3
+          }
+        ]
+      },
+      "cache_files_after_baseline": {
+        "381f94f6adae46197be9b3403ee7124f6fdde7671eebe5f59cb89b0e027ca4c2.bin": {
+          "bytes": 17,
+          "sha256": "d0865d54c3d9555142b3c304f285e6fa89daa0d64b01650e02d279257b2ce9b1"
+        }
+      },
+      "cache_files_after_candidate": {
+        "381f94f6adae46197be9b3403ee7124f6fdde7671eebe5f59cb89b0e027ca4c2.bin": {
+          "bytes": 17,
+          "sha256": "d0865d54c3d9555142b3c304f285e6fa89daa0d64b01650e02d279257b2ce9b1"
+        }
+      },
+      "candidate": {
+        "argv": [
+          "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/round22-candidate-execute",
+          "run",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/cache-case/cache.program",
+          "--manifest-dir",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/catalog",
+          "--command-timeout-ms",
+          "2000",
+          "--max-output-bytes",
+          "65536",
+          "--trace",
+          "--cache-dir",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/cache-case/cache"
+        ],
+        "cleanup": "not needed",
+        "error": null,
+        "returncode": 0,
+        "saved_file": {
+          "base64": "U01BTEwtQ0FDSEUgU0VFRAo=",
+          "bytes": 17,
+          "sha256": "d0865d54c3d9555142b3c304f285e6fa89daa0d64b01650e02d279257b2ce9b1"
+        },
+        "stderr": {
+          "base64": "eyJhcHBsZXQiOiJ0ciIsImJ5dGVzIjoxNywiZXZlbnQiOiJjYWNoZV9oaXQiLCJrZXkiOiIzODFmOTRmNmFkYWU0NjE5N2JlOWIzNDAzZWU3MTI0ZjZmZGRlNzY3MWVlYmU1ZjU5Y2I4OWIwZTAyN2NhNGMyIiwibGluZSI6Mn0KeyJieXRlcyI6MTcsImV2ZW50Ijoic2F2ZSIsImxpbmUiOjN9Cg==",
+          "bytes": 166,
+          "sha256": "497161d6d4f48335129b0807ec519eb8fbb4f79f6176e44116bb52f38aa61e70"
+        },
+        "stdout": {
+          "base64": "U01BTEwtQ0FDSEUgU0VFRAo=",
+          "bytes": 17,
+          "sha256": "d0865d54c3d9555142b3c304f285e6fa89daa0d64b01650e02d279257b2ce9b1"
+        },
+        "trace_events": [
+          {
+            "applet": "tr",
+            "bytes": 17,
+            "event": "cache_hit",
+            "key": "381f94f6adae46197be9b3403ee7124f6fdde7671eebe5f59cb89b0e027ca4c2",
+            "line": 2
+          },
+          {
+            "bytes": 17,
+            "event": "save",
+            "line": 3
+          }
+        ]
+      },
+      "environment": {
+        "HOME": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/cache-case",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/empty-path",
+        "TMPDIR": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/cache-case",
+        "__CF_USER_TEXT_ENCODING": "0x1F5:0x0:0x0"
+      },
+      "expected_stdout_and_saved_file": {
+        "base64": "U01BTEwtQ0FDSEUgU0VFRAo=",
+        "bytes": 17,
+        "sha256": "d0865d54c3d9555142b3c304f285e6fa89daa0d64b01650e02d279257b2ce9b1"
+      },
+      "input": {
+        "base64": "c21hbGwtY2FjaGUgc2VlZAo=",
+        "bytes": 17,
+        "sha256": "5ae03af2484c663b1e6d8564e1d58e200c41e8fdb3ca18abf41cd32926d743bb"
+      },
+      "program": "read \"cache-input.txt\"\nthen tr with from \"[:lower:]\" and to \"[:upper:]\" and cache\nthen save to file \"cache-result.txt\"\n"
+    },
+    "baseline-checkpoint-to-candidate": {
+      "checkpoint_files_after_failure": {
+        "blobs/830d53deda4b5ff045ef8cc22f6f74300bbccfc09ddca615f83d92b92380ac3a": {
+          "bytes": 26,
+          "sha256": "830d53deda4b5ff045ef8cc22f6f74300bbccfc09ddca615f83d92b92380ac3a"
+        },
+        "blobs/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "blobs/f5a2e57f0fb58af2f6f75f23026f142ab5470f642f8f9923c5e929de0564cecf": {
+          "bytes": 12,
+          "sha256": "f5a2e57f0fb58af2f6f75f23026f142ab5470f642f8f9923c5e929de0564cecf"
+        },
+        "journal.json": {
+          "bytes": 2965,
+          "sha256": "029f4ca3e122a947d22b257fbdce629722ca7af51aa69759c4e7dbf14230b888"
+        },
+        "lock": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "checkpoint_files_after_resume": {
+        "blobs/830d53deda4b5ff045ef8cc22f6f74300bbccfc09ddca615f83d92b92380ac3a": {
+          "bytes": 26,
+          "sha256": "830d53deda4b5ff045ef8cc22f6f74300bbccfc09ddca615f83d92b92380ac3a"
+        },
+        "blobs/c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b": {
+          "bytes": 13,
+          "sha256": "c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b"
+        },
+        "blobs/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "blobs/f5a2e57f0fb58af2f6f75f23026f142ab5470f642f8f9923c5e929de0564cecf": {
+          "bytes": 12,
+          "sha256": "f5a2e57f0fb58af2f6f75f23026f142ab5470f642f8f9923c5e929de0564cecf"
+        },
+        "journal.json": {
+          "bytes": 3442,
+          "sha256": "e586973e04788f9be436cc1ecdc1a90cecdb6abf5cbe1b07c33a78a08e319736"
+        },
+        "lock": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "consumer": {
+        "argv": [
+          "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/round22-candidate-execute",
+          "resume",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/baseline-checkpoint-to-candidate/resume.program",
+          "--manifest-dir",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/catalog",
+          "--command-timeout-ms",
+          "2000",
+          "--max-output-bytes",
+          "65536",
+          "--trace",
+          "--checkpoint",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/baseline-checkpoint-to-candidate/checkpoint"
+        ],
+        "cleanup": "not needed",
+        "error": null,
+        "returncode": 0,
+        "saved_file": {
+          "base64": "a2VwdCBwcmVmaXgKCg==",
+          "bytes": 13,
+          "sha256": "c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b"
+        },
+        "stderr": {
+          "base64": "eyJldmVudCI6ImNoZWNrcG9pbnRfcmVzdW1lIiwibmV4dF9zdGVwIjoxLCJyZXN0b3JlZF9ub2RlcyI6MX0KeyJhcHBsZXQiOiJwcmludGYiLCJiaW5hcnkiOiIvdXNyL2Jpbi9wcmludGYiLCJldmVudCI6InNwYXduIiwibGluZSI6MiwicGlkIjo4ODAyMn0KeyJhcHBsZXQiOiJwcmludGYiLCJldmVudCI6ImV4aXQiLCJncm91cF9lbGFwc2VkX3VzIjoxNzg5LCJsaW5lIjoyLCJzdGF0dXMiOjB9CnsiY29tcGxldGVkX25vZGVzIjoyLCJldmVudCI6ImNoZWNrcG9pbnRfY29tbWl0IiwibmV4dF9zdGVwIjoyfQp7ImJ5dGVzIjoxMywiZXZlbnQiOiJzYXZlIiwibGluZSI6M30KeyJjb21wbGV0ZWRfbm9kZXMiOjMsImV2ZW50IjoiY2hlY2twb2ludF9jb21taXQiLCJuZXh0X3N0ZXAiOjN9Cg==",
+          "bytes": 391,
+          "sha256": "0f68a523c7847ca3c324b400389fc7a62f3f1d7fd7611c99f49fa7b7c5c97ea1"
+        },
+        "stdout": {
+          "base64": "a2VwdCBwcmVmaXgKCg==",
+          "bytes": 13,
+          "sha256": "c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b"
+        },
+        "trace_events": [
+          {
+            "event": "checkpoint_resume",
+            "next_step": 1,
+            "restored_nodes": 1
+          },
+          {
+            "applet": "printf",
+            "binary": "/usr/bin/printf",
+            "event": "spawn",
+            "line": 2,
+            "pid": 88022
+          },
+          {
+            "applet": "printf",
+            "event": "exit",
+            "group_elapsed_us": 1789,
+            "line": 2,
+            "status": 0
+          },
+          {
+            "completed_nodes": 2,
+            "event": "checkpoint_commit",
+            "next_step": 2
+          },
+          {
+            "bytes": 13,
+            "event": "save",
+            "line": 3
+          },
+          {
+            "completed_nodes": 3,
+            "event": "checkpoint_commit",
+            "next_step": 3
+          }
+        ]
+      },
+      "environment": {
+        "HOME": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/baseline-checkpoint-to-candidate",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/empty-path",
+        "TMPDIR": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/baseline-checkpoint-to-candidate",
+        "__CF_USER_TEXT_ENCODING": "0x1F5:0x0:0x0"
+      },
+      "expected_resumed_stdout_and_file": {
+        "base64": "a2VwdCBwcmVmaXgKCg==",
+        "bytes": 13,
+        "sha256": "c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b"
+      },
+      "failed_program": "run printf with message \"kept prefix\" as remembered\nthen false\n",
+      "producer": {
+        "argv": [
+          "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/original-execute",
+          "run",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/baseline-checkpoint-to-candidate/resume.program",
+          "--manifest-dir",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/catalog",
+          "--command-timeout-ms",
+          "2000",
+          "--max-output-bytes",
+          "65536",
+          "--trace",
+          "--checkpoint",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/baseline-checkpoint-to-candidate/checkpoint"
+        ],
+        "cleanup": "not needed",
+        "error": null,
+        "returncode": 1,
+        "stderr": {
+          "base64": "eyJldmVudCI6ImNoZWNrcG9pbnRfcmVzdW1lIiwibmV4dF9zdGVwIjowLCJyZXN0b3JlZF9ub2RlcyI6MH0KeyJhcHBsZXQiOiJwcmludGYiLCJiaW5hcnkiOiIvdXNyL2Jpbi9wcmludGYiLCJldmVudCI6InNwYXduIiwibGluZSI6MSwicGlkIjo4ODAxOX0KeyJhcHBsZXQiOiJwcmludGYiLCJldmVudCI6ImV4aXQiLCJncm91cF9lbGFwc2VkX3VzIjozMzEyLCJsaW5lIjoxLCJzdGF0dXMiOjB9CnsiY29tcGxldGVkX25vZGVzIjoxLCJldmVudCI6ImNoZWNrcG9pbnRfY29tbWl0IiwibmV4dF9zdGVwIjoxfQp7ImFwcGxldCI6ImZhbHNlIiwiYmluYXJ5IjoiL3Vzci9iaW4vZmFsc2UiLCJldmVudCI6InNwYXduIiwibGluZSI6MiwicGlkIjo4ODAyMH0KeyJhcHBsZXQiOiJmYWxzZSIsImV2ZW50IjoiZXhpdCIsImdyb3VwX2VsYXBzZWRfdXMiOjE4NTgsImxpbmUiOjIsInN0YXR1cyI6MX0KZXhlY3V0ZTogbGluZSAyOiBhcHBsZXQgImZhbHNlIiBmYWlsZWQgKGV4aXQgc3RhdHVzOiAxKTogCg==",
+          "bytes": 508,
+          "sha256": "00cef023b940786c83dd5d64bd1f36ab50aebf7a4bbcda31548477ff2cd08c6a"
+        },
+        "stdout": {
+          "base64": "",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "trace_events": [
+          {
+            "event": "checkpoint_resume",
+            "next_step": 0,
+            "restored_nodes": 0
+          },
+          {
+            "applet": "printf",
+            "binary": "/usr/bin/printf",
+            "event": "spawn",
+            "line": 1,
+            "pid": 88019
+          },
+          {
+            "applet": "printf",
+            "event": "exit",
+            "group_elapsed_us": 3312,
+            "line": 1,
+            "status": 0
+          },
+          {
+            "completed_nodes": 1,
+            "event": "checkpoint_commit",
+            "next_step": 1
+          },
+          {
+            "applet": "false",
+            "binary": "/usr/bin/false",
+            "event": "spawn",
+            "line": 2,
+            "pid": 88020
+          },
+          {
+            "applet": "false",
+            "event": "exit",
+            "group_elapsed_us": 1858,
+            "line": 2,
+            "status": 1
+          }
+        ]
+      },
+      "repaired_program": "run printf with message \"kept prefix\" as remembered\nthen printf with message remembered\nthen save to file \"resumed output.txt\"\n",
+      "retry_uncertain_passed": false
+    },
+    "candidate-checkpoint-to-baseline": {
+      "checkpoint_files_after_failure": {
+        "blobs/830d53deda4b5ff045ef8cc22f6f74300bbccfc09ddca615f83d92b92380ac3a": {
+          "bytes": 26,
+          "sha256": "830d53deda4b5ff045ef8cc22f6f74300bbccfc09ddca615f83d92b92380ac3a"
+        },
+        "blobs/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "blobs/f5a2e57f0fb58af2f6f75f23026f142ab5470f642f8f9923c5e929de0564cecf": {
+          "bytes": 12,
+          "sha256": "f5a2e57f0fb58af2f6f75f23026f142ab5470f642f8f9923c5e929de0564cecf"
+        },
+        "journal.json": {
+          "bytes": 2965,
+          "sha256": "2daecd6dbf52c5efff57f1368e649f85419b1bf3e48af5e06e6279fea01e1bc3"
+        },
+        "lock": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "checkpoint_files_after_resume": {
+        "blobs/830d53deda4b5ff045ef8cc22f6f74300bbccfc09ddca615f83d92b92380ac3a": {
+          "bytes": 26,
+          "sha256": "830d53deda4b5ff045ef8cc22f6f74300bbccfc09ddca615f83d92b92380ac3a"
+        },
+        "blobs/c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b": {
+          "bytes": 13,
+          "sha256": "c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b"
+        },
+        "blobs/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "blobs/f5a2e57f0fb58af2f6f75f23026f142ab5470f642f8f9923c5e929de0564cecf": {
+          "bytes": 12,
+          "sha256": "f5a2e57f0fb58af2f6f75f23026f142ab5470f642f8f9923c5e929de0564cecf"
+        },
+        "journal.json": {
+          "bytes": 3442,
+          "sha256": "3e15c2675ebf01c47d996a8fc0641a600492c42efe0803d5e240789b85125443"
+        },
+        "lock": {
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      "consumer": {
+        "argv": [
+          "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/original-execute",
+          "resume",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/candidate-checkpoint-to-baseline/resume.program",
+          "--manifest-dir",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/catalog",
+          "--command-timeout-ms",
+          "2000",
+          "--max-output-bytes",
+          "65536",
+          "--trace",
+          "--checkpoint",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/candidate-checkpoint-to-baseline/checkpoint"
+        ],
+        "cleanup": "not needed",
+        "error": null,
+        "returncode": 0,
+        "saved_file": {
+          "base64": "a2VwdCBwcmVmaXgKCg==",
+          "bytes": 13,
+          "sha256": "c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b"
+        },
+        "stderr": {
+          "base64": "eyJldmVudCI6ImNoZWNrcG9pbnRfcmVzdW1lIiwibmV4dF9zdGVwIjoxLCJyZXN0b3JlZF9ub2RlcyI6MX0KeyJhcHBsZXQiOiJwcmludGYiLCJiaW5hcnkiOiIvdXNyL2Jpbi9wcmludGYiLCJldmVudCI6InNwYXduIiwibGluZSI6MiwicGlkIjo4ODAyN30KeyJhcHBsZXQiOiJwcmludGYiLCJldmVudCI6ImV4aXQiLCJncm91cF9lbGFwc2VkX3VzIjoyMjI0LCJsaW5lIjoyLCJzdGF0dXMiOjB9CnsiY29tcGxldGVkX25vZGVzIjoyLCJldmVudCI6ImNoZWNrcG9pbnRfY29tbWl0IiwibmV4dF9zdGVwIjoyfQp7ImJ5dGVzIjoxMywiZXZlbnQiOiJzYXZlIiwibGluZSI6M30KeyJjb21wbGV0ZWRfbm9kZXMiOjMsImV2ZW50IjoiY2hlY2twb2ludF9jb21taXQiLCJuZXh0X3N0ZXAiOjN9Cg==",
+          "bytes": 391,
+          "sha256": "0b452de140403dc948b47b59ab7d854476af73b3bba1c0172baac72e122edf27"
+        },
+        "stdout": {
+          "base64": "a2VwdCBwcmVmaXgKCg==",
+          "bytes": 13,
+          "sha256": "c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b"
+        },
+        "trace_events": [
+          {
+            "event": "checkpoint_resume",
+            "next_step": 1,
+            "restored_nodes": 1
+          },
+          {
+            "applet": "printf",
+            "binary": "/usr/bin/printf",
+            "event": "spawn",
+            "line": 2,
+            "pid": 88027
+          },
+          {
+            "applet": "printf",
+            "event": "exit",
+            "group_elapsed_us": 2224,
+            "line": 2,
+            "status": 0
+          },
+          {
+            "completed_nodes": 2,
+            "event": "checkpoint_commit",
+            "next_step": 2
+          },
+          {
+            "bytes": 13,
+            "event": "save",
+            "line": 3
+          },
+          {
+            "completed_nodes": 3,
+            "event": "checkpoint_commit",
+            "next_step": 3
+          }
+        ]
+      },
+      "environment": {
+        "HOME": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/candidate-checkpoint-to-baseline",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/empty-path",
+        "TMPDIR": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/candidate-checkpoint-to-baseline",
+        "__CF_USER_TEXT_ENCODING": "0x1F5:0x0:0x0"
+      },
+      "expected_resumed_stdout_and_file": {
+        "base64": "a2VwdCBwcmVmaXgKCg==",
+        "bytes": 13,
+        "sha256": "c0dfd4d7998e68a10f0a4e17f843060d5a662114bf404baf8ae6dec742818c6b"
+      },
+      "failed_program": "run printf with message \"kept prefix\" as remembered\nthen false\n",
+      "producer": {
+        "argv": [
+          "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/round22-candidate-execute",
+          "run",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/candidate-checkpoint-to-baseline/resume.program",
+          "--manifest-dir",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/catalog",
+          "--command-timeout-ms",
+          "2000",
+          "--max-output-bytes",
+          "65536",
+          "--trace",
+          "--checkpoint",
+          "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/candidate-checkpoint-to-baseline/checkpoint"
+        ],
+        "cleanup": "not needed",
+        "error": null,
+        "returncode": 1,
+        "stderr": {
+          "base64": "eyJldmVudCI6ImNoZWNrcG9pbnRfcmVzdW1lIiwibmV4dF9zdGVwIjowLCJyZXN0b3JlZF9ub2RlcyI6MH0KeyJhcHBsZXQiOiJwcmludGYiLCJiaW5hcnkiOiIvdXNyL2Jpbi9wcmludGYiLCJldmVudCI6InNwYXduIiwibGluZSI6MSwicGlkIjo4ODAyNH0KeyJhcHBsZXQiOiJwcmludGYiLCJldmVudCI6ImV4aXQiLCJncm91cF9lbGFwc2VkX3VzIjoyMjc4LCJsaW5lIjoxLCJzdGF0dXMiOjB9CnsiY29tcGxldGVkX25vZGVzIjoxLCJldmVudCI6ImNoZWNrcG9pbnRfY29tbWl0IiwibmV4dF9zdGVwIjoxfQp7ImFwcGxldCI6ImZhbHNlIiwiYmluYXJ5IjoiL3Vzci9iaW4vZmFsc2UiLCJldmVudCI6InNwYXduIiwibGluZSI6MiwicGlkIjo4ODAyNX0KeyJhcHBsZXQiOiJmYWxzZSIsImV2ZW50IjoiZXhpdCIsImdyb3VwX2VsYXBzZWRfdXMiOjI3NTYsImxpbmUiOjIsInN0YXR1cyI6MX0KZXhlY3V0ZTogbGluZSAyOiBhcHBsZXQgImZhbHNlIiBmYWlsZWQgKGV4aXQgc3RhdHVzOiAxKTogCg==",
+          "bytes": 508,
+          "sha256": "25d2d1daf1b8c5959e0c0216cb2519c90562708c7206b29b7d4464e64c3a4843"
+        },
+        "stdout": {
+          "base64": "",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "trace_events": [
+          {
+            "event": "checkpoint_resume",
+            "next_step": 0,
+            "restored_nodes": 0
+          },
+          {
+            "applet": "printf",
+            "binary": "/usr/bin/printf",
+            "event": "spawn",
+            "line": 1,
+            "pid": 88024
+          },
+          {
+            "applet": "printf",
+            "event": "exit",
+            "group_elapsed_us": 2278,
+            "line": 1,
+            "status": 0
+          },
+          {
+            "completed_nodes": 1,
+            "event": "checkpoint_commit",
+            "next_step": 1
+          },
+          {
+            "applet": "false",
+            "binary": "/usr/bin/false",
+            "event": "spawn",
+            "line": 2,
+            "pid": 88025
+          },
+          {
+            "applet": "false",
+            "event": "exit",
+            "group_elapsed_us": 2756,
+            "line": 2,
+            "status": 1
+          }
+        ]
+      },
+      "repaired_program": "run printf with message \"kept prefix\" as remembered\nthen printf with message remembered\nthen save to file \"resumed output.txt\"\n",
+      "retry_uncertain_passed": false
+    }
+  },
+  "environment": {
+    "HOME": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/cache-case",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/empty-path",
+    "TMPDIR": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-version-compat-e2smuowp/cache-case",
+    "__CF_USER_TEXT_ENCODING": "0x1F5:0x0:0x0"
+  },
+  "harness_sha256": "a611a4b7b619adc17466e5e0bf71f5471288552af43fad75bc5276c0fc725d0b",
+  "limits": {
+    "artifact_file_count": 32,
+    "binary_bytes": 268435456,
+    "combined_output_bytes": 131072,
+    "native_command_ms": 2000,
+    "outer_seconds_per_process": 8.0,
+    "regular_file_bytes": 1048576,
+    "timeout_cleanup": "SIGTERM runner, bounded wait, then kill runner only; descendant cleanup is reported unverified"
+  },
+  "method": "one explicit baseline/candidate pair; private temp cwd; fixed absolute applets; no timing claims",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "python": "3.9.6",
+  "schema": "version-compatibility-v1",
+  "status": "passed"
+}

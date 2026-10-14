@@ -1,0 +1,6 @@
+# Purpose: Summarize a dependency inventory by license with package names and pinned versions.
+# Inputs: fixtures/063/packages.json contains Package names, versions, and license IDs from a saved inventory.
+# Outputs: Sorted license groups with counts and package versions.
+accept packages_path as text with default "fixtures/063/packages.json"
+run cat with path packages_path
+then jq with filter ".packages | sort_by(.license, .name) | group_by(.license) | map({license: .[0].license, count: length, packages: map({name, version})})" and flags ["-c", "-S"]

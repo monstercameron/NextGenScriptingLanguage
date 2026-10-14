@@ -1,0 +1,6 @@
+# Purpose: Show the most recent deployment state for every service in a finite deployment log.
+# Inputs: deployments.jsonl contains timestamped deployment records.
+# Outputs: stdout emits the latest revision and state for each service as JSONL.
+accept deployments_path as text with default "deployments.jsonl"
+run cat with path deployments_path
+pipe to jq with flags ["-s", "-c"] and filter "group_by(.service)[] | sort_by(.deployed_at) | last | {service, revision, state, deployed_at}"

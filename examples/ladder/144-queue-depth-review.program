@@ -1,0 +1,6 @@
+# Purpose: Summarize queue samples with current and peak depth for operational review.
+# Inputs: queues.jsonl contains timestamped queue depth measurements.
+# Outputs: stdout reports sample count, most recent depth, and peak per queue.
+accept queues_path as text with default "queues.jsonl"
+run cat with path queues_path
+pipe to jq with flags ["-s", "-c"] and filter "group_by(.queue)[] | sort_by(.time) as $samples | {queue: $samples[0].queue, samples: ($samples | length), latest_at: $samples[-1].time, latest_depth: $samples[-1].depth, peak_depth: ([$samples[].depth] | max)}"

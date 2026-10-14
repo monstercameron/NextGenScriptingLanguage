@@ -1,0 +1,6 @@
+# Purpose: Identify the four longest jobs in a workflow export to guide runner and dependency-cache tuning.
+# Inputs: ci/job-durations.json is a CI job summary with elapsed seconds and completion result.
+# Outputs: The four longest jobs, including their outcome, in descending elapsed time.
+accept job_durations_path as text with default "ci/job-durations.json"
+run cat with path job_durations_path
+then jq with flags ["-r"] and filter "[.jobs[]] | sort_by(-.duration_seconds)[:4][] | \"\\(.duration_seconds)s\\t\\(.result)\\t\\(.name)\""

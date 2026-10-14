@@ -1,0 +1,7 @@
+# Purpose: Find all log lines for an incident request ID and save a focused trace.
+# Inputs: request-id.txt (one whitespace-free request identifier) and api.log (space-delimited records with the ID in field two).
+# Outputs: Exact matching API log lines on stdout and in request-trace.txt.
+accept api_path as text with default "api.log"
+run cat with path api_path
+pipe to awk with program "BEGIN { if ((getline target < \"request-id.txt\") !=1 || target==\"\") exit 2; close(\"request-id.txt\") } (\"x\" $2)==(\"x\" target) {print}"
+then save to "request-trace.txt"

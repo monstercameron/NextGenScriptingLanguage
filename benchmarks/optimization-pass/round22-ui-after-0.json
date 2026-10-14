@@ -1,0 +1,41 @@
+{
+  "control_checks": {
+    "ctrl_c_to_restored_terminal_exit_ms": 37.244417,
+    "resize_ctrl_q_to_restored_terminal_exit_ms": 35.565583,
+    "resize_warning_and_restore": "passed"
+  },
+  "forced_cleanup_limit": "unverified if applets leave the PTY child process group or the benchmark runner is killed",
+  "input_reader_lifecycle_cost_ms": {
+    "ctrl_q_to_restored_terminal_exit_including_reader_join": 36.147292,
+    "process_start_to_first_frame_including_reader_spawn": 316.114208
+  },
+  "native_catalog": [
+    "printf.json",
+    "tr.json"
+  ],
+  "native_executables": {
+    "printf": {
+      "absolute_executable": "/usr/bin/printf",
+      "executable_sha256": "d7992bc59e048ee061716365839990227ab463d954d87e6c2e7f987c0054fd59",
+      "manifest_sha256": "abe61c4481c94396e230406897d253ff8ba0f9c854fb09ecc098b85870b0237e",
+      "owned_path_symlink": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-ui-latency-4fk_wkes/native-bin/printf"
+    },
+    "tr": {
+      "absolute_executable": "/usr/bin/tr",
+      "executable_sha256": "b8ac76bef7c61d9a462e6054d7887108ea632d250049aa5a2abee0ab906aefb4",
+      "manifest_sha256": "971ed4560d7f290983f444a96a1698b932e051ea2667dceb3c523cccb9b09f7d",
+      "owned_path_symlink": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/flow-ui-latency-4fk_wkes/native-bin/tr"
+    }
+  },
+  "pty": {
+    "columns": 100,
+    "rows": 30,
+    "term": "xterm-256color"
+  },
+  "samples": 120,
+  "submit_to_full_uppercase_render_ms": {
+    "median": 3.945896,
+    "p95_nearest_rank": 4.460583,
+    "p99_nearest_rank": 4.926917
+  }
+}

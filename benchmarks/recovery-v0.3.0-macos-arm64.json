@@ -1,0 +1,70 @@
+{
+  "environment": {
+    "os": "Darwin",
+    "release": "25.6.0",
+    "architecture": "arm64",
+    "version": "execute 0.3.0",
+    "binary_sha256": "4c779b2a3fc73adbe1db365aed976df88b610740341bbbf6c58e639de956616e"
+  },
+  "method": {
+    "samples_per_case": 200,
+    "warmups": 10,
+    "timer": "perf_counter_ns",
+    "cli": "new process, warmed filesystem caches; fixture/directory preparation excluded",
+    "listener": "one process, sequential stdin request to complete handler output; startup excluded",
+    "durability": "local filesystem fsync + rename + directory sync; not a power-loss simulation",
+    "ordering": "shuffled CLI cases; separate sequential listener batches",
+    "safety": "temporary files only; no external API or Git operations"
+  },
+  "cli_ms": {
+    "normal_read": {
+      "samples": 200,
+      "p50": 10.124083500000001,
+      "p95": 14.208917,
+      "p99": 15.019959
+    },
+    "checkpoint_read": {
+      "samples": 200,
+      "p50": 81.8814995,
+      "p95": 105.006709,
+      "p99": 112.1685
+    },
+    "completed_resume": {
+      "samples": 200,
+      "p50": 10.342082999999999,
+      "p95": 14.720042,
+      "p99": 15.511625
+    },
+    "normal_pipeline_save": {
+      "samples": 200,
+      "p50": 23.5306665,
+      "p95": 31.913,
+      "p99": 34.638834
+    },
+    "checkpoint_pipeline_save": {
+      "samples": 200,
+      "p50": 152.7965835,
+      "p95": 195.267083,
+      "p99": 208.641708
+    }
+  },
+  "listener_us": {
+    "normal_read_handler": {
+      "samples": 200,
+      "p50": 35.021,
+      "p95": 48.333,
+      "p99": 54.583
+    },
+    "checkpoint_read_handler": {
+      "samples": 200,
+      "p50": 60895.0835,
+      "p95": 67712.125,
+      "p99": 71594.459
+    }
+  },
+  "scripts": {
+    "read.program": "read \"input.txt\"\n",
+    "pipeline.program": "run printf with message \"checkpoint fixture\"\nthen tr with from \"[:lower:]\" and to \"[:upper:]\"\nthen save to file \"output.txt\"\n",
+    "listener.program": "listen to stdin\nwhenever a line arrives as record\n  read \"input.txt\"\n"
+  }
+}

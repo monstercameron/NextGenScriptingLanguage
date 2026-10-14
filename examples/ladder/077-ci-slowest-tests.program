@@ -1,0 +1,6 @@
+# Purpose: Surface tests above the 500 ms review threshold and rank the three slowest for triage.
+# Inputs: reports/test-timings.json is a test-runner timing export with suite and duration_ms fields.
+# Outputs: The three slowest tests at or above 500 ms, in descending duration order.
+accept test_timings_path as text with default "reports/test-timings.json"
+run cat with path test_timings_path
+then jq with flags ["-r"] and filter "[.tests[] | select(.duration_ms >= 500)] | sort_by(-.duration_ms)[:3][] | \"\\(.duration_ms) ms\\t\\(.suite)::\\(.name)\""

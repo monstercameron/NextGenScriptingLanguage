@@ -1,0 +1,5 @@
+# Purpose: Sort and deduplicate newline-separated text from stdin.
+# Input: Standard input, with the native sort locale inherited from the caller.
+# Output: Sorted unique lines on stdout, bounded by the finite output limit.
+read from stdin
+pipe to "sort" with arguments ["-u"]

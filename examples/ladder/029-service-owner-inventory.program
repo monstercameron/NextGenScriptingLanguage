@@ -1,0 +1,6 @@
+# Purpose: Join sorted service criticality rows with their owning teams.
+# Inputs: services.csv and owners.csv, both sorted by their first column.
+# Outputs: A joined service,criticality,owner report on stdout.
+accept services_path as text with default "services.csv"
+accept owners_path as text with default "owners.csv"
+run join with flags ["-t,", "-1", "1", "-2", "1"] and files [services_path, owners_path]

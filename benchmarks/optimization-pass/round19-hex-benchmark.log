@@ -1,0 +1,16 @@
+
+running 1 test
+opt_hex_sample mode=format_lower_hex batch=0 iterations=50000 total_ns=2690500 ns_per_op=53.8
+opt_hex_sample mode=fixed_table batch=0 iterations=50000 total_ns=3041292 ns_per_op=60.8
+opt_hex_sample mode=fixed_table batch=1 iterations=50000 total_ns=2915042 ns_per_op=58.3
+opt_hex_sample mode=format_lower_hex batch=1 iterations=50000 total_ns=2688667 ns_per_op=53.8
+opt_hex_sample mode=format_lower_hex batch=2 iterations=50000 total_ns=2565167 ns_per_op=51.3
+opt_hex_sample mode=fixed_table batch=2 iterations=50000 total_ns=2870334 ns_per_op=57.4
+opt_hex_sample mode=fixed_table batch=3 iterations=50000 total_ns=2803834 ns_per_op=56.1
+opt_hex_sample mode=format_lower_hex batch=3 iterations=50000 total_ns=2697458 ns_per_op=53.9
+opt_hex_sample mode=format_lower_hex batch=4 iterations=50000 total_ns=2568917 ns_per_op=51.4
+opt_hex_sample mode=fixed_table batch=4 iterations=50000 total_ns=2732458 ns_per_op=54.6
+test digest::opt_hex_digest_tests::opt_hex_digest_benchmark_raw_samples ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 107 filtered out; finished in 0.03s
+

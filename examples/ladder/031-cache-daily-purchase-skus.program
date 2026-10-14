@@ -1,0 +1,9 @@
+# Purpose: Extract a distinct SKU index from the daily unquoted purchase export.
+# Inputs: purchases.csv (date,sku,quantity).
+# Outputs: Sorted SKU names; repeated runs can reuse the cached cut result.
+accept purchases_path as text with default "purchases.csv"
+run cat with path purchases_path
+then cut with delimiter "," and fields "2" and cache
+then tail with flags ["-n", "+2"]
+then sort
+then uniq

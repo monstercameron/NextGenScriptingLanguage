@@ -1,0 +1,10 @@
+# Normalize CRLF stdin and optionally uppercase it using native tr stages.
+define a program named normalize
+  accept uppercase as boolean with default false
+  read from stdin
+  pipe to "tr" with arguments ["-d", "\r"]
+  if uppercase is true
+    then "tr" with arguments ["[:lower:]", "[:upper:]"]
+accept uppercase as boolean with default false
+read from stdin
+then program normalize with uppercase uppercase

@@ -1,0 +1,6 @@
+# Purpose: Report whether required release gates are clear and name any pending or failed blockers.
+# Inputs: release/gates.json is a release checklist export with required flags and latest gate statuses.
+# Outputs: A single READY/BLOCKED summary, excluding optional gate failures from blockers.
+accept gates_path as text with default "release/gates.json"
+run cat with path gates_path
+then jq with flags ["-r"] and filter "[.gates[] | select(.required and .status != \"passed\") | .name] | sort | if length == 0 then \"READY: all required release gates passed\" else \"BLOCKED: \\(join(\", \"))\" end"

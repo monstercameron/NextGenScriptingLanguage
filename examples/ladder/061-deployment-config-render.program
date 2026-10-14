@@ -1,0 +1,8 @@
+# Purpose: Resolve environment-specific replica counts and release tags into a concrete deployment plan.
+# Inputs: fixtures/061/release.json contains Release target, version, and service replica maps.
+# Outputs: Concrete deployment-plan JSON in deployment-plan.json and stdout.
+accept release_path as text with default "fixtures/061/release.json"
+run cat with path release_path
+then jq with filter ".target as $target | .version as $version | {environment: $target, release: $version, services: [.services[] | {name, image: (.image + \":\" + $version), replicas: .replicas[$target], port}]}" and flags ["-c", "-S"]
+then save to "deployment-plan.json"
+then cat with path "deployment-plan.json"

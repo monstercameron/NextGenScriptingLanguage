@@ -1,0 +1,6 @@
+# Purpose: Remove only a trailing carriage return from each input record so CRLF files become LF text.
+# Inputs: vendor-notes.txt: UTF-8 text whose records use CRLF line endings.
+# Outputs: stdout: The same records with LF line endings.
+accept vendor_notes_path as text with default "vendor-notes.txt"
+run cat with path vendor_notes_path
+then awk with program "BEGIN { cr=sprintf(\"%c\",13) } { sub(cr \"$\", \"\", $0); print }"

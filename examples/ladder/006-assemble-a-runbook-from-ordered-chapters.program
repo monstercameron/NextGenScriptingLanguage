@@ -1,0 +1,9 @@
+# Purpose: Combine the cover, diagnosis, and recovery chapters in the declared operational order.
+# Inputs: runbook/00-purpose.md, runbook/10-diagnosis.md, runbook/20-rollback.md: ordered runbook chapters.
+# Outputs: release/runbook.md: complete ordered runbook; stdout echoes the assembled document.
+accept input_00_purpose_path as text with default "runbook/00-purpose.md"
+accept input_10_diagnosis_path as text with default "runbook/10-diagnosis.md"
+accept input_20_rollback_path as text with default "runbook/20-rollback.md"
+run mkdir with flags ["-p"] and paths ["release"]
+run cat with files [input_00_purpose_path, input_10_diagnosis_path, input_20_rollback_path]
+then save to "release/runbook.md"

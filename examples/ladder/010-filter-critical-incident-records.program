@@ -1,0 +1,8 @@
+# Purpose: Extract SEV1 records from the operations log to prepare the incident commander handoff.
+# Inputs: ops/incidents.log: timestamped incident records with a severity field.
+# Outputs: reports/sev1-incidents.log: all SEV1 lines in source order; stdout echoes the report.
+accept incidents_path as text with default "ops/incidents.log"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path incidents_path
+pipe to grep with pattern "severity=SEV1" and flags ["-F"]
+then save to "reports/sev1-incidents.log"

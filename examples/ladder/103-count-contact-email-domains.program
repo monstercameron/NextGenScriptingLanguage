@@ -1,0 +1,7 @@
+# Purpose: Extract email domains from a simple unquoted CSV and count contacts per domain.
+# Inputs: directory.csv: Unquoted CSV: contact_id,name,email; email values use ASCII domains.
+# Outputs: stdout: Alphabetically sorted domain,count rows.
+accept directory_path as text with default "directory.csv"
+run cat with path directory_path
+then awk with delimiter "," and program "NR>1 { e=tolower($3); at=index(e,\"@\"); if (at>1 && at<length(e)) domains[substr(e,at+1)]++ } END { for (d in domains) print d \",\" domains[d] }"
+then sort

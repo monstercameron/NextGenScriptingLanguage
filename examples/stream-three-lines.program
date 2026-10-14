@@ -1,0 +1,5 @@
+# Finite native source, with output delivered one line at a time.
+stream from printf with message "one\ntwo\nthree\nfour"
+pipe to tr with from "[:lower:]" and to "[:upper:]"
+take the first 3 lines
+show each line

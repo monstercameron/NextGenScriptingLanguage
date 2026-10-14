@@ -1,0 +1,7 @@
+# Purpose: Stream a finite JSONL service log and emit only warnings and errors as compact incident records.
+# Inputs: service.jsonl contains one JSON object per line.
+# Outputs: stdout contains selected records as compact JSONL.
+accept service_path as text with default "service.jsonl"
+stream from cat with path service_path
+pipe to jq with flags ["--unbuffered", "-c"] and filter "select(.level == \"error\" or .level == \"warning\") | {time, service, request_id, level, message}"
+show each line

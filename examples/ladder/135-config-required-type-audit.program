@@ -1,0 +1,7 @@
+# Purpose: Check required configuration values for both presence and expected JSON type.
+# Inputs: schema.json maps required setting names to expected JSON types; config.json is the candidate.
+# Outputs: stdout lists missing or wrongly typed settings as compact JSONL, distinguishing absent from explicit null.
+accept schema_path as text with default "schema.json"
+accept config_path as text with default "config.json"
+run cat with files [schema_path, config_path]
+then jq with flags ["-s", "-c"] and filter ".[0].required as $required | .[1] as $config | $required | to_entries[] as $spec | (if ($config | has($spec.key)) then ($config[$spec.key] | type) else \"missing\" end) as $actual | select($actual != $spec.value) | {key: $spec.key, expected: $spec.value, actual: $actual}"

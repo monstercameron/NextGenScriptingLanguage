@@ -1,0 +1,6 @@
+# Purpose: Preview endpoint operations not supported by a saved token scope set.
+# Inputs: fixtures/070/scopes.json contains Offline token scope list and endpoint required-scope metadata.
+# Outputs: JSON rows for endpoints with one or more missing scopes.
+accept scopes_path as text with default "fixtures/070/scopes.json"
+run cat with path scopes_path
+then jq with filter ".token_scopes as $granted | [.endpoints[] as $endpoint | {method: $endpoint.method, path: $endpoint.path, missing_scopes: [$endpoint.required_scopes[] as $scope | select(($granted | index($scope)) == null) | $scope]} | select(.missing_scopes | length > 0)]" and flags ["-c", "-S"]

@@ -1,0 +1,8 @@
+# Purpose: Count occurrences of each line-oriented review status and emit a deterministic status summary.
+# Inputs: queue/review-statuses.txt: one status label per line.
+# Outputs: reports/review-status-counts.tsv: count and status pairs sorted by status; stdout echoes the summary.
+accept review_statuses_path as text with default "queue/review-statuses.txt"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path review_statuses_path
+pipe to jq with flags ["-R", "-s", "-r"] and filter "split(\"\\n\") | map(select(length > 0)) | group_by(.) | map(\"\\(length)\\t\\(.[0])\")[]"
+then save to "reports/review-status-counts.tsv"

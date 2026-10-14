@@ -1,0 +1,6 @@
+# Purpose: Compare dependency snapshots and identify added, removed, and version-changed packages before rollout.
+# Inputs: fixtures/067/lock-comparison.json contains Current and proposed package lists from lockfile exports.
+# Outputs: JSON arrays of added, removed, and changed package versions.
+accept lock_comparison_path as text with default "fixtures/067/lock-comparison.json"
+run cat with path lock_comparison_path
+then jq with filter ".current as $current | .proposed as $proposed | {added: ([$proposed[] as $pkg | select(([$current[].name] | index($pkg.name)) == null) | {name: $pkg.name, version: $pkg.version}] | sort_by(.name)), removed: ([$current[] as $pkg | select(([$proposed[].name] | index($pkg.name)) == null) | {name: $pkg.name, version: $pkg.version}] | sort_by(.name)), changed: ([$proposed[] as $pkg | ($current[] | select(.name == $pkg.name)) as $old | select($old.version != $pkg.version) | {name: $pkg.name, from: $old.version, to: $pkg.version}] | sort_by(.name))}" and flags ["-c", "-S"]

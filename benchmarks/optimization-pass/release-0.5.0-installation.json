@@ -1,0 +1,17 @@
+{
+  "version": "execute 0.5.0",
+  "binary_sha256": "3387d01c87ed52e1988fb5422d4b5074cbf1ea02363c8cbf1bd9a0167d36c396",
+  "command": "/Users/earlcameron/.local/bin/execute",
+  "bundle": "/Users/earlcameron/.local/share/execute/releases/0.5.0-3387d01c87ed",
+  "installed_at_utc": "2026-10-14T04:08:44.579366+00:00",
+  "platform": "macOS arm64",
+  "stream_file_uri_smoke": "passed: exact3linesfromunrelatedcwd",
+  "cpu_file_uri_headless_smoke": "passed",
+  "regular_rust_tests_passed": 227,
+  "isolated_sigchld_test": "passed",
+  "macos_clippy_warnings_denied": "passed",
+  "linux_target_clippy_warnings_denied": "passed",
+  "linux_native_runtime": "not run",
+  "optimization_campaign": "ended early at user request",
+  "previous_release_retained": "0.4.6-205a0f198ec0"
+}

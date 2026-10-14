@@ -1,0 +1,58 @@
+{
+  "batches": 100,
+  "chart_points": 120,
+  "operations": {
+    "parse": {
+      "p50_us": 25.34542,
+      "p95_us": 28.4425,
+      "p99_us": 30.31458
+    },
+    "render_100x30_120_points": {
+      "p50_us": 104.15333000000001,
+      "p95_us": 109.35167000000001,
+      "p99_us": 123.77542
+    },
+    "render_100x30_ten_bars": {
+      "p50_us": 105.19458,
+      "p95_us": 109.08958999999999,
+      "p99_us": 112.28458
+    },
+    "route_text_message": {
+      "p50_us": 0.27,
+      "p95_us": 0.27792,
+      "p99_us": 0.28875
+    },
+    "validate": {
+      "p50_us": 1.85666,
+      "p95_us": 2.06166,
+      "p99_us": 2.16167
+    }
+  },
+  "operations_per_batch": 100,
+  "percentiles": "batch averages; render includes in-memory diff, excludes terminal I/O; routing excludes applets",
+  "terminal_cells": [
+    100,
+    30
+  ],
+  "warmup_batches": 10,
+  "version": "execute 0.4.5",
+  "binary_sha256": "8d2e55ed28c1bf19ff8a910f38f9aba2ac57b14cb5fe30ebe81edbbc1153dea3",
+  "observed_at": "2026-10-14T00:46:33.998348+00:00",
+  "library_measurement": "Optimized release unit-test binary; process executable hash identifies matching installed release, not the unit-test executable",
+  "source_sha256": {
+    "src/ast.rs": "60cbb334b2dd74904773fb21cc2b117e96bcab8892122a16cd037cc91748f999",
+    "src/lib.rs": "60ade187a4d49205ca3e749ef391bde749dc16f2f5cc71de103322b1a8f91ab7",
+    "src/main.rs": "8dfaeee447da676d264fad886d6570cb4ed79c1e94bd1c124c2e9a5a661a0acf",
+    "src/manifest.rs": "3aca75989429f5dfeee8b8a8ae2190fff5bf2be581adfd4643dad6b87eff2b4c",
+    "src/parser.rs": "4e36f6b64aa7e1c88d9eb30400b4a3d5945bd55536ff24bc5e0c57217b20735d",
+    "src/runtime/checkpoint.rs": "89897024055711ec73616a0c835fa11452196bd3489170eafb456dab0e92c3fb",
+    "src/runtime/resume.rs": "7a8659baa1835d4b6c4f5bf723b475134c804034ae0420f253b769d8e7f1807a",
+    "src/runtime/service.rs": "02f23428c7181a6f542ee2cadaaccf93150cc573579afeb56db9dad4fae64c41",
+    "src/runtime/stdio.rs": "dbf9027666e4dfc193ea9a34dcd46969f94397ed4f156f44b2a1871eb1e61b9b",
+    "src/runtime.rs": "368f11dd0ba3c7ad27ac233228073a2701f3559c78ae39a85d11d6f8d60c4eb2",
+    "src/schedule.rs": "5847c42d7c838a8ba98c0be9590d2855c3561521e14998f5fa97b1167ba3e290",
+    "src/ui/app.rs": "2d6fadd76fcaa83684bfbefdf10677076132efc79d516e45f53b14367266da64",
+    "src/ui/mod.rs": "1fe56cda36b3e2b4bb97b50fdd27853befa193934b0a392ec0d6eafd46cf6ad7",
+    "src/ui/syntax.rs": "9fb05cc26668f58594ada2ba760149f466f09dfa465b688067c42e5fb587e68b"
+  }
+}

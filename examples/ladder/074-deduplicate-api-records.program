@@ -1,0 +1,6 @@
+# Purpose: Keep the latest timestamped version of each entity and identify IDs with duplicate source rows.
+# Inputs: fixtures/074/records.json contains API import data that may repeat entity IDs with update timestamps.
+# Outputs: JSON with latest resolved records and sorted duplicate IDs.
+accept records_path as text with default "fixtures/074/records.json"
+run cat with path records_path
+then jq with filter ".records as $records | {resolved: ([$records[]] | sort_by(.id, .updated_at) | group_by(.id) | map(max_by(.updated_at))), duplicate_ids: ($records | sort_by(.id) | group_by(.id) | map(select(length > 1) | .[0].id))}" and flags ["-c", "-S"]

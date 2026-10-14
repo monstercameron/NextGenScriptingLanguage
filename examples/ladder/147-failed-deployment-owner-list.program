@@ -1,0 +1,8 @@
+# Purpose: Extract service, version, and owner columns for failed deployment rows in a CSV export.
+# Inputs: deployments.csv has deployment_id,service,version,team,state columns.
+# Outputs: stdout is an unquoted comma-delimited list of failed deployment owner details.
+accept deployments_path as text with default "deployments.csv"
+run cat with path deployments_path
+pipe to grep with flags ["-v"] and pattern "^deployment_id,"
+pipe to grep with flags ["-E"] and pattern ",failed$"
+pipe to cut with delimiter "," and fields "2,3,4"

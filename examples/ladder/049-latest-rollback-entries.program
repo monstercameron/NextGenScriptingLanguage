@@ -1,0 +1,9 @@
+# Purpose: Save the three newest rollback events for release review.
+# Inputs: deploy-history.log, oldest event first.
+# Outputs: Newest-first rollback lines on stdout and rollback-review.txt.
+accept deploy_history_path as text with default "deploy-history.log"
+run cat with path deploy_history_path
+pipe to grep with pattern "rollback"
+pipe to sort with flags ["-r"]
+pipe to head with lines 3
+then save to "rollback-review.txt"

@@ -1,0 +1,8 @@
+# Purpose: Save the header and first two shipment rows as a compact sample for an intake review.
+# Inputs: shipping/inbound.csv: ordered, unquoted supplier shipment feed.
+# Outputs: reports/inbound-shipment-sample.csv: header and first two records; stdout echoes the sample.
+accept inbound_path as text with default "shipping/inbound.csv"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path inbound_path
+pipe to head with lines 3
+then save to "reports/inbound-shipment-sample.csv"

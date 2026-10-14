@@ -1,0 +1,6 @@
+# Purpose: Prepare an incident handoff grouped by owner, with only open incident IDs.
+# Inputs: incidents.jsonl contains incident ID, owner, and state fields.
+# Outputs: stdout is a compact JSON array of owners with open work.
+accept incidents_path as text with default "incidents.jsonl"
+run cat with path incidents_path
+pipe to jq with flags ["-s", "-c"] and filter "group_by(.owner) | map(. as $items | {owner: $items[0].owner, open_count: ([$items[] | select(.state == \"open\")] | length), open_ids: ([$items[] | select(.state == \"open\") | .id] | sort)}) | map(select(.open_count > 0))"

@@ -1,0 +1,9 @@
+   Compiling execute v0.5.0 (/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow)
+    Finished `release` profile [optimized] target(s) in 6.97s
+     Running unittests src/lib.rs (/Users/earlcameron/Documents/Codex/2026-10-12/you/work/optimization-8h/candidate-target/release/deps/flow-28a47f2170868898)
+
+running 1 test
+test runtime::child_observer_tests::runtime_observer_preserves_host_sigchld_ignore ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 113 filtered out; finished in 0.00s
+

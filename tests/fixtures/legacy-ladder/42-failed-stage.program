@@ -1,0 +1,4 @@
+# 42. Stop before a save after a command fails
+run printf with message "prefix"
+then false
+then save to "must-not-exist.txt"

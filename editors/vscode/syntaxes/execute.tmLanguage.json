@@ -1,0 +1,929 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Execute Program",
+  "scopeName": "source.execute",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#condition"
+    },
+    {
+      "include": "#otherwise"
+    },
+    {
+      "include": "#structured-json"
+    },
+    {
+      "include": "#unsupported"
+    },
+    {
+      "include": "#stdin"
+    },
+    {
+      "include": "#read-stdin"
+    },
+    {
+      "include": "#read"
+    },
+    {
+      "include": "#folder"
+    },
+    {
+      "include": "#save"
+    },
+    {
+      "include": "#timer"
+    },
+    {
+      "include": "#schedule"
+    },
+    {
+      "include": "#stream-limit"
+    },
+    {
+      "include": "#stream-sink"
+    },
+    {
+      "include": "#component"
+    },
+    {
+      "include": "#widget"
+    },
+    {
+      "include": "#program-input"
+    },
+    {
+      "include": "#nested-program-input"
+    },
+    {
+      "include": "#ports"
+    },
+    {
+      "include": "#connect"
+    },
+    {
+      "include": "#place"
+    },
+    {
+      "include": "#layout"
+    },
+    {
+      "include": "#record-event"
+    },
+    {
+      "include": "#event"
+    },
+    {
+      "include": "#widget-item"
+    },
+    {
+      "include": "#ui-action"
+    },
+    {
+      "include": "#program-call"
+    },
+    {
+      "include": "#direct-invocation"
+    },
+    {
+      "include": "#invocation"
+    },
+    {
+      "include": "#implicit-invocation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "match": "(#).*$",
+      "name": "comment.line.number-sign.execute",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.comment.execute"
+        }
+      }
+    },
+    "strings": {
+      "name": "string.quoted.double.execute",
+      "begin": "\"",
+      "end": "\"|$",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.execute"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.execute"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4})",
+          "name": "constant.character.escape.execute"
+        },
+        {
+          "match": "\\\\.|\\\\(?=$)",
+          "name": "invalid.illegal.escape.execute"
+        },
+        {
+          "match": "[\\x00-\\x1f]",
+          "name": "invalid.illegal.control-character.execute"
+        }
+      ]
+    },
+    "values": {
+      "patterns": [
+        {
+          "include": "#strings"
+        },
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#lists"
+        },
+        {
+          "match": "(?<![\\w.])[+-]?[0-9]+(?![\\w.])",
+          "name": "constant.numeric.integer.execute"
+        },
+        {
+          "match": "\\b(?:true|false)\\b",
+          "name": "constant.language.boolean.execute"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "variable.other.readwrite.execute"
+        }
+      ]
+    },
+    "lists": {
+      "name": "meta.sequence.list.execute",
+      "begin": "\\[",
+      "end": "\\]|(?=$)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.brackets.begin.execute"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.brackets.end.execute"
+        }
+      },
+      "patterns": [
+        {
+          "match": ",",
+          "name": "punctuation.separator.sequence.execute"
+        },
+        {
+          "include": "#values"
+        }
+      ]
+    },
+    "cache": {
+      "match": "\\b(and)[ \\t]+(cache)(?=[ \\t]*(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.parameter.execute"
+        },
+        "2": {
+          "name": "storage.modifier.cache.execute"
+        }
+      }
+    },
+    "bindings": {
+      "match": "\\b(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:and[ \\t]+keep[ \\t]+status[ \\t]+as[ \\t]+[A-Za-z_][A-Za-z0-9_]*[ \\t]*)?(?:and[ \\t]+cache[ \\t]*)?(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.binding.execute"
+        },
+        "2": {
+          "name": "variable.other.definition.execute"
+        }
+      }
+    },
+    "parameters": {
+      "name": "meta.argument.execute",
+      "begin": "\\b(with|and)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]+",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.parameter.execute"
+        },
+        "2": {
+          "name": "variable.parameter.execute"
+        }
+      },
+      "end": "(?<=\\S)(?=[ \\t]+(?:and|as)\\b)|(?=[ \\t]*#)|$",
+      "patterns": [
+        {
+          "include": "#values"
+        }
+      ]
+    },
+    "unsupported": {
+      "match": "^[ \\t]*(?:else|for|while|loop)\\b",
+      "name": "invalid.illegal.unsupported-control.execute"
+    },
+    "stdin": {
+      "match": "^[ \\t]*(listen[ \\t]+to)[ \\t]+(stdin)(?=[ \\t]*(?:#|$))",
+      "captures": {
+        "1": {
+          "name": "keyword.control.listen.execute"
+        },
+        "2": {
+          "name": "constant.language.stdin.execute"
+        }
+      }
+    },
+    "read": {
+      "name": "meta.read.execute",
+      "begin": "^[ \\t]*(read(?:[ \\t]+file)?)(?=[ \\t]|$)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#bindings"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.io.execute"
+        }
+      }
+    },
+    "folder": {
+      "name": "meta.folder.execute",
+      "begin": "^[ \\t]*(use[ \\t]+folder)(?=[ \\t]|$)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.cwd.execute"
+        }
+      }
+    },
+    "save": {
+      "name": "meta.save.execute",
+      "begin": "^[ \\t]*(then[ \\t]+save[ \\t]+to(?:[ \\t]+file)?)(?=[ \\t]|$)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.io.execute"
+        }
+      }
+    },
+    "timer": {
+      "name": "meta.timer.execute",
+      "begin": "^[ \\t]*(every)(?=[ \\t]|$)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#duration"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.timer.execute"
+        }
+      }
+    },
+    "duration": {
+      "match": "\\b(?:milliseconds?|seconds?|minutes?|hours?)\\b",
+      "name": "support.type.duration.execute"
+    },
+    "schedule": {
+      "name": "meta.schedule.execute",
+      "begin": "^[ \\t]*(on[ \\t]+schedule)(?=[ \\t]|$)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.schedule.execute"
+        }
+      }
+    },
+    "stream-limit": {
+      "name": "meta.stream-limit.execute",
+      "begin": "^[ \\t]*(take[ \\t]+the[ \\t]+first)(?=[ \\t]|$)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#line-unit"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.limit.execute"
+        }
+      }
+    },
+    "line-unit": {
+      "match": "\\blines?\\b",
+      "name": "support.type.record.execute"
+    },
+    "stream-sink": {
+      "match": "^[ \\t]*(show[ \\t]+each[ \\t]+line)(?=[ \\t]*(?:#|$))",
+      "captures": {
+        "1": {
+          "name": "keyword.control.output.execute"
+        }
+      }
+    },
+    "component": {
+      "name": "meta.component.execute",
+      "begin": "^[ \\t]*(define[ \\t]+a[ \\t]+program[ \\t]+named)[ \\t]+([A-Za-z][A-Za-z0-9_]*)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#comments"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.declaration.program.execute"
+        },
+        "2": {
+          "name": "entity.name.type.component.execute"
+        }
+      }
+    },
+    "widget": {
+      "name": "meta.widget.execute",
+      "begin": "^[ \\t]*(show[ \\t]+a)[ \\t]+(heading|text[ \\t]+field|list|table|text[ \\t]+panel|badge|button|line[ \\t]+chart|bar[ \\t]+chart)[ \\t]+(named)[ \\t]+([A-Za-z][A-Za-z0-9_]*)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#widget-properties"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.declaration.widget.execute"
+        },
+        "2": {
+          "name": "support.type.widget.execute"
+        },
+        "3": {
+          "name": "keyword.declaration.name.execute"
+        },
+        "4": {
+          "name": "entity.name.tag.widget.execute"
+        }
+      }
+    },
+    "widget-properties": {
+      "match": "\\b(?:with[ \\t]+(?:text|value|key)|labelled)\\b",
+      "name": "keyword.other.property.execute"
+    },
+    "ports": {
+      "match": "^[ \\t]*(accept|offer)[ \\t]+([A-Za-z][A-Za-z0-9_]*)[ \\t]+(as)[ \\t]+(text)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.port.execute"
+        },
+        "2": {
+          "name": "variable.parameter.port.execute"
+        },
+        "3": {
+          "name": "keyword.operator.type.execute"
+        },
+        "4": {
+          "name": "support.type.text.execute"
+        }
+      }
+    },
+    "connect": {
+      "match": "^[ \\t]*(connect)[ \\t]+([A-Za-z][A-Za-z0-9_]*)[ \\t]+(from)[ \\t]+([A-Za-z][A-Za-z0-9_]*)[ \\t]+(to)[ \\t]+([A-Za-z][A-Za-z0-9_]*)[ \\t]+(in)[ \\t]+([A-Za-z][A-Za-z0-9_]*)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.control.connect.execute"
+        },
+        "2": {
+          "name": "variable.other.port.execute"
+        },
+        "3": {
+          "name": "keyword.operator.connection.execute"
+        },
+        "4": {
+          "name": "variable.other.component.execute"
+        },
+        "5": {
+          "name": "keyword.operator.connection.execute"
+        },
+        "6": {
+          "name": "variable.other.port.execute"
+        },
+        "7": {
+          "name": "keyword.operator.connection.execute"
+        },
+        "8": {
+          "name": "variable.other.component.execute"
+        }
+      }
+    },
+    "place": {
+      "match": "^[ \\t]*(place)[ \\t]+([A-Za-z][A-Za-z0-9_]*)[ \\t]+(on[ \\t]+the)[ \\t]+(left|right)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.control.layout.execute"
+        },
+        "2": {
+          "name": "variable.other.component.execute"
+        },
+        "3": {
+          "name": "keyword.other.layout.execute"
+        },
+        "4": {
+          "name": "constant.language.position.execute"
+        }
+      }
+    },
+    "layout": {
+      "name": "meta.layout.execute",
+      "begin": "^[ \\t]*(open[ \\t]+a[ \\t]+screen[ \\t]+titled|divide[ \\t]+the[ \\t]+screen[ \\t]+into[ \\t]+two[ \\t]+columns|give|label[ \\t]+the[ \\t]+(?:horizontal|vertical)[ \\t]+axis[ \\t]+of)\\b",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#layout-words"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.layout.execute"
+        }
+      }
+    },
+    "layout-words": {
+      "match": "\\b(?:percent[ \\t]+of[ \\t]+the[ \\t]+width|rows)\\b",
+      "name": "keyword.other.layout.execute"
+    },
+    "record-event": {
+      "match": "^[ \\t]*(whenever[ \\t]+a[ \\t]+line[ \\t]+arrives[ \\t]+as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.control.event.execute"
+        },
+        "2": {
+          "name": "variable.other.definition.execute"
+        }
+      }
+    },
+    "event": {
+      "name": "meta.event.execute",
+      "begin": "^[ \\t]*(whenever)\\b",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#event-words"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.event.execute"
+        }
+      }
+    },
+    "event-words": {
+      "match": "\\b(?:the[ \\t]+program[ \\t]+opens|an[ \\t]+item[ \\t]+is[ \\t]+chosen[ \\t]+in|a[ \\t]+command[ \\t]+fails|is[ \\t]+(?:submitted|pressed)|arrives|key)\\b",
+      "name": "keyword.control.event.execute"
+    },
+    "widget-item": {
+      "name": "meta.widget-item.execute",
+      "begin": "^[ \\t]*(include|column|label[ \\t]+each[ \\t]+bar[ \\t]+from|size[ \\t]+each[ \\t]+bar[ \\t]+from|label[ \\t]+bar[ \\t]+values[ \\t]+with)\\b",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#field-from"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.widget.execute"
+        }
+      }
+    },
+    "field-from": {
+      "match": "\\bfrom\\b",
+      "name": "keyword.operator.projection.execute"
+    },
+    "ui-action": {
+      "name": "meta.ui-action.execute",
+      "begin": "^[ \\t]*(?:(then)[ \\t]+)?(show|send|add[ \\t]+field|press|close[ \\t]+the[ \\t]+screen)\\b",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#action-words"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.flow.execute"
+        },
+        "2": {
+          "name": "keyword.control.action.execute"
+        }
+      }
+    },
+    "action-words": {
+      "match": "\\b(?:the[ \\t]+(?:result|error|value[ \\t]+of)|its[ \\t]+error|that[ \\t]+item|JSON|as[ \\t]+(?:rows|bars)|field|as|in|to)\\b",
+      "name": "keyword.other.action.execute"
+    },
+    "invocation": {
+      "name": "meta.invocation.execute",
+      "begin": "^[ \\t]*(run|then|pipe[ \\t]+to|listen[ \\t]+to|stream[ \\t]+from)[ \\t]+([^\\s\\[\\],\"#]+(?:[ \\t]+(?!(?:with|as)\\b|and[ \\t]+keep[ \\t]+status\\b|and[ \\t]+cache[ \\t]*(?:#|$))[^\\s\\[\\],\"#]+)*)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#status-binding"
+        },
+        {
+          "include": "#cache"
+        },
+        {
+          "include": "#bindings"
+        },
+        {
+          "include": "#parameters"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.flow.execute"
+        },
+        "2": {
+          "name": "entity.name.function.applet.execute"
+        }
+      }
+    },
+    "implicit-invocation": {
+      "name": "meta.implicit-invocation.execute",
+      "begin": "^[ \\t]*([^\\s\\[\\],\"#]+(?:[ \\t]+(?!(?:with|as)\\b|and[ \\t]+keep[ \\t]+status\\b|and[ \\t]+cache[ \\t]*(?:#|$))[^\\s\\[\\],\"#]+)*)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#status-binding"
+        },
+        {
+          "include": "#cache"
+        },
+        {
+          "include": "#bindings"
+        },
+        {
+          "include": "#parameters"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.function.applet.execute"
+        }
+      }
+    },
+    "direct-invocation": {
+      "name": "meta.direct-invocation.execute",
+      "begin": "^[ \\t]*(run|then|pipe[ \\t]+to|listen[ \\t]+to|stream[ \\t]+from)[ \\t]+(\"(?:[^\"\\\\]|\\\\.)*\")",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#status-binding"
+        },
+        {
+          "include": "#cache"
+        },
+        {
+          "include": "#bindings"
+        },
+        {
+          "include": "#parameters"
+        },
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.flow.execute"
+        },
+        "2": {
+          "name": "entity.name.function.applet.execute",
+          "patterns": [
+            {
+              "include": "#strings"
+            }
+          ]
+        }
+      }
+    },
+    "program-input": {
+      "name": "meta.program-input.execute",
+      "begin": "^(accept)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]+(as)[ \\t]+(list[ \\t]+of[ \\t]+text|text|integer|boolean|json)\\b",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.declaration.input.execute"
+        },
+        "2": {
+          "name": "variable.parameter.input.execute"
+        },
+        "3": {
+          "name": "keyword.operator.type.execute"
+        },
+        "4": {
+          "name": "support.type.input.execute"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\bwith[ \\t]+default\\b",
+          "name": "keyword.operator.default.execute"
+        },
+        {
+          "include": "#values"
+        }
+      ]
+    },
+    "read-stdin": {
+      "name": "meta.read.execute",
+      "begin": "^[ \\t]*(read[ \\t]+from)[ \\t]+(stdin)(?=[ \\t]|$)",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.io.execute"
+        },
+        "2": {
+          "name": "constant.language.stdin.execute"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#bindings"
+        }
+      ]
+    },
+    "status-binding": {
+      "match": "\\b(and)[ \\t]+(keep[ \\t]+status)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:and[ \\t]+cache[ \\t]*)?(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.parameter.execute"
+        },
+        "2": {
+          "name": "storage.modifier.status.execute"
+        },
+        "3": {
+          "name": "keyword.operator.binding.execute"
+        },
+        "4": {
+          "name": "variable.other.definition.execute"
+        }
+      }
+    },
+    "condition": {
+      "name": "meta.condition.execute",
+      "begin": "^[ \\t]*(if)[ \\t]+(\"(?:[^\"\\\\]|\\\\.)*\"|[A-Za-z_][A-Za-z0-9_]*|[+-]?[0-9]+)[ \\t]+(is)(?:[ \\t]+(not))?(?=[ \\t]|$)",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.condition.execute"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#values"
+            }
+          ]
+        },
+        "3": {
+          "name": "keyword.operator.comparison.execute"
+        },
+        "4": {
+          "name": "keyword.operator.comparison.execute"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#values"
+        }
+      ]
+    },
+    "otherwise": {
+      "match": "^[ \\t]*(otherwise)(?=[ \\t]*(?:#|$))",
+      "captures": {
+        "1": {
+          "name": "keyword.control.condition.execute"
+        }
+      }
+    },
+    "structured-json": {
+      "patterns": [
+        {
+          "include": "#json-parse"
+        },
+        {
+          "include": "#json-take"
+        },
+        {
+          "include": "#json-encode"
+        }
+      ]
+    },
+    "json-parse": {
+      "match": "^[ \\t]*(then)[ \\t]+(parse)[ \\t]+(json)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.flow.execute"
+        },
+        "2": {
+          "name": "keyword.control.structured.execute"
+        },
+        "3": {
+          "name": "support.type.input.execute"
+        },
+        "4": {
+          "name": "keyword.operator.binding.execute"
+        },
+        "5": {
+          "name": "variable.other.definition.execute"
+        }
+      }
+    },
+    "json-take": {
+      "begin": "^[ \\t]*(take)[ \\t]+(list[ \\t]+of[ \\t]+text|text|integer|boolean|json)[ \\t]+(at)\\b",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.structured.execute"
+        },
+        "2": {
+          "name": "support.type.input.execute"
+        },
+        "3": {
+          "name": "keyword.operator.structured.execute"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#bindings"
+        },
+        {
+          "match": "\\b(from)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.structured.execute"
+            },
+            "2": {
+              "name": "variable.other.readwrite.execute"
+            }
+          }
+        },
+        {
+          "include": "#values"
+        }
+      ]
+    },
+    "json-encode": {
+      "begin": "^[ \\t]*(then)[ \\t]+(encode)\\b",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.flow.execute"
+        },
+        "2": {
+          "name": "keyword.control.structured.execute"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\b(as)[ \\t]+(json)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.structured.execute"
+            },
+            "2": {
+              "name": "support.type.input.execute"
+            }
+          }
+        },
+        {
+          "include": "#values"
+        }
+      ]
+    },
+    "program-call": {
+      "name": "meta.program-call.execute",
+      "begin": "^[ \\t]*(run|then)[ \\t]+(program)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)\\b",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.flow.execute"
+        },
+        "2": {
+          "name": "keyword.control.program.execute"
+        },
+        "3": {
+          "name": "entity.name.function.program.execute"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#bindings"
+        },
+        {
+          "include": "#parameters"
+        },
+        {
+          "include": "#values"
+        }
+      ]
+    },
+    "nested-program-input": {
+      "name": "meta.program-input.execute",
+      "begin": "^[ \\t]+(accept)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]+(as)[ \\t]+(list[ \\t]+of[ \\t]+text|integer|boolean|json)\\b",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.declaration.input.execute"
+        },
+        "2": {
+          "name": "variable.parameter.input.execute"
+        },
+        "3": {
+          "name": "keyword.operator.type.execute"
+        },
+        "4": {
+          "name": "support.type.input.execute"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\bwith[ \\t]+default\\b",
+          "name": "keyword.operator.default.execute"
+        },
+        {
+          "include": "#values"
+        }
+      ]
+    }
+  }
+}

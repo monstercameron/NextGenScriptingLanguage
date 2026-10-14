@@ -1,0 +1,7 @@
+# Purpose: Publish a capacity snapshot on a real calendar-minute boundary.
+# Inputs: service-metrics.csv (service,request count,error count,mean latency ms).
+# Outputs: One aggregate capacity report per scheduled run, weighted by request volume.
+accept service_metrics_path as text with default "service-metrics.csv"
+on schedule "* * * * *"
+  run cat with path service_metrics_path
+  pipe to awk with delimiter "," and program "NR>1 { services++; requests += $2; errors += $3; weighted_latency += $2 * $4 } END { printf \"services=%d requests=%d errors=%d weighted_mean_latency_ms=%.2f\\n\", services, requests, errors, weighted_latency/requests }"

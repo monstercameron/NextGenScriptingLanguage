@@ -1,0 +1,11 @@
+# Purpose: Cache a selected CSV field for a stable lookup list.
+# Inputs: selected-field.txt (one numeric column index without a newline) and requests.csv (unquoted CSV with request_id, region, and status columns).
+# Outputs: Sorted distinct values from the selected field; changing the selector stores a result for the new column.
+accept selected_field_path as text with default "selected-field.txt"
+accept requests_path as text with default "requests.csv"
+read file selected_field_path as selected
+run cat with path requests_path
+then cut with delimiter "," and fields selected and cache
+then tail with flags ["-n", "+2"]
+then sort
+then uniq

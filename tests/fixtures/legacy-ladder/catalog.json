@@ -1,0 +1,154 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "number": 42,
+      "file": "42-failed-stage.program",
+      "title": "Stop before a save after a command fails",
+      "failure": true,
+      "absent": [
+        "must-not-exist.txt"
+      ],
+      "error": "failed",
+      "expected": ""
+    },
+    {
+      "number": 43,
+      "file": "43-validate-first.program",
+      "title": "Validate every parameter before effects",
+      "failure": true,
+      "invalid": true,
+      "absent": [
+        "must-not-exist.txt"
+      ],
+      "error": "requires parameter",
+      "expected": ""
+    },
+    {
+      "number": 44,
+      "file": "44-record-limit.program",
+      "title": "Reject an oversized event before its handler",
+      "stdin": "this record is too long\n",
+      "args": [
+        "--max-record-bytes",
+        "8"
+      ],
+      "failure": true,
+      "error": "record exceeds",
+      "absent": [
+        "must-not-exist.txt"
+      ],
+      "expected": ""
+    },
+    {
+      "number": 45,
+      "file": "45-output-limit.program",
+      "title": "Cancel a full native group and skip saving",
+      "args": [
+        "--max-output-bytes",
+        "64"
+      ],
+      "failure": true,
+      "error": "output exceeds",
+      "absent": [
+        "must-not-exist.txt"
+      ],
+      "expected": ""
+    },
+    {
+      "number": 46,
+      "file": "46-repair-cached.program",
+      "title": "Repair a suffix after a cached checkpoint",
+      "mode": "recover",
+      "repair": "run printf with message \"recover\"\nthen tr with from \"[:lower:]\" and to \"[:upper:]\" and cache\nthen cat\nthen save to \"recovered.txt\"",
+      "after_expected": "RECOVER\n",
+      "after_spawns": [
+        "cat"
+      ],
+      "restored": 2,
+      "after_files": {
+        "recovered.txt": "RECOVER\n"
+      },
+      "expected": ""
+    },
+    {
+      "number": 47,
+      "file": "47-remove-failed-tail.program",
+      "title": "Finish after removing a failed terminal node",
+      "mode": "recover",
+      "repair": "run printf with message \"already done\"\nthen save to \"effect.txt\"",
+      "mutate": {
+        "effect.txt": "leave completed effect alone\n"
+      },
+      "after_expected": "already done\n",
+      "after_spawns": [],
+      "restored": 2,
+      "after_files": {
+        "effect.txt": "leave completed effect alone\n"
+      },
+      "expected": ""
+    },
+    {
+      "number": 48,
+      "file": "48-restore-context.program",
+      "title": "Restore cwd, named parameters, and frozen results",
+      "mode": "recover",
+      "repair": "run cd with path \"sub\"\nread \"filename.txt\" as selected\nthen cat with path selected as content\nthen printf with message content\nthen save to \"recovered.txt\"",
+      "mutate": {
+        "sub/a.txt": "changed source\n",
+        "sub/filename.txt": "b.txt"
+      },
+      "after_expected": "alpha sub\n\n",
+      "after_spawns": [
+        "printf"
+      ],
+      "restored": 3,
+      "after_files": {
+        "sub/recovered.txt": "alpha sub\n\n"
+      },
+      "expected": ""
+    },
+    {
+      "number": 49,
+      "file": "49-repair-pipe-group.program",
+      "title": "Retry a failed group from frozen input",
+      "mode": "recover",
+      "repair": "read \"fruit.txt\"\npipe to tr with from \"[:lower:]\" and to \"[:upper:]\"\npipe to grep with pattern \"APPLE\"\nthen save to \"group.txt\"",
+      "mutate": {
+        "fruit.txt": "plum\n"
+      },
+      "after_expected": "APPLE\nAPPLE\n",
+      "after_spawns": [
+        "tr",
+        "grep"
+      ],
+      "restored": 1,
+      "after_files": {
+        "group.txt": "APPLE\nAPPLE\n"
+      },
+      "expected": ""
+    },
+    {
+      "number": 50,
+      "file": "50-recover-service.program",
+      "title": "Resume a partial event before reopening its producer",
+      "mode": "recover",
+      "repair": "listen to cat with path \"events.txt\"\nwhenever a line arrives as record\n  then tr with from \"[:lower:]\" and to \"[:upper:]\" as normalized and cache\n  then grep with pattern \".\"\n  then save to \"event.txt\"",
+      "after_expected": "FAIL\n",
+      "after_args": [
+        "--max-runs",
+        "1"
+      ],
+      "after_spawns": [
+        "grep"
+      ],
+      "restored": 1,
+      "after_files": {
+        "event.txt": "FAIL\n"
+      },
+      "no_restarted_producer": true,
+      "gc": true,
+      "expected": "PASS\n"
+    }
+  ]
+}

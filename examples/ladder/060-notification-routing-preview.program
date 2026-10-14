@@ -1,0 +1,6 @@
+# Purpose: Evaluate saved notification rules against sample events without sending messages.
+# Inputs: fixtures/060/notifications.json contains Offline routing rules and events with kind and numeric priority.
+# Outputs: JSON preview of matched channels for each event.
+accept notifications_path as text with default "fixtures/060/notifications.json"
+run cat with path notifications_path
+then jq with filter ".events as $events | .routes as $routes | [$events[] as $event | {event_id: $event.id, kind: $event.kind, channels: [$routes[] | select(.minimum_priority <= $event.priority and (.kinds | index($event.kind)) != null) | .channel]}]" and flags ["-c", "-S"]

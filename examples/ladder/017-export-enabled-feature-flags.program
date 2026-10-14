@@ -1,0 +1,9 @@
+# Purpose: Create a sorted plain-text list of currently enabled feature flags for the release checklist.
+# Inputs: config/feature-flags.json: object mapping feature names to booleans.
+# Outputs: reports/enabled-feature-flags.txt: enabled flag names in sorted order; stdout echoes the list.
+accept feature_flags_path as text with default "config/feature-flags.json"
+run mkdir with flags ["-p"] and paths ["reports"]
+run cat with path feature_flags_path
+pipe to jq with flags ["-r"] and filter ".flags | to_entries[] | select(.value == true) | .key"
+pipe to sort
+then save to "reports/enabled-feature-flags.txt"

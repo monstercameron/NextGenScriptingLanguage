@@ -1,0 +1,2 @@
+on schedule "*/5 * * * *"
+  run ls with flags ["-la"] and path "."

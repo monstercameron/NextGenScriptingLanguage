@@ -1,0 +1,8 @@
+# Purpose: Save a bounded excerpt of the latest release failures for handoff.
+# Inputs: release.log, oldest event first.
+# Outputs: Up to three ERROR/FATAL lines on stdout and in release-errors.txt.
+accept release_path as text with default "release.log"
+run cat with path release_path
+pipe to grep with flags ["-E"] and pattern "ERROR|FATAL"
+pipe to tail with flags ["-n", "3"]
+then save to "release-errors.txt"

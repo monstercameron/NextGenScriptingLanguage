@@ -1,0 +1,6 @@
+# Purpose: Align staging and production exports for promotion review.
+# Inputs: Two ordered text files with corresponding configuration rows.
+# Outputs: A pipe-delimited side-by-side comparison.
+accept staging_config_path as text with default "staging-config.txt"
+accept production_config_path as text with default "production-config.txt"
+run paste with flags ["-d", "|"] and files [staging_config_path, production_config_path]

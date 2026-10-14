@@ -1,0 +1,17 @@
+{
+  "batches": 23,
+  "columns": 3,
+  "fixture": "examples/top-cpu.program; UI rendering only, applets not advanced",
+  "measured_batches": 20,
+  "operation": "render_100x30_10000_table_rows",
+  "operations_per_batch": 20,
+  "p50_us": 102.24794999999999,
+  "p95_us": 103.30834999999999,
+  "p99_us": 108.39585,
+  "rows": 10000,
+  "terminal_cells": [
+    100,
+    30
+  ],
+  "warmup_batches": 3
+}

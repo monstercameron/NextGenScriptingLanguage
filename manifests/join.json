@@ -1,0 +1,29 @@
+{
+  "name": "join",
+  "binary": "join",
+  "parameters": {
+    "flags": {
+      "type": "list",
+      "items": "string"
+    },
+    "files": {
+      "type": "list",
+      "items": "string",
+      "required": true,
+      "min_items": 2
+    }
+  },
+  "arguments": [
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    },
+    {
+      "spread": "files"
+    }
+  ]
+}

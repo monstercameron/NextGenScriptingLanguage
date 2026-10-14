@@ -1,0 +1,8 @@
+# Search literal text in a file and save both native grep status and matching lines.
+# 0 = matches, 1 = no matches, 2 = grep error. The report records all three.
+accept path as text
+accept pattern as text
+accept report as text
+run "grep" with arguments ["-n", "-F", "-e", pattern, "--", path] as matches and keep status as search_status
+then "printf" with arguments ["grep exit: %s\n%s", search_status, matches]
+then save to report

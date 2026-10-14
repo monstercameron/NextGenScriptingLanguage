@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+- Package the source grammar for native status, scalar conditions, JSON operations
+  and same-file reusable programs, with complete validated snippets.
+- Add repository, homepage and issue metadata; derive the VSIX filename from the
+  package version.
+- Validate snippet defaults with the current source runtime, or an explicit
+  `EXECUTE_TEST_BINARY`, instead of the retained historical binary.
+- Refresh installation and contributor instructions.
+
 ## 0.2.0
 
 - Highlight top-level typed program inputs and defaults in Execute 0.8.0.
@@ -16,11 +26,3 @@
 - Highlight finite commands, native streams, services, and single-file TUI syntax.
 - Add comment/bracket support, indentation folding, two-space defaults, and snippets.
 - Verify scopes using the VS Code TextMate/Oniguruma engine and real project programs.
-# Pending source candidate
-
-- Highlight native JSON parse, typed pointer selection, explicit encoding and
-  JSON input declarations; add a complete JSON field extraction template.
-- This source update is not included in the packaged 0.2.0 VSIX.
-- Highlight reusable finite program calls and nested typed inputs; add a complete
-  same-file reusable program template.
-

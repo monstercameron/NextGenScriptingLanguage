@@ -8,6 +8,11 @@ for executable lookup, quoting, cancellation, checkpoints and live IPC.
 Persistent native streams have a [separate guide](streaming.md); managed runtime
 and widget edits are covered by the [live-control API](live-control.md).
 
+This reference describes the current native source and the 0.9.0-rc.4 release
+candidate. Historical `bin/execute` 0.8.0 lacks several newer forms; use a matching
+[release or source build](releases.md). The [browser host](playground.md) has its
+own explicit applet and lifecycle limits.
+
 ## Language and Unix contracts
 
 One statement per line; `#` comments and blank lines are allowed. Strings use JSON
@@ -51,7 +56,7 @@ to that component; they are separate from top-level CLI input declarations.
 | `then ls with path "."` | Wait for prior success, then run the command. |
 | `pipe to wc with flags ["-l"]` | Connect adjacent applet stdout/stdin directly with OS pipes. |
 | `as name` | Name a finite UTF-8 stdout result, including its trailing newline. |
-| `and keep status as code` | Bind an external command's exit code as an integer (source candidate). |
+| `and keep status as code` | Bind an external command's exit code as an integer. |
 | `and cache` | Reuse a declared deterministic finite transformation by content. |
 | `read "path"` | Builtin file input without launching a `cat` process. |
 | `read from stdin` | Read inherited stdin in a finite program; native stages consume it directly. |
@@ -70,7 +75,9 @@ Text does not implicitly become an integer, boolean, or list parameter.
 Lists of string arguments may contain named text results. `as name` precedes
 `and cache` when both are used.
 
-### Native exit status (pending source candidate)
+<a id="native-exit-status-pending-source-candidate"></a>
+
+### Native exit status
 
 ```text
 accept path as text
@@ -97,10 +104,12 @@ code, so tools such as `grep` need explicit treatment of error codes as well as
 "no matches". Use the scalar conditional blocks below to choose the next commands.
 
 The useful [search report](../examples/search-status.program) records both real
-`grep` status and matching lines. This feature is a source candidate; installed
-0.8.0 and existing release packages do not yet recognize the suffix.
+`grep` status and matching lines. The suffix is available in 0.9.0-rc.4; the historical 0.8.0 binary does not
+recognize it.
 
-### Conditional commands (pending source candidate)
+<a id="conditional-commands-pending-source-candidate"></a>
+
+### Conditional commands
 
 ```text
 accept path as text
@@ -154,10 +163,12 @@ resume inside a branch.
 [preview-if-present.program](../examples/preview-if-present.program) uses native `test` and
 `head`; [search-report.program](../examples/search-report.program) uses real
 `grep` codes to distinguish matches, no matches and an error, preserving an
-existing report after errors. Installed 0.8.0 does not yet support these candidate
-blocks; source validation/build evidence is retained in the optimization campaign.
+existing report after errors. The historical 0.8.0 binary does not support these blocks; current release
+validation is linked from the [installation guide](releases.md).
 
-### Structured JSON (pending source candidate)
+<a id="structured-json-pending-source-candidate"></a>
+
+### Structured JSON
 
 ```text
 accept path as text
@@ -218,7 +229,9 @@ future work. See [github-repo-summary.program](../examples/github-repo-summary.p
 [json-event-names.program](../examples/json-event-names.program) and
 [json-compact.program](../examples/json-compact.program).
 
-### Reusable finite programs (pending source candidate)
+<a id="reusable-finite-programs-pending-source-candidate"></a>
+
+### Reusable finite programs
 
 ```text
 define a program named stars
@@ -356,8 +369,8 @@ use separate programs or explicitly save the results you need.
 
 ## Finite stdin and Unix composition
 
-The current source candidate adds explicit stdin input. The installed 0.8.0
-release does not include this syntax yet:
+Finite programs accept explicit stdin input. The historical 0.8.0 binary
+does not include this syntax:
 
 ```text
 read from stdin
@@ -407,9 +420,8 @@ The first `=` separates name from value, preserving later `=` characters. Text
 values are literal argument text, with no shell expansion by Execute. Shell users
 must still quote their own command-line arguments in the calling shell.
 
-Released types are `text`, `integer` (signed 64-bit), `boolean` (`true`/`false`),
-and `list of text`. The pending source candidate also accepts `json` as described
-above. A text list is supplied as JSON:
+Input types are `text`, `integer` (signed 64-bit), `boolean` (`true`/`false`),
+`list of text` and `json` as described above. A text list is supplied as JSON:
 
 ```text
 accept files as list of text with default ["notes.txt"]
@@ -419,10 +431,9 @@ run "cksum" with arguments files
 Run `execute checksums.program --input 'files=["first file.txt","second.txt"]'`.
 Empty strings and lists are valid at the input-schema level; an applet manifest
 can impose tighter constraints. Defaults must be literal values of the declared
-type, including literal text lists. Released inputs reject references, nested
-lists, records, null, floating point and NUL bytes. The source candidate's `json`
-type retains nested JSON, numbers and escaped NUL; references remain invalid
-input values. Names cannot
+type, including literal text lists. Scalar and text-list inputs reject references,
+nested lists, records, null, floating point and NUL bytes. The `json` type retains nested
+JSON, numbers and escaped NUL; references remain invalid input values. Names cannot
 duplicate other inputs or be shadowed by ordinary result bindings.
 
 Declared values can feed file paths, cwd setup, applet parameters, native argv,
@@ -446,7 +457,7 @@ Programs with no declarations keep their previous checkpoint representation.
 
 ### Agent interface discovery
 
-The current source candidate adds `execute inspect FILE [--input NAME=VALUE]`.
+Use `execute inspect FILE [--input NAME=VALUE]`.
 The installed 0.8.0 release does not include this command yet. Inspection prints
 one JSON object using protocol `execute.inspect/1`, after the same static syntax,
 binding, type and known manifest-constraint validation as `check`. It starts no
@@ -488,7 +499,9 @@ lifetime; restart it to apply source-argument changes. Screen programs continue
 to use component input ports and live widget state; root `--input` is not exposed
 for screens in this release.
 
-## Machine-readable checks (pending source candidate)
+<a id="machine-readable-checks-pending-source-candidate"></a>
+
+## Machine-readable checks
 
 ```sh
 execute check report.program --json
@@ -552,11 +565,11 @@ Intervals accept positive integer milliseconds, seconds, minutes, or hours. The
 first tick occurs after one full interval. Deadlines keep their original monotonic
 phase; slow jobs skip missed ticks and never overlap.
 
-The source candidate applies that phase calculation to managed intervals too,
-and waits until their deadline rather than sleeping in fixed 20 ms chunks.
+Managed intervals use the same phase calculation and wait until their deadlines
+rather than sleeping in fixed 20 ms chunks.
 Managed normal ticks retain the initial full-interval delay; diagnostic `step`
 remains an explicit immediate tick. OS scheduling and native runtime costs still
-limit actual latency. These corrections are pending release integration.
+limit actual latency. These corrections are included in 0.9.0-rc.4.
 
 Calendar schedules use five numeric fields: minute, hour, day of month, month,
 day of week. Supported forms are `*`, lists, ranges, and `/steps`. Weekday 0 or 7
@@ -575,7 +588,7 @@ that cleanup contract. Binaries run with the caller's privileges.
 
 ## Process input sources
 
-Source candidate 0.9.0-dev adds explicit environment and Unix argument inputs:
+Programs can declare explicit environment and positional argument inputs:
 
 ```text
 #!/usr/bin/env -S execute --
@@ -726,7 +739,7 @@ changes apply only to commands that still run. Use a new checkpoint directory to
 start over or change the completed prefix. A completed finite resume returns its
 stored final output without running commands again.
 
-The pending source candidate reuses executable content digests within a completed
+On Unix, the runtime reuses executable content digests within a completed
 prefix validation pass. Each reuse still checks the selected path's device,
 inode, size, modification time and change time; a changed identity is rehashed.
 New validation attempts and execution boundaries use fresh digests. Fingerprint
@@ -763,7 +776,7 @@ Checkpoint directories contain private outputs and named values (0700 directorie
 state, not a sandbox or an encrypted secrets store. Keep them until recovery is
 complete; choose a separate directory for each execution.
 
-The pending source candidate rejects symlinks at the requested checkpoint
+The runtime rejects symlinks at the requested checkpoint
 and blob directory leaves, including a trailing `/` or `/.` on the requested
 checkpoint path. Lock, journal and blob files must be regular files; opens use
 `O_NOFOLLOW` and descriptor checks, with nonblocking opens to reject substituted
@@ -787,7 +800,7 @@ this flag does not shut them down after one interval. UI native pipelines defaul
 to 30 seconds; the option overrides that default. Very small limits may expire
 during process startup.
 
-The pending source candidate also keeps buffered stdin writers inside that
+The runtime also keeps buffered stdin writers inside that
 deadline/cancellation contract. Their private pipe uses cancellable writes,
 and error cleanup tells the writer to stop without blocking on a join. This
 fixes a case where an exited applet's escaped descendant retained stdin and the

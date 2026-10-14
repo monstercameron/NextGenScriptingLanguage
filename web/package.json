@@ -3,7 +3,20 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": {"build": "node build.mjs", "test": "node --test test/*.test.mjs", "test:browser": "node test/browser.mjs"},
-  "dependencies": {"@xterm/xterm": "6.0.0", "@xterm/addon-fit": "0.11.0"},
-  "devDependencies": {"esbuild": "0.25.12", "playwright": "1.58.2"}
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node test/browser.mjs",
+    "format": "prettier --write \"*.mjs\" \"test/*.mjs\" \"*.json\" \"*.css\"",
+    "format:check": "prettier --check \"*.mjs\" \"test/*.mjs\" \"*.json\" \"*.css\""
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "playwright": "1.58.2",
+    "prettier": "3.8.1"
+  }
 }

@@ -37,6 +37,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: web
+      - run: npm run format:check
+        working-directory: web
+      - run: python3 tests/docs.py
+      - run: python3 tools/check_docs.py
+      - run: rustfmt --edition 2021 --check src/runtime/shared.rs
       - run: cargo fmt --manifest-path browser/Cargo.toml --check
       - run: cargo clippy --locked --target wasm32-unknown-unknown -- -D warnings
         working-directory: browser

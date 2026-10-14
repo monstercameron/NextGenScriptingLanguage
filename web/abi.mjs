@@ -3,7 +3,7 @@ export function connect(instance) {
   const { memory, allocate, execute, release } = instance.exports;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder('utf-8', { fatal: true });
-  return request => {
+  return (request) => {
     const bytes = encoder.encode(JSON.stringify(request));
     if (bytes.length > 8 * 1024 * 1024) throw new Error('Request exceeds 8 MiB');
     const pointer = allocate(bytes.length);
@@ -12,7 +12,10 @@ export function connect(instance) {
     const packed = execute(pointer, bytes.length); // Rust consumes the request allocation.
     const output = Number(packed >> 32n);
     const length = Number(packed & 0xffffffffn);
-    try { return JSON.parse(decoder.decode(new Uint8Array(memory.buffer, output, length))); }
-    finally { release(output, length); }
+    try {
+      return JSON.parse(decoder.decode(new Uint8Array(memory.buffer, output, length)));
+    } finally {
+      release(output, length);
+    }
   };
 }

@@ -9,13 +9,13 @@ the roadmap and outstanding proof gates.
 
 ## Set up and check
 
-Use current stable Rust, Python 3.9+, Node.js 22+, npm, `make`, `jq`, and standard
+Use current stable Rust, Python 3.9+, Node.js 24, npm, `make`, `jq`, and standard
 Unix tools on macOS or Linux. Tests use private temporary fixtures and fake
 external services; GitHub authentication and model-provider credentials are not
-required. Install the editor's locked development dependencies once:
+required. Install the locked editor and playground dependencies once:
 
 ```sh
-npm --prefix editors/vscode ci --ignore-scripts --no-audit --no-fund
+make setup
 make check
 ```
 
@@ -42,6 +42,38 @@ and `make proof-smoke` for a small streaming/lifecycle check. The smoke report
 goes into ignored `target/`. `CARGO`, `PYTHON` and `NPM` can override executable
 names. Existing toolchain environment variables continue to work normally.
 
+## Browser, documentation and formatting
+
+The native check does not require a WASM target or browser installation. For the
+playground, install those once, then use the shared targets:
+
+```sh
+rustup target add wasm32-unknown-unknown
+npm --prefix web exec -- playwright install chromium
+make playground-check
+make playground-browser-check
+make site-serve
+```
+
+The preview serves `http://127.0.0.1:8080/`; use `PORT=9000` to change the port.
+The [browser contract](docs/playground.md), [Rust host](browser/README.md) and
+[web source map](web/README.md) describe the separate native/browser boundaries.
+On Linux, Chromium may need additional OS dependencies; the CI job installs them
+with Playwright's `--with-deps` option.
+
+`make format` formats owned Rust and playground source. `make format-check`
+checks without editing. Rustfmt explicitly includes `src/runtime/shared.rs`, which
+is shared through `include!`; Prettier is pinned in the web lockfile and checks JS,
+JSON and CSS. Generated assets, vendored code, lockfiles and historical reports
+are not reformatted. `.editorconfig` and `.gitattributes` define editing and
+cross-platform line-ending conventions.
+
+`make docs-check` verifies local files and fragments in maintained Markdown.
+Historical reports and user-provided reviews are retained verbatim. Add new
+maintained entry points to `tools/check_docs.py`; the [documentation index](docs/README.md)
+keeps guides separate from evidence. The [changelog](CHANGELOG.md) distinguishes
+unreleased features from immutable published versions.
+
 ## Find the right code
 
 | Area | Files |
@@ -55,6 +87,9 @@ names. Existing toolchain environment variables continue to work normally.
 | Terminal UI | `src/ui/` |
 | Model transport and provider validation | `src/models.rs`, `src/bin/execute-model.rs`, `tests/model_control.rs` |
 | Model workflows and exact offline oracles | `examples/models/`, `tests/model_catalog.py` |
+| Shared host validation and argv rules | `src/runtime/shared.rs`, `src/runtime/control.rs`, `src/runtime/calls.rs` |
+| Rust/WASM host and ABI | `src/browser.rs`, `src/browser/`, `browser/` |
+| Browser UI, worker, fixtures and acceptance | `web/`, `docs/playground/` |
 | Applet argv contracts | `manifests/` |
 | Runtime regressions and owned fake tools | `tests/`, `tests/fixtures/` |
 | Useful programs and their fixture runner | `examples/ladder/` |
@@ -86,3 +121,15 @@ campaign scratch belongs outside the repository; the retained `work/` patches
 are historical evidence. Run `git status --short` before preparing a change so
 unrelated edits remain intact. No benchmark or test result establishes a full
 Bash or desktop replacement by itself.
+
+## Prepare a contribution
+
+Keep changes focused and describe the observable problem, resulting behavior and
+checks actually run. Include a small `.program` and owned fixtures when changing
+syntax or runtime contracts. Update the current guides and `CHANGELOG.md` for
+user-visible changes; preserve historical source hashes and reports. Issue forms
+and the pull-request template prompt for reproduction and platform details.
+
+Run `git diff --check` and inspect the staged file list before committing. Do not
+use broad cleanup commands against unknown local files, installed releases or
+ignored directories that may contain a contributor's data.

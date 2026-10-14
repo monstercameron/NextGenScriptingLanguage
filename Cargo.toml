@@ -5,6 +5,11 @@ edition = "2021"
 default-run = "execute"
 description = "Readable Unix workflows with declarative applets and direct pipes"
 license = "MIT"
+repository = "https://github.com/monstercameron/NextGenScriptingLanguage"
+homepage = "https://monstercameron.github.io/NextGenScriptingLanguage/"
+readme = "README.md"
+keywords = ["scripting", "unix", "pipeline", "interpreter", "automation"]
+categories = ["command-line-utilities"]
 
 [lib]
 name = "flow"
@@ -38,7 +43,6 @@ tempfile = "3"
 [profile.release]
 lto = "thin"
 strip = true
-
 
 [patch.crates-io]
 iana-time-zone = { path = "vendor/iana-time-zone" }

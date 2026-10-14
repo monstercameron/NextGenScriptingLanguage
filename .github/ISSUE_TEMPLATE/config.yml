@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation and examples
+    url: https://github.com/monstercameron/NextGenScriptingLanguage/blob/main/docs/README.md
+    about: Start with installation, language contracts, examples and known limits.
+  - name: Browser playground
+    url: https://monstercameron.github.io/NextGenScriptingLanguage/playground/
+    about: Try the language with virtual files and bounded browser applets.

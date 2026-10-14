@@ -14,6 +14,12 @@ self.onmessage = async ({ data }) => {
     const start = performance.now();
     const result = invoke(data.request);
     postMessage({ id: data.id, result, elapsed: performance.now() - start });
-  } catch (error) { postMessage({ id: data.id, error: error.message, restart: error instanceof WebAssembly.RuntimeError }); }
+  } catch (error) {
+    postMessage({
+      id: data.id,
+      error: error.message,
+      restart: error instanceof WebAssembly.RuntimeError,
+    });
+  }
 };
-ready.catch(error => postMessage({ fatal: error.message }));
+ready.catch((error) => postMessage({ fatal: error.message }));

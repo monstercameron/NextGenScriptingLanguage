@@ -3,20 +3,30 @@
 from pathlib import Path
 import subprocess
 import json
+import os
 
 ROOT = Path(__file__).resolve().parents[1]
 subprocess.run(
-    ["cargo", "build", "--locked", "--release", "--target", "wasm32-unknown-unknown"],
+    [
+        os.environ.get("CARGO", "cargo"),
+        "build",
+        "--locked",
+        "--release",
+        "--target",
+        "wasm32-unknown-unknown",
+    ],
     cwd=ROOT / "browser",
     check=True,
 )
-subprocess.run(["npm", "run", "build"], cwd=ROOT / "web", check=True)
+subprocess.run(
+    [os.environ.get("NPM", "npm"), "run", "build"], cwd=ROOT / "web", check=True
+)
 
 # Bundle full license texts rather than only short minifier banners.
 metadata = json.loads(
     subprocess.check_output(
         [
-            "cargo",
+            os.environ.get("CARGO", "cargo"),
             "metadata",
             "--locked",
             "--format-version",

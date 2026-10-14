@@ -1,32 +1,51 @@
 [
   {
-    "id": "log-triage", "title": "Find the fires", "subtitle": "Filter → sort → deduplicate → save", "file": "log-triage.program",
+    "id": "log-triage",
+    "title": "Find the fires",
+    "subtitle": "Filter → sort → deduplicate → save",
+    "file": "log-triage.program",
     "source": "# Turn noisy application logs into an actionable report.\naccept severity as text with default \"ERROR\"\nread \"app.log\"\nthen grep with pattern severity and flags [\"-F\"]\npipe to sort\npipe to uniq\nthen save to \"incidents.txt\"\n",
     "expected": "ERROR api timeout\nERROR disk near capacity\n"
   },
   {
-    "id": "release-gate", "title": "Ship or hold?", "subtitle": "Typed JSON drives a real branch", "file": "release-gate.program",
+    "id": "release-gate",
+    "title": "Ship or hold?",
+    "subtitle": "Typed JSON drives a real branch",
+    "file": "release-gate.program",
     "source": "# The decision lives here, not in JavaScript.\nread \"release.json\"\nthen parse json as release\ntake boolean at \"/checks_passed\" from release as ready\nif ready is true\n  run printf with message \"Ready for release review\"\notherwise\n  run printf with message \"Hold: checks need attention\"\nthen save to \"release-decision.txt\"\n",
     "expected": "Ready for release review\n"
   },
   {
-    "id": "shortlist", "title": "A reusable shortlist", "subtitle": "Local program + typed arguments + files", "file": "shortlist.program",
+    "id": "shortlist",
+    "title": "A reusable shortlist",
+    "subtitle": "Local program + typed arguments + files",
+    "file": "shortlist.program",
     "source": "# One reusable program, with explicit inputs and local scope.\ndefine a program named shortlist\n  accept path as text\n  accept limit as integer\n  read path\n  then sort\n  pipe to uniq\n  pipe to head with lines limit\naccept limit as integer with default 3\nrun program shortlist with path \"people.txt\" and limit limit\nthen save to \"shortlist.txt\"\n",
     "expected": "Ada\nGrace\nKatherine\n"
   },
   {
-    "id": "cache", "title": "Keep the good work", "subtitle": "Run twice. Inspect the cache hit.", "file": "cache.program",
+    "id": "cache",
+    "title": "Keep the good work",
+    "subtitle": "Run twice. Inspect the cache hit.",
+    "file": "cache.program",
     "source": "# Explicit caching, keyed by input, argv and the virtual filesystem.\naccept lines as integer with default 2\nread \"app.log\"\nthen head with lines lines and cache\n",
     "expected": "INFO worker ready\nERROR api timeout\n"
   },
   {
-    "id": "status", "title": "Failure is data", "subtitle": "Keep an exit status, choose what happens", "file": "status.program",
+    "id": "status",
+    "title": "Failure is data",
+    "subtitle": "Keep an exit status, choose what happens",
+    "file": "status.program",
     "source": "# Missing matches are an expected outcome for this report.\nread \"app.log\"\nthen \"grep\" with arguments [\"-F\", \"PANIC\"] and keep status as found\nif found is 1\n  run printf with message \"No panics. Carry on.\"\notherwise\n  run printf with message \"Inspect the panic report\"\n",
     "expected": "No panics. Carry on.\n"
   },
   {
-    "id": "stdin", "title": "Bring your own bytes", "subtitle": "Stdin → a real byte pipeline", "file": "stdin.program",
+    "id": "stdin",
+    "title": "Bring your own bytes",
+    "subtitle": "Stdin → a real byte pipeline",
+    "file": "stdin.program",
     "source": "# Paste newline-separated names into the stdin box below.\nread from stdin\nthen sort\npipe to uniq\nthen save to \"cleaned.txt\"\n",
-    "stdin": "Grace\nAda\nGrace\nLinus\n", "expected": "Ada\nGrace\nLinus\n"
+    "stdin": "Grace\nAda\nGrace\nLinus\n",
+    "expected": "Ada\nGrace\nLinus\n"
   }
 ]

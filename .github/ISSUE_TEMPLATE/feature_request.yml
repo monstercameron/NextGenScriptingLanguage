@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose a concrete improvement to the small Unix glue language.
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What useful workflow is difficult or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: program
+    attributes:
+      label: Proposed .program example
+      description: Show inputs, native tools, control flow and expected output. A small example is enough.
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Behavior and tradeoffs
+      description: Consider failure behavior, platform needs and how the feature could be verified. Link related requests if relevant.

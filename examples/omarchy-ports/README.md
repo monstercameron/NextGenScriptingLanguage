@@ -2,7 +2,7 @@
 
 Ten `.program` files reproduce the native command interfaces of ten small
 scripts from [Omarchy v4.0.4](https://github.com/omacom/omarchy/tree/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin).
-They require the **source 0.9.0-dev runtime**, an Omarchy installation and its
+They require the **0.9.0-rc.4 or current source runtime**, an Omarchy installation and its
 normal desktop session to perform real actions. The installed 0.8.0 runtime
 does not support their positional input declarations.
 

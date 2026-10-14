@@ -1,8 +1,19 @@
 # GitHub Pages showcase
 
-The site lives directly in `docs/index.html` and `docs/assets/`. GitHub Pages
-publishes `main` → `/docs`; `.nojekyll` keeps it a buildless static site. No npm
-install, application server or generated framework bundle is required.
+The landing page lives in `docs/index.html` and `docs/assets/`. The Rust/WASM
+playground uses tracked HTML in `docs/playground/` and generated assets built from
+`browser/` and `web/`. `.github/workflows/pages.yml` builds and tests the playground,
+then deploys the complete `docs/` artifact through GitHub Pages. `.nojekyll` keeps
+all files available without Jekyll processing.
+
+The landing page itself is static and buildless. Build the playground before
+previewing the whole site:
+
+```sh
+make setup
+rustup target add wasm32-unknown-unknown
+make playground-build
+```
 
 Preview from the repository root:
 
@@ -34,8 +45,9 @@ never executes the displayed AI or desktop applications.
 
 The benchmark selector uses two exact 80-sample paired reports. The page reports
 helper-process avoidance, keeps Bash's faster result visible, and links the raw
-samples. It separates packaged 0.8.0 from source 0.9.0-dev and points to the
-unfinished production gates.
+samples. Those measurements describe recorded 0.9.0-dev source hashes before
+the Windows port. The page identifies the 0.9.0-rc.4 release, keeps the retained
+0.8.0 binary distinct, and links unfinished production gates.
 
 ## Screenshots
 

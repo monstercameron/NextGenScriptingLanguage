@@ -186,8 +186,8 @@ test('complete snippet defaults pass the actual execute check without running co
   const snippets = JSON.parse(fs.readFileSync(path.join(extension, 'snippets/execute.code-snippets'), 'utf8'));
   assert.equal(Object.keys(snippets).length, 23);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'execute-vscode-'));
-  const binary = process.env.EXECUTE_TEST_BINARY || path.join(project, 'bin/execute');
-  assert.ok(fs.existsSync(binary), 'Use the checked-out runtime or set EXECUTE_TEST_BINARY');
+  const binary = process.env.EXECUTE_TEST_BINARY || path.join(project, 'target/release', process.platform === 'win32' ? 'execute.exe' : 'execute');
+  assert.ok(fs.existsSync(binary), 'Build the current runtime with cargo build --locked --release, or set EXECUTE_TEST_BINARY');
   try {
     let checked = 0;
     for (const [name, snippet] of Object.entries(snippets)) {

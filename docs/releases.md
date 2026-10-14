@@ -75,8 +75,10 @@ are not configured.
 
 ## Maintainer workflow
 
-`Cargo.toml` is the canonical runtime version; `Cargo.lock` must agree. Both
-runtime binaries embed that version. The VS Code extension versions separately.
+`Cargo.toml` is the canonical runtime version; root `Cargo.lock` and the
+root dependency entry in `browser/Cargo.lock` must agree. The release helper
+validates and updates all three together. Both native runtime binaries embed that
+version. The private browser wrapper and VS Code extension version separately.
 
 ```sh
 python3 tools/release.py version
@@ -84,7 +86,7 @@ python3 tools/release.py bump patch
 # Or explicitly prepare a candidate:
 python3 tools/release.py set-version 0.9.0-rc.4
 make check
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock browser/Cargo.lock
 git commit -m "Prepare Execute 0.9.0-rc.4"
 git push origin main
 # Wait for native checks and a manually dispatched Package validation run.

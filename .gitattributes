@@ -1,0 +1,27 @@
+# Keep source consistent across native Windows and Unix checkouts.
+* text=auto
+*.rs text eol=lf
+*.py text eol=lf
+*.program text eol=lf
+*.sh text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Makefile text eol=lf
+*.png binary
+*.wasm binary
+*.vsix binary
+/bin/execute binary
+
+# Separate upstream source and retained evidence from project code statistics.
+vendor/** linguist-vendored
+docs/** linguist-documentation
+benchmarks/optimization-pass/** linguist-documentation
+work/** linguist-documentation

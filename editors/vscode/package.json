@@ -2,7 +2,7 @@
   "name": "execute-program",
   "displayName": "Execute .program",
   "description": "Syntax highlighting and snippets for Execute Unix workflows, streams, services, and terminal apps.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "execute-lang",
   "license": "MIT",
   "engines": {
@@ -66,11 +66,20 @@
   "scripts": {
     "test": "node --test test/*.test.cjs",
     "vscode:prepublish": "npm test",
-    "package": "vsce package --allow-missing-repository --out execute-program-0.2.0.vsix"
+    "package": "vsce package"
   },
   "devDependencies": {
     "@vscode/vsce": "4.0.0",
     "vscode-textmate": "9.3.2",
     "vscode-oniguruma": "2.0.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/monstercameron/NextGenScriptingLanguage.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://monstercameron.github.io/NextGenScriptingLanguage/",
+  "bugs": {
+    "url": "https://github.com/monstercameron/NextGenScriptingLanguage/issues"
   }
 }

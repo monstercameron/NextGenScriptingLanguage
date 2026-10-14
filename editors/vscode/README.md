@@ -52,7 +52,7 @@ This declarative extension provides lexical highlighting and snippets. It has no
 activation code, telemetry, command runner or language server. It does not execute
 programs or load applet manifests, and highlighting is not semantic validation.
 Use `execute check FILE.program` or `execute check FILE.program --json` for the
-runtime's static checks. See the [language reference](../../docs/language.md).
+runtime's static checks. See the [language reference](https://github.com/monstercameron/NextGenScriptingLanguage/blob/main/docs/language.md).
 
 ## Develop and package
 

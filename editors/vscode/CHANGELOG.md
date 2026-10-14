@@ -5,7 +5,8 @@
 - Package the source grammar for native status, scalar conditions, JSON operations
   and same-file reusable programs, with complete validated snippets.
 - Add repository, homepage and issue metadata; derive the VSIX filename from the
-  package version.
+  package version. Resolve packaged documentation from the monorepo extension
+  directory.
 - Validate snippet defaults with the current source runtime, or an explicit
   `EXECUTE_TEST_BINARY`, instead of the retained historical binary.
 - Refresh installation and contributor instructions.

@@ -29,9 +29,10 @@ CI uses the same command on macOS and Ubuntu. Native Windows runs portable
 library/model tests and the PE fixture suite on x64 and ARM64:
 
 ```powershell
-cargo build --locked --release --bins --example native-fixture
-cargo test --locked --release --test windows_native --test models --test opt_manifest_regressions
-cargo test --locked --release --lib
+$target = "x86_64-pc-windows-msvc" # ARM64: aarch64-pc-windows-msvc
+cargo build --locked --target $target --release --bins --example native-fixture
+cargo test --locked --target $target --release --test windows_native --test models --test opt_manifest_regressions
+cargo test --locked --target $target --release --lib
 ```
 
 See [Windows contracts](docs/windows.md) and the [release workflow](docs/releases.md).

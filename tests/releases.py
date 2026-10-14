@@ -98,12 +98,15 @@ class Releases(unittest.TestCase):
             path = Path(tmp) / "binary"
             for target in release.TARGETS:
                 arm = target.startswith("aarch64")
-                data = bytearray(256)
+                data = bytearray(512)
                 if "windows" in target:
                     data[:2] = b"MZ"
                     struct.pack_into("<I", data, 0x3C, 128)
                     data[128:132] = b"PE\0\0"
                     struct.pack_into("<H", data, 132, 0xAA64 if arm else 0x8664)
+                    struct.pack_into("<H", data, 148, 240)
+                    struct.pack_into("<H", data, 152, 0x20B)
+                    struct.pack_into("<I", data, 260, 16)
                 elif "linux" in target:
                     data[:6] = b"\x7fELF\x02\x01"
                     struct.pack_into("<H", data, 18, 183 if arm else 62)
@@ -123,6 +126,35 @@ class Releases(unittest.TestCase):
                 path.write_bytes(b"wrong")
                 with self.assertRaises((ValueError, struct.error)):
                     package.check_binary(path, target)
+
+    def test_windows_import_gate_rejects_hidden_visual_cpp_dependencies(self):
+        data = bytearray(1024)
+        data[:2] = b"MZ"
+        struct.pack_into("<I", data, 0x3C, 128)
+        data[128:132] = b"PE\0\0"
+        struct.pack_into("<HH", data, 132, 0x8664, 1)
+        struct.pack_into("<H", data, 148, 240)
+        struct.pack_into("<H", data, 152, 0x20B)
+        struct.pack_into("<I", data, 260, 16)
+        struct.pack_into("<II", data, 272, 0x1000, 40)
+        struct.pack_into("<IIII", data, 400, 256, 0x1000, 256, 512)
+        struct.pack_into("<IIIII", data, 512, 0, 0, 0, 0x1040, 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "fixture.exe"
+            for name, forbidden in [
+                ("VCRUNTIME140.dll", True),
+                ("MSVCP140.dll", True),
+                ("KERNEL32.dll", False),
+            ]:
+                data[576:640] = bytes(64)
+                data[576 : 576 + len(name)] = name.encode()
+                binary.write_bytes(data)
+                self.assertEqual(package.pe_imports(data), [name])
+                if forbidden:
+                    with self.assertRaisesRegex(ValueError, "non-system CRT"):
+                        package.check_binary(binary, "x86_64-pc-windows-msvc")
+                else:
+                    package.check_binary(binary, "x86_64-pc-windows-msvc")
 
     def test_archive_bytes_reproducible_despite_input_mtime(self):
         with tempfile.TemporaryDirectory() as tmp:

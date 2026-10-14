@@ -4,6 +4,7 @@ import argparse
 import gzip
 import io
 import os
+import re
 from pathlib import Path
 import shutil
 import struct
@@ -19,6 +20,50 @@ def run(*args, **kwargs):
     return subprocess.run(list(map(str, args)), check=True, **kwargs)
 
 
+def pe_imports(data):
+    """Read PE32+ imports without depending on an installed SDK or objdump."""
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    optional = pe + 24
+    optional_size = struct.unpack_from("<H", data, pe + 20)[0]
+    if optional_size < 240 or struct.unpack_from("<H", data, optional)[0] != 0x20B:
+        raise ValueError("Windows release requires a PE32+ optional header")
+    sections = []
+    for i in range(struct.unpack_from("<H", data, pe + 6)[0]):
+        offset = optional + optional_size + 40 * i
+        virtual_size, address, size, raw = struct.unpack_from("<IIII", data, offset + 8)
+        sections.append((address, max(size, virtual_size), raw, size))
+
+    def location(rva):
+        for address, extent, raw, size in sections:
+            delta = rva - address
+            if 0 <= delta < extent and delta < size and raw + delta < len(data):
+                return raw + delta
+        raise ValueError("invalid PE import RVA")
+
+    directory_count = struct.unpack_from("<I", data, optional + 108)[0]
+    if (
+        directory_count > 13
+        and struct.unpack_from("<I", data, optional + 112 + 13 * 8)[0]
+    ):
+        raise ValueError("delayed Windows imports require explicit packaging review")
+    imports = []
+    rva = (
+        struct.unpack_from("<I", data, optional + 120)[0] if directory_count > 1 else 0
+    )
+    if not rva:
+        return imports
+    for index in range(4096):
+        descriptor = struct.unpack_from("<IIIII", data, location(rva + index * 20))
+        if not any(descriptor):
+            return imports
+        start = location(descriptor[3])
+        end = data.find(b"\0", start, min(start + 4096, len(data)))
+        if end < 0:
+            raise ValueError("unterminated PE import name")
+        imports.append(data[start:end].decode("ascii"))
+    raise ValueError("too many PE import descriptors")
+
+
 def check_binary(path, target):
     data = path.read_bytes()
     arm = target.startswith("aarch64")
@@ -30,6 +75,16 @@ def check_binary(path, target):
             "<H", data, offset + 4
         )[0] != (0xAA64 if arm else 0x8664):
             raise ValueError("PE architecture mismatch")
+        for name in pe_imports(data):
+            name = name.lower()
+            if (
+                name.startswith(("vcruntime", "msvcp", "concrt"))
+                or name == "ucrtbased.dll"
+                or re.fullmatch(r"msvcr[0-9]+d?\.dll", name)
+            ):
+                raise ValueError(
+                    "Windows package depends on a non-system CRT DLL: " + name
+                )
     elif "linux" in target:
         if data[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", data, 18)[0] != (
             183 if arm else 62

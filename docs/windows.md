@@ -2,6 +2,8 @@
 
 The Windows runtime uses native executables and pipes. It does not require WSL.
 Windows x64 and ARM64 have separate native CI runners and release artifacts.
+The MSVC C runtime is linked statically. Packaging inspects PE imports and rejects
+Visual C++ runtime DLL dependencies; no separate VC++ redistributable is required.
 
 The language, typed values, branches, reusable programs, JSON operations, cache,
 checkpoint state machine, intervals, listeners, headless widgets and live state

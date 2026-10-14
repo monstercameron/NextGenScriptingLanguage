@@ -2,7 +2,7 @@
 
 [Explore the Execute site →](https://monstercameron.github.io/NextGenScriptingLanguage/)
 
-Production tracking: [Bash and Omarchy acceptance gates](docs/production-readiness.md), [pinned command inventory](docs/omarchy-inventory.json), and [initial isolated interface ports](examples/omarchy-ports/README.md). Source 0.9.0-rc.3 is a multi-platform release candidate; historical packaged 0.8.0 is unchanged. See [releases and installation](docs/releases.md).
+Production tracking: [Bash and Omarchy acceptance gates](docs/production-readiness.md), [pinned command inventory](docs/omarchy-inventory.json), and [initial isolated interface ports](examples/omarchy-ports/README.md). Source 0.9.0-rc.4 is a multi-platform release candidate; historical packaged 0.8.0 is unchanged. See [releases and installation](docs/releases.md).
 
 **English for the glue. Unix for the work.**
 
@@ -25,7 +25,7 @@ The goal is a small language that people can read and agents can compose: reuse
 the tools that already do the work, and make the connections explicit. The syntax
 is deterministic; running a program requires no LLM, API key, or model inference.
 
-**0.9.0-rc.3 candidate · macOS + Linux + native Windows · x64 + ARM64 · Rust · [MIT](LICENSE)**
+**0.9.0-rc.4 candidate · macOS + Linux + native Windows · x64 + ARM64 · Rust · [MIT](LICENSE)**
 
 The source candidate includes stdin, discovery, status, conditions, JSON, reusable
 programs and explicit model applets, plus a native Windows runtime.
@@ -524,7 +524,7 @@ for the current candidate. Windows does not run Unix-tool-dependent fixtures.
 
 ## Release and source status
 
-| Capability | Historical packaged 0.8.0 | 0.9.0-rc.3 source and release |
+| Capability | Historical packaged 0.8.0 | 0.9.0-rc.4 source and release |
 | --- | --- | --- |
 | Direct native calls, argv, pipes, typed CLI inputs, services and TUIs | Available | Available |
 | Finite `read from stdin` | Pending | Available |

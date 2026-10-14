@@ -68,7 +68,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, windows-11-arm]
+        include:
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     steps:
@@ -81,7 +85,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo build --locked --release --bins --example native-fixture
-      - run: cargo test --locked --release --test windows_native --test models --test opt_manifest_regressions -- --test-threads=1
-      - run: cargo test --locked --release --lib -- --test-threads=1
+      - run: cargo clippy --locked --target ${{ matrix.target }} --all-targets -- -D warnings
+      - run: cargo build --locked --target ${{ matrix.target }} --release --bins --example native-fixture
+      - run: cargo test --locked --target ${{ matrix.target }} --release --test windows_native --test models --test opt_manifest_regressions -- --test-threads=1
+      - run: cargo test --locked --target ${{ matrix.target }} --release --lib -- --test-threads=1

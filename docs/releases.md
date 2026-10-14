@@ -12,7 +12,7 @@ Omarchy compatibility. See [Windows semantics](windows.md) and the
 | Linux x64 / ARM64 | `execute-VERSION-linux-x64.tar.gz` / `linux-arm64.tar.gz` | Static musl executables; native host tools are separate dependencies. |
 | Debian / Ubuntu | `execute_VERSION_amd64.deb` / `arm64.deb` | `/usr/bin` binaries and `/usr/share/execute/manifests`. |
 | Fedora / RHEL family | `execute-VERSION-1.x86_64.rpm` / `aarch64.rpm` | Same layout; payload validated on Ubuntu, with Fedora installation validation in CI. |
-| Windows x64 / ARM64 | `execute-VERSION-windows-x64.zip` / `windows-arm64.zip` | Real `.exe` binaries. Extract the complete directory; add its `bin` directory to PATH. Not Authenticode signed. |
+| Windows x64 / ARM64 | `execute-VERSION-windows-x64.zip` / `windows-arm64.zip` | Real `.exe` binaries with a static CRT, without a separate VC++ redistributable. Extract the complete directory; add its `bin` directory to PATH. Not Authenticode signed. |
 | Flatpak x64 / ARM64 | `execute-VERSION-linux-x64.flatpak` / `linux-arm64.flatpak` | CLI sandbox, Freedesktop 25.08. Home files and network are permitted. Host tools and desktop services are not automatically accessible. |
 
 Every archive contains `execute-VERSION/bin/execute` and `execute-model`
@@ -82,15 +82,15 @@ runtime binaries embed that version. The VS Code extension versions separately.
 python3 tools/release.py version
 python3 tools/release.py bump patch
 # Or explicitly prepare a candidate:
-python3 tools/release.py set-version 0.9.0-rc.3
+python3 tools/release.py set-version 0.9.0-rc.4
 make check
 git add Cargo.toml Cargo.lock
-git commit -m "Prepare Execute 0.9.0-rc.3"
+git commit -m "Prepare Execute 0.9.0-rc.4"
 git push origin main
 # Wait for native checks and a manually dispatched Package validation run.
-python3 tools/release.py verify-tag v0.9.0-rc.3
-git tag -a v0.9.0-rc.3 -m "Execute 0.9.0-rc.3"
-git push origin v0.9.0-rc.3
+python3 tools/release.py verify-tag v0.9.0-rc.4
+git tag -a v0.9.0-rc.4 -m "Execute 0.9.0-rc.4"
+git push origin v0.9.0-rc.4
 ```
 
 Release tags use strict SemVer without build metadata. Leading zeros, malformed

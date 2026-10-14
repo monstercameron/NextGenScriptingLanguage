@@ -134,6 +134,24 @@ test('loop trace stays bounded and iteration-budget errors preserve worker usabi
   bad(run(call, 'while true is true\n  run "true"'), /iteration budget/);
   assert.equal(good(run(call, 'then encode 7 as json')).stdout, '7');
 });
+test('trace byte budget preserves exact UTF8 and escaped JSON boundaries per request', async () => {
+  const call = await session();
+  const source =
+    'accept message as text\nrepeat 200 times\n  run "printf" with arguments ["%s", message]';
+  for (const message of ['small', '雪'.repeat(4000), '"\\\u0001\n\r\t\b\f'.repeat(2000)]) {
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const response = good(run(call, source, { inputs: { message } }));
+      assert.equal(response.stdout, message);
+      assert.equal(response.applet_calls, 200);
+      assert.equal(response.trace[0].argv[1], message);
+      const entryBytes = Buffer.byteLength(JSON.stringify(response.trace[0]));
+      const accepted = Math.min(200, 4095, Math.floor((1024 * 1024 - 1024) / (entryBytes + 1)));
+      assert.equal(response.trace.length, accepted + (accepted < 200 ? 1 : 0));
+      if (accepted < 200) assert.equal(response.trace.at(-1).operation, 'trace truncated');
+      assert.ok(Buffer.byteLength(JSON.stringify(response.trace)) <= 1024 * 1024);
+    }
+  }
+});
 test('validation rejects undefined names, branch-dependent bindings and type mismatch', async () => {
   const call = await seeded();
   for (const source of [

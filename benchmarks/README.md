@@ -1,3 +1,38 @@
+# Browser trace sizing
+
+The [browser trace report](performance-2026-10-14-browser-trace.json) compares
+release WASM from `f797524` with a byte-counting serializer for trace limits.
+It uses the same JSON serializer and escaping rules while avoiding a temporary
+buffer for every trace entry. Full response hashes, exact escaped UTF-8 budget
+boundaries, the 4,096-entry/1 MiB caps and lazy trace construction remain intact.
+
+Three alternating rounds in Node's real WASM ABI measured trace-heavy medians
+21–29% lower. Repeated Chromium runs measured project-worker time about 21–32%
+lower and worker round trips about 21–26% lower. These finite virtual-applet
+workloads exclude UI rendering, native processes and network providers. The
+pure JSON control stayed approximately flat. WASM grows by 909 bytes (0.175%);
+startup, compile time, allocations, peak memory and RSS were not measured.
+
+Tiny worker samples were quantized at 10/20 microseconds, producing an apparent
+100% ratio that cannot establish a precise regression. Single-applet round trips
+remained about 40 microseconds. Separate browser-main-thread ABI measurements,
+using 500-operation batches, repeated about 6.2 to 5.6 microseconds per call;
+those exclude worker/RPC overhead. One earlier JSON worker-control round varied
+60 to 80 microseconds. Raw samples and these limitations are retained.
+
+`browser_trace.mjs` loads explicit preserved WASM files and compares matching
+requests, full responses and independent output/trace-budget oracles. Compilation,
+instantiation and fetch are outside timing. Use `--host node` for the Node ABI or
+`--host chromium` for the project worker plus the separate batched ABI control:
+
+```sh
+node benchmarks/browser_trace.mjs --baseline /path/to/baseline.wasm --candidate /path/to/candidate.wasm --host chromium --report target/browser-paired.json
+```
+
+The harness uses the installed playground Playwright dependency. Keep timing
+runs separate from builds and tests. Results are local warm-cache macOS arm64,
+not cold-start, native-runtime or Bash comparisons. Native CLI bytes are unchanged.
+
 # Compound checkpoint fingerprints
 
 The [checkpoint fingerprint report](performance-2026-10-14-checkpoint-fingerprints.json)

@@ -66,7 +66,21 @@ impl Response {
         let value = value();
         // Loops can execute far more statements than the source-size limit.
         // Keep diagnostics bounded independently of the execution budget.
-        let bytes = serde_json::to_vec(&value).map_or(LIMIT, |bytes| bytes.len().saturating_add(1));
+        struct Counter(usize);
+        impl std::io::Write for Counter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0 = self.0.saturating_add(bytes.len());
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        // Use the same serializer and escaping rules without allocating a
+        // second copy of every trace entry just to measure its byte length.
+        let mut counter = Counter(0);
+        let bytes = serde_json::to_writer(&mut counter, &value)
+            .map_or(LIMIT, |_| counter.0.saturating_add(1));
         if self.trace.len() >= 4095 || self.trace_bytes.saturating_add(bytes) > LIMIT - 1024 {
             self.trace.push(serde_json::json!({"operation":"trace truncated","reason":"browser trace limit: 4096 entries or 1 MiB"}));
             self.trace_truncated = true;

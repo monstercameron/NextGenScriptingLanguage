@@ -197,6 +197,7 @@ class Publication(unittest.TestCase):
     def server(self, folder, value, draft=True):
         return {
             "id": 1,
+            "tag_name": "v" + value,
             "draft": draft,
             "body": "<!-- execute-release:v" + value + ":" + "a" * 40 + " -->",
             "assets": [
@@ -209,13 +210,36 @@ class Publication(unittest.TestCase):
             ],
         }
 
+    def test_new_draft_is_found_in_paginated_listing_and_verified_by_id(self):
+        with self.payload() as (folder, value):
+            server = self.server(folder, value)
+            missing = subprocess.CompletedProcess([], 0, "[[]]", "")
+            found = subprocess.CompletedProcess([], 0, json.dumps([[], [server]]), "")
+            with mock.patch.object(
+                publish_release.subprocess, "run", side_effect=[missing, found]
+            ) as listing, mock.patch.object(
+                publish_release.subprocess,
+                "check_output",
+                return_value=json.dumps(server),
+            ) as by_id, mock.patch.object(
+                publish_release, "gh"
+            ) as gh:
+                publish_release.main()
+                self.assertEqual(listing.call_count, 2)
+                self.assertIn("--paginate", listing.call_args.args[0])
+                self.assertTrue(by_id.call_args.args[0][-1].endswith("/releases/1"))
+                self.assertEqual(gh.call_args_list[0].args[:2], ("release", "create"))
+                self.assertEqual(
+                    gh.call_args_list[-1].args[:3], ("api", "--method", "PATCH")
+                )
+
     def test_uploaded_server_digest_is_required_before_publication(self):
         for corrupt in [False, True]:
             with self.subTest(corrupt=corrupt), self.payload() as (folder, value):
                 server = self.server(folder, value)
                 if corrupt:
                     server["assets"][0]["digest"] = "sha256:" + "0" * 64
-                lookup = subprocess.CompletedProcess([], 0, json.dumps(server), "")
+                lookup = subprocess.CompletedProcess([], 0, json.dumps([[server]]), "")
                 with mock.patch.object(
                     publish_release.subprocess, "run", return_value=lookup
                 ), mock.patch.object(
@@ -247,7 +271,7 @@ class Publication(unittest.TestCase):
         with self.payload() as (folder, value):
             server = self.server(folder, value)
             server["body"] = "somebody else owns this release"
-            lookup = subprocess.CompletedProcess([], 0, json.dumps(server), "")
+            lookup = subprocess.CompletedProcess([], 0, json.dumps([[server]]), "")
             with mock.patch.object(
                 publish_release.subprocess, "run", return_value=lookup
             ), mock.patch.object(publish_release, "gh") as gh:
@@ -272,7 +296,7 @@ class Publication(unittest.TestCase):
         for corrupt in [False, True]:
             with self.subTest(corrupt=corrupt), self.payload() as (folder, value):
                 server = self.server(folder, value, draft=False)
-                lookup = subprocess.CompletedProcess([], 0, json.dumps(server), "")
+                lookup = subprocess.CompletedProcess([], 0, json.dumps([[server]]), "")
 
                 def download(*args, **kwargs):
                     self.assertEqual(args[:2], ("release", "download"))

@@ -6,11 +6,42 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from release import expected_assets, version
 
 
 def gh(*args, **kwargs):
     return subprocess.run(["gh", *map(str, args)], check=True, **kwargs)
+
+
+def lookup_release(repo, tag):
+    # GitHub's /releases/tags endpoint does not return drafts, even to their
+    # author. Authenticated release listing includes drafts; paginate so old
+    # published releases are also found without creating duplicate drafts.
+    lookup = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            "repos/" + repo + "/releases?per_page=100",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if lookup.returncode:
+        raise ValueError("release lookup failed: " + lookup.stderr)
+    matches = [
+        item
+        for page in json.loads(lookup.stdout)
+        for item in page
+        if item["tag_name"] == tag
+    ]
+    if len(matches) > 1:
+        raise ValueError(
+            "multiple releases use the same tag; refusing ambiguous ownership"
+        )
+    return matches[0] if matches else None
 
 
 def main():
@@ -33,16 +64,7 @@ def main():
     if lines != [actual[n] + "  " + n for n in sorted(actual)]:
         raise ValueError("checksums do not match publication payloads")
     marker = "<!-- execute-release:" + tag + ":" + commit + " -->"
-    lookup = subprocess.run(
-        ["gh", "api", "repos/" + repo + "/releases/tags/" + tag],
-        capture_output=True,
-        text=True,
-    )
-    existing = None
-    if lookup.returncode == 0:
-        existing = json.loads(lookup.stdout)
-    elif "404" not in lookup.stderr:
-        raise ValueError("release lookup failed: " + lookup.stderr)
+    existing = lookup_release(repo, tag)
     if existing and marker not in existing.get("body", ""):
         raise ValueError(
             "refusing to mutate a release not owned by this exact tag/commit"
@@ -89,6 +111,20 @@ def main():
             "--notes-file",
             notes,
         )
+        for delay in [0, 0.25, 0.5, 1]:
+            if delay:
+                time.sleep(delay)
+            existing = lookup_release(repo, tag)
+            if existing:
+                break
+        if (
+            not existing
+            or not existing["draft"]
+            or marker not in existing.get("body", "")
+        ):
+            raise ValueError(
+                "created draft could not be verified; leaving it unpublished"
+            )
     gh(
         "release",
         "upload",
@@ -101,7 +137,8 @@ def main():
     # Check server digests, not merely a successful HTTP response or asset count.
     release = json.loads(
         subprocess.check_output(
-            ["gh", "api", "repos/" + repo + "/releases/tags/" + tag], text=True
+            ["gh", "api", "repos/" + repo + "/releases/" + str(existing["id"])],
+            text=True,
         )
     )
     assets = {a["name"]: a for a in release["assets"]}

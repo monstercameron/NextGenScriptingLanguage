@@ -82,15 +82,15 @@ runtime binaries embed that version. The VS Code extension versions separately.
 python3 tools/release.py version
 python3 tools/release.py bump patch
 # Or explicitly prepare a candidate:
-python3 tools/release.py set-version 0.9.0-rc.1
+python3 tools/release.py set-version 0.9.0-rc.2
 make check
 git add Cargo.toml Cargo.lock
-git commit -m "Prepare Execute 0.9.0-rc.1"
+git commit -m "Prepare Execute 0.9.0-rc.2"
 git push origin main
 # Wait for native checks and a manually dispatched Package validation run.
-python3 tools/release.py verify-tag v0.9.0-rc.1
-git tag -a v0.9.0-rc.1 -m "Execute 0.9.0-rc.1"
-git push origin v0.9.0-rc.1
+python3 tools/release.py verify-tag v0.9.0-rc.2
+git tag -a v0.9.0-rc.2 -m "Execute 0.9.0-rc.2"
+git push origin v0.9.0-rc.2
 ```
 
 Release tags use strict SemVer without build metadata. Leading zeros, malformed

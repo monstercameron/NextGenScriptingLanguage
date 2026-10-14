@@ -67,4 +67,5 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo build --locked --release --bins --example native-fixture
-      - run: cargo test --locked --release -- --test-threads=1
+      - run: cargo test --locked --release --test windows_native --test models --test opt_manifest_regressions -- --test-threads=1
+      - run: cargo test --locked --release --lib -- --test-threads=1

@@ -953,7 +953,10 @@ fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
     }
     // Keep the selected path spelling: multicall tools and symlink aliases
     // dispatch on argv[0], so canonicalizing to the target changes behavior.
-    if binary.contains(['/', '\\']) || Path::new(binary).is_absolute() {
+    if binary.contains('/')
+        || (cfg!(windows) && binary.contains('\\'))
+        || Path::new(binary).is_absolute()
+    {
         let candidate = crate::platform::executable_path(cwd.join(binary))?;
         let metadata = fs::metadata(&candidate)?;
         if !metadata.is_file() || !crate::platform::executable(&metadata) {
@@ -2585,7 +2588,10 @@ mod opt_manifest_binary_path_tests {
 
     fn opt_manifest_legacy_binary_path(binary: &str, cwd: &Path, path: &OsStr) -> Result<PathBuf> {
         // This preserves the original candidate construction as a parity oracle.
-        if binary.contains(['/', '\\']) || Path::new(binary).is_absolute() {
+        if binary.contains('/')
+            || (cfg!(windows) && binary.contains('\\'))
+            || Path::new(binary).is_absolute()
+        {
             let candidate = crate::platform::executable_path(cwd.join(binary))?;
             let metadata = fs::metadata(&candidate)?;
             if !metadata.is_file() || !crate::platform::executable(&metadata) {

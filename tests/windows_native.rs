@@ -79,8 +79,7 @@ fn direct_byte_pipelines_and_inherited_stdin_preserve_binary_data() {
     fs::write(
         &file,
         format!(
-            "read from stdin\n{}pipe to {} with arguments [\"copy\"]\n",
-            native(&["copy"]),
+            "read from stdin\npipe to {0} with arguments [\"copy\"]\npipe to {0} with arguments [\"copy\"]\n",
             quoted(&fixture())
         ),
     )
@@ -95,10 +94,10 @@ fn direct_byte_pipelines_and_inherited_stdin_preserve_binary_data() {
     let data: Vec<u8> = (0..256).cycle().take(131072).map(|n| n as u8).collect();
     let expected = data.clone();
     let mut sink = child.stdin.take().unwrap();
-    let writer = std::thread::spawn(move || sink.write_all(&data).unwrap());
+    let writer = std::thread::spawn(move || sink.write_all(&data));
     let result = child.wait_with_output().unwrap();
-    writer.join().unwrap();
     ok(&result);
+    writer.join().unwrap().unwrap();
     assert_eq!(result.stdout, expected);
 }
 #[test]
@@ -314,4 +313,75 @@ fn headless_widgets_and_bundled_model_helper_are_native() {
         .unwrap();
     ok(&result);
     assert!(String::from_utf8_lossy(&result.stdout).contains("execute-model"));
+}
+
+#[test]
+fn finite_stdin_capture_preserves_bytes_and_obeys_limits_and_timeout() {
+    let folder = tempfile::tempdir().unwrap();
+    let script = folder.path().join("capture.program");
+    fs::write(&script, "read from stdin\n").unwrap();
+    let data: Vec<u8> = (0..256).cycle().take(65536).map(|n| n as u8).collect();
+    let input = folder.path().join("input.bin");
+    fs::write(&input, &data).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg(&script)
+        .stdin(fs::File::open(&input).unwrap())
+        .output()
+        .unwrap();
+    ok(&result);
+    assert_eq!(result.stdout, data);
+    let result = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg(&script)
+        .args(["--max-output-bytes", "32"])
+        .stdin(fs::File::open(&input).unwrap())
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    let mut child = Server(
+        Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg(&script)
+            .args(["--command-timeout-ms", "150"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            assert!(!status.success());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "blocked native stdin did not cancel"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn unicode_file_uri_and_batch_rejection_are_explicit() {
+    let folder = tempfile::tempdir().unwrap();
+    let script = folder.path().join("snow 雪.program");
+    fs::write(&script, native(&["write", "uri"])).unwrap();
+    let uri = url::Url::from_file_path(&script).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg(uri.as_str())
+        .output()
+        .unwrap();
+    ok(&result);
+    assert_eq!(result.stdout, b"uri");
+    let batch = folder.path().join("forbidden.cmd");
+    fs::write(&batch, "@echo must-not-run").unwrap();
+    let result = invoke(
+        folder.path(),
+        &format!("run {}\n", quoted(batch.to_str().unwrap())),
+        &[],
+    );
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("explicit cmd.exe"));
 }

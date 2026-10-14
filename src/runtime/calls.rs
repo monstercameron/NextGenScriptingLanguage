@@ -1,5 +1,6 @@
 //! Validation and lexical execution frames for lowered finite program calls.
 use super::*;
+
 use crate::ast::{InputDeclaration, InputType};
 
 pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Result<()> {
@@ -178,7 +179,29 @@ pub(super) fn preflight(
             .validate_with_types(&resolved, types)
             .with_context(|| format!("line {line}: program inputs"))
     }
-    let mut values = supplied.clone();
+    // Most preflight passes only inspect supplied values. Keep their large
+    // trees borrowed until a known binding actually becomes unavailable.
+    fn forget(values: &mut Cow<'_, BTreeMap<String, Value>>, name: &str) {
+        match values {
+            Cow::Owned(owned) => {
+                owned.remove(name);
+            }
+            Cow::Borrowed(borrowed) => {
+                if borrowed.contains_key(name) {
+                    // The invalidated value is no longer observable. Avoid
+                    // copying its potentially large tree just to discard it.
+                    *values = Cow::Owned(
+                        borrowed
+                            .iter()
+                            .filter(|(key, _)| key.as_str() != name)
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect(),
+                    );
+                }
+            }
+        }
+    }
+    let mut values = Cow::Borrowed(supplied);
     let mut types: BTreeMap<_, _> = program
         .inputs
         .iter()
@@ -204,7 +227,7 @@ pub(super) fn preflight(
                     types.clone(),
                 ));
                 if let crate::ast::LoopKind::ForEach { binding, .. } = kind {
-                    values.remove(binding);
+                    forget(&mut values, binding);
                     types.insert(binding.clone(), InputType::Text);
                 }
             }
@@ -212,7 +235,9 @@ pub(super) fn preflight(
                 let (outer, outer_types) = loop_scopes
                     .pop()
                     .context("loop end without preflight scope")?;
-                values.retain(|name, _| outer.contains(name));
+                if values.keys().any(|name| !outer.contains(name)) {
+                    values.to_mut().retain(|name, _| outer.contains(name));
+                }
                 types = outer_types;
             }
             StepKind::CallProgram { call, inputs, .. } => {
@@ -237,7 +262,7 @@ pub(super) fn preflight(
                     .map(|input| (input.name.clone(), input.kind))
                     .collect();
                 scopes.push((
-                    std::mem::replace(&mut values, child),
+                    std::mem::replace(&mut values, Cow::Owned(child)),
                     std::mem::replace(&mut types, child_types),
                     call.binding.clone(),
                 ));
@@ -249,18 +274,18 @@ pub(super) fn preflight(
                 values = parent;
                 types = parent_types;
                 if let Some(name) = binding {
-                    values.remove(&name);
+                    forget(&mut values, &name);
                     types.insert(name, InputType::Text);
                 }
             }
             StepKind::Invoke { call, .. } => {
                 native(call, step.line, registry, &values, &types)?;
                 if let Some(name) = &call.binding {
-                    values.remove(name);
+                    forget(&mut values, name);
                     types.insert(name.clone(), InputType::Text);
                 }
                 if let Some(name) = &call.status_binding {
-                    values.remove(name);
+                    forget(&mut values, name);
                     types.insert(name.clone(), InputType::Integer);
                 }
             }
@@ -268,12 +293,12 @@ pub(super) fn preflight(
             | StepKind::ReadStdin { binding }
             | StepKind::ReadCallInput { binding } => {
                 if let Some(name) = binding {
-                    values.remove(name);
+                    forget(&mut values, name);
                     types.insert(name.clone(), InputType::Text);
                 }
             }
             StepKind::ParseJson { binding } => {
-                values.remove(binding);
+                forget(&mut values, binding);
                 types.insert(binding.clone(), InputType::Json);
             }
             StepKind::TakeJson {
@@ -286,11 +311,324 @@ pub(super) fn preflight(
                     crate::structured::take(pointer, &source, *kind, step.line)
                         .with_context(|| format!("line {}: program inputs", step.line))?;
                 }
-                values.remove(binding);
+                forget(&mut values, binding);
                 types.insert(binding.clone(), *kind);
             }
             _ => {}
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    #[ignore = "explicit release preflight state timing; no processes or effects"]
+    #[allow(clippy::assertions_on_constants)]
+    fn supplied_preflight_state() -> Result<()> {
+        assert!(!cfg!(debug_assertions), "use --release");
+        let registry = Registry::default();
+        let mut results = BTreeMap::new();
+        for (name, mode, size) in [
+            ("empty_control", 0, 0),
+            ("record_8192", 0, 8192),
+            ("record_64k", 0, 64 * 1024),
+            ("record_1m", 0, 1024 * 1024),
+            ("json_64k", 1, 64 * 1024),
+            ("json_4m", 1, 4 * 1024 * 1024),
+            ("overwrite_1m_control", 2, 1024 * 1024),
+            ("loop_1m", 3, 1024 * 1024),
+        ] {
+            let source = match mode {
+            0 => "run \"true\"\n",
+            1 => "accept payload as json\ntake integer at \"/n\" from payload as number\nthen encode number as json\n",
+            2 => "accept record as text\nread \"missing\" as record\n",
+            _ => "repeat 0 times\n  run \"true\"\n",
+        };
+            let program = crate::parser::parse(source)?;
+            let supplied = if size == 0 {
+                BTreeMap::new()
+            } else if mode == 1 {
+                BTreeMap::from([(
+                    "payload".into(),
+                    Value::Record(BTreeMap::from([
+                        ("n".into(), Value::Integer(42)),
+                        ("padding".into(), Value::String("x".repeat(size))),
+                    ])),
+                )])
+            } else {
+                BTreeMap::from([("record".into(), Value::String("x".repeat(size)))])
+            };
+            let before = supplied.clone();
+            preflight(&program, &registry, &supplied)?;
+            assert_eq!(before, supplied);
+            let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&supplied)?));
+            let iterations = if size >= 64 * 1024 { 10 } else { 100 };
+            let mut raw = Vec::new();
+            for batch in 0..60 {
+                let start = Instant::now();
+                for _ in 0..iterations {
+                    preflight(
+                        std::hint::black_box(&program),
+                        &registry,
+                        std::hint::black_box(&supplied),
+                    )?;
+                }
+                if batch >= 10 {
+                    raw.push(start.elapsed().as_secs_f64() * 1e9 / f64::from(iterations));
+                }
+            }
+            assert_eq!(before, supplied);
+            let mut sorted = raw.clone();
+            sorted.sort_by(f64::total_cmp);
+            results.insert(name, json!({"source":source,"inputs_sha256":fingerprint,"payload_bytes":size,"p50_ns":(sorted[24]+sorted[25])/2.0,"p95_ns":sorted[47],"raw_batch_average_ns":raw}));
+        }
+        fs::write(
+            std::env::var("OPT_BENCH_REPORT")?,
+            serde_json::to_vec_pretty(
+                &json!({"results":results,"method":"Private static preflight entry. Parsed programs, input trees, clone/immutability/hash oracles and registry construction excluded. Validation, known-value handling, scope/type tracking and temporary destruction included. No processes, filesystem effects or provider calls. 10 warmup batches,50measured batches,10 or100 operations each. Actual caller maps checked unchanged before/after timing; not runtime/CLI/event latency or RSS."}),
+            )?,
+        )?;
+        Ok(())
+    }
+
+    // Exact pre-optimization implementation, retained as the semantic oracle.
+    fn legacy_preflight(
+        program: &Program,
+        registry: &Registry,
+        supplied: &BTreeMap<String, Value>,
+    ) -> Result<()> {
+        fn known(value: &Value, values: &BTreeMap<String, Value>) -> Value {
+            match value {
+                Value::Reference(name) => {
+                    values.get(name).cloned().unwrap_or_else(|| value.clone())
+                }
+                Value::List(items) => {
+                    Value::List(items.iter().map(|item| known(item, values)).collect())
+                }
+                Value::Record(items) => Value::Record(
+                    items
+                        .iter()
+                        .map(|(name, item)| (name.clone(), known(item, values)))
+                        .collect(),
+                ),
+                value => value.clone(),
+            }
+        }
+        fn native(
+            call: &Invocation,
+            line: usize,
+            registry: &Registry,
+            values: &BTreeMap<String, Value>,
+            types: &BTreeMap<String, InputType>,
+        ) -> Result<()> {
+            // Literal arguments already are the resolved values. Only calls that
+            // reference bindings need an owned invocation, with each value copied
+            // once rather than cloning the original map before replacing it.
+            let resolved = if call.parameters.values().any(contains_reference) {
+                Cow::Owned(Invocation {
+                    operation: call.operation.clone(),
+                    direct: call.direct,
+                    parameters: call
+                        .parameters
+                        .iter()
+                        .map(|(name, value)| (name.clone(), known(value, values)))
+                        .collect(),
+                    binding: call.binding.clone(),
+                    cache: call.cache,
+                    status_binding: call.status_binding.clone(),
+                })
+            } else {
+                Cow::Borrowed(call)
+            };
+            registry
+                .resolve_call(call)?
+                .validate_with_types(&resolved, types)
+                .with_context(|| format!("line {line}: program inputs"))
+        }
+        let mut values = supplied.clone();
+        let mut types: BTreeMap<_, _> = program
+            .inputs
+            .iter()
+            .map(|input| (input.name.clone(), input.kind))
+            .collect();
+        if let Some(Trigger::Listen {
+            source: ListenSource::Applet(call),
+            line,
+            ..
+        }) = &program.trigger
+        {
+            native(call, *line, registry, &values, &types)?;
+        }
+        let mut scopes = Vec::new();
+        let mut loop_scopes = Vec::new();
+        for step in &program.steps {
+            match &step.kind {
+                StepKind::Loop { kind, .. } => {
+                    loops::preflight(kind, &values)
+                        .with_context(|| format!("line {}: loop inputs", step.line))?;
+                    loop_scopes.push((
+                        values.keys().cloned().collect::<BTreeSet<_>>(),
+                        types.clone(),
+                    ));
+                    if let crate::ast::LoopKind::ForEach { binding, .. } = kind {
+                        values.remove(binding);
+                        types.insert(binding.clone(), InputType::Text);
+                    }
+                }
+                StepKind::EndLoop { .. } => {
+                    let (outer, outer_types) = loop_scopes
+                        .pop()
+                        .context("loop end without preflight scope")?;
+                    values.retain(|name, _| outer.contains(name));
+                    types = outer_types;
+                }
+                StepKind::CallProgram { call, inputs, .. } => {
+                    let mut child = BTreeMap::new();
+                    for input in inputs {
+                        if let Some(value) =
+                            call.parameters.get(&input.name).or(input.default.as_ref())
+                        {
+                            let value = known(value, &values);
+                            if !contains_reference(&value) {
+                                input.validate_value(&value).with_context(|| {
+                                    format!(
+                                        "program {:?}, called at line {}",
+                                        call.operation, step.line
+                                    )
+                                })?;
+                                child.insert(input.name.clone(), value);
+                            }
+                        }
+                    }
+                    let child_types = inputs
+                        .iter()
+                        .map(|input| (input.name.clone(), input.kind))
+                        .collect();
+                    scopes.push((
+                        std::mem::replace(&mut values, child),
+                        std::mem::replace(&mut types, child_types),
+                        call.binding.clone(),
+                    ));
+                }
+                StepKind::EndCall => {
+                    let (parent, parent_types, binding) = scopes
+                        .pop()
+                        .context("program return without preflight scope")?;
+                    values = parent;
+                    types = parent_types;
+                    if let Some(name) = binding {
+                        values.remove(&name);
+                        types.insert(name, InputType::Text);
+                    }
+                }
+                StepKind::Invoke { call, .. } => {
+                    native(call, step.line, registry, &values, &types)?;
+                    if let Some(name) = &call.binding {
+                        values.remove(name);
+                        types.insert(name.clone(), InputType::Text);
+                    }
+                    if let Some(name) = &call.status_binding {
+                        values.remove(name);
+                        types.insert(name.clone(), InputType::Integer);
+                    }
+                }
+                StepKind::Read { binding, .. }
+                | StepKind::ReadStdin { binding }
+                | StepKind::ReadCallInput { binding } => {
+                    if let Some(name) = binding {
+                        values.remove(name);
+                        types.insert(name.clone(), InputType::Text);
+                    }
+                }
+                StepKind::ParseJson { binding } => {
+                    values.remove(binding);
+                    types.insert(binding.clone(), InputType::Json);
+                }
+                StepKind::TakeJson {
+                    pointer,
+                    source,
+                    kind,
+                    binding,
+                } => {
+                    if let Ok(source) = structured_source(source, &values) {
+                        crate::structured::take(pointer, &source, *kind, step.line)
+                            .with_context(|| format!("line {}: program inputs", step.line))?;
+                    }
+                    values.remove(binding);
+                    types.insert(binding.clone(), *kind);
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn preflight_borrowing_preserves_errors_scopes_and_caller_values() -> Result<()> {
+        let registry = Registry::default();
+        let sources = [
+        "run \"true\"\n",
+        "run \"printf\" with arguments [\"%s\", record] as rendered\nthen \"printf\" with arguments [\"%s\", rendered]\n",
+        "read \"missing\" as record\nrun \"printf\" with arguments [\"%s\", record]\n",
+        "accept payload as json\ntake integer at \"/n\" from payload as number\nrun \"printf\" with arguments [\"%s\", number]\n",
+        "repeat count times\n  run \"true\" as rendered\nrun \"printf\" with arguments [\"%s\", rendered]\n",
+        "for each item in files\n  run \"printf\" with arguments [\"%s\", item] as rendered\n",
+        "define a program named worker\n  accept item as text with default \"default\"\n  run \"printf\" with arguments [\"%s\", item] as private\nrun program worker with item record as rendered\nrun \"printf\" with arguments [\"%s\", rendered]\n",
+        "if true is true\n  run \"printf\" with arguments [\"%s\", record] as rendered\notherwise\n  read \"missing\" as rendered\nrun \"printf\" with arguments [\"%s\", rendered]\n",
+    ];
+        let values = [
+            Value::String("text 雪; $HOME".into()),
+            Value::Integer(2),
+            Value::Integer(-1),
+            Value::Bool(true),
+            Value::List(vec![
+                Value::String("first".into()),
+                Value::String("second".into()),
+            ]),
+            Value::Record(BTreeMap::from([
+                ("n".into(), Value::Integer(42)),
+                ("padding".into(), Value::String("x".repeat(512))),
+            ])),
+            Value::Null,
+            Value::Reference("unknown".into()),
+        ];
+        for source in sources {
+            let program = crate::parser::parse(source)?;
+            for (index, value) in values.iter().enumerate() {
+                for overwrite in [false, true] {
+                    let mut supplied = BTreeMap::from([
+                        ("record".into(), value.clone()),
+                        ("payload".into(), value.clone()),
+                        ("count".into(), value.clone()),
+                        ("files".into(), value.clone()),
+                    ]);
+                    if overwrite {
+                        supplied.extend([
+                            (
+                                "rendered".into(),
+                                values[(index + 1) % values.len()].clone(),
+                            ),
+                            ("number".into(), value.clone()),
+                            ("item".into(), value.clone()),
+                        ]);
+                    }
+                    let before = supplied.clone();
+                    let legacy = legacy_preflight(&program, &registry, &supplied)
+                        .map_err(|error| format!("{error:#}"));
+                    let candidate = preflight(&program, &registry, &supplied)
+                        .map_err(|error| format!("{error:#}"));
+                    assert_eq!(
+                        candidate, legacy,
+                        "source={source},case={index},overwrite={overwrite}"
+                    );
+                    assert_eq!(supplied, before, "caller values mutated");
+                }
+            }
+        }
+        Ok(())
+    }
 }

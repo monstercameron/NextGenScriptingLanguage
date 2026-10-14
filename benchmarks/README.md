@@ -1,3 +1,42 @@
+# Borrowed preflight values
+
+The [preflight-state report](performance-2026-10-14-preflight-state.json)
+compares `d83078a` with borrowed supplied values during static preflight.
+Read-only analysis keeps the caller map borrowed. When a binding becomes
+unavailable, validation copies the remaining entries and skips the discarded
+value; child program scopes remain owned. Exact legacy errors, type/scope
+handling and caller immutability are checked against the old implementation
+across 128 differential cases.
+
+Three alternating release rounds measured native runtime API medians about
+18–23% lower for 1–4 MiB JSON inputs and 6% lower at 64 KiB. Parsing, fixture
+construction and hashing are excluded; validation, resolution, preflight, cwd,
+signal registration and pure JSON execution are included. Small API controls
+stayed within 1%. Isolated preflight reductions of 81–99.8% describe validation
+work alone, not whole-program or event latency.
+
+The 4 MiB API allocation probe repeated 78 to 72 allocation requests and
+16,786,257 to 12,590,674 requested bytes in all three runs. A reusable-call
+checkpoint control requests 32 additional bytes for scope storage; all other
+allocation controls match. Native executable size grows about 0.6%. These are
+allocation traffic and artifact sizes, not peak memory or RSS measurements.
+
+Cached native-listener acknowledgements stayed near 0.47/0.51 ms for 8/8,192-byte
+records, with exact cache/output and native-spawn oracles. Two managed 32-node
+runs did not show a repeatable improvement: large-state medians stayed within
+1.7%, while small scheduling-sensitive cases varied by about 6%. Common handlers
+without declared inputs or loops already bypass this preflight entry. Neither
+service latency nor broad Bash superiority is claimed.
+
+An earlier candidate copied the first invalidated value before removing it;
+its overwrite microcase was 3–7% slower. That result motivated the refinement,
+which avoids the copy and reduces the same isolated case by over 99%. Earlier
+sources, binaries and raw measurements remain separately labelled. Final raw
+alternating samples, full output oracles, source/input/catalog/harness/binary
+hashes and browser controls are retained. Measurements are local warm-cache
+macOS arm64; cold starts and performance on other platforms remain unmeasured.
+Keep timing runs separate from builds and tests.
+
 # Browser trace sizing
 
 The [browser trace report](performance-2026-10-14-browser-trace.json) compares

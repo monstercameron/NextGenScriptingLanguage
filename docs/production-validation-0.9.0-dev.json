@@ -23,7 +23,8 @@
     "omarchy_interface_native_failure_pairs": 10,
     "omarchy_missing_input_gap_pairs": 1,
     "notes": "make check passed, followed by separate normal/optimized Omarchy interface checks and updated matrix contract checks. Added Omarchy check to make check/CI. Interface tests use fake backends and explicitly assert known failure-output differences.",
-    "replacement_harness_contract_tests": 5
+    "replacement_harness_contract_tests": 5,
+    "streaming_fixture_repetitions_after_race_fix": 20
   },
   "unix_matrix": "unix-matrix-v0.9.0-dev-macos-arm64.json",
   "benchmarks": [
@@ -33,7 +34,7 @@
   "proof_scope": "110 Unix cases/46 native executables; pinned ten Omarchy wrapper interfaces with isolated fake backends; no Arch/Omarchy desktop effects or Bash syntax emulation.",
   "performance_claim": "Environment-input workflow removes printenv/jq helper processes; no general speed advantage over Bash. Literal native control remains similar to prior runtime.",
   "remaining_gates": "production-readiness.md",
-  "ci": "In progress for b9de431; a follow-up selects native failure status 7 for source proof-smoke. Final remote status is recorded separately.",
+  "ci": "25c96bb passed native Ubuntu/macOS make check, streaming proof smoke and VS Code package. e8fe795 additionally passed actual Ubuntu Unix matrix, proof smoke and packaging, but the job was marked cancelled after macOS failed an existing fixed-sleep streaming fixture. That fixture now waits for observed child exit without consuming status; 20 local repetitions and all-target Clippy pass. New CI pending.",
   "raw_evidence": "production-validation-0.9.0-dev/",
   "streaming_lifecycle": {
     "report": "../benchmarks/replacement-proofs-v0.9.0-dev-macos-arm64.json",
@@ -44,5 +45,18 @@
     "scope": "Exact bulk SHA-256, two native launches, local macOS only. Not a memory scaling study, 10000-cycle proof or native Linux desktop acceptance."
   },
   "source_commit": "b9de43159442684a3adc34d2019d5d71aa127cbd",
-  "ci_run": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38577846097"
+  "ci_run": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38577846097",
+  "ci_runs": [
+    {
+      "commit": "25c96bb5b3f51fd8dd90f686fed698ae0601a779",
+      "run_id": 38578215048,
+      "conclusion": "success"
+    },
+    {
+      "commit": "e8fe7958120e82b11888cffa3a45a673810e44d5",
+      "run_id": 38578486309,
+      "conclusion": "failure",
+      "detail": "Mac fixed-sleep streaming fixture race; Ubuntu all steps passed before fail-fast cancellation."
+    }
+  ]
 }

@@ -217,7 +217,7 @@ mod tests {
             directory.path().join("fail.json"),
             serde_json::json!({
                 "name":"fail", "binary":"/bin/sh", "arguments":[
-                    {"literal":"-c"}, {"literal":"printf 'one\\n'; while [ ! -e release ]; do sleep 0.01; done; exit 7"}
+                    {"literal":"-c"}, {"literal":r#"printf '%s' "$$" > child.pid; printf 'one\n'; while [ ! -e release ]; do sleep 0.01; done; exit 7"#}
                 ]
             })
             .to_string(),
@@ -239,9 +239,37 @@ mod tests {
         let result = run_stream(&program, &registry, &options, 8, |bytes, _, _| {
             emitted.extend_from_slice(bytes);
             fs::write(directory.path().join("release"), b"go").unwrap();
-            // A slow sink allows the final native status to become observable
-            // after the pre-read scan but before intentional limit cleanup.
-            std::thread::sleep(Duration::from_millis(100));
+            // Observe the actual exit without consuming its wait status. A
+            // fixed sleep races a loaded CI host; the runtime must remain the
+            // owner that reaps this exact child after the callback returns.
+            let pid: libc::pid_t = fs::read_to_string(directory.path().join("child.pid"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        pid as libc::id_t,
+                        &mut info,
+                        libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                    )
+                };
+                if result < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    panic!("observing owned fixture exit: {error}");
+                }
+                if info.si_signo == libc::SIGCHLD && info.si_code == libc::CLD_EXITED {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "owned fixture did not exit");
+                std::thread::sleep(Duration::from_millis(1));
+            }
             Ok(())
         });
         assert!(result.is_err());

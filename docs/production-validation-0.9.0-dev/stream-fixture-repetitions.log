@@ -1,0 +1,159 @@
+    Finished `release` profile [optimized] target(s) in 0.14s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.06s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s
+
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running unittests src/lib.rs (target/release/deps/flow-19b58bb44e0d10c3)
+
+running 1 test
+test runtime::streaming::tests::completed_native_failure_during_final_emit_is_propagated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 136 filtered out; finished in 0.02s

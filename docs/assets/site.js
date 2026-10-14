@@ -39,7 +39,7 @@ document.querySelectorAll('[data-filter]').forEach(button => button.addEventList
   const visible = entries.filter(entry => filter === 'all' || entry.category === filter);
   if (visible.length && !visible.some(entry => entry.file === selected)) selectExample(visible[0]); else renderList();
 }));
-fetch('assets/data/examples.json').then(response => {if(!response.ok) throw Error('Examples unavailable'); return response.json();}).then(data => { entries = data; selectExample(data[0]); }).catch(() => { $('#example-list').textContent = 'Examples could not load. Browse the full collection on GitHub using the link above.'; });
+fetch('assets/data/examples.json').then(response => {if(!response.ok) throw Error('Examples unavailable'); return response.json();}).then(data => { entries = data; const initial = entries.find(entry => filter === 'all' || entry.category === filter); if (initial) selectExample(initial); else renderList(); }).catch(() => { $('#example-list').textContent = 'Examples could not load. Browse the full collection on GitHub using the link above.'; });
 const benchFiles = {first: 'process-inputs-v0.9.0-dev-macos-arm64.json', repeat: 'process-inputs-v0.9.0-dev-macos-arm64-repeat.json'};
 let benchmarkRequest = 0;
 async function renderBenchmark() {

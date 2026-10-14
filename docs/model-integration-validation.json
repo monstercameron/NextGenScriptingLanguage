@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "status": "local validation passed; remote CI pending",
+  "status": "Local feature validation and native Ubuntu CI passed; macOS CI utility compatibility fix passed locally, remote recheck pending.",
   "at_utc": "2026-10-14T13:23:57.263763+00:00",
   "feature_commit": "9526402925f454f9384659370960f27b0aca5e67",
-  "scope": "Pending source candidate based on packaged0.8.0; installed immutable releases unchanged. Generic Rust applet mechanics with .program application control flow.",
+  "scope": "Pending source candidate based on packaged 0.8.0; installed immutable releases unchanged. Generic Rust applet mechanics with .program application control flow.",
   "delegation": "GPT-6 Luna max subagents, per explicit human request.",
   "implemented": [
     "execute-model binary and execute model CLI alias",
@@ -30,7 +30,7 @@
     "editor_tests": 20,
     "model_catalog_contract_tests": 14,
     "optimized_python_catalog_tests": 14,
-    "functional_proof_smoke": "1MiB stream plus7 lifecycle probes"
+    "functional_proof_smoke": "1 MiB stream plus 7 lifecycle probes"
   },
   "performance": {
     "report": "model-integration-validation/model-adapter-repeat.json",
@@ -42,7 +42,7 @@
     "runs": 2,
     "native_measured_pairs": 1280,
     "warmups_excluded": true,
-    "conclusion": "Native controls similar in both runs; no speedup claimed. Offline fixture applet median2.94–2.98ms; .program fixture median6.09–6.32ms. Process-launch timing includes Python launch/wait and filesystem caching, excludes network/inference. Full catalog compatibility strips only the new uncertainty field on both variants because the old parser rejects it."
+    "conclusion": "Native controls similar in both runs; no speedup claimed. Offline fixture applet median 2.94–2.98 ms; .program fixture median 6.09–6.32 ms. Process-launch timing includes Python launch/wait and filesystem caching, excludes network/inference. Full catalog compatibility strips only the new uncertainty field on both variants because the old parser rejects it."
   },
   "live_provider_validation": {
     "report": "model-integration-validation/live-smokes.json",
@@ -62,13 +62,13 @@
     "Nullable schema unions work through a real extraction workflow"
   ],
   "verification_limits": [
-    "Native macOS local validation; Ubuntu/macOS remote CI still pending at receipt creation.",
+    "Local macOS feature validation and native Ubuntu CI verified. GitHub macOS CI exposed utility 015 formatting incompatibility, fixed and locally rechecked; remote macOS recheck pending.",
     "Local Linux-target Clippy blocked by missing x86_64-linux-gnu-gcc for ring; no cross-build success claimed.",
     "Fixtures validate contracts and routing, not semantic model accuracy or 100 live inference runs.",
     "100 idea catalog includes future retrieval/preprocessing concepts beyond the concrete program files.",
     "Finite floating-point parsing is retained for fractions/exponents; arbitrary-precision source decimals are not implemented.",
     "Batch named Jev questions, token streaming, embeddings, failover and automatic retries/cache remain future work.",
-    "No Bash replacement, desktop-platform completion or10/10 rating claimed."
+    "No Bash replacement, desktop-platform completion or 10/10 rating claimed."
   ],
   "environment": {
     "platform": "macOS-26.6.2-arm64-arm-64bit",
@@ -97,10 +97,34 @@
     "manifests/jev.judge.json": "bd5dccd3153a503af5c59963a52676969bc9d5793de3c43268249c653fc88127",
     "manifests/jev.score.json": "76601821cf98022a7003028bb7185cb116b53fb101857777403d91001b4d55f3",
     "manifests/llm.ask.json": "652f07f014c12e04892d773e7812812dd95b7c5ebf790571d0d405c3c5a0f13d",
-    "manifests/llm.extract.json": "58b9b9afada23d708c3e3f382d0952faf3c9065c13b732f0ea171c9b72164155"
+    "manifests/llm.extract.json": "58b9b9afada23d708c3e3f382d0952faf3c9065c13b732f0ea171c9b72164155",
+    "examples/ladder/015-count-a-multi-file-handoff-packet.program": "4d5556220312170ccf83088313cf49321add0d4c4e34cbdc6bf8e3d76973e593"
   },
   "primary_contracts": [
     "https://api.typesafe.ai/openapi.json",
     "https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses"
-  ]
+  ],
+  "ci_followup": {
+    "observed_at_utc": "2026-10-14T13:30:35.408332+00:00",
+    "run_id": 38570827901,
+    "source_commit": "9526402925f454f9384659370960f27b0aca5e67",
+    "ubuntu": {
+      "conclusion": "success",
+      "steps": [
+        "make check",
+        "make proof-smoke",
+        "npm run package"
+      ],
+      "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38570827901/job/115875266166"
+    },
+    "macos": {
+      "conclusion": "failure",
+      "cause": "Existing utility 015 passed space-padded BSD wc output directly to jq tonumber; CIjq rejects leading whitespace.",
+      "fix": "Explicitly trim surrounding POSIX whitespace in .program before tonumber; no runtime or test-oracle change.",
+      "local_recheck": "All 150 utilities and 146 alternate inputs passed.",
+      "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38570827901/job/115875265566",
+      "new_remote_recheck": "pending"
+    }
+  },
+  "updated_at_utc": "2026-10-14T13:31:04.714997+00:00"
 }

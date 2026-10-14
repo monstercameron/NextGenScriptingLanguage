@@ -6,5 +6,5 @@ accept open_items_path as text with default "handoff/open-items.md"
 run mkdir with flags ["-p"] and paths ["reports"]
 run cat with files [summary_path, open_items_path]
 pipe to wc with flags ["-l"]
-pipe to jq with flags ["-Rr"] and filter "tonumber"
+pipe to jq with flags ["-Rr"] and filter "gsub(\"^[[:space:]]+|[[:space:]]+$\"; \"\") | tonumber"
 then save to "reports/handoff-line-count.txt"

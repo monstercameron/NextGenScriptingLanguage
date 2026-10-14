@@ -15,3 +15,13 @@ __pycache__/
 *.py[cod]
 
 /dist/
+
+# Rebuilt by the WASM playground / GitHub Pages workflow
+/browser/target/
+/web/node_modules/
+/docs/playground/app.js*
+/docs/playground/worker.js*
+/docs/playground/execute.wasm
+/docs/playground/build.json
+/docs/playground/style.css
+/docs/playground/xterm.css

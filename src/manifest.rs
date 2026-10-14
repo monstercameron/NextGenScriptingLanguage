@@ -1,6 +1,7 @@
 use crate::ast::{InputType, Invocation, Value};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -161,27 +162,40 @@ impl Registry {
             bail!("no JSON manifests found in {}", path.display());
         }
 
-        let mut data = RegistryData {
-            manifests: Vec::with_capacity(paths.len()),
-            names: BTreeMap::new(),
-        };
-        for manifest_path in paths {
-            let raw = fs::read_to_string(&manifest_path)
-                .with_context(|| format!("reading manifest {}", manifest_path.display()))?;
-            let manifest = parse_manifest(&raw)
-                .with_context(|| format!("invalid manifest {}", manifest_path.display()))?;
-            let index = data.manifests.len();
-            for key in std::iter::once(&manifest.name).chain(manifest.phrases.iter()) {
-                if let Some(previous) = data.names.insert(key.clone(), index) {
-                    let previous_name = &data.manifests[previous].name;
-                    bail!("duplicate manifest name or phrase {key:?} (used by {previous_name:?} and {:?})", manifest.name);
-                }
-            }
-            data.manifests.push(manifest);
+        let mut data = RegistryData::default();
+        for path in paths {
+            let raw = fs::read_to_string(&path)
+                .with_context(|| format!("reading manifest {}", path.display()))?;
+            Self::insert_source(&mut data, &raw)
+                .with_context(|| format!("invalid manifest {}", path.display()))?;
         }
         Ok(Self {
             data: Arc::new(data),
         })
+    }
+
+    /// Parse embedded manifests with the same schema and duplicate checks as files.
+    pub fn from_sources(sources: &[impl AsRef<str>]) -> Result<Self> {
+        let mut data = RegistryData::default();
+        for raw in sources {
+            Self::insert_source(&mut data, raw.as_ref()).context("invalid embedded manifest")?;
+        }
+        Ok(Self {
+            data: Arc::new(data),
+        })
+    }
+
+    fn insert_source(data: &mut RegistryData, raw: &str) -> Result<()> {
+        let manifest = parse_manifest(raw)?;
+        let index = data.manifests.len();
+        for key in std::iter::once(&manifest.name).chain(manifest.phrases.iter()) {
+            if let Some(previous) = data.names.insert(key.clone(), index) {
+                let previous_name = &data.manifests[previous].name;
+                bail!("duplicate manifest name or phrase {key:?} (used by {previous_name:?} and {:?})", manifest.name);
+            }
+        }
+        data.manifests.push(manifest);
+        Ok(())
     }
 
     pub fn resolve(&self, name_or_phrase: &str) -> Result<&Manifest> {
@@ -198,6 +212,7 @@ impl Registry {
 }
 
 impl Manifest {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn checkpoint_identity(&self, call: &Invocation) -> Result<Vec<u8>> {
         if call.direct {
             // Widening accepted scalar argv does not change the command mapping
@@ -304,6 +319,7 @@ impl Manifest {
     }
 
     /// Build argv for immediate Command construction without cloning borrowed text.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn build_arguments_borrowed<'a>(
         &'a self,
         values: &'a BTreeMap<String, Value>,
@@ -480,6 +496,7 @@ fn append_arguments(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn append_arguments_borrowed<'a>(
     node: &'a ArgumentNode,
     values: &'a BTreeMap<String, Value>,
@@ -519,6 +536,7 @@ fn append_arguments_borrowed<'a>(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn value_to_cow(value: &Value) -> Result<Cow<'_, str>> {
     match value {
         Value::String(value) => Ok(Cow::Borrowed(value)),

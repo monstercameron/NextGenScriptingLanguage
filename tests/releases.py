@@ -63,6 +63,38 @@ class Releases(unittest.TestCase):
                 release.set_version("0.9.1", root)
             self.assertEqual((root / "Cargo.toml").read_bytes(), before)
 
+    def test_browser_path_dependency_version_tracks_atomic_source_bumps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "browser").mkdir()
+            (root / "Cargo.toml").write_text(
+                '[package]\nname = "execute"\nversion = "0.9.0-rc.4"\n'
+            )
+            lock = (
+                'version = 4\n[[package]]\nname = "execute"\nversion = "0.9.0-rc.4"\n'
+            )
+            (root / "Cargo.lock").write_text(lock)
+            browser = (
+                lock + '\n[[package]]\nname = "execute-browser"\nversion = "0.1.0"\n'
+            )
+            (root / "browser/Cargo.lock").write_text(browser)
+            release.set_version("0.9.0-rc.5", root)
+            self.assertEqual(release.version(root), "0.9.0-rc.5")
+            self.assertIn(
+                'name = "execute-browser"\nversion = "0.1.0"',
+                (root / "browser/Cargo.lock").read_text(),
+            )
+            (root / "browser/Cargo.lock").write_text(browser)
+            before = [
+                (root / name).read_bytes() for name in ["Cargo.toml", "Cargo.lock"]
+            ]
+            with self.assertRaises(ValueError):
+                release.set_version("0.9.1", root)
+            self.assertEqual(
+                before,
+                [(root / name).read_bytes() for name in ["Cargo.toml", "Cargo.lock"]],
+            )
+
     def test_complete_asset_gate_rejects_partial_extra_and_empty_then_checksums(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)

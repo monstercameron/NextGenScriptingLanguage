@@ -558,6 +558,7 @@ pub(crate) fn strip_comment(line: &str) -> &str {
     line
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn tokenize<'source>(line: &'source str) -> Result<Vec<Token<'source>>> {
     let mut tokens = Vec::new();
     tokenize_into(line, &mut tokens)?;
@@ -736,6 +737,7 @@ fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn is_input_header(line: &str) -> bool {
     line.split_ascii_whitespace().next() == Some("accept")
 }

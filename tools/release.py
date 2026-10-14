@@ -43,6 +43,15 @@ def version(root=ROOT):
     )
     if not cargo or not lock or cargo[1] != lock[1]:
         raise ValueError("Cargo.toml and Cargo.lock Execute versions disagree")
+    browser_lock = root / "browser/Cargo.lock"
+    if browser_lock.exists():
+        browser = re.search(
+            r'(?m)^name = "execute"\nversion = "([^"]+)"$', browser_lock.read_text()
+        )
+        if not browser or browser[1] != cargo[1]:
+            raise ValueError(
+                "browser/Cargo.lock Execute version disagrees with Cargo.toml"
+            )
     return validate(cargo[1])
 
 
@@ -54,6 +63,10 @@ def set_version(value, root=ROOT):
         ("Cargo.toml", r'(?ms)(^\[package\]\n.*?^version = ")[^"]+("$)'),
         ("Cargo.lock", r'(?m)(^name = "execute"\nversion = ")[^"]+("$)'),
     ]
+    if (root / "browser/Cargo.lock").exists():
+        edits.append(
+            ("browser/Cargo.lock", r'(?m)(^name = "execute"\nversion = ")[^"]+("$)')
+        )
     replacements = []
     for filename, pattern in edits:
         p = root / filename

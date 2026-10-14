@@ -1,0 +1,6 @@
+{
+  "app.log": "INFO worker ready\nERROR api timeout\nINFO request complete\nERROR disk near capacity\nERROR api timeout\nWARN retry scheduled\n",
+  "release.json": "{\"checks_passed\": true, \"version\": \"0.9.0-rc.4\", \"tests\": 409}\n",
+  "people.txt": "Linus\nAda\nGrace\nAda\nKatherine\nMargaret\n",
+  "README.txt": "Welcome to /workspace.\nThese files exist only inside your browser tab.\nClick a file to inspect or edit it.\nType help in the terminal for supported commands.\n"
+}

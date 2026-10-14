@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Run real .program scripts in your browser. A Rust WebAssembly runtime, an interactive terminal, and a tiny Unix workbench.">
+<meta name="theme-color" content="#f5f2e9">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Execute playground — tiny scripts, real runtime.</title>
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="xterm.css"><link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<a class="skip" href="#source">Skip to editor</a>
+<header><a class="brand" href="../">›_ execute<span>.</span></a><nav><a href="../#examples">Examples ↗</a><a href="https://github.com/monstercameron/NextGenScriptingLanguage/blob/main/docs/playground.md">Browser guide ↗</a><a href="https://github.com/monstercameron/NextGenScriptingLanguage">GitHub ↗</a></nav></header>
+<main>
+<div class="intro"><div><p class="eyebrow">THE BROWSER WORKBENCH / RUST + WEBASSEMBLY</p><h1>Small scripts.<br><em>Immediate possibilities.</em></h1><p>Change a line. Run the program. Follow the bytes.</p></div><div class="runtime-card"><span id="runtime-status" role="status" aria-live="polite">◌ Loading the Rust runtime…</span><p>Local execution · no login · no API keys<br>Virtual files live in this tab. Reload clears them.</p></div></div>
+<section aria-labelledby="choose"><div class="section-label" id="choose">01 / PICK A STARTING POINT</div><div id="examples" class="examples"></div></section>
+<div class="workbench">
+<section class="editor-panel" aria-label="Program editor"><div class="panel-bar"><span><i class="dot"></i> <span id="filename">log-triage.program</span></span><div><button id="download" title="Download this .program">Download ↓</button><button id="share" title="Copy a link containing this script">Share ↗</button></div></div>
+<label class="sr-only" for="source">Program source</label><textarea id="source" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-describedby="editor-help"></textarea>
+<div class="toolbar"><button id="run" class="primary" disabled>Run program <kbd>⌘ ↵</kbd></button><button id="check" disabled>Check</button><button id="explain" disabled>Explain</button><button id="stop" disabled>Stop ■</button></div><p id="editor-help" class="hint">Control flow stays in .program. The Rust runtime runs inside a worker.</p>
+<details class="inputs"><summary>Inputs &amp; stdin</summary><div><label for="inputs">Typed CLI inputs <small>JSON object of strings</small></label><textarea id="inputs" spellcheck="false" rows="2">{}</textarea><label for="stdin">Standard input</label><textarea id="stdin" spellcheck="false" rows="3" placeholder="Paste text to pipe into read from stdin"></textarea></div></details></section>
+<section class="terminal-panel" aria-label="Interactive browser terminal"><div class="panel-bar"><span>›_ /workspace</span><span class="terminal-badge">BROWSER UNIX SUBSET</span></div><div id="terminal"></div><pre id="accessible-output" class="sr-only" aria-live="polite"></pre><div class="terminal-footer"><span id="run-status" role="status" aria-live="polite">Type help, ls, or execute log-triage.program</span><button id="clear">Clear</button><button id="reset">Reset files</button></div></section>
+</div>
+<div class="inspectors"><section class="files-panel" aria-labelledby="files-title"><div class="inspector-heading"><h2 id="files-title">02 / YOUR VIRTUAL FILES</h2><div><button id="new-file">New file +</button><button id="upload">Import ↑</button><input type="file" id="file-upload" class="sr-only" accept="text/*,.program,.json,.log,.csv,.txt"></div></div><p class="hint">Click to edit. Generated outputs appear here.</p><div id="files" class="files"></div></section>
+<section class="trace-panel" aria-labelledby="trace-title"><div class="inspector-heading"><h2 id="trace-title">03 / FOLLOW THE PIPELINE</h2><span id="metrics">Waiting for a program</span></div><p class="hint">Real argv, byte counts and cache hits from Rust.</p><div id="trace" aria-live="polite"><p class="empty">Your next run leaves a trail here.</p></div></section></div>
+<aside class="boundaries"><b>A real language core. A deliberately small browser host.</b><p>The shared Rust parser, validator, types, branches, JSON operations and reusable program rules power this playground. Browser applets are Rust ports with a limited flag set; pipelines buffer bytes in memory. Native binaries, OS pipes, TUI screens, models, listeners and schedules need the <a href="../#start">native runtime ↗</a>. This is not a remote shell.</p><a href="https://github.com/monstercameron/NextGenScriptingLanguage/blob/main/docs/playground.md">Supported applets &amp; limits ↗</a> <a href="build.json">Build receipt ↗</a></aside>
+</main><footer>Unix supplies the philosophy. You supply the idea.<a href="../">Back to Execute ↗</a></footer>
+<dialog id="file-dialog"><form method="dialog"><div class="inspector-heading"><h2>Edit a virtual file</h2><button value="cancel" aria-label="Close file editor">×</button></div><label for="file-path">Path</label><input id="file-path" required value="notes.txt"><label for="file-content">Contents</label><textarea id="file-content" spellcheck="false" rows="14"></textarea><p id="file-error" role="alert"></p><button type="button" class="primary" id="save-file">Save to virtual filesystem</button></form></dialog>
+<noscript>This playground needs JavaScript and WebAssembly. Download the native runtime to run scripts offline.</noscript>
+</body></html>

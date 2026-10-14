@@ -1,6 +1,6 @@
 # Execute
 
-[Explore the Execute site →](https://monstercameron.github.io/NextGenScriptingLanguage/)
+[Explore the Execute site →](https://monstercameron.github.io/NextGenScriptingLanguage/) · [Run the browser playground →](https://monstercameron.github.io/NextGenScriptingLanguage/playground/)
 
 Production tracking: [Bash and Omarchy acceptance gates](docs/production-readiness.md), [pinned command inventory](docs/omarchy-inventory.json), and [initial isolated interface ports](examples/omarchy-ports/README.md). Source 0.9.0-rc.4 is a multi-platform release candidate; historical packaged 0.8.0 is unchanged. See [releases and installation](docs/releases.md).
 
@@ -37,6 +37,8 @@ platform checks pass. See [installation and release policy](docs/releases.md).
 [Live services](#one-file-several-lifetimes) · [Terminal apps](#terminal-apps-with-control-flow-you-can-read) ·
 [Agent control](#inspect-and-edit-a-running-app) · [Performance](#performance-with-receipts) ·
 [Documentation](#documentation)
+
+Try the **[browser playground](https://monstercameron.github.io/NextGenScriptingLanguage/playground/)** without installing anything: edit scripts, run the Rust/WASM language core, inspect virtual files and trace applet calls. Its bounded browser applets buffer pipelines in memory; installed native tools, OS pipes, services and terminal screens require the native runtime. See [browser contracts and build instructions](docs/playground.md).
 
 ## Quickstart
 

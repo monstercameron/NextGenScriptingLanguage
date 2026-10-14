@@ -67,6 +67,7 @@ impl InputDeclaration {
         Ok(value)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn parse_json(&self, value: &serde_json::Value) -> Result<Value> {
         let result = match (self.kind, value) {
             (InputType::Json, value) => crate::structured::from_json(value.clone()),

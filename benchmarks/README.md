@@ -1,3 +1,21 @@
+# Reusable definition validation performance
+
+The [October 14 paired report](performance-2026-10-14-definition-validation.json)
+compares the unchanged `f742a54` release build with a candidate that borrows
+reusable definition inputs and instructions during validation instead of cloning
+a temporary program. All definitions, including unused ones, remain validated.
+
+Across three alternating release-executable rounds, the six in-process cases
+measured 22–79% lower validation medians. A 1,000-command unused definition fell
+from 207 to 42 microseconds; the called version fell from 606 to 441 microseconds.
+Parser, catalog and argv controls stayed within 2%. Forty-sample fresh CLI task
+comparisons were approximately flat; these results do not establish a whole-task
+speedup. Raw batches, workload and binary hashes, controls and limits are retained.
+This is local macOS arm64 with warm caches, not a cross-platform or Bash result.
+
+The ignored `opt_reuse_validation` release test measures only validation;
+`reusable_programs.py --baseline-programs` compares matching sources end to end.
+
 # Unix command differential matrix (pending source candidate)
 
 `unix_matrix.py` exercises 110 cases across **46 distinct native executables**:

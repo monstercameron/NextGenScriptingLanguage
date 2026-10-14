@@ -51,9 +51,13 @@ fn binding(
     }
     Ok(())
 }
+#[cfg(not(target_arch = "wasm32"))]
 fn pipe_at(program: &Program, index: usize) -> bool {
+    pipe_in_steps(&program.steps, index)
+}
+fn pipe_in_steps(steps: &[crate::ast::Step], index: usize) -> bool {
     matches!(
-        program.steps.get(index).map(|s| &s.kind),
+        steps.get(index).map(|s| &s.kind),
         Some(StepKind::Invoke {
             connection: Connection::Pipe,
             ..
@@ -198,7 +202,7 @@ fn validate_inputs(
         started: has_data && !allow_rebinding,
     };
     validate_range(
-        program,
+        &program.steps,
         registry,
         &mut flow,
         0..program.steps.len(),
@@ -216,7 +220,7 @@ fn validate_inputs(
 }
 
 fn validate_range(
-    program: &Program,
+    steps: &[crate::ast::Step],
     registry: &Registry,
     flow: &mut control::FlowState,
     range: std::ops::Range<usize>,
@@ -225,7 +229,7 @@ fn validate_range(
 ) -> Result<()> {
     let mut index = range.start;
     while index < range.end {
-        let step = &program.steps[index];
+        let step = &steps[index];
         if let StepKind::CallProgram {
             call,
             inputs,
@@ -236,7 +240,7 @@ fn validate_range(
             let finish = index + end;
             calls::validate_arguments(call, inputs, flow)
                 .with_context(|| format!("line {}", step.line))?;
-            if *connection == Connection::Pipe || pipe_at(program, finish) {
+            if *connection == Connection::Pipe || pipe_in_steps(steps, finish) {
                 bail!(
                     "line {}: program calls use run or then outside native pipe groups",
                     step.line
@@ -253,7 +257,7 @@ fn validate_range(
                 started: false,
             };
             validate_range(
-                program,
+                steps,
                 registry,
                 &mut child,
                 index + 1..finish - 1,
@@ -291,7 +295,7 @@ fn validate_range(
             // Most command branches only read bindings. Validate those in place,
             // restoring the two data-flow flags between paths, without copying
             // the entire input/name/type environment for every condition.
-            let defines_names = program.steps[index + 1..finish - 1]
+            let defines_names = steps[index + 1..finish - 1]
                 .iter()
                 .any(|step| match &step.kind {
                     StepKind::Read { binding, .. }
@@ -307,7 +311,7 @@ fn validate_range(
             if !defines_names {
                 let before = (flow.has_data, flow.started);
                 validate_range(
-                    program,
+                    steps,
                     registry,
                     flow,
                     index + 1..yes_end,
@@ -318,7 +322,7 @@ fn validate_range(
                 (flow.has_data, flow.started) = before;
                 if has_otherwise {
                     validate_range(
-                        program,
+                        steps,
                         registry,
                         flow,
                         index + otherwise..finish - 1,
@@ -333,7 +337,7 @@ fn validate_range(
             }
             let mut yes = flow.clone();
             validate_range(
-                program,
+                steps,
                 registry,
                 &mut yes,
                 index + 1..yes_end,
@@ -342,7 +346,7 @@ fn validate_range(
             )?;
             if has_otherwise {
                 validate_range(
-                    program,
+                    steps,
                     registry,
                     flow,
                     index + otherwise..finish - 1,
@@ -440,7 +444,7 @@ fn validate_range(
                         check_value(value, &flow.names)?;
                     }
                     if manifest.builtin == Some(Builtin::Cd) {
-                        if *connection == Connection::Pipe || pipe_at(program, index + 1) {
+                        if *connection == Connection::Pipe || pipe_in_steps(steps, index + 1) {
                             bail!("cd changes the program directory and cannot belong to a pipe group");
                         }
                         if call.binding.is_some() {
@@ -456,7 +460,7 @@ fn validate_range(
                         }
                         if (index == 0 && !initial_has_data)
                             || !matches!(
-                                program.steps[index.saturating_sub(1)].kind,
+                                steps[index.saturating_sub(1)].kind,
                                 StepKind::Read { .. }
                                     | StepKind::ReadStdin { .. }
                                     | StepKind::ReadCallInput { .. }
@@ -473,7 +477,7 @@ fn validate_range(
                         }
                         if call.cache
                             || *connection == Connection::Pipe
-                            || pipe_at(program, index + 1)
+                            || pipe_in_steps(steps, index + 1)
                         {
                             bail!("status capture requires a single uncached command outside a pipe group");
                         }
@@ -485,11 +489,11 @@ fn validate_range(
                         if !manifest.cacheable {
                             bail!("applet {:?} is not declared cacheable", manifest.name);
                         }
-                        if *connection == Connection::Pipe || pipe_at(program, index + 1) {
+                        if *connection == Connection::Pipe || pipe_in_steps(steps, index + 1) {
                             bail!("cache requires a finite then step, outside a live pipe group");
                         }
                     }
-                    if call.binding.is_some() && pipe_at(program, index + 1) {
+                    if call.binding.is_some() && pipe_in_steps(steps, index + 1) {
                         bail!("name results at the end of a pipe group; intermediate naming requires buffering");
                     }
                     binding(&call.binding, &mut flow.names, allow_rebinding)?;

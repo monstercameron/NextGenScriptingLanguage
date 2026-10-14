@@ -4,22 +4,18 @@ use crate::ast::{InputDeclaration, InputType};
 
 pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Result<()> {
     for (name, definition) in program.definitions.iter() {
-        let finite = Program {
-            inputs: definition.inputs.clone(),
-            steps: definition.steps.clone(),
-            trigger: None,
-            definitions: Default::default(),
-        };
+        // Validation reads the body; borrowing avoids copying every literal and
+        // input default merely to construct a temporary finite Program.
         let checked = (|| -> Result<()> {
-            crate::inputs::validate(&finite.inputs)?;
-            control::validate_shape(&finite.steps)?;
+            crate::inputs::validate(&definition.inputs)?;
+            control::validate_shape(&definition.steps)?;
             let mut flow = control::FlowState {
-                names: finite
+                names: definition
                     .inputs
                     .iter()
                     .map(|input| input.name.clone())
                     .collect(),
-                types: finite
+                types: definition
                     .inputs
                     .iter()
                     .map(|input| (input.name.clone(), input.kind))
@@ -28,10 +24,10 @@ pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Re
                 started: false,
             };
             validate_range(
-                &finite,
+                &definition.steps,
                 registry,
                 &mut flow,
-                0..finite.steps.len(),
+                0..definition.steps.len(),
                 true,
                 false,
             )

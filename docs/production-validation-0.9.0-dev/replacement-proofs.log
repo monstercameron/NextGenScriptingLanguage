@@ -1,0 +1,4 @@
+bulk: 8,388,608 bytes, exact SHA-256, two native launches
+bulk: 1,000,000,000 bytes, exact SHA-256, two native launches
+lifecycle: 10/10 cycles, 70 probes
+report: /Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow/benchmarks/replacement-proofs-v0.9.0-dev-macos-arm64.json

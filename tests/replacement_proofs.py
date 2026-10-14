@@ -19,7 +19,8 @@ spec.loader.exec_module(proof)
 class ProofContracts(unittest.TestCase):
     def test_budget_rejection_does_not_create_reports_or_fixtures(self):
         for option, value in [('--stream-bytes', '0'), ('--stream-bytes', '2000000001'),
-                              ('--lifecycle-repetitions', '0'), ('--lifecycle-repetitions', '10001')]:
+                              ('--lifecycle-repetitions', '0'), ('--lifecycle-repetitions', '10001'),
+                              ('--native-failure-code', '0'), ('--native-failure-code', '42')]:
             with self.subTest(option=option, value=value), tempfile.TemporaryDirectory() as tmp:
                 folder = Path(tmp)
                 p = subprocess.run([sys.executable, str(ROOT/'benchmarks/replacement_proofs.py'),

@@ -22,7 +22,8 @@
     "omarchy_interface_success_pairs": 30,
     "omarchy_interface_native_failure_pairs": 10,
     "omarchy_missing_input_gap_pairs": 1,
-    "notes": "make check passed, followed by separate normal/optimized Omarchy interface checks and updated matrix contract checks. Added Omarchy check to make check/CI. Interface tests use fake backends and explicitly assert known failure-output differences."
+    "notes": "make check passed, followed by separate normal/optimized Omarchy interface checks and updated matrix contract checks. Added Omarchy check to make check/CI. Interface tests use fake backends and explicitly assert known failure-output differences.",
+    "replacement_harness_contract_tests": 5
   },
   "unix_matrix": "unix-matrix-v0.9.0-dev-macos-arm64.json",
   "benchmarks": [
@@ -32,6 +33,16 @@
   "proof_scope": "110 Unix cases/46 native executables; pinned ten Omarchy wrapper interfaces with isolated fake backends; no Arch/Omarchy desktop effects or Bash syntax emulation.",
   "performance_claim": "Environment-input workflow removes printenv/jq helper processes; no general speed advantage over Bash. Literal native control remains similar to prior runtime.",
   "remaining_gates": "production-readiness.md",
-  "ci": "pending new pushed candidate; previous native Ubuntu passed, previous Mac failure was the model test-harness group cleanup race addressed here.",
-  "raw_evidence": "production-validation-0.9.0-dev/"
+  "ci": "In progress for b9de431; a follow-up selects native failure status 7 for source proof-smoke. Final remote status is recorded separately.",
+  "raw_evidence": "production-validation-0.9.0-dev/",
+  "streaming_lifecycle": {
+    "report": "../benchmarks/replacement-proofs-v0.9.0-dev-macos-arm64.json",
+    "stream_bytes": 1000000000,
+    "lifecycle_cycles": 10,
+    "lifecycle_probes": 70,
+    "status": "passed",
+    "scope": "Exact bulk SHA-256, two native launches, local macOS only. Not a memory scaling study, 10000-cycle proof or native Linux desktop acceptance."
+  },
+  "source_commit": "b9de43159442684a3adc34d2019d5d71aa127cbd",
+  "ci_run": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38577846097"
 }

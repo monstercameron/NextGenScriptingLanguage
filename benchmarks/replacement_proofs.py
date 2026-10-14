@@ -196,6 +196,8 @@ def main():
     parser.add_argument('--stream-bytes', type=int, default=1_000_000_000)
     parser.add_argument('--lifecycle-repetitions', type=int, default=10,
                         help='cycles of all seven lifecycle cases; challenge target: 10000')
+    parser.add_argument('--native-failure-code', type=int, choices=(1, 7), default=1,
+                        help='expected CLI code for a native exit 7: packaged 0.8 uses 1, source 0.9 uses 7')
     args = parser.parse_args()
     if not __debug__:
         parser.error('proof verification requires Python without -O')
@@ -214,7 +216,8 @@ def main():
               'catalog_sha256': {p.name: digest(p) for p in manifests},
               'registered_applets': len(manifests),
               'requested': {'stream_bytes': args.stream_bytes,
-                            'lifecycle_cycles': args.lifecycle_repetitions},
+                            'lifecycle_cycles': args.lifecycle_repetitions,
+                            'native_failure_code': args.native_failure_code},
               'bulk': [], 'lifecycle': [],
               'limits': ['Local Mac/Linux host only; not Omarchy or full Unix parity.',
                          'One observed run per bulk size; wall times include tracing, hashing, and observation.',
@@ -266,7 +269,7 @@ def main():
                 ('blocked-consumer-cancel', blocked,
                  dict(expected_code=1, stalled=True, stop_signal=signal.SIGTERM)),
                 ('producer-exit-seven', 'stream from fault\npipe to cat\nshow each line\n',
-                 dict(expected_code=1, stderr_contains=b'fixture-status-7')),
+                 dict(expected_code=args.native_failure_code, stderr_contains=b'fixture-status-7')),
                 ('middle-stage-failure', f'stream from cat with path {json.dumps(str(events))}\npipe to fail-stage\npipe to cat\nshow each line\n',
                  dict(expected_code=1, expected_spawns=3)),
                 ('oversized-record-rejected', f'stream from cat with path {json.dumps(str(oversized))}\nshow each line\n',

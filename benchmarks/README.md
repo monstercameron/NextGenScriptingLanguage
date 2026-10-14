@@ -869,3 +869,11 @@ python3 benchmarks/process_inputs.py --baseline /path/to/prior/execute --candida
 
 Raw samples: [first run](process-inputs-v0.9.0-dev-macos-arm64.json),
 [repeat](process-inputs-v0.9.0-dev-macos-arm64-repeat.json).
+
+The source 0.9.0-dev streaming/lifecycle proof is
+[recorded separately](replacement-proofs-v0.9.0-dev-macos-arm64.json): exact
+1,000,000,000-byte SHA-256 and ten cycles / 70 lifecycle probes on macOS.
+Use `--native-failure-code 7` for source 0.9; the harness defaults to packaged
+0.8's generic failure code 1 so historical release checks remain explicit.
+This is functional integration evidence, not the full 10,000-cycle gate,
+Linux parity, memory-scaling proof or a timing benchmark.

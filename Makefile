@@ -26,4 +26,4 @@ build:
 
 # Functional streaming/lifecycle check, not a timing benchmark or stress proof.
 proof-smoke: build
-	$(PYTHON) benchmarks/replacement_proofs.py --binary target/release/execute --stream-bytes 1048576 --lifecycle-repetitions 1 --report target/proof-smoke.json
+	$(PYTHON) benchmarks/replacement_proofs.py --binary target/release/execute --stream-bytes 1048576 --lifecycle-repetitions 1 --native-failure-code 7 --report target/proof-smoke.json

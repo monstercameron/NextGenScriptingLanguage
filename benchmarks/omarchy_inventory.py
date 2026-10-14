@@ -38,6 +38,28 @@ def inventory(checkout):
     ).stdout.strip()
     if commit != PIN:
         raise ValueError(f"expected pinned Omarchy commit {PIN}; found {commit}")
+    dirty = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignored",
+            "--",
+            "bin",
+            "LICENSE",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout
+    if dirty:
+        raise ValueError(
+            "pinned Omarchy bin/ and LICENSE must be clean, including untracked files"
+        )
     commands = []
     totals = collections.Counter()
     interpreters = collections.Counter()

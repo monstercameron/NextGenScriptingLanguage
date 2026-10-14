@@ -8,7 +8,7 @@
 use flow::{
     ast::{Invocation, Value},
     manifest::Registry,
-    parser,
+    parser, runtime,
     schedule::CronSchedule,
     ui::syntax,
 };
@@ -155,7 +155,38 @@ fn report_release_allocation_counts() {
         status_binding: None,
     };
 
+    let directory = tempfile::tempdir().unwrap();
+    let input_program = parser::parse("accept payload as json\ntake integer at \"/n\" from payload as number\nthen encode number as json\n").unwrap();
+    let input_options = runtime::RunOptions {
+        inputs: BTreeMap::from([(
+            "payload".into(),
+            Value::Record(BTreeMap::from([
+                ("n".into(), Value::Integer(42)),
+                ("padding".into(), Value::String("x".repeat(4 * 1024 * 1024))),
+            ])),
+        )]),
+        working_directory: directory.path().into(),
+        cache_directory: None,
+        trace: false,
+        max_output_bytes: 32,
+        command_timeout: Some(std::time::Duration::from_secs(5)),
+    };
+    let checked = runtime::run(&input_program, &registry, &input_options).unwrap();
+    assert_eq!(checked.output, b"42");
+    assert_eq!(checked.launched_processes, 0);
+
     let mut operations = BTreeMap::new();
+    operations.insert(
+        "runtime_json_input_4mib",
+        measure(|| {
+            runtime::run(
+                black_box(&input_program),
+                black_box(&registry),
+                black_box(&input_options),
+            )
+            .unwrap()
+        }),
+    );
     operations.insert(
         "registry_load",
         measure(|| Registry::load(black_box(&manifests_path)).unwrap()),
@@ -198,7 +229,7 @@ fn report_release_allocation_counts() {
             "allocation_bytes": "allocation_requested_bytes sums Layout::size() for alloc and alloc_zeroed calls",
             "reallocation_bytes": "reallocation_requested_bytes sums each realloc new_size request",
             "excluded": "deallocation calls, net live bytes, peak live bytes, and peak RSS are not counted",
-            "inputs": "paths, source strings, registry used by clone/argv, invocation, and 256 list values are prepared before measurement",
+            "inputs": "paths, source strings, registry used by clone/argv, invocation, 256 list values, and parsed JSON-selection program/options with 4 MiB padding are prepared before measurement",
             "reporting": "JSON construction, serialization, environment lookup, and report file writing happen after counting is disabled"
         },
         "operations": operations

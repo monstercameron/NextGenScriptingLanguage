@@ -91,8 +91,16 @@ fn configured_inputs<'a>(
     if program.inputs.is_empty() && options.inputs.is_empty() {
         return Ok(Cow::Borrowed(options));
     }
-    let mut configured = options.clone();
-    configured.inputs = crate::inputs::resolve(&program.inputs, &options.inputs, false)?;
+    // Resolve supplied values once; cloning options first copied the complete
+    // input tree only to discard that copy when replacing the inputs field.
+    let configured = RunOptions {
+        inputs: crate::inputs::resolve(&program.inputs, &options.inputs, false)?,
+        working_directory: options.working_directory.clone(),
+        cache_directory: options.cache_directory.clone(),
+        trace: options.trace,
+        max_output_bytes: options.max_output_bytes,
+        command_timeout: options.command_timeout,
+    };
     preflight_inputs(program, registry, &configured.inputs)?;
     Ok(Cow::Owned(configured))
 }

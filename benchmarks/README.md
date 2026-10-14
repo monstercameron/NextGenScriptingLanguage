@@ -1,3 +1,25 @@
+# Supplied JSON input setup performance
+
+The [input setup report](performance-2026-10-14-input-setup.json) compares
+`5dc0d59` with a candidate that avoids cloning supplied inputs into an options
+copy immediately before replacing them with resolved values. Across three
+alternating release rounds, the native Rust API's 64 KiB–4 MiB JSON workloads
+measured 14–26% lower median time. The 4 MiB case moved from 656 to 545 microseconds.
+Parsing and fixture construction are excluded; validation, input resolution,
+signal registration, cwd canonicalization and pure JSON selection/encoding remain
+included. No native command launches in these cases.
+
+Three independent allocation probes each measured 88 to 82 allocation calls and
+20,982,608 to 16,787,025 requested bytes for the 4 MiB workload: about 4 MiB and
+20% fewer requested bytes. This is allocation traffic, not live or peak memory.
+All other allocation controls matched exactly. Small/no-input and fresh CLI
+workloads were approximately flat overall. A first no-input timing round varied
+by +14.9%; an unchanged cron control varied by -12.3%. Both remain visible and
+neither is treated as a gain. These are local warm-cache macOS measurements.
+
+The ignored `opt_input_setup` release test provides API timing workloads;
+`opt_allocations` measures allocation requests separately from timing.
+
 # Known-input preflight performance
 
 The [paired preflight report](performance-2026-10-14-preflight-parameters.json)

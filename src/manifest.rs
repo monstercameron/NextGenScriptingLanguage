@@ -596,9 +596,7 @@ struct RawParameter {
     min_items: Option<usize>,
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(untagged)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug)]
 enum RawArgument {
     Literal {
         literal: String,
@@ -613,6 +611,54 @@ enum RawArgument {
         when_present: String,
         append: Vec<RawArgument>,
     },
+}
+
+impl<'de> Deserialize<'de> for RawArgument {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Missing fields and explicit null have different meanings: all present
+        // values must decode to their required type, including in mixed nodes.
+        fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+            deserializer: D,
+        ) -> Result<Option<T>, D::Error> {
+            T::deserialize(deserializer).map(Some)
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            #[serde(default, deserialize_with = "present")]
+            literal: Option<String>,
+            #[serde(default, deserialize_with = "present")]
+            parameter: Option<String>,
+            #[serde(default, deserialize_with = "present")]
+            spread: Option<String>,
+            #[serde(default, deserialize_with = "present")]
+            when_present: Option<String>,
+            #[serde(default, deserialize_with = "present")]
+            append: Option<Vec<RawArgument>>,
+        }
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = RawArgument;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a manifest argument node")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let fields =
+                    Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                match (fields.literal, fields.parameter, fields.spread, fields.when_present, fields.append) {
+                    (Some(literal), None, None, None, None) => Ok(RawArgument::Literal { literal }),
+                    (None, Some(parameter), None, None, None) => Ok(RawArgument::Parameter { parameter }),
+                    (None, None, Some(spread), None, None) => Ok(RawArgument::Spread { spread }),
+                    (None, None, None, Some(when_present), Some(append)) => Ok(RawArgument::WhenPresent { when_present, append }),
+                    _ => Err(serde::de::Error::custom("expected exactly one literal, parameter, spread, or when_present with append")),
+                }
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 fn parse_manifest(raw: &str) -> Result<Manifest> {
@@ -1296,5 +1342,151 @@ mod tests {
                 .unwrap_err()
                 .to_string()
         );
+    }
+}
+
+#[cfg(test)]
+mod argument_decoder_compat {
+    use super::*;
+
+    // Retain the exact former decoder as an independent accept/reject and
+    // variant-selection oracle. The former deny_unknown_fields setting also
+    // rejects sequence-shaped nodes; do not accidentally broaden this schema.
+    #[derive(Deserialize)]
+    #[serde(untagged, deny_unknown_fields)]
+    enum LegacyArgument {
+        Literal {
+            literal: String,
+        },
+        Parameter {
+            parameter: String,
+        },
+        Spread {
+            spread: String,
+        },
+        WhenPresent {
+            when_present: String,
+            append: Vec<LegacyArgument>,
+        },
+    }
+    impl From<LegacyArgument> for RawArgument {
+        fn from(value: LegacyArgument) -> Self {
+            match value {
+                LegacyArgument::Literal { literal } => Self::Literal { literal },
+                LegacyArgument::Parameter { parameter } => Self::Parameter { parameter },
+                LegacyArgument::Spread { spread } => Self::Spread { spread },
+                LegacyArgument::WhenPresent {
+                    when_present,
+                    append,
+                } => Self::WhenPresent {
+                    when_present,
+                    append: append.into_iter().map(Into::into).collect(),
+                },
+            }
+        }
+    }
+    fn compare(source: &str) {
+        let legacy = serde_json::from_str::<LegacyArgument>(source).map(RawArgument::from);
+        let current = serde_json::from_str::<RawArgument>(source);
+        assert_eq!(
+            current.is_ok(),
+            legacy.is_ok(),
+            "acceptance differs: {source}"
+        );
+        if let (Ok(current), Ok(legacy)) = (current, legacy) {
+            assert_eq!(
+                format!("{current:?}"),
+                format!("{legacy:?}"),
+                "mapping differs: {source}"
+            );
+        }
+    }
+    #[test]
+    fn argument_decoder_matches_legacy_objects_duplicates_sequences_and_nesting() {
+        let keys = [
+            "literal",
+            "parameter",
+            "spread",
+            "when_present",
+            "append",
+            "extra",
+        ];
+        let values = [
+            r#""p""#,
+            r#""""#,
+            r#""snow 雪\\end""#,
+            "null",
+            "true",
+            "7",
+            "1.5",
+            "[]",
+            r#"[{"literal":"x"}]"#,
+            "{}",
+        ];
+        for key in keys {
+            for value in values {
+                compare(&format!("{{\"{key}\":{value}}}"));
+                for other in keys {
+                    for next in values {
+                        // Repeating the same key is intentional; do not build
+                        // through serde_json::Value, which would erase it.
+                        compare(&format!("{{\"{key}\":{value},\"{other}\":{next}}}"));
+                    }
+                }
+            }
+        }
+        for first in values {
+            compare(&format!("[{first}]"));
+            for second in values {
+                compare(&format!("[{first},{second}]"));
+                compare(&format!("[{first},{second},null]"));
+            }
+        }
+        for source in [
+            "null",
+            "true",
+            "7",
+            r#""p""#,
+            "[]",
+            "{}",
+            r#"{"literal":"x","parameter":"p","append":[]}"#,
+            r#"{"literal":"\u0000"}"#,
+            r#"{"lit\u0065ral":"escaped key"}"#,
+            r#"{"literal":"x","literal":"x"}"#,
+            r#"{"when_present":"p","append":[],"append":[]}"#,
+        ] {
+            compare(source);
+        }
+        let mut object = r#"{"literal":"end"}"#.to_owned();
+        let mut sequence = r#"["end"]"#.to_owned();
+        for _ in 0..70 {
+            compare(&object);
+            compare(&sequence);
+            object = format!("{{\"when_present\":\"p\",\"append\":[{object}]}}");
+            sequence = format!("[\"p\",[{sequence}]]");
+        }
+    }
+    #[test]
+    fn argument_decoder_matches_all_shipped_catalog_nodes() {
+        fn visit(value: &serde_json::Value) {
+            compare(&value.to_string());
+            if let Some(children) = value.get("append").and_then(|v| v.as_array()) {
+                for child in children {
+                    visit(child);
+                }
+            }
+        }
+        for entry in
+            std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap()
+        {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|ext| ext == "json") {
+                let source = std::fs::read_to_string(path).unwrap();
+                let manifest: serde_json::Value = serde_json::from_str(&source).unwrap();
+                for node in manifest["arguments"].as_array().unwrap() {
+                    visit(node);
+                }
+            }
+        }
     }
 }

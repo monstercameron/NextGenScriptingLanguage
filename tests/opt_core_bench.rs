@@ -7,6 +7,7 @@ use flow::{
     schedule::CronSchedule,
 };
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, hint::black_box, path::Path, time::Instant};
 
 #[test]
@@ -14,6 +15,23 @@ use std::{collections::BTreeMap, hint::black_box, path::Path, time::Instant};
 fn core_operations() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let registry = Registry::load(&root.join("manifests")).unwrap();
+    let mut paths: Vec<_> = std::fs::read_dir(root.join("manifests"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect();
+    paths.sort();
+    let sources: Vec<_> = paths
+        .iter()
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .collect();
+    assert_eq!(
+        serde_json::to_vec(Registry::from_sources(&sources).unwrap().manifests()).unwrap(),
+        serde_json::to_vec(registry.manifests()).unwrap()
+    );
     let short="run printf with message \"hello\"\npipe to tr with from \"[:lower:]\" and to \"[:upper:]\"\npipe to wc with flags [\"-l\"]\n";
     let long = "run printf with message \"one\"\n".repeat(1000);
     let parsed = parser::parse(short).unwrap();
@@ -47,6 +65,7 @@ fn core_operations() {
         ("manifest_argv_list256", 500),
         ("registry_clone", 1000),
         ("registry_load", 5),
+        ("registry_from_sources", 10),
         ("cron_parse", 1000),
         ("cron_matches", 10000),
     ] {
@@ -80,6 +99,9 @@ fn core_operations() {
                     "registry_load" => {
                         black_box(Registry::load(black_box(&root.join("manifests"))).unwrap());
                     }
+                    "registry_from_sources" => {
+                        black_box(Registry::from_sources(black_box(&sources)).unwrap());
+                    }
                     "cron_parse" => {
                         black_box(CronSchedule::parse(black_box("*/5 0-23/2 * * 0,7")).unwrap());
                     }
@@ -106,7 +128,7 @@ fn core_operations() {
             ..
         }
     ));
-    let report = json!({"version":env!("CARGO_PKG_VERSION"),"mode":"release optimized in-process functions, includes allocation/drop; excludes external commands and CLI startup","warmup_batches":10,"measured_batches":100,"operations":measurements});
+    let report = json!({"version":env!("CARGO_PKG_VERSION"),"mode":"release optimized in-process functions, includes allocation/drop; excludes external commands and CLI startup","warmup_batches":10,"measured_batches":100,"operations":measurements,"catalog_serialized_sha256":format!("{:x}", Sha256::digest(serde_json::to_vec(registry.manifests()).unwrap()))});
     let path = std::env::var("OPT_BENCH_REPORT").expect("set OPT_BENCH_REPORT");
     std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
 }

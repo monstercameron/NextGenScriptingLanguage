@@ -132,6 +132,19 @@ fn report_release_allocation_counts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let manifests_path = root.join("manifests");
     let registry = Registry::load(&manifests_path).unwrap();
+    let mut paths: Vec<_> = std::fs::read_dir(&manifests_path)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect();
+    paths.sort();
+    let sources: Vec<_> = paths
+        .iter()
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .collect();
 
     // All operation inputs, including the 1,000-line source and list values,
     // are ready before any counter scope begins.
@@ -190,6 +203,10 @@ fn report_release_allocation_counts() {
     operations.insert(
         "registry_load",
         measure(|| Registry::load(black_box(&manifests_path)).unwrap()),
+    );
+    operations.insert(
+        "registry_from_sources",
+        measure(|| Registry::from_sources(black_box(&sources)).unwrap()),
     );
     operations.insert(
         "registry_clone",

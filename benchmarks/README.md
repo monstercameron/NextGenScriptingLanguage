@@ -1,3 +1,23 @@
+# Catalog decoding performance
+
+The [paired catalog report](performance-2026-10-14-catalog-decoding.json)
+compares `8cb5e7d` with a strict one-pass argument-node decoder. Across three
+alternating release rounds, parsing the catalog from memory measured 51% lower
+median time (101 to 50 microseconds); loading its files measured 12.5% lower
+(507 to 444 microseconds). Three allocation repeats each show 1,487 to 658
+allocation calls and 143,356 to 59,805 requested bytes per load; reallocations
+also decrease. All other allocation controls matched exactly. This measures
+allocation traffic, not retained memory, RSS or peak memory.
+
+The legacy differential corpus preserves accepted/rejected nodes and mappings;
+serialized catalog hashes match, and a baseline-created checkpoint resumes on
+the candidate without repeating completed effects. Matching fresh CLI medians
+varied -2.53% to +0.22%; these small changes are controls, not claimed whole-task
+gains. An unchanged cron control varied +2.67% (about 0.4 ns). Raw samples,
+source/catalog/harness/binary hashes and limits are retained. These are local
+macOS warm-cache results; cold-cache and other-platform performance remain
+unmeasured.
+
 # Loop integration regression controls
 
 The [loop integration report](loop-regression-2026-10-14.json) compares the

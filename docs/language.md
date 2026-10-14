@@ -3,6 +3,8 @@
 Execute uses a deterministic English-like grammar. This reference covers finite
 programs, listeners, schedules, applet manifests, caching, and checkpoints.
 Start with the [project README](../README.md) for installation and runnable examples.
+The same grammar runs on native Windows; see [platform differences](windows.md)
+for executable lookup, quoting, cancellation, checkpoints and live IPC.
 Persistent native streams have a [separate guide](streaming.md); managed runtime
 and widget edits are covered by the [live-control API](live-control.md).
 

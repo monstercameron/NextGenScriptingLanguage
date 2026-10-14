@@ -37,9 +37,14 @@ still a one-shot process. A `listen to` producer remains running between events;
 a `stream from` pipeline starts each native stage once for the whole stream.
 Persistent request/response worker protocols are a separate future feature.
 
-macOS and Linux share process, descriptor, signal, and `poll` contracts. Tests have
-run locally on macOS; CI targets both macOS and Ubuntu. No system cron, launchd,
-systemd, or shell-profile configuration is changed by running these apps.
+macOS and Linux share process, descriptor, signal, and `poll` contracts. Native
+Windows supplies Job Objects, handle I/O, console cancellation and owner-checked
+named pipes behind the same language and state protocol. Only the OS boundary is
+separate; Rust does not replace `.program` control flow. Native CI covers Windows
+x64/ARM64 as well as macOS and Ubuntu. See [Windows contracts](docs/windows.md).
+No system cron, launchd, systemd, or shell-profile configuration is changed by
+running these apps. [Release builds](docs/releases.md) package six architectures
+and enforce version/source agreement before publishing.
 
 ## Next measured improvements
 

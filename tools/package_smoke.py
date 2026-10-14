@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Run the installed tree from an unrelated cwd, without network or host effects."""
 import argparse
+import contextlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import tempfile
+import tarfile
+import zipfile
 from release import version
 
 
@@ -63,18 +66,75 @@ def smoke(executable, helper, manifests):
     print("Installed tree smoke passed: " + str(executable))
 
 
+@contextlib.contextmanager
+def extracted_archive(path):
+    # Never restore install trees from the Rust build cache. Each invocation gets
+    # an owned empty directory, even if target/ contains a previous version.
+    with tempfile.TemporaryDirectory(prefix="execute-archive-test-") as tmp:
+        folder = Path(tmp)
+
+        def safe(name):
+            parts = PurePosixPath(name).parts
+            if (
+                not parts
+                or name.startswith("/")
+                or "\\" in name
+                or ":" in name
+                or ".." in parts
+            ):
+                raise ValueError("unsafe archive path")
+
+        if path.suffix == ".zip":
+            with zipfile.ZipFile(path) as archive:
+                for entry in archive.infolist():
+                    safe(entry.filename)
+                    if entry.external_attr >> 16 & 0o170000 == 0o120000:
+                        raise ValueError("archive symlink is not permitted")
+                archive.extractall(folder)
+        else:
+            with tarfile.open(path) as archive:
+                for entry in archive.getmembers():
+                    safe(entry.name)
+                    if not (entry.isfile() or entry.isdir()):
+                        raise ValueError("archive special file is not permitted")
+                archive.extractall(
+                    folder,
+                    **({"filter": "data"} if hasattr(tarfile, "data_filter") else {})
+                )
+        roots = list(folder.iterdir())
+        if (
+            len(roots) != 1
+            or roots[0].name != "execute-" + version()
+            or not roots[0].is_dir()
+        ):
+            raise ValueError("invalid archive root")
+        yield roots[0]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, required=True)
+    choice = parser.add_mutually_exclusive_group(required=True)
+    choice.add_argument("--root", type=Path)
+    choice.add_argument("--archive", type=Path)
     parser.add_argument("--system", action="store_true")
     args = parser.parse_args()
-    prefix = args.root / "usr" if args.system else args.root
-    suffix = ".exe" if (prefix / "bin/execute.exe").is_file() else ""
-    smoke(
-        prefix / ("bin/execute" + suffix),
-        prefix / ("bin/execute-model" + suffix),
-        prefix / "share/execute/manifests" if args.system else prefix / "manifests",
-    )
+
+    def check(root):
+        prefix = root / "usr" if args.system else root
+        suffix = ".exe" if (prefix / "bin/execute.exe").is_file() else ""
+        smoke(
+            prefix / ("bin/execute" + suffix),
+            prefix / ("bin/execute-model" + suffix),
+            prefix / "share/execute/manifests" if args.system else prefix / "manifests",
+        )
+
+    if args.archive:
+        if args.system:
+            parser.error("--system is for an extracted package root")
+        with extracted_archive(args.archive) as root:
+            check(root)
+    else:
+        check(args.root)
 
 
 if __name__ == "__main__":

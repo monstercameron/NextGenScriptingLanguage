@@ -1,6 +1,7 @@
 # Live state control for agents
 
-`execute live` exposes real execution state through a local Unix socket. Every
+`execute live` exposes real execution state through a local Unix socket, or a
+native owner-checked named pipe on Windows. Every
 client command prints one JSON response and returns status 0 on success or 1 on
 failure. `execute live schema` describes the commands, fields, limits, and supported
 program kinds without starting a program. No shell, HTTP server, or extra daemon
@@ -278,6 +279,12 @@ and requires explicit retry before re-executing their queued handlers. Stop and
 signals restore terminal settings and join owned workers.
 
 ## Resource and compatibility contract
+
+On Windows, `--socket PATH` is a local named-pipe namespace key rather than a
+filesystem socket. Both peers check user SIDs; protected DACLs and rejection of
+remote clients enforce the local boundary. Use identical absolute path spelling
+for the server and clients. See [native Windows semantics](windows.md). The
+Unix permission/UID details below apply to macOS and Linux.
 
 The socket is mode 0600; macOS/Linux peer credentials must match the server's
 user. The pending source candidate also verifies the server peer UID in the CLI

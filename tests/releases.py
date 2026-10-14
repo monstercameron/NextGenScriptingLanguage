@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """Version, architecture and deterministic package contracts; no publishing."""
 import hashlib
-import importlib.util
+import contextlib
+import io
+import json
+import os
+import subprocess
 from pathlib import Path
 import struct
 import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import release
 import package
+import publish_release
+import package_smoke
 
 
 class Releases(unittest.TestCase):
@@ -136,6 +143,154 @@ class Releases(unittest.TestCase):
                             t.extractfile("execute-1.0.0/bin/execute").read(),
                             b"fixture",
                         )
+
+
+class ArchiveInstallation(unittest.TestCase):
+    def test_extraction_is_fresh_versioned_and_rejects_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            root = work / ("execute-" + release.version())
+            root.mkdir()
+            (root / "fixture.txt").write_text("owned")
+            for extension in [".zip", ".tar.gz"]:
+                path = work / ("fixture" + extension)
+                package.archive(root, path, 1700000000)
+                with package_smoke.extracted_archive(path) as extracted:
+                    self.assertNotEqual(extracted.parent, work)
+                    self.assertEqual((extracted / "fixture.txt").read_text(), "owned")
+                    previous = extracted
+                self.assertFalse(previous.exists())
+            malicious = work / "malicious.zip"
+            with zipfile.ZipFile(malicious, "w") as archive:
+                archive.writestr("../must-not-exist", b"escape")
+            with self.assertRaisesRegex(ValueError, "unsafe archive path"):
+                with package_smoke.extracted_archive(malicious):
+                    self.fail("unsafe archive was accepted")
+            self.assertFalse((work / "must-not-exist").exists())
+
+
+class Publication(unittest.TestCase):
+    @contextlib.contextmanager
+    def payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = Path.cwd()
+            os.chdir(tmp)
+            try:
+                folder = Path("dist")
+                folder.mkdir()
+                value = release.version()
+                for name in release.expected_assets(value):
+                    (folder / name).write_bytes(b"owned artifact fixture" * 20)
+                release.verify_assets(folder, value)
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        "GITHUB_REPOSITORY": "owner/repo",
+                        "GITHUB_SHA": "a" * 40,
+                        "GITHUB_REF": "refs/tags/v" + value,
+                    },
+                ), contextlib.redirect_stdout(io.StringIO()):
+                    yield folder, value
+            finally:
+                os.chdir(previous)
+
+    def server(self, folder, value, draft=True):
+        return {
+            "id": 1,
+            "draft": draft,
+            "body": "<!-- execute-release:v" + value + ":" + "a" * 40 + " -->",
+            "assets": [
+                {
+                    "name": p.name,
+                    "size": p.stat().st_size,
+                    "digest": "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest(),
+                }
+                for p in folder.iterdir()
+            ],
+        }
+
+    def test_uploaded_server_digest_is_required_before_publication(self):
+        for corrupt in [False, True]:
+            with self.subTest(corrupt=corrupt), self.payload() as (folder, value):
+                server = self.server(folder, value)
+                if corrupt:
+                    server["assets"][0]["digest"] = "sha256:" + "0" * 64
+                lookup = subprocess.CompletedProcess([], 0, json.dumps(server), "")
+                with mock.patch.object(
+                    publish_release.subprocess, "run", return_value=lookup
+                ), mock.patch.object(
+                    publish_release.subprocess,
+                    "check_output",
+                    return_value=json.dumps(server),
+                ), mock.patch.object(
+                    publish_release, "gh"
+                ) as gh:
+                    if corrupt:
+                        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+                            publish_release.main()
+                        self.assertFalse(
+                            any(
+                                c.args[:3] == ("api", "--method", "PATCH")
+                                for c in gh.call_args_list
+                            )
+                        )
+                    else:
+                        publish_release.main()
+                        self.assertEqual(
+                            gh.call_args_list[-1].args[:3], ("api", "--method", "PATCH")
+                        )
+                        request = json.loads(gh.call_args_list[-1].kwargs["input"])
+                        self.assertFalse(request["draft"])
+                        self.assertEqual(request["prerelease"], "-" in value)
+
+    def test_unowned_release_wrong_tag_and_corrupt_local_payload_never_upload(self):
+        with self.payload() as (folder, value):
+            server = self.server(folder, value)
+            server["body"] = "somebody else owns this release"
+            lookup = subprocess.CompletedProcess([], 0, json.dumps(server), "")
+            with mock.patch.object(
+                publish_release.subprocess, "run", return_value=lookup
+            ), mock.patch.object(publish_release, "gh") as gh:
+                with self.assertRaisesRegex(ValueError, "not owned"):
+                    publish_release.main()
+                gh.assert_not_called()
+            with mock.patch.dict(
+                os.environ, {"GITHUB_REF": "refs/heads/main"}
+            ), mock.patch.object(publish_release.subprocess, "run") as api:
+                with self.assertRaisesRegex(ValueError, "exact version tag"):
+                    publish_release.main()
+                api.assert_not_called()
+            next(p for p in folder.iterdir() if p.name != "SHA256SUMS").write_bytes(
+                b"changed"
+            )
+            with mock.patch.object(publish_release.subprocess, "run") as api:
+                with self.assertRaisesRegex(ValueError, "checksums"):
+                    publish_release.main()
+                api.assert_not_called()
+
+    def test_published_retry_compares_every_byte_without_mutating_the_release(self):
+        for corrupt in [False, True]:
+            with self.subTest(corrupt=corrupt), self.payload() as (folder, value):
+                server = self.server(folder, value, draft=False)
+                lookup = subprocess.CompletedProcess([], 0, json.dumps(server), "")
+
+                def download(*args, **kwargs):
+                    self.assertEqual(args[:2], ("release", "download"))
+                    destination = Path(args[args.index("--dir") + 1])
+                    for path in folder.iterdir():
+                        (destination / path.name).write_bytes(path.read_bytes())
+                    if corrupt:
+                        (destination / "SHA256SUMS").write_bytes(b"changed remotely")
+
+                with mock.patch.object(
+                    publish_release.subprocess, "run", return_value=lookup
+                ), mock.patch.object(publish_release, "gh", side_effect=download) as gh:
+                    if corrupt:
+                        with self.assertRaisesRegex(ValueError, "never overwrite"):
+                            publish_release.main()
+                    else:
+                        publish_release.main()
+                    self.assertEqual(gh.call_count, 1)
 
 
 if __name__ == "__main__":

@@ -58,19 +58,10 @@ jobs:
           BUILD_TARGET: ${{ matrix.target }}
         run: |
           python3 - <<'PY'
-          import os, pathlib, tarfile, zipfile, subprocess
-          folder = pathlib.Path('target/install-smoke')
-          folder.mkdir(parents=True, exist_ok=True)
+          import pathlib, subprocess
           archives = list(pathlib.Path('dist').glob('*.zip')) + list(pathlib.Path('dist').glob('*.tar.gz'))
           if len(archives) != 1: raise SystemExit('expected one native archive')
-          path = archives[0]
-          if path.suffix == '.zip':
-              with zipfile.ZipFile(path) as z: z.extractall(folder)
-          else:
-              with tarfile.open(path) as t: t.extractall(folder, filter='data')
-          roots = list(folder.iterdir())
-          if len(roots) != 1: raise SystemExit('invalid archive root')
-          subprocess.run(['python3', 'tools/package_smoke.py', '--root', str(roots[0])], check=True)
+          subprocess.run(['python3', 'tools/package_smoke.py', '--archive', str(archives[0])], check=True)
           PY
       - name: Install DEB on ephemeral runner
         if: runner.os == 'Linux'

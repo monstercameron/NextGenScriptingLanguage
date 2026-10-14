@@ -66,7 +66,9 @@ def main():
         notes.write_text(
             "Execute "
             + value
-            + "\n\nNative macOS, Linux and Windows builds, including x64 and ARM64. Linux also includes DEB, RPM and sandboxed Flatpak bundles.\n\nDownload the archive for your platform; keep execute and execute-model together. Verify SHA256SUMS and GitHub artifact provenance before installation.\n\nThis is a release candidate. Windows is native, without WSL. The Flatpak edition runs inside its sandbox; use native packages for full host automation. Binaries are not Apple-notarized or Authenticode-signed.\n\n[Installation and release policy](https://github.com/"
+            + "\n\nNative macOS, Linux and Windows builds, including x64 and ARM64. Linux also includes DEB, RPM and sandboxed Flatpak bundles.\n\nDownload the archive for your platform; keep execute and execute-model together. Verify SHA256SUMS and GitHub artifact provenance before installation.\n\n"
+            + ("This is a release candidate. " if "-" in value else "")
+            + "Windows is native, without WSL. The Flatpak edition runs inside its sandbox; use native packages for full host automation. Binaries are not Apple-notarized or Authenticode-signed.\n\n[Installation and release policy](https://github.com/"
             + repo
             + "/blob/"
             + tag

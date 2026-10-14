@@ -1,6 +1,6 @@
 use crate::ast::{
     Condition, Connection, InputDeclaration, InputSource, InputType, Invocation, ListenSource,
-    Program, Step, StepKind, Trigger, Value,
+    LoopKind, Program, Step, StepKind, Trigger, Value,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use std::borrow::Cow;
@@ -41,8 +41,8 @@ pub(crate) struct BlockLine<'arena, 'source> {
 const MAX_CONTROL_DEPTH: usize = 64;
 mod reusable;
 
-/// Lower one indented statement into forward-only instructions. Offsets remain
-/// valid when a complete conditional is copied into a managed execution node.
+/// Lower one indented statement into relative control instructions. Offsets remain
+/// valid when a complete block is copied into a managed execution node.
 pub(crate) fn parse_statement<'arena, 'source: 'arena>(
     line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
     cursor: &mut usize,
@@ -72,6 +72,12 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
             line.number
         );
     }
+    if matches!(
+        line.tokens.first(),
+        Some(Token::Word("repeat" | "for" | "while"))
+    ) {
+        return parse_loop(line_at, cursor, indent, steps, depth);
+    }
     if !word_is(line.tokens.first(), "if") {
         let kind =
             parse_line(line.tokens).map_err(|error| anyhow!("line {}: {error}", line.number))?;
@@ -88,30 +94,13 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
             line.number
         );
     }
-    let mut token = 1;
-    let left = parse_value(line.tokens, &mut token)
-        .map_err(|error| anyhow!("line {}: if left value: {error}", line.number))?;
-    if !word_is(line.tokens.get(token), "is") {
-        bail!(
-            "line {}: expected `if <value> is [not] <value>`",
-            line.number
-        );
-    }
-    token += 1;
-    let negated = word_is(line.tokens.get(token), "not");
-    token += usize::from(negated);
-    let right = parse_value(line.tokens, &mut token)
-        .map_err(|error| anyhow!("line {}: if right value: {error}", line.number))?;
-    ensure_end(line.tokens, token).map_err(|error| anyhow!("line {}: {error}", line.number))?;
+    let condition = parse_condition(line.tokens, "if")
+        .map_err(|error| anyhow!("line {}: {error:#}", line.number))?;
     let start = steps.len();
     steps.push(Step {
         line: line.number,
         kind: StepKind::If {
-            condition: Condition {
-                left,
-                right,
-                negated,
-            },
+            condition,
             otherwise: 0,
             end: 0,
         },
@@ -164,6 +153,93 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
         steps[index].kind = StepKind::Otherwise {
             end: finish - index,
         };
+    }
+    Ok(())
+}
+
+fn parse_condition(tokens: &[Token<'_>], keyword: &str) -> Result<Condition> {
+    let mut token = 1;
+    let left = parse_value(tokens, &mut token).with_context(|| format!("{keyword} left value"))?;
+    if !word_is(tokens.get(token), "is") {
+        bail!("expected `{keyword} <value> is [not] <value>`");
+    }
+    token += 1;
+    let negated = word_is(tokens.get(token), "not");
+    token += usize::from(negated);
+    let right =
+        parse_value(tokens, &mut token).with_context(|| format!("{keyword} right value"))?;
+    ensure_end(tokens, token)?;
+    Ok(Condition {
+        left,
+        right,
+        negated,
+    })
+}
+
+fn parse_loop<'arena, 'source: 'arena>(
+    line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
+    cursor: &mut usize,
+    indent: usize,
+    steps: &mut Vec<Step>,
+    depth: usize,
+) -> Result<()> {
+    let line = line_at(*cursor).expect("loop cursor");
+    if depth >= MAX_CONTROL_DEPTH {
+        bail!(
+            "line {}: control nesting exceeds {MAX_CONTROL_DEPTH} levels",
+            line.number
+        );
+    }
+    let kind = (|| -> Result<LoopKind> {
+        if word_is(line.tokens.first(), "repeat") {
+            let mut token = 1;
+            let count = parse_value(line.tokens, &mut token)?;
+            if !word_is(line.tokens.get(token), "times") {
+                bail!("expected `repeat <integer value> times`");
+            }
+            ensure_end(line.tokens, token + 1)?;
+            Ok(LoopKind::Repeat { count })
+        } else if word_is(line.tokens.first(), "for") {
+            if !word_is(line.tokens.get(1), "each") || !word_is(line.tokens.get(3), "in") {
+                bail!("expected `for each <name> in <text-list value>`");
+            }
+            let binding = parse_binding_identifier(line.tokens.get(2), "iteration binding")?;
+            let mut token = 4;
+            let values = parse_value(line.tokens, &mut token)?;
+            ensure_end(line.tokens, token)?;
+            Ok(LoopKind::ForEach { binding, values })
+        } else {
+            Ok(LoopKind::While {
+                condition: parse_condition(line.tokens, "while")?,
+            })
+        }
+    })()
+    .map_err(|error| anyhow!("line {}: {error:#}", line.number))?;
+    let start = steps.len();
+    steps.push(Step {
+        line: line.number,
+        kind: StepKind::Loop { kind, end: 0 },
+    });
+    *cursor += 1;
+    let body_indent = line_at(*cursor)
+        .filter(|child| child.indent > indent)
+        .map(|child| child.indent)
+        .ok_or_else(|| {
+            anyhow!(
+                "line {}: loop body must contain an indented statement",
+                line.number
+            )
+        })?;
+    while line_at(*cursor).is_some_and(|child| child.indent > indent) {
+        parse_statement(line_at, cursor, body_indent, steps, depth + 1)?;
+    }
+    let back = steps.len() - start;
+    steps.push(Step {
+        line: line.number,
+        kind: StepKind::EndLoop { back },
+    });
+    if let StepKind::Loop { end, .. } = &mut steps[start].kind {
+        *end = back + 1;
     }
     Ok(())
 }
@@ -695,7 +771,7 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
         return parse_save(tokens);
     }
     if tokens.first().is_some_and(|token| {
-        matches!(token, Token::Word(word) if matches!(*word, "for" | "while" | "if" | "otherwise" | "else" | "loop"))
+        matches!(token, Token::Word(word) if matches!(*word, "repeat" | "for" | "while" | "if" | "otherwise" | "else" | "loop"))
     }) {
         bail!("unsupported control block");
     }
@@ -1258,13 +1334,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_parameters_and_control_blocks() {
+    fn rejects_duplicate_parameters_and_empty_control_blocks() {
         let duplicate = parse("run printf with x 1 and x 2")
             .unwrap_err()
             .to_string();
         assert!(duplicate.contains("line 1") && duplicate.contains("duplicate parameter `x`"));
         let loop_error = parse("for each file in inputs").unwrap_err().to_string();
-        assert!(loop_error.contains("line 1") && loop_error.contains("unsupported control block"));
+        assert_eq!(
+            loop_error,
+            "line 1: loop body must contain an indented statement"
+        );
     }
 
     #[test]
@@ -1454,5 +1533,182 @@ mod tests {
             program.trigger,
             Some(Trigger::Listen { line: 3, .. })
         ));
+    }
+
+    #[test]
+    fn loops_lower_to_relative_markers_without_unrolling() {
+        let program = parse("repeat 3 times\n  for each path in [\"a.txt\", \"b.txt\"]\n    while ready is not false\n      run \"cat\" with arguments [path]\nthen save to \"report.txt\"\n").unwrap();
+        assert_eq!(program.steps.len(), 8);
+        assert!(matches!(
+            &program.steps[0].kind,
+            StepKind::Loop {
+                kind: LoopKind::Repeat {
+                    count: Value::Integer(3)
+                },
+                end: 7
+            }
+        ));
+        assert!(matches!(&program.steps[1].kind, StepKind::Loop {
+            kind: LoopKind::ForEach { binding, values: Value::List(values) }, end: 5
+        } if binding == "path" && values.len() == 2));
+        assert!(matches!(&program.steps[2].kind, StepKind::Loop {
+            kind: LoopKind::While { condition: Condition {
+                left: Value::Reference(left), right: Value::Bool(false), negated: true
+            } }, end: 3
+        } if left == "ready"));
+        for (index, back) in [(4, 2), (5, 4), (6, 6)] {
+            assert!(
+                matches!(program.steps[index].kind, StepKind::EndLoop { back: actual } if actual == back)
+            );
+        }
+        assert_eq!(
+            program
+                .steps
+                .iter()
+                .map(|step| step.line)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4, 3, 2, 1, 5]
+        );
+    }
+
+    #[test]
+    fn loop_headers_accept_input_references_and_empty_lists() {
+        for (source, expected) in [
+            (
+                "repeat count times\n  run pwd",
+                LoopKind::Repeat {
+                    count: Value::Reference("count".into()),
+                },
+            ),
+            (
+                "for each item in files\n  run pwd",
+                LoopKind::ForEach {
+                    binding: "item".into(),
+                    values: Value::Reference("files".into()),
+                },
+            ),
+            (
+                "for each item in []\n  run pwd",
+                LoopKind::ForEach {
+                    binding: "item".into(),
+                    values: Value::List(vec![]),
+                },
+            ),
+        ] {
+            let program = parse(source).unwrap();
+            assert!(
+                matches!(&program.steps[0].kind, StepKind::Loop { kind, end: 3 } if kind == &expected)
+            );
+        }
+    }
+
+    #[test]
+    fn loop_and_conditional_offsets_survive_reusable_expansion() {
+        let program = parse("define a program named emit\n  run pwd\n  then cat\nrepeat 2 times\n  if true is true\n    run program emit\n  otherwise\n    for each item in []\n      run program emit\nthen cat\n").unwrap();
+        let steps = &program.steps;
+        assert!(matches!(steps[0].kind, StepKind::Loop { end: 15, .. }));
+        assert!(matches!(
+            steps[1].kind,
+            StepKind::If {
+                otherwise: 6,
+                end: 13,
+                ..
+            }
+        ));
+        assert!(matches!(
+            steps[2].kind,
+            StepKind::CallProgram { end: 4, .. }
+        ));
+        assert!(matches!(steps[6].kind, StepKind::Otherwise { end: 8 }));
+        assert!(matches!(steps[7].kind, StepKind::Loop { end: 6, .. }));
+        assert!(matches!(steps[12].kind, StepKind::EndLoop { back: 5 }));
+        assert!(matches!(steps[14].kind, StepKind::EndLoop { back: 14 }));
+    }
+
+    #[test]
+    fn loops_inside_reusable_programs_rebase_relative_to_their_header() {
+        let program = parse("define a program named emit\n  run pwd\n  then cat\ndefine a program named twice\n  repeat 2 times\n    run program emit\nrun program twice\n").unwrap();
+        assert!(matches!(
+            program.steps[0].kind,
+            StepKind::CallProgram { end: 8, .. }
+        ));
+        assert!(matches!(
+            program.steps[1].kind,
+            StepKind::Loop { end: 6, .. }
+        ));
+        assert!(matches!(
+            program.steps[6].kind,
+            StepKind::EndLoop { back: 5 }
+        ));
+        assert!(matches!(program.steps[7].kind, StepKind::EndCall));
+    }
+
+    #[test]
+    fn rejects_malformed_loop_headers_and_bodies_with_source_lines() {
+        for source in [
+            "repeat 3\n  run pwd",
+            "repeat 3 times extra\n  run pwd",
+            "repeat times\n  run pwd",
+            "repeat 1 times",
+            "repeat 1 times\nrun pwd",
+            "for item in []\n  run pwd",
+            "for each item []\n  run pwd",
+            "for each true in []\n  run pwd",
+            "for each item in [\"a\",]\n  run pwd",
+            "for each item in [] extra\n  run pwd",
+            "while ready\n  run pwd",
+            "while ready is\n  run pwd",
+            "while ready is true extra\n  run pwd",
+            "repeat 1 times\n  run pwd\n   run pwd",
+            "repeat 1 times\n  otherwise\n    run pwd",
+            "repeat 1 times\n  every 1 second\n    run pwd",
+        ] {
+            let error = parse(source).unwrap_err().to_string();
+            assert!(error.contains("line "), "{source:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn mixed_loop_and_conditional_nesting_is_bounded() {
+        let mut source = String::new();
+        for depth in 0..=MAX_CONTROL_DEPTH {
+            source.push_str(&"  ".repeat(depth));
+            source.push_str(if depth % 2 == 0 {
+                "repeat 1 times\n"
+            } else {
+                "if true is true\n"
+            });
+        }
+        source.push_str(&"  ".repeat(MAX_CONTROL_DEPTH + 1));
+        source.push_str("run pwd\n");
+        let error = parse(&source).unwrap_err().to_string();
+        assert!(error.contains("nesting exceeds 64 levels"), "{error}");
+
+        // Exactly 64 nested controls remain accepted; the guard is not off by one.
+        let mut accepted = String::new();
+        for depth in 0..MAX_CONTROL_DEPTH {
+            accepted.push_str(&"  ".repeat(depth));
+            accepted.push_str(if depth % 2 == 0 {
+                "repeat 1 times\n"
+            } else {
+                "if true is true\n"
+            });
+        }
+        accepted.push_str(&"  ".repeat(MAX_CONTROL_DEPTH));
+        accepted.push_str("run pwd\n");
+        assert!(parse(&accepted).is_ok());
+    }
+
+    #[test]
+    fn loops_parse_inside_scheduled_and_listener_handlers() {
+        for source in [
+            "every 1 second\n  repeat 2 times\n    run pwd",
+            "listen to stdin\nwhenever a line arrives as message\n  for each item in [message]\n    while false is true\n      run pwd",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(program.trigger.is_some());
+            assert!(matches!(program.steps[0].kind, StepKind::Loop { .. }));
+            assert!(matches!(program.steps.last().unwrap().kind, StepKind::EndLoop { .. }));
+        }
     }
 }

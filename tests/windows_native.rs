@@ -140,6 +140,20 @@ fn real_native_statuses_propagate_or_can_be_handled() {
     assert_eq!(serde_json::from_slice::<i64>(&output.stdout).unwrap(), 42);
 }
 #[test]
+fn repeat_foreach_and_while_use_native_windows_applets_and_file_paths() {
+    let folder = tempfile::tempdir().unwrap();
+    let exe = quoted(&fixture());
+    let source = format!(
+        "define a program named uppercase\n  repeat 2 times\n    then {exe} with arguments [\"upper\"]\nrun {exe} with arguments [\"write\", \"letters\"]\nrepeat 2 times\n  then program uppercase\nfor each outputpath in [\"one space.txt\", \"雪.txt\"]\n  then save to outputpath\nrun {exe} with arguments [\"exit\", \"0\", \"\"] and keep status as code\nwhile code is 0\n  run {exe} with arguments [\"exit\", \"1\", \"\"] and keep status as code\nthen encode code as json\n"
+    );
+    let output = invoke(folder.path(), &source, &[]);
+    ok(&output);
+    assert_eq!(serde_json::from_slice::<i64>(&output.stdout).unwrap(), 1);
+    for path in ["one space.txt", "雪.txt"] {
+        assert_eq!(fs::read(folder.path().join(path)).unwrap(), b"LETTERS");
+    }
+}
+#[test]
 fn output_limits_and_timeouts_kill_owned_descendants() {
     let folder = tempfile::tempdir().unwrap();
     let result = invoke(

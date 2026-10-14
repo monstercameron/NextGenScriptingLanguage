@@ -165,6 +165,12 @@ impl Plan {
                     index += end;
                     continue;
                 }
+                StepKind::Loop { end, .. } => {
+                    // Names created inside a loop are iteration-local. Outer
+                    // names rebound by its body are already tracked outside it.
+                    index += end;
+                    continue;
+                }
                 StepKind::Read { binding, .. } | StepKind::ReadStdin { binding } => {
                     names.extend(binding.iter().cloned())
                 }
@@ -364,7 +370,7 @@ pub(crate) fn validate(doc: &Document, registry: &Registry, max_bytes: usize) ->
         index = plan.end(index);
     }
     if index != doc.cursor {
-        bail!("cursor must be at a native pipeline group boundary");
+        bail!("cursor must be at a native pipeline or control-block boundary");
     }
     if let Some(stream) = &plan.stream {
         runtime::preflight_inputs(&stream.pipeline, registry, &declared)?;

@@ -15,10 +15,10 @@ then save to "contacts-clean.txt"
 ## Install
 
 Build a source VSIX with the instructions below. In VS Code, choose
-**Extensions: Install from VSIX…** and select `execute-program-0.2.1.vsix`, or use:
+**Extensions: Install from VSIX…** and select `execute-program-0.2.2.vsix`, or use:
 
 ```sh
-code --install-extension execute-program-0.2.1.vsix
+code --install-extension execute-program-0.2.2.vsix
 ```
 
 Earlier installed VSIX files retain their original contents. Use the current
@@ -32,7 +32,7 @@ picker. The language ID is `execute-program`; TextMate scope is `source.execute`
 
 - Typed CLI inputs and defaults, including JSON and text-list inputs.
 - Context-aware token scopes for direct executable names, named applets, parameters,
-  bindings, literals, comments, status, conditional blocks and cache modifiers.
+  bindings, literals, comments, status, conditional and loop blocks, and cache modifiers.
 - Finite stdin, JSON selection, same-file reusable programs, listeners, schedules,
   persistent streams and implemented TUI vocabulary.
 - Folding, `#` comments, bracket/quote pairing and two-space indentation defaults.
@@ -43,7 +43,7 @@ picker. The language ID is `execute-program`; TextMate scope is `source.execute`
 A keyword-shaped applet stays an applet: `then false` highlights `false` as a
 command. In strings, `#`, `$HOME`, backticks and `$(...)` remain literal text.
 An unterminated string resets at the next line. Unsupported statement forms such
-as `else`, `for`, `while` and `loop` are marked; an applet with one of those names
+as `else`, malformed `for`/`while` headers and `loop` are marked; an applet with one of those names
 can still be invoked explicitly with `run`.
 
 ## Scope

@@ -25,6 +25,7 @@ mod calls;
 mod checkpoint;
 mod control;
 pub(crate) mod live;
+mod loops;
 mod resume;
 mod service;
 mod streaming;
@@ -930,6 +931,10 @@ fn run_finite_state(
 ) -> Result<RunResult> {
     let mut cwd = fs::canonicalize(&options.working_directory)?;
     let cache_override = options.cache_directory.as_ref().map(|path| cwd.join(path));
+    // Component and managed handlers may supply values without `accept`
+    // declarations. Validate their known loop inputs before earlier effects.
+    let preflight_context =
+        !initial_bindings.is_empty() && state_source == FiniteStateSource::Fresh;
     let mut bindings = initial_bindings;
     let mut data = initial_input;
     let mut result = RunResult {
@@ -939,6 +944,7 @@ fn run_finite_state(
     };
     let mut index = 0;
     let mut call_frames: Vec<calls::Frame<'_>> = Vec::new();
+    let mut loop_frames = loops::LoopStack::default();
     if let Some(journal) = journal.as_deref_mut() {
         if state_source == FiniteStateSource::Restore {
             let state = journal.take_restored_state()?;
@@ -970,6 +976,9 @@ fn run_finite_state(
         }
         bindings.extend(crate::inputs::resolve(&program.inputs, &bindings, true)?);
     }
+    if preflight_context {
+        preflight_inputs(program, registry, &bindings)?;
+    }
     let mut journal_end = None;
     let mut journal_uncertain = false;
     while index < program.steps.len() {
@@ -982,7 +991,7 @@ fn run_finite_state(
             journal_end = Some(end);
             journal_uncertain = matches!(
                 step.kind,
-                StepKind::If { .. } | StepKind::CallProgram { .. }
+                StepKind::If { .. } | StepKind::CallProgram { .. } | StepKind::Loop { .. }
             ) || resume::uncertain_on_failure(program, index, end, registry)?;
             let fingerprint = resume::node_fingerprint(program, index, end, registry, &cwd)?;
             journal.begin_node(
@@ -997,6 +1006,26 @@ fn run_finite_state(
         let mut jump_to = None;
         let execution = (|| -> Result<()> {
             match &step.kind {
+                StepKind::Loop { kind, end } => {
+                    let entered = loop_frames
+                        .header(index, kind, &mut bindings)
+                        .with_context(|| format!("line {}", step.line))?;
+                    lazy_event(
+                        options.trace,
+                        signals,
+                        || serde_json::json!({"event":"loop", "line":step.line, "entered":entered}),
+                    )?;
+                    if !entered {
+                        jump_to = Some(index + end);
+                    }
+                }
+                StepKind::EndLoop { back } => {
+                    let header = index.checked_sub(*back).context("invalid loop back edge")?;
+                    loop_frames
+                        .end_iteration(header, &mut bindings)
+                        .with_context(|| format!("line {}", step.line))?;
+                    jump_to = Some(header);
+                }
                 StepKind::If {
                     condition,
                     otherwise,

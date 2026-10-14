@@ -1,9 +1,13 @@
-//! Forward-only conditional control flow; no shell, byte copies or truthiness.
+//! Validated structured control flow; no shell, byte copies or truthiness.
 use super::*;
 use crate::ast::{Condition, InputType, Step};
 
 pub(super) fn validate_shape(steps: &[Step]) -> Result<()> {
     enum Frame {
+        Loop {
+            start: usize,
+            finish: usize,
+        },
         If {
             finish: usize,
             other: usize,
@@ -17,7 +21,9 @@ pub(super) fn validate_shape(steps: &[Step]) -> Result<()> {
     impl Frame {
         fn finish(&self) -> usize {
             match self {
-                Self::If { finish, .. } | Self::Call { finish, .. } => *finish,
+                Self::If { finish, .. } | Self::Call { finish, .. } | Self::Loop { finish, .. } => {
+                    *finish
+                }
             }
         }
     }
@@ -25,6 +31,29 @@ pub(super) fn validate_shape(steps: &[Step]) -> Result<()> {
     let mut calls = 0;
     for (index, step) in steps.iter().enumerate() {
         match &step.kind {
+            StepKind::Loop { end, .. } => {
+                let finish = index.checked_add(*end).context("loop offset overflow")?;
+                if *end < 3
+                    || finish > steps.len()
+                    || stack.last().is_some_and(|parent| finish >= parent.finish())
+                    || stack.len().saturating_sub(calls) >= 64
+                    || !matches!(steps[finish - 1].kind, StepKind::EndLoop { back } if back == *end - 1)
+                {
+                    bail!("line {}: invalid loop block offsets or nesting", step.line);
+                }
+                stack.push(Frame::Loop {
+                    start: index,
+                    finish,
+                });
+            }
+            StepKind::EndLoop { back } => {
+                let Some(Frame::Loop { start, finish }) = stack.pop() else {
+                    bail!("line {}: loop end without loop", step.line);
+                };
+                if finish != index + 1 || index.checked_sub(*back) != Some(start) {
+                    bail!("line {}: invalid loop end", step.line);
+                }
+            }
             StepKind::If { otherwise, end, .. } => {
                 let finish = index
                     .checked_add(*end)
@@ -180,8 +209,23 @@ pub(super) struct FlowState {
     pub types: BTreeMap<String, InputType>,
     pub has_data: bool,
     pub started: bool,
+    pub invariant: BTreeMap<String, InputType>,
+    pub invariant_names: BTreeSet<String>,
+    pub loop_depth: usize,
 }
 impl FlowState {
+    pub fn bind_type(&mut self, name: &str, kind: InputType) -> Result<()> {
+        if self.invariant_names.contains(name) && !self.invariant.contains_key(name) {
+            bail!("loop cannot rebind {name:?}: its outer type is unknown; bind a typed result before the loop");
+        }
+        if let Some(expected) = self.invariant.get(name) {
+            if *expected != kind {
+                bail!("loop binding {name:?} must remain {expected}, received {kind}");
+            }
+        }
+        self.types.insert(name.to_owned(), kind);
+        Ok(())
+    }
     pub fn merge(mut yes: Self, no: &Self) -> Result<Self> {
         yes.names.retain(|name| no.names.contains(name));
         for (name, left) in &yes.types {
@@ -198,5 +242,48 @@ impl FlowState {
         yes.has_data &= no.has_data;
         yes.started |= no.started;
         Ok(yes)
+    }
+}
+
+#[cfg(test)]
+mod loop_shape_tests {
+    use super::*;
+    fn step(kind: StepKind) -> Step {
+        Step { line: 1, kind }
+    }
+    fn header(end: usize) -> Step {
+        step(StepKind::Loop {
+            kind: crate::ast::LoopKind::Repeat {
+                count: Value::Integer(1),
+            },
+            end,
+        })
+    }
+    #[test]
+    fn rejects_forged_backedges_and_control_boundary_crossings() {
+        let body = step(StepKind::EncodeJson {
+            source: Value::Bool(true),
+        });
+        assert!(
+            validate_shape(&[header(3), body.clone(), step(StepKind::EndLoop { back: 2 })]).is_ok()
+        );
+        assert!(
+            validate_shape(&[header(3), body.clone(), step(StepKind::EndLoop { back: 0 })])
+                .is_err()
+        );
+        assert!(validate_shape(&[
+            header(usize::MAX),
+            body.clone(),
+            step(StepKind::EndLoop { back: 2 })
+        ])
+        .is_err());
+        assert!(validate_shape(&[
+            header(4),
+            header(3),
+            body,
+            step(StepKind::EndLoop { back: 2 })
+        ])
+        .is_err());
+        assert!(validate_shape(&[step(StepKind::EndLoop { back: 1 })]).is_err());
     }
 }

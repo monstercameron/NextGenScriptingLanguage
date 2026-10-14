@@ -271,5 +271,35 @@
       "$0"
     ],
     "isFileTemplate": true
+  },
+  "Repeat a command": {
+    "prefix": "program-repeat",
+    "description": "Repeat a finite command block with an explicit integer input; Execute current source.",
+    "isFileTemplate": true,
+    "body": [
+      "accept count as integer with default 3",
+      "repeat count times",
+      "  run \"printf\" with arguments [\"${1:hello}\\n\"]"
+    ]
+  },
+  "Process each file": {
+    "prefix": "program-foreach",
+    "description": "Iterate an explicit text list; literal arguments keep spaces and wildcard characters.",
+    "isFileTemplate": true,
+    "body": [
+      "accept files as list of text",
+      "for each file in files",
+      "  run \"cksum\" with arguments [file]"
+    ]
+  },
+  "Poll using native status": {
+    "prefix": "program-while",
+    "description": "Reevaluate an integer status; native commands update it with its type preserved.",
+    "isFileTemplate": true,
+    "body": [
+      "run \"true\" and keep status as status",
+      "while status is 0",
+      "  run \"false\" and keep status as status"
+    ]
   }
 }

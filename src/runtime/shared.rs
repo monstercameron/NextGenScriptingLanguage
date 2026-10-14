@@ -32,7 +32,12 @@ pub(crate) fn preflight_inputs(
     registry: &Registry,
     bindings: &BTreeMap<String, Value>,
 ) -> Result<()> {
-    if program.inputs.is_empty() {
+    if program.inputs.is_empty()
+        && !program
+            .steps
+            .iter()
+            .any(|step| matches!(step.kind, StepKind::Loop { .. }))
+    {
         return Ok(());
     }
     calls::preflight(program, registry, bindings)?;
@@ -200,6 +205,9 @@ fn validate_inputs(
         types,
         has_data,
         started: has_data && !allow_rebinding,
+        invariant: BTreeMap::new(),
+        invariant_names: BTreeSet::new(),
+        loop_depth: 0,
     };
     validate_range(
         &program.steps,
@@ -209,11 +217,12 @@ fn validate_inputs(
         initial_has_data,
         allow_rebinding,
     )?;
-    if program
-        .steps
-        .iter()
-        .any(|step| matches!(step.kind, StepKind::CallProgram { .. }))
-    {
+    if program.steps.iter().any(|step| {
+        matches!(
+            step.kind,
+            StepKind::CallProgram { .. } | StepKind::Loop { .. }
+        )
+    }) {
         calls::preflight(program, registry, &BTreeMap::new())?;
     }
     Ok(())
@@ -230,6 +239,39 @@ fn validate_range(
     let mut index = range.start;
     while index < range.end {
         let step = &steps[index];
+        if let StepKind::Loop { kind, end } = &step.kind {
+            loops::validate(kind, flow).with_context(|| format!("line {}", step.line))?;
+            let finish = index + end;
+            let mut body = flow.clone();
+            body.invariant
+                .extend(flow.types.iter().map(|(name, kind)| (name.clone(), *kind)));
+            body.invariant_names.extend(flow.names.iter().cloned());
+            body.loop_depth += 1;
+            body.has_data = true;
+            body.started = true;
+            if let crate::ast::LoopKind::ForEach { binding, .. } = kind {
+                body.names.insert(binding.clone());
+                body.types
+                    .insert(binding.clone(), crate::ast::InputType::Text);
+                body.invariant
+                    .insert(binding.clone(), crate::ast::InputType::Text);
+            }
+            validate_range(
+                steps,
+                registry,
+                &mut body,
+                index + 1..finish - 1,
+                true,
+                allow_rebinding,
+            )
+            .with_context(|| format!("loop at line {}", step.line))?;
+            // A loop may execute zero times. Its existing bindings retain their
+            // types, and body-local names never become available afterwards.
+            flow.has_data = true;
+            flow.started = true;
+            index = finish;
+            continue;
+        }
         if let StepKind::CallProgram {
             call,
             inputs,
@@ -255,6 +297,9 @@ fn validate_range(
                     .collect(),
                 has_data,
                 started: false,
+                invariant: BTreeMap::new(),
+                invariant_names: BTreeSet::new(),
+                loop_depth: 0,
             };
             validate_range(
                 steps,
@@ -267,10 +312,14 @@ fn validate_range(
             .with_context(|| {
                 format!("program {:?}, called at line {}", call.operation, step.line)
             })?;
-            binding(&call.binding, &mut flow.names, allow_rebinding)
-                .with_context(|| format!("line {}", step.line))?;
+            binding(
+                &call.binding,
+                &mut flow.names,
+                allow_rebinding || flow.loop_depth > 0,
+            )
+            .with_context(|| format!("line {}", step.line))?;
             if let Some(name) = &call.binding {
-                flow.types.insert(name.clone(), crate::ast::InputType::Text);
+                flow.bind_type(name, crate::ast::InputType::Text)?;
             }
             flow.has_data = child.has_data;
             flow.started = true;
@@ -305,7 +354,7 @@ fn validate_range(
                         call.binding.is_some() || call.status_binding.is_some()
                     }
                     StepKind::ParseJson { .. } | StepKind::TakeJson { .. } => true,
-                    StepKind::CallProgram { .. } => true,
+                    StepKind::CallProgram { .. } | StepKind::Loop { .. } => true,
                     _ => false,
                 });
             if !defines_names {
@@ -376,7 +425,9 @@ fn validate_range(
                 }
             }
             match &step.kind {
-                StepKind::If { .. }
+                StepKind::Loop { .. }
+                | StepKind::EndLoop { .. }
+                | StepKind::If { .. }
                 | StepKind::Otherwise { .. }
                 | StepKind::EndIf
                 | StepKind::CallProgram { .. }
@@ -398,9 +449,13 @@ fn validate_range(
                     if allow_rebinding && matches!(step.kind, StepKind::ReadStdin { .. }) {
                         bail!("managed programs use /input or listen to stdin via the inbox, not read from stdin");
                     }
-                    binding(name, &mut flow.names, allow_rebinding)?;
+                    binding(
+                        name,
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
                     if let Some(name) = name {
-                        flow.types.insert(name.clone(), crate::ast::InputType::Text);
+                        flow.bind_type(name, crate::ast::InputType::Text)?;
                     }
                     flow.has_data = true;
                     flow.started = true;
@@ -409,8 +464,12 @@ fn validate_range(
                     if !flow.has_data {
                         bail!("parse json requires preceding output");
                     }
-                    binding(&Some(name.clone()), &mut flow.names, allow_rebinding)?;
-                    flow.types.insert(name.clone(), crate::ast::InputType::Json);
+                    binding(
+                        &Some(name.clone()),
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
+                    flow.bind_type(name, crate::ast::InputType::Json)?;
                     flow.started = true;
                 }
                 StepKind::TakeJson {
@@ -426,8 +485,12 @@ fn validate_range(
                     if !contains_reference(source) {
                         crate::structured::take(pointer, source, *kind, step.line)?;
                     }
-                    binding(&Some(name.clone()), &mut flow.names, allow_rebinding)?;
-                    flow.types.insert(name.clone(), *kind);
+                    binding(
+                        &Some(name.clone()),
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
+                    flow.bind_type(name, *kind)?;
                 }
                 StepKind::EncodeJson { source } => {
                     check_value(source, &flow.names)?;
@@ -496,14 +559,21 @@ fn validate_range(
                     if call.binding.is_some() && pipe_in_steps(steps, index + 1) {
                         bail!("name results at the end of a pipe group; intermediate naming requires buffering");
                     }
-                    binding(&call.binding, &mut flow.names, allow_rebinding)?;
+                    binding(
+                        &call.binding,
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
                     if let Some(name) = &call.binding {
-                        flow.types.insert(name.clone(), crate::ast::InputType::Text);
+                        flow.bind_type(name, crate::ast::InputType::Text)?;
                     }
-                    binding(&call.status_binding, &mut flow.names, allow_rebinding)?;
+                    binding(
+                        &call.status_binding,
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
                     if let Some(name) = &call.status_binding {
-                        flow.types
-                            .insert(name.clone(), crate::ast::InputType::Integer);
+                        flow.bind_type(name, crate::ast::InputType::Integer)?;
                     }
                     flow.has_data = manifest.builtin.is_none();
                     flow.started |= manifest.builtin.is_none();
@@ -604,6 +674,11 @@ pub fn explain_with_inputs(
     }
     for step in &program.steps {
         let description = match &step.kind {
+            StepKind::Loop { kind, .. } => format!(
+                "loop {kind:?}; shared {} entered-iteration limit",
+                loops::MAX_LOOP_ITERATIONS
+            ),
+            StepKind::EndLoop { .. } => "end iteration; remove body-local names".into(),
             StepKind::If { condition, .. } => format!(
                 "if {:?} is {}{:?}",
                 condition.left,

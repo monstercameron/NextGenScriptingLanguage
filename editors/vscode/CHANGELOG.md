@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Highlight and indent current-source `repeat`, `for each` and `while` blocks.
+- Add three complete loop snippets validated by the current runtime.
+
 ## 0.2.1
 
 - Package the source grammar for native status, scalar conditions, JSON operations

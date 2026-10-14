@@ -42,7 +42,9 @@ impl From<std::fs::Metadata> for BinaryIdentity {
 type BinaryDigests = HashMap<PathBuf, (BinaryIdentity, [u8; 32])>;
 
 pub(super) fn node_end(program: &Program, start: usize) -> usize {
-    if let StepKind::If { end, .. } | StepKind::CallProgram { end, .. } = program.steps[start].kind
+    if let StepKind::If { end, .. }
+    | StepKind::CallProgram { end, .. }
+    | StepKind::Loop { end, .. } = program.steps[start].kind
     {
         return start + end;
     }
@@ -175,7 +177,7 @@ fn node_fingerprint_with_digests(
                 binary_digests,
                 matches!(
                     program.steps[start].kind,
-                    StepKind::If { .. } | StepKind::CallProgram { .. }
+                    StepKind::If { .. } | StepKind::CallProgram { .. } | StepKind::Loop { .. }
                 ),
             )?;
         }
@@ -224,15 +226,17 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
     let mut depth = 0;
     for step in &program.steps {
         match &step.kind {
-            StepKind::If { .. } | StepKind::CallProgram { .. } => depth += 1,
-            StepKind::EndIf | StepKind::EndCall => depth -= 1,
+            StepKind::If { .. } | StepKind::CallProgram { .. } | StepKind::Loop { .. } => {
+                depth += 1
+            }
+            StepKind::EndIf | StepKind::EndCall | StepKind::EndLoop { .. } => depth -= 1,
             StepKind::UseFolder { .. } if depth > 0 => {
-                bail!("line {}: checkpointed conditionals cannot change directory; reusable calls also require directory setup outside their bodies", step.line);
+                bail!("line {}: checkpointed conditionals cannot change directory; loops and reusable calls also require directory setup outside their bodies", step.line);
             }
             StepKind::Invoke { call, .. }
                 if depth > 0 && registry.resolve_call(call)?.builtin == Some(Builtin::Cd) =>
             {
-                bail!("line {}: checkpointed conditionals cannot change directory; reusable calls also require cd outside their bodies", step.line);
+                bail!("line {}: checkpointed conditionals cannot change directory; loops and reusable calls also require cd outside their bodies", step.line);
             }
             _ => {}
         }

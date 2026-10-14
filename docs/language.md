@@ -8,7 +8,8 @@ for executable lookup, quoting, cancellation, checkpoints and live IPC.
 Persistent native streams have a [separate guide](streaming.md); managed runtime
 and widget edits are covered by the [live-control API](live-control.md).
 
-This reference describes the current native source and the 0.9.0-rc.4 release
+This reference describes the current native source. Loop blocks are unreleased
+and require a source build; other forms are available in the 0.9.0-rc.4 release
 candidate. Historical `bin/execute` 0.8.0 lacks several newer forms; use a matching
 [release or source build](releases.md). The [browser host](playground.md) has its
 own explicit applet and lifecycle limits.
@@ -17,7 +18,7 @@ own explicit applet and lifecycle limits.
 
 One statement per line; `#` comments and blank lines are allowed. Strings use JSON
 double-quote escaping. Identifiers reference named results. Trigger bodies use
-consistent space indentation, with nested `if`/`otherwise` command blocks.
+consistent space indentation, with nested conditional and loop command blocks.
 
 Keywords are lowercase and case-sensitive. Finite service bodies accept any
 consistent positive space indentation; examples use two spaces. TUI component
@@ -167,6 +168,81 @@ existing report after errors. The historical 0.8.0 binary does not support these
 validation is linked from the [installation guide](releases.md).
 
 <a id="structured-json-pending-source-candidate"></a>
+
+### Loops (current source)
+
+```text
+accept count as integer with default 3
+repeat count times
+  run "printf" with arguments ["Worker ready\n"]
+```
+
+```text
+accept files as list of text
+for each file in files
+  run "cksum" with arguments [file]
+```
+
+```text
+accept path as text
+run "test" with arguments ["-r", path] and keep status as ready
+while ready is not 0
+  run "sleep" with arguments [1]
+  run "test" with arguments ["-r", path] and keep status as ready
+run "cat" with arguments [path]
+```
+
+`repeat <integer> times`, `for each <name> in <list of text>` and
+`while <scalar> is [not] <scalar>` introduce an indented body. Dedenting ends
+it. Loops and conditionals can nest to a combined depth of 64, including inside
+same-file reusable programs. `while` uses the same exact, type-matched equality
+as `if`; there is no truthiness or arithmetic. An external command or typed
+selection can update a condition's binding, as the `test` example does.
+
+The current pipeline flows through each iteration. The final iteration's output
+becomes the next pipeline value; outputs are **not concatenated**. A zero-count,
+empty-list or initially false loop preserves its incoming bytes (empty when
+there are none). Use explicit file appends or another native applet to accumulate
+results. `then` works within and after blocks; an OS `pipe to` group cannot cross
+a control-flow boundary.
+
+A loop can rebind an existing outer name only with the same statically known
+type. Each write is checked, including status and stdout bindings. Names created
+inside the body are local to that iteration. The `for each` name is text, cannot
+shadow an existing name, and its list is snapshotted once at entry. `repeat`
+also resolves its count once; `while` reevaluates its comparison each iteration.
+Reading an
+externally supplied binding with an unknown static type is supported, but
+rebinding it in a loop requires establishing a known type before entry. Ordinary
+loop directory changes persist; checkpoint mode requires directory setup outside
+control blocks so executable identities remain unambiguous.
+
+Validation checks every body before effects, even for zero iterations. Known
+counts must be between 0 and 100,000; supplied input counts, lists and comparisons
+are checked before earlier native or file effects. Derived values are checked
+when execution reaches them. A shared guard allows at most **100,000 entered
+iterations per finite invocation**, across nested loops and reusable calls.
+Services and TUI handlers start a new guard per handler; managed live execution
+starts one per outer node. Resume counts newly entered iterations and does not
+persist a lifetime quota. Cancellation is checked between VM steps, including
+loops containing only builtins. Browser execution also retains its worker
+watchdog. There is no `break` or `continue` in this increment.
+
+A whole loop is one checkpoint/live node, including its body fingerprint.
+Completed loops are skipped on resume. A failure may have performed partial
+external effects: `--retry-uncertain` explicitly retries the **entire loop**;
+there is no per-iteration recovery. Live cursor changes cannot enter a loop's
+interior, and pause/source replacement take effect at its outer boundary.
+Finite scripts, schedule/listener handlers, reusable finite programs and native
+TUI command handlers accept loops. Persistent stream-stage grammar remains
+separate. The browser supports the same finite loop grammar with virtual applets.
+
+Runnable utilities: [batch checksums](../examples/batch-checksums.program),
+[repeat log](../examples/repeat-log.program), and
+[wait for a readable file](../examples/wait-for-file.program). These blocks require
+current source; published 0.9.0-rc.4 and historical 0.8.0 binaries do not include them.
+[Regression controls](../benchmarks/loop-regression-2026-10-14.json) retain paired
+release measurements for existing non-loop workloads.
 
 ### Structured JSON
 

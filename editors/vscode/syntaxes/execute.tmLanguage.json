@@ -19,6 +19,12 @@
       "include": "#structured-json"
     },
     {
+      "include": "#loop-repeat"
+    },
+    {
+      "include": "#loop-foreach"
+    },
+    {
       "include": "#unsupported"
     },
     {
@@ -752,7 +758,7 @@
     },
     "condition": {
       "name": "meta.condition.execute",
-      "begin": "^[ \\t]*(if)[ \\t]+(\"(?:[^\"\\\\]|\\\\.)*\"|[A-Za-z_][A-Za-z0-9_]*|[+-]?[0-9]+)[ \\t]+(is)(?:[ \\t]+(not))?(?=[ \\t]|$)",
+      "begin": "^[ \\t]*(if|while)[ \\t]+(\"(?:[^\"\\\\]|\\\\.)*\"|[A-Za-z_][A-Za-z0-9_]*|[+-]?[0-9]+)[ \\t]+(is)(?:[ \\t]+(not))?(?=[ \\t]|$)",
       "end": "$",
       "beginCaptures": {
         "1": {
@@ -931,6 +937,49 @@
           "match": "\\bwith[ \\t]+default\\b",
           "name": "keyword.operator.default.execute"
         },
+        {
+          "include": "#values"
+        }
+      ]
+    },
+    "loop-repeat": {
+      "name": "meta.loop.execute",
+      "begin": "^[ \\t]*(repeat)(?=[ \\t]|$)",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.loop.execute"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\btimes\\b(?=[ \\t]*(?:#|$))",
+          "name": "keyword.control.loop.execute"
+        },
+        {
+          "include": "#values"
+        }
+      ]
+    },
+    "loop-foreach": {
+      "name": "meta.loop.execute",
+      "begin": "^[ \\t]*(for[ \\t]+each)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]+(in)(?=[ \\t]|$)",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.loop.execute"
+        },
+        "2": {
+          "name": "variable.other.definition.execute"
+        },
+        "3": {
+          "name": "keyword.operator.loop.execute"
+        }
+      },
+      "patterns": [
         {
           "include": "#values"
         }

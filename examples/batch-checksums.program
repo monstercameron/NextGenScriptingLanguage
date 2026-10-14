@@ -1,0 +1,8 @@
+# Build one checksum report from explicit file inputs.
+accept files as list of text
+accept report as text with default "checksums.txt"
+run "printf" with arguments [""]
+then save to report
+for each file in files
+  run "cksum" with arguments [file]
+  then "tee" with arguments ["-a", report]

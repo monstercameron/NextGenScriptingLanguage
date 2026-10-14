@@ -2,7 +2,7 @@
   {
     "id": "log-triage",
     "title": "Find the fires",
-    "subtitle": "Filter → sort → deduplicate → save",
+    "subtitle": "Filter \u2192 sort \u2192 deduplicate \u2192 save",
     "file": "log-triage.program",
     "source": "# Turn noisy application logs into an actionable report.\naccept severity as text with default \"ERROR\"\nread \"app.log\"\nthen grep with pattern severity and flags [\"-F\"]\npipe to sort\npipe to uniq\nthen save to \"incidents.txt\"\n",
     "expected": "ERROR api timeout\nERROR disk near capacity\n"
@@ -42,10 +42,18 @@
   {
     "id": "stdin",
     "title": "Bring your own bytes",
-    "subtitle": "Stdin → a real byte pipeline",
+    "subtitle": "Stdin \u2192 a real byte pipeline",
     "file": "stdin.program",
     "source": "# Paste newline-separated names into the stdin box below.\nread from stdin\nthen sort\npipe to uniq\nthen save to \"cleaned.txt\"\n",
     "stdin": "Grace\nAda\nGrace\nLinus\n",
     "expected": "Ada\nGrace\nLinus\n"
+  },
+  {
+    "id": "loops",
+    "title": "A batch of files",
+    "subtitle": "One text list \u2192 native commands for each file",
+    "file": "batch-sort.program",
+    "source": "# Sort two virtual files in place. Inputs stay explicit.\naccept files as list of text with default [\"tasks-one.txt\", \"tasks-two.txt\"]\nfor each path in files\n  read path\n  pipe to \"sort\"\n  then save to path\n",
+    "expected": "bravo\ndelta\n"
   }
 ]

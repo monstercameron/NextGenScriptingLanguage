@@ -272,3 +272,13 @@ sources, including executable shebangs and checkpoint input identity. A pinned
 porting requirements. These do not establish desktop acceptance. Two paired
 measurements show helper-process avoidance improves one workflow while Bash
 remains faster; no universal performance or readiness claim is allowed.
+
+### Bounded loops (unreleased source)
+
+Current source adds `repeat`, `for each` and scalar-equality `while` blocks in
+the shared native/browser grammar, with same-type outer updates, local iteration
+names and a shared iteration guard. Native checkpoint/live handling treats a
+whole loop as one conservative recovery node. This closes the basic finite-loop
+gap; jobs, richer redirection and desktop acceptance remain separate proof gates.
+See the [language contract](language.md#loops-current-source). Published release
+artifacts remain unchanged.

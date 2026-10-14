@@ -464,6 +464,42 @@ define a program named panel
             self.assertEqual(state['runtime']['completed_native_launches'], 2)
             self.assertEqual(state['state']['cursor'], 6)
 
+    def test_loops_are_atomic_live_nodes_with_iteration_local_bindings(self):
+        source = ('run "printf" with arguments ["a"] as outer\n'
+                  'repeat 2 times\n'
+                  '  then "tr" with arguments ["a-z", "b-za"] as local\n'
+                  'then "printf" with arguments ["%s", outer]\n')
+        with Session(source) as app:
+            app.action('step')
+            app.until(lambda s: s['state']['cursor'] == 1 and not s['runtime']['in_flight'])
+            before = app.read()['state']
+            for interior in (2, 3):
+                self.assertFalse(app.call('update', path='/cursor', value=interior)['ok'])
+                self.assertEqual(app.read()['state'], before)
+            app.action('step')
+            state = app.until(lambda s: s['state']['cursor'] == 4 and not s['runtime']['in_flight'])
+            self.assertEqual(state['state']['input'], {'text': 'c'})
+            self.assertNotIn('local', state['state']['bindings'])
+            self.assertEqual(state['runtime']['completed_native_launches'], 3)
+            app.action('reset')
+            self.assertEqual(app.read()['state']['bindings'], {})
+
+    def test_cancel_loop_reaps_native_child_and_requires_whole_node_retry(self):
+        code = 'import os,time;open("loop.pid","w").write(str(os.getpid()));time.sleep(30)'
+        source = ('while true is true\n  run ' + json.dumps(sys.executable) +
+                  ' with arguments ["-c", ' + json.dumps(code) + ']\n')
+        with Session(source) as app:
+            app.action('resume')
+            app.until(lambda s: (app.root / 'loop.pid').exists() and bool((app.root / 'loop.pid').read_text()))
+            pid = int((app.root / 'loop.pid').read_text())
+            app.action('cancel')
+            state = app.until(lambda s: s['runtime']['status'] == 'failed' and not s['runtime']['in_flight'])
+            self.assertEqual(state['state']['cursor'], 0)
+            self.assertTrue(state['runtime']['effects_may_be_incomplete'])
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+            self.assertEqual(app.call('control', action='resume')['error']['code'], 'uncertain_effects')
+
     def test_reusable_calls_are_atomic_local_scopes_and_reset_preserves_external_names(self):
         source = ('define a program named render\n  accept name as text\n'
                   '  run "printf" with arguments ["%s", name] as private\n'

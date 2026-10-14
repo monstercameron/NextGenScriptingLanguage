@@ -2,7 +2,7 @@
   "name": "execute-program",
   "displayName": "Execute .program",
   "description": "Syntax highlighting and snippets for Execute Unix workflows, streams, services, and terminal apps.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "execute-lang",
   "license": "MIT",
   "engines": {

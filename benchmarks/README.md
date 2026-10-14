@@ -1,3 +1,15 @@
+# Loop integration regression controls
+
+The [loop integration report](loop-regression-2026-10-14.json) compares the
+unchanged `7348c16` release build with current source after adding bounded loops.
+It measures identical **non-loop** workloads: three alternating in-process rounds
+and 80 interleaved fresh CLI samples per variant, with warm filesystem caches.
+All nine core controls stayed within 2%; three-command validation increased
+1.64% (about 5 ns). Matching CLI medians changed by -1.83% to -0.02%. These small
+changes are descriptive controls, not claimed speedups. Raw samples, binary and
+source hashes, output oracles and local verification are retained. This does not
+measure loop dispatch, cold-cache startup, Bash parity or other platforms.
+
 # Supplied JSON input setup performance
 
 The [input setup report](performance-2026-10-14-input-setup.json) compares

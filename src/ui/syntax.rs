@@ -463,7 +463,10 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
                     if child.indent != 4 {
                         bail!("line {}: actions need four spaces", child.number);
                     }
-                    if words(&child.tokens).first() == Some(&"if") {
+                    if matches!(
+                        words(&child.tokens).first(),
+                        Some(&"if" | &"repeat" | &"for" | &"while")
+                    ) {
                         let view = |index| {
                             lines.get(index).map(|line: &Line<'_>| parser::BlockLine {
                                 number: line.number,
@@ -869,5 +872,27 @@ mod borrowed_token_tests {
         assert_eq!(screen.title, "Résumé");
         assert_eq!(screen.placements, ["app"]);
         assert_eq!(screen.components["app"].widgets[0].initial, "ready");
+    }
+
+    #[test]
+    fn tui_native_handlers_share_loop_block_lowering() {
+        let screen = parse("open a screen titled \"Loop\"\nplace app on the left\ndefine a program named app\n  show a text panel named status\n  whenever the program opens\n    repeat 2 times\n      for each item in [\"a\", \"b\"]\n        while false is true\n          run \"printf\" with arguments [item]\n    then show the result in status\n").unwrap();
+        let actions = &screen.components["app"].handlers[0].actions;
+        assert_eq!(actions.len(), 8);
+        assert!(matches!(
+            &actions[0],
+            Action::Native(Step {
+                kind: crate::ast::StepKind::Loop { end: 7, .. },
+                line: 6
+            })
+        ));
+        assert!(matches!(
+            &actions[6],
+            Action::Native(Step {
+                kind: crate::ast::StepKind::EndLoop { back: 6 },
+                line: 6
+            })
+        ));
+        assert!(matches!(&actions[7], Action::Show(Value::Result, target) if target == "status"));
     }
 }

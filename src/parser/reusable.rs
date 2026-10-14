@@ -284,6 +284,12 @@ fn expand<'a>(
                 *new_otherwise = positions[index + otherwise] - positions[index];
                 *new_end = positions[index + end] - positions[index];
             }
+            (StepKind::Loop { end, .. }, StepKind::Loop { end: new_end, .. }) => {
+                *new_end = positions[index + end] - positions[index];
+            }
+            (StepKind::EndLoop { back }, StepKind::EndLoop { back: new_back }) => {
+                *new_back = positions[index] - positions[index - back];
+            }
             (StepKind::Otherwise { end }, StepKind::Otherwise { end: new_end }) => {
                 *new_end = positions[index + end] - positions[index]
             }

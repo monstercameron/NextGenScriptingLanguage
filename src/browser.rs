@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 mod calls;
 #[path = "runtime/control.rs"]
 mod control;
+#[path = "runtime/loops.rs"]
+mod loops;
 include!("runtime/shared.rs");
 
 const LIMIT: usize = 1024 * 1024;
@@ -50,6 +52,29 @@ pub struct Response {
     pub trace: Vec<serde_json::Value>,
     pub cache_hits: usize,
     pub applet_calls: usize,
+    #[serde(skip)]
+    trace_bytes: usize,
+    #[serde(skip)]
+    trace_truncated: bool,
+}
+
+impl Response {
+    fn push_trace(&mut self, value: impl FnOnce() -> serde_json::Value) {
+        if self.trace_truncated {
+            return;
+        }
+        let value = value();
+        // Loops can execute far more statements than the source-size limit.
+        // Keep diagnostics bounded independently of the execution budget.
+        let bytes = serde_json::to_vec(&value).map_or(LIMIT, |bytes| bytes.len().saturating_add(1));
+        if self.trace.len() >= 4095 || self.trace_bytes.saturating_add(bytes) > LIMIT - 1024 {
+            self.trace.push(serde_json::json!({"operation":"trace truncated","reason":"browser trace limit: 4096 entries or 1 MiB"}));
+            self.trace_truncated = true;
+        } else {
+            self.trace_bytes += bytes;
+            self.trace.push(value);
+        }
+    }
 }
 
 pub struct BrowserSession {
@@ -193,6 +218,7 @@ impl BrowserSession {
         let mut bindings = crate::inputs::resolve(&program.inputs, &supplied, false)?;
         let mut cwd = PathBuf::from(&self.cwd);
         let mut frames: Vec<calls::Frame<'_>> = Vec::new();
+        let mut loops = loops::LoopStack::default();
         let mut data = Vec::new();
         let mut stdin = Some(request.stdin.as_bytes().to_vec());
         let mut index = 0;
@@ -201,13 +227,25 @@ impl BrowserSession {
             let mut jump = None;
             let execution = (|| -> Result<()> {
                 match &step.kind {
+                    StepKind::Loop { kind, end } => {
+                        if !loops.header(index, kind, &mut bindings)? {
+                            jump = Some(index + end);
+                        }
+                    }
+                    StepKind::EndLoop { back } => {
+                        let header = index
+                            .checked_sub(*back)
+                            .context("invalid loop back offset")?;
+                        loops.end_iteration(header, &mut bindings)?;
+                        jump = Some(header);
+                    }
                     StepKind::If {
                         condition,
                         otherwise,
                         ..
                     } => {
                         let matched = control::evaluate(condition, &bindings)?;
-                        response.trace.push(serde_json::json!({"line":step.line,"operation":"if","matched":matched}));
+                        response.push_trace(|| serde_json::json!({"line":step.line,"operation":"if","matched":matched}));
                         if !matched {
                             jump = Some(index + otherwise);
                         }
@@ -237,7 +275,7 @@ impl BrowserSession {
                         bindings = frame.bindings;
                         cwd = frame.cwd;
                         bind_text(frame.binding, &data, &mut bindings)?;
-                        response.trace.push(serde_json::json!({"line":frame.line,"operation":"return","program":frame.name}));
+                        response.push_trace(|| serde_json::json!({"line":frame.line,"operation":"return","program":frame.name}));
                     }
                     StepKind::Read { path, binding } => {
                         let path = path_value(path, &bindings, &cwd)?;
@@ -350,7 +388,7 @@ impl BrowserSession {
                         }
                         data = output;
                         bind_text(call.binding.as_deref(), &data, &mut bindings)?;
-                        response.trace.push(serde_json::json!({"line":step.line,"operation":binary,"argv":argv,"input_bytes":input_bytes,"output_bytes":data.len(),"cache_hit":hit,"status":status}));
+                        response.push_trace(|| serde_json::json!({"line":step.line,"operation":binary,"argv":argv,"input_bytes":input_bytes,"output_bytes":data.len(),"cache_hit":hit,"status":status}));
                     }
                 }
                 if data.len() > LIMIT {

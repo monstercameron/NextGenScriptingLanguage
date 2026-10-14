@@ -6,8 +6,8 @@ Edit a `.program`, press **Run program** (Cmd/Ctrl+Enter), and inspect the termi
 virtual files and execution trace. **Check** and **Explain** use the Rust validator.
 Nothing calls an LLM, logs into a server, or reads your computer's files.
 
-Six workflows have fixtures and checked outputs: log triage, a typed release gate,
-a reusable shortlist, explicit caching, exit-status branching, and stdin cleanup.
+Seven workflows have fixtures and checked outputs: log triage, a typed release gate,
+a reusable shortlist, explicit caching, exit-status branching, stdin cleanup, and a batch file loop.
 Try changing `checks_passed` in `release.json`, or enter `{"limit":"2"}` in
 **Inputs & stdin**. Input values use the same CLI type parser as native Execute.
 Click any virtual file to edit it; `.program` files open in the main editor.
@@ -38,7 +38,7 @@ JavaScript translation of the language. `src/ast.rs`, `src/parser.rs`,
 `src/runtime/shared.rs`, and the control/call helpers are shared source with the
 native runtime. The browser host in `src/browser.rs` supplies a separate finite
 execution loop, virtual files, memory caching, and Rust applet implementations.
-Application branching and program calls execute in Rust from the parsed script.
+Application branching, finite loops and program calls execute in Rust from the parsed script.
 JavaScript supplies xterm.js, the editor, worker transport, and UI rendering.
 
 The browser cannot spawn your installed executables. Its applets are deliberately
@@ -86,6 +86,9 @@ replacement for invalid sequences.
 
 Limits are 64 KiB source, 4,096 expanded steps, 1 MiB output/file, 128 files,
 128 directories, 4 MiB total file bytes, and a 256-entry / 4 MiB payload cache.
+Loops share a 100,000-iteration guard per invocation. Trace collection stops at
+4,096 entries or 1 MiB with an explicit `trace truncated` marker; execution
+continues within its other bounds.
 The linker caps WASM linear memory at 64 MiB. Exceeding memory or stack capacity
 can trap; the UI replaces that worker. Each worker request has an 8-second
 watchdog. **Stop** or terminal Ctrl+C terminates the worker and restores the last

@@ -48,8 +48,25 @@ pub struct Condition {
     pub negated: bool,
 }
 
+/// A bounded loop; values resolve in the enclosing lexical scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum LoopKind {
+    Repeat { count: Value },
+    ForEach { binding: String, values: Value },
+    While { condition: Condition },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StepKind {
+    /// `end` is relative to the header and points just beyond EndLoop.
+    Loop {
+        kind: LoopKind,
+        end: usize,
+    },
+    /// `back` is a backward offset from this marker to its Loop header.
+    EndLoop {
+        back: usize,
+    },
     /// Parser-lowered forward offsets, relative to this statement. `end` points
     /// just beyond EndIf; `otherwise` points to its body, or equals `end`.
     If {

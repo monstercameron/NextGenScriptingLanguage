@@ -184,7 +184,7 @@ function expand(body) {
 }
 test('complete snippet defaults pass the actual execute check without running commands', () => {
   const snippets = JSON.parse(fs.readFileSync(path.join(extension, 'snippets/execute.code-snippets'), 'utf8'));
-  assert.equal(Object.keys(snippets).length, 23);
+  assert.equal(Object.keys(snippets).length, 26);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'execute-vscode-'));
   const binary = process.env.EXECUTE_TEST_BINARY || path.join(project, 'target/release', process.platform === 'win32' ? 'execute.exe' : 'execute');
   assert.ok(fs.existsSync(binary), 'Build the current runtime with cargo build --locked --release, or set EXECUTE_TEST_BINARY');
@@ -201,7 +201,7 @@ test('complete snippet defaults pass the actual execute check without running co
       assert.equal(result.status, 0, `${name}: ${result.stderr || result.error}`);
       checked++;
     }
-    assert.equal(checked, 15);
+    assert.equal(checked, 18);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -253,6 +253,22 @@ test('scalar conditions preserve operand roles and indent their branches', () =>
   scope('otherwise # fallback', 'otherwise', 'keyword.control.condition');
   const indent = new RegExp(configuration.onEnterRules[0].beforeText);
   assert.ok(indent.test('if code is 0')); assert.ok(indent.test('  otherwise'));
+});
+
+test('repeat, foreach and while distinguish headers and indent bodies', () => {
+  scope('repeat count times', 'repeat', 'keyword.control.loop');
+  scope('repeat count times', 'count', 'variable.other.readwrite');
+  scope('repeat count times', 'times', 'keyword.control.loop');
+  scope('for each file in files', 'for each', 'keyword.control.loop');
+  scope('for each file in files', 'file', 'variable.other.definition');
+  scope('for each file in files', 'in', 'keyword.operator.loop');
+  scope('for each file in files', 'files', 'variable.other.readwrite');
+  scope('while status is not 0', 'while', 'keyword.control.condition');
+  scope('while status is not 0', 'status', 'variable.other.readwrite');
+  scope('while status is not 0', 'not', 'keyword.operator.comparison');
+  const indent = new RegExp(configuration.onEnterRules[0].beforeText);
+  for (const line of ['repeat 3 times', 'repeat count times', 'for each file in files', 'while status is 0']) assert.ok(indent.test(line), line);
+  assert.ok(!indent.test('run while'));
 });
 
 test('structured JSON operations highlight types, pointers, sources and bindings', () => {

@@ -7,8 +7,14 @@ original version labels.
 
 ## Unreleased
 
+- Native and browser `repeat`, `for each` and `while` blocks, with typed outer
+  updates, iteration-local names, bounded execution and whole-loop recovery.
+  Includes three native utilities and a browser batch workflow; source builds only.
+- VS Code source package 0.2.2 highlights loop headers and adds three checked
+  loop snippets.
+
 - Browser terminal playground on GitHub Pages, with the Rust/WASM language core,
-  virtual files, six runnable workflows, typed inputs, branches and cache traces.
+  virtual files, seven runnable workflows, typed inputs, branches and cache traces.
 - Bounded browser applet ports and a worker lifecycle separate from native OS
   processes, streaming and services; see [browser contracts](docs/playground.md).
 - Automated WASM, native-output comparison and real-browser acceptance checks,

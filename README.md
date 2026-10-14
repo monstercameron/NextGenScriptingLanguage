@@ -157,7 +157,7 @@ require explicit retry. See the [recovery contract](docs/language.md#recover-aft
 | [Native applet catalog](manifests) | Readable named parameters mapped directly to argv. Direct quoted calls need no adapter. |
 | [Model operations](docs/models.md) | TypeSafe Jev classification, judgment and scoring; OpenAI generation and JSON extraction. |
 | [VS Code extension](editors/vscode/README.md) | Syntax highlighting, snippets and grammar tests. |
-| [Browser playground](docs/playground.md) | Rust/WASM language core, terminal, virtual files and six runnable workflows. |
+| [Browser playground](docs/playground.md) | Rust/WASM language core, terminal, virtual files and seven runnable workflows. |
 
 The browser uses bounded Rust applet ports and buffered pipelines. Installed
 executables, native pipes, services, model calls and TUI screens use native Execute.
@@ -179,11 +179,12 @@ processes. No result establishes a universal speed advantage or full Bash parity
 
 The project targets small, readable Unix glue programs on macOS and Linux, with
 a native Windows port on x64 and ARM64. `0.9.0-rc.4` is the published multi-platform
-release candidate. Current `main` also includes the browser playground.
+release candidate. Current `main` also includes the browser playground and
+[repeat, for each and while loops](docs/language.md#loops-current-source).
 
 Execute is still evolving toward the [Bash and Omarchy proof gates](docs/production-readiness.md).
-General loops, jobs, external modules, richer redirection and full desktop
-acceptance remain open. Native commands run with the caller's permissions;
+Jobs, external modules, richer redirection and full desktop acceptance remain
+open. Native commands run with the caller's permissions;
 they are not automatically sandboxed. Flatpak has a separate sandbox contract.
 
 The retained `bin/execute` is historical **0.8.0**. Use a release download or

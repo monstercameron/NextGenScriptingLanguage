@@ -77,6 +77,63 @@ test('typed CLI values control branch; invalid input fails before effects', asyn
   bad(run(call, source, { inputs: { count: '2x' } }), /integer/);
   bad(run(call, source, { inputs: { unknown: '2' } }), /unknown/);
 });
+
+test('loops preserve zero input, update typed status and nest through calls', async () => {
+  const call = await seeded();
+  assert.equal(
+    good(run(call, 'repeat 0 times\n  run "false"\nthen "printf" with arguments ["empty"]')).stdout,
+    'empty',
+  );
+  const source =
+    'run "true" and keep status as code\nwhile code is 0\n  run "false" and keep status as code\nthen encode code as json';
+  assert.equal(good(run(call, source)).stdout, '1');
+  const nested =
+    'define a program named emit\n  repeat 2 times\n    then encode 42 as json\nrepeat 3 times\n  run program emit';
+  assert.equal(good(run(call, nested)).stdout, '42');
+  const batch = good(run(call, examples.find((item) => item.id === 'loops').source));
+  assert.equal(batch.files['/workspace/tasks-one.txt'], 'alpha\nzulu\n');
+  assert.equal(batch.files['/workspace/tasks-two.txt'], 'bravo\ndelta\n');
+});
+
+test('loop bodies and known invalid counts fail before virtual file effects', async () => {
+  const call = await seeded();
+  const prefix = 'run "printf" with arguments ["forbidden"]\nthen save to "forbidden.txt"\n';
+  for (const body of [
+    'repeat 0 times\n  run nonexistent_applet',
+    'repeat -1 times\n  run "true"',
+    'for each file in [1]\n  run "true"',
+  ]) {
+    bad(run(call, prefix + body), /count|text|unknown/);
+    assert.ok(!good(call({ action: 'inspect' })).files['/workspace/forbidden.txt']);
+  }
+  bad(
+    run(call, 'accept count as integer\n' + prefix + 'repeat count times\n  run "true"', {
+      inputs: { count: '-1' },
+    }),
+    /count/,
+  );
+  assert.ok(!good(call({ action: 'inspect' })).files['/workspace/forbidden.txt']);
+});
+
+test('loop trace stays bounded and iteration-budget errors preserve worker usability', async () => {
+  const call = await seeded();
+  const complete = good(run(call, 'repeat 100000 times\n  run "true"'));
+  assert.equal(complete.applet_calls, 100000);
+  assert.ok(complete.trace.length <= 4096);
+  assert.equal(complete.trace.at(-1).operation, 'trace truncated');
+  assert.ok(Buffer.byteLength(JSON.stringify(complete.trace)) <= 1024 * 1024);
+  const oversized = good(
+    run(
+      call,
+      'accept message as text\nrepeat 100 times\n  run "printf" with arguments ["%s", message]',
+      { inputs: { message: 'x'.repeat(64 * 1024) } },
+    ),
+  );
+  assert.ok(Buffer.byteLength(JSON.stringify(oversized.trace)) <= 1024 * 1024);
+  assert.equal(oversized.trace.at(-1).operation, 'trace truncated');
+  bad(run(call, 'while true is true\n  run "true"'), /iteration budget/);
+  assert.equal(good(run(call, 'then encode 7 as json')).stdout, '7');
+});
 test('validation rejects undefined names, branch-dependent bindings and type mismatch', async () => {
   const call = await seeded();
   for (const source of [

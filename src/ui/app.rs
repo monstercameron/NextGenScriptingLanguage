@@ -153,12 +153,21 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                     references(&condition.left, &mut needed);
                     references(&condition.right, &mut needed);
                 }
+                crate::ast::StepKind::Loop { kind, .. } => match kind {
+                    crate::ast::LoopKind::Repeat { count } => references(count, &mut needed),
+                    crate::ast::LoopKind::ForEach { values, .. } => references(values, &mut needed),
+                    crate::ast::LoopKind::While { condition } => {
+                        references(&condition.left, &mut needed);
+                        references(&condition.right, &mut needed);
+                    }
+                },
                 crate::ast::StepKind::TakeJson { source, .. }
                 | crate::ast::StepKind::EncodeJson { source } => references(source, &mut needed),
                 crate::ast::StepKind::ParseJson { .. } => {}
                 crate::ast::StepKind::ReadStdin { .. }
                 | crate::ast::StepKind::ReadCallInput { .. }
                 | crate::ast::StepKind::EndCall
+                | crate::ast::StepKind::EndLoop { .. }
                 | crate::ast::StepKind::Otherwise { .. }
                 | crate::ast::StepKind::EndIf => {}
             }

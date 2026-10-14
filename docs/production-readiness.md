@@ -45,7 +45,7 @@ Omarchy desktop.
 | Gate | Required behavior and proof | Current gap |
 | --- | --- | --- |
 | Command contracts | Exact argv, stdin, stdout/stderr, cwd, native status, missing tools and failure behavior on macOS and Linux | 110-case/46-tool Unix matrix; output and pipeline failure policy differences remain explicit |
-| Shell control | Compact loops, local bindings, command results, early return/status, environment overrides and unset, append/separate/merged redirection | Typed inputs and scalar conditions exist; much of this control surface remains missing |
+| Shell control | Compact loops, local bindings, command results, early return/status, environment overrides and unset, append/separate/merged redirection | Typed inputs, scalar conditions and bounded repeat/for-each/while loops exist in current source; the remaining control surface needs proof |
 | Jobs and terminal ownership | Spawn, await, cancel, `exec` identity or a documented alternative, signal propagation, traps/finally and terminal handoff | Supervised children and bounded services exist; Bash job/session parity is missing |
 | Reuse and data | External program modules, lists/records and structured streams without generated application helpers | Same-file finite reuse and finite JSON exist; modules, iteration and structured streams remain missing |
 | Real Omarchy ports | Port every in-scope command; add success, absent dependency, cancellation, failure and side-effect oracles per command | Pinned inventory plus ten isolated interface ports; no complete command or desktop certification |

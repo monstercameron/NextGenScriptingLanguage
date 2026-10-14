@@ -22,6 +22,9 @@ pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Re
                     .collect(),
                 has_data: true,
                 started: false,
+                invariant: BTreeMap::new(),
+                invariant_names: BTreeSet::new(),
+                loop_depth: 0,
             };
             validate_range(
                 &definition.steps,
@@ -190,8 +193,28 @@ pub(super) fn preflight(
         native(call, *line, registry, &values, &types)?;
     }
     let mut scopes = Vec::new();
+    let mut loop_scopes = Vec::new();
     for step in &program.steps {
         match &step.kind {
+            StepKind::Loop { kind, .. } => {
+                loops::preflight(kind, &values)
+                    .with_context(|| format!("line {}: loop inputs", step.line))?;
+                loop_scopes.push((
+                    values.keys().cloned().collect::<BTreeSet<_>>(),
+                    types.clone(),
+                ));
+                if let crate::ast::LoopKind::ForEach { binding, .. } = kind {
+                    values.remove(binding);
+                    types.insert(binding.clone(), InputType::Text);
+                }
+            }
+            StepKind::EndLoop { .. } => {
+                let (outer, outer_types) = loop_scopes
+                    .pop()
+                    .context("loop end without preflight scope")?;
+                values.retain(|name, _| outer.contains(name));
+                types = outer_types;
+            }
             StepKind::CallProgram { call, inputs, .. } => {
                 let mut child = BTreeMap::new();
                 for input in inputs {

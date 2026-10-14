@@ -1,0 +1,8 @@
+# Wait for a readable artifact, then return its bytes.
+accept path as text
+accept interval as integer with default 1
+run "test" with arguments ["-r", path] and keep status as ready
+while ready is not 0
+  run "sleep" with arguments [interval]
+  run "test" with arguments ["-r", path] and keep status as ready
+run "cat" with arguments [path]

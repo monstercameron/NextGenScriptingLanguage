@@ -187,7 +187,7 @@ pub(crate) fn normalize_state(
     if let Some(focus) = old.get("focus") {
         fresh["focus"] = focus.clone();
     }
-    let focus = serde_json::from_value::<UiState>(fresh.clone())?.focus;
+    let focus = UiState::deserialize(&fresh)?.focus;
     if focus
         .as_ref()
         .is_some_and(|focus| !focus_valid(screen, focus))
@@ -241,7 +241,7 @@ fn validate_event(screen: &Screen, ui: &UiState, event: &LiveEvent) -> Result<()
     Ok(())
 }
 pub(crate) fn validate_state(screen: &Screen, value: &Json) -> Result<()> {
-    let ui: UiState = serde_json::from_value(value.clone()).context("invalid live UI state")?;
+    let ui: UiState = UiState::deserialize(value).context("invalid live UI state")?;
     if ui.programs.keys().cloned().collect::<BTreeSet<_>>()
         != screen.placements.iter().cloned().collect()
     {
@@ -568,7 +568,7 @@ pub(crate) fn run(shared: Arc<Shared>, options: &RunOptions) -> Result<()> {
         let app = app.as_mut().unwrap();
         let apply = state.ui_dirty;
         if apply {
-            let desired: UiState = serde_json::from_value(state.doc.ui.clone())?;
+            let desired: UiState = UiState::deserialize(&state.doc.ui)?;
             app.apply_live_state(desired)?;
             state.ui_dirty = false;
         }
@@ -684,5 +684,269 @@ pub(crate) fn run(shared: Arc<Shared>, options: &RunOptions) -> Result<()> {
                     .unwrap(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use crate::ui::syntax;
+    use sha2::{Digest, Sha256};
+
+    fn fixture(name: &str) -> Result<(Screen, Json)> {
+        let screen = syntax::parse(include_str!("../../examples/live/widget-console.program"))?;
+        let mut value = initial_state(&screen)?;
+        match name {
+            "list256" => {
+                value["programs"]["console"]["widgets"]["choices"]["items"] =
+                    json!((0..256).map(|n| format!("item {n} 雪")).collect::<Vec<_>>())
+            }
+            "table64k" | "table4m" => {
+                let count = if name == "table64k" { 64 } else { 4096 };
+                value["programs"]["dashboard"]["widgets"]["metrics"]["rows"] = json!((0..count)
+                    .map(
+                        |n| json!({"name":format!("row {n}"),"value":n,"padding":"x".repeat(1024)})
+                    )
+                    .collect::<Vec<_>>());
+            }
+            "chart" => {
+                let series: BTreeMap<_, _> = (0..16)
+                    .map(|n| {
+                        (
+                            format!("series{n}"),
+                            (0..120)
+                                .map(|x| (f64::from(x), x as u64))
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect();
+                value["programs"]["dashboard"]["widgets"]["history"]["series"] =
+                    serde_json::to_value(series)?;
+            }
+            _ => {}
+        }
+        validate_state(&screen, &value)?;
+        Ok((screen, value))
+    }
+
+    #[test]
+    #[ignore = "explicit paired release UI-state validation timings"]
+    #[allow(clippy::assertions_on_constants)]
+    fn ui_state_validation() -> Result<()> {
+        assert!(!cfg!(debug_assertions), "use --release");
+        let mut results = BTreeMap::new();
+        for name in ["empty_control", "list256", "table64k", "table4m", "chart"] {
+            let (screen, value) = fixture(name)?;
+            let bytes = serde_json::to_vec(&value)?;
+            let fingerprint = format!("{:x}", Sha256::digest(&bytes));
+            let before = value.clone();
+            for normalize in [false, true] {
+                let mut raw = Vec::new();
+                let iterations = if name == "table4m" { 5 } else { 20 };
+                let expected = if normalize {
+                    Some(normalize_state(&screen, &value, None)?)
+                } else {
+                    None
+                };
+                if let Some(expected) = &expected {
+                    assert_eq!(expected, &value);
+                }
+                for batch in 0..60 {
+                    let start = Instant::now();
+                    for _ in 0..iterations {
+                        if normalize {
+                            std::hint::black_box(normalize_state(
+                                std::hint::black_box(&screen),
+                                std::hint::black_box(&value),
+                                None,
+                            )?);
+                        } else {
+                            validate_state(
+                                std::hint::black_box(&screen),
+                                std::hint::black_box(&value),
+                            )?;
+                        }
+                    }
+                    if batch >= 10 {
+                        raw.push(start.elapsed().as_secs_f64() * 1e9 / f64::from(iterations));
+                    }
+                }
+                let mut sorted = raw.clone();
+                sorted.sort_by(f64::total_cmp);
+                let key = format!(
+                    "{name}_{}",
+                    if normalize { "normalize" } else { "validate" }
+                );
+                results.insert(key,json!({"p50_ns":(sorted[24]+sorted[25])/2.0,"p95_ns":sorted[47],"raw_batch_average_ns":raw,"state_sha256":fingerprint,"serialized_state_bytes":bytes.len(),"immutable":true}));
+            }
+            assert_eq!(before, value);
+        }
+        std::fs::write(
+            std::env::var("OPT_BENCH_REPORT")?,
+            serde_json::to_vec_pretty(
+                &json!({"results":results,"method":"Private UI-state validate/normalize entry with identical parsed screen and preconstructed JSON fixtures. Fixture,serialization,hash/oracle construction excluded; validation/normalization and result destruction included.10warmup/50measured batches,5or20operations. Caller JSON verified immutable and normalized state exactly equal. No renderer,IPC/native processes/network; not event latency,memory/RSS."}),
+            )?,
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn ui_state_decode_preserves_legacy_schema_errors_and_validation() -> Result<()> {
+        let (screen, initial) = fixture("empty_control")?;
+        let paths = [
+            "/focus",
+            "/events",
+            "/programs",
+            "/programs/console/inputs",
+            "/programs/console/widgets/message/text",
+            "/programs/console/widgets/choices/selected",
+            "/programs/console/widgets/choices/items",
+            "/programs/dashboard/widgets/metrics/rows",
+            "/programs/dashboard/widgets/load/bars",
+            "/programs/dashboard/widgets/history/series",
+            "/programs/dashboard/widgets/history/active_series",
+        ];
+        let values = [
+            Json::Null,
+            json!(true),
+            json!(0),
+            json!(-1),
+            json!(u64::MAX),
+            json!("text 雪"),
+            json!([]),
+            json!({}),
+            json!(["one", "two"]),
+            json!({"type":"open","program":"console"}),
+            json!([{"type":"press","program":"console","widget":"send"}]),
+            json!([{"name":"n","value":1}]),
+        ];
+        for path in paths {
+            for replacement in &values {
+                let mut value = initial.clone();
+                *value.pointer_mut(path).unwrap() = replacement.clone();
+                let before = value.clone();
+                let legacy = legacy_validate_state(&screen, &value).map_err(|e| format!("{e:#}"));
+                let current = validate_state(&screen, &value).map_err(|e| format!("{e:#}"));
+                assert_eq!(current, legacy, "path={path},replacement={replacement}");
+                assert_eq!(before, value);
+            }
+        }
+        for name in ["empty_control", "list256", "table64k", "table4m", "chart"] {
+            let (screen, value) = fixture(name)?;
+            legacy_validate_state(&screen, &value)?;
+        }
+        for path in ["", "/programs/console", "/programs/console/widgets/message"] {
+            let mut value = initial.clone();
+            let object = value.pointer_mut(path).unwrap().as_object_mut().unwrap();
+            object.insert("unexpected".into(), json!(1));
+            assert_eq!(
+                validate_state(&screen, &value).map_err(|e| format!("{e:#}")),
+                legacy_validate_state(&screen, &value).map_err(|e| format!("{e:#}"))
+            );
+        }
+        Ok(())
+    }
+
+    fn legacy_validate_state(screen: &Screen, value: &Json) -> Result<()> {
+        let ui: UiState = serde_json::from_value(value.clone()).context("invalid live UI state")?;
+        if ui.programs.keys().cloned().collect::<BTreeSet<_>>()
+            != screen.placements.iter().cloned().collect()
+        {
+            bail!("UI component identities come from source; edit source to add/remove components");
+        }
+        if ui.events.len() > MAX_QUEUE {
+            bail!("UI event queue exceeds capacity");
+        }
+        if ui.focus.is_none() && defaults(screen).focus.is_some() {
+            bail!("an interactive screen requires a focused widget");
+        }
+        if let Some(focus) = &ui.focus {
+            if !focus_valid(screen, focus) {
+                bail!("focus must name an interactive widget on the screen");
+            }
+        }
+        for (name, component) in &ui.programs {
+            let declaration = &screen.components[name];
+            if component.widgets.keys().cloned().collect::<BTreeSet<_>>()
+                != declaration.widgets.iter().map(|w| w.id.clone()).collect()
+            {
+                bail!("widget identities come from source; edit source to add/remove widgets");
+            }
+            for (port, text) in &component.inputs {
+                if !declaration.inputs.contains(port) {
+                    bail!("unknown component input {name}.{port}");
+                }
+                validate_message(text)?;
+            }
+            for widget in &declaration.widgets {
+                let state = &component.widgets[&widget.id];
+                if widget.kind == Kind::Input {
+                    validate_text_field(&state.text)?;
+                }
+                if state.items.len() > 256
+                    || state.rows.len() > 10000
+                    || state.bars.len() > 256
+                    || state.series.len() > 16
+                {
+                    bail!("widget collection limit exceeded");
+                }
+                if widget.kind == Kind::List && state.selected >= state.items.len().max(1) {
+                    bail!("selected list index is out of range");
+                }
+                if widget.kind != Kind::List && state.selected != 0 {
+                    bail!("selected is supported only for list widgets");
+                }
+                if widget.kind != Kind::List && !state.items.is_empty() {
+                    bail!("items are supported only by list widgets");
+                }
+                if widget.kind != Kind::Table && !state.rows.is_empty() {
+                    bail!("rows are supported only by table widgets");
+                }
+                if widget.kind != Kind::Bars && !state.bars.is_empty() {
+                    bail!("bars are supported only by bar widgets");
+                }
+                if widget.kind != Kind::Chart
+                    && (!state.series.is_empty() || !state.active_series.is_empty())
+                {
+                    bail!("series are supported only by chart widgets");
+                }
+                for item in &state.items {
+                    validate_message(item)?;
+                }
+                for row in &state.rows {
+                    if !row.is_object()
+                        || widget
+                            .columns
+                            .iter()
+                            .any(|(_, field)| row.get(field).is_none())
+                    {
+                        bail!("table rows must be objects containing the declared fields");
+                    }
+                }
+                if state
+                    .bars
+                    .iter()
+                    .any(|bar| !bar.value.is_finite() || bar.value < 0.0)
+                {
+                    bail!("bar values must be finite and nonnegative");
+                }
+                if state
+                    .series
+                    .values()
+                    .any(|points| points.len() > 120 || points.iter().any(|(x, _)| !x.is_finite()))
+                {
+                    bail!("chart series need finite x coordinates and at most 120 points");
+                }
+                if !state.active_series.is_empty()
+                    && !state.series.contains_key(&state.active_series)
+                {
+                    bail!("active_series must name an existing series");
+                }
+            }
+        }
+        for event in &ui.events {
+            validate_event(screen, &ui, event)?;
+        }
+        Ok(())
     }
 }

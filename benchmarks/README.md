@@ -1,3 +1,38 @@
+# Live widget state decoding
+
+The [UI-state report](performance-2026-10-14-ui-state.json) compares `5ac9361`
+with borrowed JSON decoding at validation, normalization and renderer input.
+Typed widget state still owns its values; decoding no longer starts by cloning
+the entire JSON document. State schemas, exact errors, widget identities, queue
+and collection limits, document budgets and transaction boundaries remain.
+
+Three alternating release rounds measured private validation medians 26–85%
+lower, including 22% lower for a table with 4 MiB of payload. Normalization
+measured 16–56% lower. Fixtures, parsing and hashing are excluded; typed decoding,
+validation or normalization and temporary destruction are included. These are
+private-entry timings, separate from application responsiveness.
+
+Two final renderer runs, each with 20 measured eight-edit trials per variant
+and table size, measured about 2–2.4% lower edit-to-applied medians for the 4 MiB
+table. Acknowledgement medians were about 3% lower. Small-console applied results
+varied from 4.5% lower to flat; 64 KiB table results were 3–4.5% lower. These
+headless measurements include projected RPC, scheduling and Python/socket costs;
+they exclude startup and table loading and do not measure event-to-photon latency.
+
+`ui_widget_state.py` checks every complete rendered frame hash across variants
+and trials, expected edited text, full retained rows, empty UI errors and clean
+owned-child exit. The original validator remains a test oracle across 140
+schema/validation cases. Earlier reports used edited-text presence rather than
+complete frame hashes; those reports and their corrected interpretation remain
+separate from the final verified runs.
+
+The native executable shrinks by 16,512 bytes (0.57%). Allocation traffic, peak
+memory, RSS, cold startup and Linux timing were not measured. Unrelated runtime
+API controls varied -7% to +2%, and a cron microcontrol varied -5.5%; these are
+retained as variation, without attributing them to UI decoding. Source, input,
+catalog, harness and binary hashes and all raw paired samples are retained.
+Keep measurements separate from builds and stress.
+
 # Borrowed preflight values
 
 The [preflight-state report](performance-2026-10-14-preflight-state.json)

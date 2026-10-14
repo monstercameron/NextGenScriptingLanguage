@@ -236,6 +236,83 @@ fn report_release_allocation_counts() {
         measure(|| CronSchedule::parse(black_box(cron_source)).unwrap()),
     );
 
+    // Interface fixtures are built outside all counter scopes. Measure index
+    // allocation traffic separately from the returned owned value maps.
+    for (count, validate_name, parse_name, resolve_name) in [
+        (
+            0,
+            "input_validate_0000",
+            "input_parse_cli_0000",
+            "input_resolve_0000",
+        ),
+        (
+            1,
+            "input_validate_0001",
+            "input_parse_cli_0001",
+            "input_resolve_0001",
+        ),
+        (
+            8,
+            "input_validate_0008",
+            "input_parse_cli_0008",
+            "input_resolve_0008",
+        ),
+        (
+            64,
+            "input_validate_0064",
+            "input_parse_cli_0064",
+            "input_resolve_0064",
+        ),
+        (
+            1000,
+            "input_validate_1000",
+            "input_parse_cli_1000",
+            "input_resolve_1000",
+        ),
+    ] {
+        let declarations: Vec<_> = (0..count)
+            .map(|n| flow::ast::InputDeclaration {
+                name: format!("p_{n:04}"),
+                kind: flow::ast::InputType::Integer,
+                default: Some(Value::Integer(42)),
+                source: None,
+                line: n + 1,
+            })
+            .collect();
+        let supplied: BTreeMap<_, _> = declarations
+            .iter()
+            .map(|d| (d.name.clone(), "42".to_owned()))
+            .collect();
+        let typed: BTreeMap<_, _> = declarations
+            .iter()
+            .map(|d| (d.name.clone(), Value::Integer(42)))
+            .collect();
+        assert_eq!(
+            flow::inputs::parse_cli(&declarations, &supplied).unwrap(),
+            typed
+        );
+        assert_eq!(
+            flow::inputs::resolve(&declarations, &typed, false).unwrap(),
+            typed
+        );
+        operations.insert(
+            validate_name,
+            measure(|| flow::inputs::validate(black_box(&declarations)).unwrap()),
+        );
+        operations.insert(
+            parse_name,
+            measure(|| {
+                flow::inputs::parse_cli(black_box(&declarations), black_box(&supplied)).unwrap()
+            }),
+        );
+        operations.insert(
+            resolve_name,
+            measure(|| {
+                flow::inputs::resolve(black_box(&declarations), black_box(&typed), false).unwrap()
+            }),
+        );
+    }
+
     // JSON construction, serialization, environment access, and file output
     // all occur with allocation counting disabled.
     let report = serde_json::json!({

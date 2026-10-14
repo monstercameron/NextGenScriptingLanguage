@@ -99,14 +99,53 @@ impl InputDeclaration {
 }
 
 pub fn validate(declarations: &[InputDeclaration]) -> Result<()> {
+    if declarations.len() <= 1 {
+        // A singleton cannot duplicate a name; retain every other schema check.
+        return validate_schema(declarations, |_| true);
+    }
     let mut names = BTreeSet::new();
+    validate_schema(declarations, |input| names.insert(input.name.as_str()))
+}
+
+enum ValidatedSpecs<'a> {
+    Small(&'a [InputDeclaration]),
+    Indexed(BTreeMap<&'a str, &'a InputDeclaration>),
+}
+impl<'a> ValidatedSpecs<'a> {
+    fn get(&self, name: &str) -> Option<&'a InputDeclaration> {
+        match self {
+            Self::Small(declarations) => declarations.iter().find(|input| input.name == name),
+            Self::Indexed(specs) => specs.get(name).copied(),
+        }
+    }
+}
+
+fn validated_specs(declarations: &[InputDeclaration]) -> Result<ValidatedSpecs<'_>> {
+    // Small interfaces do not amortize the wider lookup-index nodes.
+    if declarations.len() <= 8 {
+        validate(declarations)?;
+        return Ok(ValidatedSpecs::Small(declarations));
+    }
+    let mut specs = BTreeMap::new();
+    validate_schema(declarations, |input| {
+        specs.insert(input.name.as_str(), input).is_none()
+    })?;
+    Ok(ValidatedSpecs::Indexed(specs))
+}
+
+// Collect the lookup index during the existing duplicate-name check. Keep all
+// declaration checks in their original order, before inspecting supplied keys.
+fn validate_schema<'a>(
+    declarations: &'a [InputDeclaration],
+    mut insert: impl FnMut(&'a InputDeclaration) -> bool,
+) -> Result<()> {
     for input in declarations {
         if !crate::parser::is_identifier(&input.name)
             || matches!(input.name.as_str(), "true" | "false")
         {
             bail!("line {}: invalid input name {:?}", input.line, input.name);
         }
-        if !names.insert(input.name.as_str()) {
+        if !insert(input) {
             bail!("line {}: duplicate input {:?}", input.line, input.name);
         }
         if let Some(default) = &input.default {
@@ -157,10 +196,12 @@ pub fn resolve(
     supplied: &BTreeMap<String, Value>,
     allow_extra: bool,
 ) -> Result<BTreeMap<String, Value>> {
-    validate(declarations)?;
-    if !allow_extra {
+    if allow_extra {
+        validate(declarations)?;
+    } else {
+        let specs = validated_specs(declarations)?;
         for name in supplied.keys() {
-            if !declarations.iter().any(|d| d.name == *name) {
+            if specs.get(name.as_str()).is_none() {
                 bail!("unknown program input {name:?}");
             }
         }
@@ -217,13 +258,12 @@ pub fn parse_cli(
     declarations: &[InputDeclaration],
     supplied: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, Value>> {
-    validate(declarations)?;
+    let specs = validated_specs(declarations)?;
     supplied
         .iter()
         .map(|(name, text)| {
-            let spec = declarations
-                .iter()
-                .find(|d| d.name == *name)
+            let spec = specs
+                .get(name.as_str())
                 .ok_or_else(|| anyhow!("unknown program input {name:?}"))?;
             Ok((name.clone(), spec.parse_cli(text)?))
         })
@@ -330,7 +370,7 @@ pub(crate) fn known_values(
     declarations: &[InputDeclaration],
     supplied: &BTreeMap<String, Value>,
 ) -> Result<BTreeMap<String, Value>> {
-    validate(declarations)?;
+    let specs = validated_specs(declarations)?;
     let mut values = declarations
         .iter()
         .filter_map(|d| {
@@ -340,9 +380,8 @@ pub(crate) fn known_values(
         })
         .collect::<BTreeMap<_, _>>();
     for (name, value) in supplied {
-        let input = declarations
-            .iter()
-            .find(|d| &d.name == name)
+        let input = specs
+            .get(name.as_str())
             .ok_or_else(|| anyhow!("unknown program input {name:?}"))?;
         input.validate_value(value)?;
         values.insert(name.clone(), value.clone());

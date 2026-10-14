@@ -1,3 +1,28 @@
+# Typed-input lookup scaling
+
+The [input-interface report](performance-2026-10-14-input-lookup.json) compares
+`cc10290` with an index collected during existing declaration validation.
+For 1,000 supplied inputs, in-process parsing measured 86% lower median time,
+resolution 80% lower, and program-argument validation 66% lower. Two interleaved
+120-sample fresh CLI repeats measured check/run/inspect medians 27–33% lower.
+These large interfaces are scaling probes. CLI cases with up to 64 inputs stayed
+within 1%; native API JSON/no-input controls were approximately flat. Single-input
+parsing/resolution helpers measured 11–15% lower, which does not establish a
+whole-script gain.
+
+Small interfaces retain linear lookup; zero/singleton validation avoids a
+uniqueness-set allocation. Through eight inputs allocation traffic does not
+increase. The larger index adds 880 requested bytes at 64 inputs and 14,696 at
+1,000 inputs, with unchanged allocation-call counts. This is a CPU/temporary
+allocation tradeoff, not measured peak memory or RSS. Invalid-name, duplicate,
+default, type, unknown-input and host-local policies retain their error order.
+
+Raw timings, refinement decisions, source/input/harness/binary hashes and bounds
+are retained. Some unchanged microcontrols vary: final manifest-list validation
+was +8.27%; an earlier cron control changed +9.33%, then -6.76% on repeat. These
+are not claimed gains. Results are local macOS with warm filesystem caches;
+cold-cache, other-platform and Bash performance remain unmeasured.
+
 # Catalog decoding performance
 
 The [paired catalog report](performance-2026-10-14-catalog-decoding.json)

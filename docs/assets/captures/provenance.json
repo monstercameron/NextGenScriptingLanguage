@@ -1,0 +1,16 @@
+[
+  {
+    "image": "cpu.png",
+    "program": "examples/top-cpu.program",
+    "program_sha256": "9318693eb08a33b9d465d4e731e22d2a6313a956ef59b4f533442ef36345a7a9",
+    "runtime_sha256": "eae11c0b128e2b1ca7849aeeaa8b497cbc3464f2745d2326129792305fe99507",
+    "method": "Real runtime PTY frame, 140x32 cells. pyte interprets ANSI; Pillow renders the captured cell grid in Menlo. Monochrome terminal theme. Native ps/gh manifests replaced only for this capture with deterministic private fixture backends. Application source unchanged; all layout/events/control flow remain .program. Metrics are illustrative fixture values, not live measurements."
+  },
+  {
+    "image": "stars.png",
+    "program": "examples/github-stars.program",
+    "program_sha256": "046b5f89c7e881e417b72ae2d80d697b7e3265702353e8971f7770fb0b8ea58b",
+    "runtime_sha256": "eae11c0b128e2b1ca7849aeeaa8b497cbc3464f2745d2326129792305fe99507",
+    "method": "Real runtime PTY frame, 140x32 cells. pyte interprets ANSI; Pillow renders the captured cell grid in Menlo. Monochrome terminal theme. Native ps/gh manifests replaced only for this capture with deterministic private fixture backends. Application source unchanged; all layout/events/control flow remain .program. Metrics are illustrative fixture values, not live measurements."
+  }
+]

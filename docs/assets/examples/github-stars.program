@@ -1,0 +1,69 @@
+# A single file: layout first, then each component's interface and behavior.
+open a screen titled "GitHub star tracker"
+divide the screen into two columns
+place chooser on the left
+place tracker on the right
+give chooser 30 percent of the width
+connect repository from chooser to repository in tracker
+
+define a program named chooser
+  offer repository as text
+
+  show a heading named title with text "Repositories"
+  show a text field named repo with value "morluto/rea"
+  show a button named track labelled "Track repository"
+  show a list named saved
+    include "morluto/rea"
+    include "cli/cli"
+    include "ratatui/ratatui"
+
+  whenever key "Ctrl-Q" is pressed
+    close the screen
+
+  whenever the program opens
+    send the value of repo as repository
+
+  whenever repo is submitted
+    send the value of repo as repository
+
+  whenever track is pressed
+    send the value of repo as repository
+
+  whenever an item is chosen in saved
+    show that item in repo
+    send that item as repository
+
+define a program named tracker
+  accept repository as text
+
+  show a heading named title with text "Stars and forks"
+  show a table named metrics
+    column "Repository" from "nameWithOwner"
+    column "Stars" from "stargazerCount"
+    column "Forks" from "forkCount"
+  show a line chart named history with key "nameWithOwner"
+  label the horizontal axis of history "session seconds"
+  label the vertical axis of history "stars"
+  show a text panel named description
+  show a badge named status with text "Waiting for a repository"
+  show a button named refresh labelled "Refresh now"
+
+  whenever repository arrives
+    press refresh
+
+  whenever key "Ctrl-R" is pressed
+    press refresh
+
+  every 60 seconds
+    press refresh
+
+  whenever refresh is pressed
+    show "Refreshing..." in status
+    run gh.repo with repository repository
+    then show the result as rows in metrics
+    then add field "stargazerCount" to history
+    then show field "description" in description
+    then show "Live data. Graph shows this session." in status
+
+  whenever a command fails
+    show the error in status

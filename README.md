@@ -1,5 +1,7 @@
 # Execute
 
+[Explore the Execute site →](https://monstercameron.github.io/NextGenScriptingLanguage/)
+
 Production tracking: [Bash and Omarchy acceptance gates](docs/production-readiness.md), [pinned command inventory](docs/omarchy-inventory.json), and [initial isolated interface ports](examples/omarchy-ports/README.md). Source 0.9.0-dev remains a candidate; packaged 0.8.0 is unchanged.
 
 **English for the glue. Unix for the work.**

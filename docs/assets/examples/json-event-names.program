@@ -1,0 +1,7 @@
+# Follow one JSON object per line; each object must have a text `name`.
+accept path as text
+listen to "tail" with arguments ["-n", "0", "-F", path]
+whenever a line arrives as event
+  then parse json as record
+  take text at "/name" from record as name
+  then "printf" with arguments ["%s\n", name]

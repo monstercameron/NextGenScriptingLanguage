@@ -1,0 +1,6 @@
+# Purpose: Count lines after uppercasing a text file through native pipes.
+# Input: input.txt in the calling directory. Output: native wc line count.
+accept path as text with default "input.txt"
+run "cat" with arguments [path]
+pipe to "tr" with arguments ["[:lower:]", "[:upper:]"]
+pipe to "wc" with arguments ["-l"]

@@ -34,7 +34,7 @@
   "proof_scope": "110 Unix cases/46 native executables; pinned ten Omarchy wrapper interfaces with isolated fake backends; no Arch/Omarchy desktop effects or Bash syntax emulation.",
   "performance_claim": "Environment-input workflow removes printenv/jq helper processes; no general speed advantage over Bash. Literal native control remains similar to prior runtime.",
   "remaining_gates": "production-readiness.md",
-  "ci": "25c96bb passed native Ubuntu/macOS make check, streaming proof smoke and VS Code package. e8fe795 additionally passed actual Ubuntu Unix matrix, proof smoke and packaging, but the job was marked cancelled after macOS failed an existing fixed-sleep streaming fixture. That fixture now waits for observed child exit without consuming status; 20 local repetitions and all-target Clippy pass. New CI pending.",
+  "ci": "Native macOS and Ubuntu passed make check, actual110-case Unix matrix, streaming/lifecycle proof smoke, VSCode packaging and artifact upload for c05d2ac. Ubuntu is not Arch/Omarchy desktop acceptance.",
   "raw_evidence": "production-validation-0.9.0-dev/",
   "streaming_lifecycle": {
     "report": "../benchmarks/replacement-proofs-v0.9.0-dev-macos-arm64.json",
@@ -57,6 +57,17 @@
       "run_id": 38578486309,
       "conclusion": "failure",
       "detail": "Mac fixed-sleep streaming fixture race; Ubuntu all steps passed before fail-fast cancellation."
+    },
+    {
+      "commit": "c05d2acead1bbfe1887a2c903d7add819f2c619b",
+      "run_id": 38580276421,
+      "conclusion": "success",
+      "platforms": [
+        "ubuntu-latest",
+        "macos-latest"
+      ],
+      "artifacts": "production-validation-0.9.0-dev/ci/summary.json"
     }
-  ]
+  ],
+  "final_integration_checkpoint_utc": "2026-10-14T14:34:56.128303+00:00"
 }

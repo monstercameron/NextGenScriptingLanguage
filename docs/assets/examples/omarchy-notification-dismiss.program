@@ -1,0 +1,5 @@
+#!/usr/bin/env -S execute --
+# Interface port of Omarchy v4.0.4; see README.md for compatibility limits.
+accept arguments as list of text from arguments
+accept summary as text from argument 1
+run "omarchy-shell" with arguments ["-q", "notifications", "dismiss", summary]

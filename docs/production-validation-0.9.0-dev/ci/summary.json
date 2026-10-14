@@ -1,0 +1,49 @@
+{
+  "ubuntu-latest": {
+    "unix-matrix.json": {
+      "status": "passed",
+      "binary_sha256": "29b00821a0aed9afadc0eb7a1340f9ca2d06bc6c0178e93157130b57ca5e58df",
+      "summary": {
+        "exact_matches": 100,
+        "intentional_differences": 10,
+        "distinct_tools": 46,
+        "paired_observations": 110,
+        "unexplained_mismatches": 0
+      }
+    },
+    "proof-smoke.json": {
+      "status": "passed",
+      "binary_sha256": "29b00821a0aed9afadc0eb7a1340f9ca2d06bc6c0178e93157130b57ca5e58df",
+      "summary": {
+        "stream_bytes": 1048576,
+        "lifecycle_cycles": 1,
+        "native_failure_code": 7
+      }
+    }
+  },
+  "macos-latest": {
+    "unix-matrix.json": {
+      "status": "passed",
+      "binary_sha256": "6d32e67bb7c562ac4d697aab9a0e99053fc67532ef8123d5db2600d7d4ad82ed",
+      "summary": {
+        "exact_matches": 100,
+        "intentional_differences": 10,
+        "distinct_tools": 46,
+        "paired_observations": 110,
+        "unexplained_mismatches": 0
+      }
+    },
+    "proof-smoke.json": {
+      "status": "passed",
+      "binary_sha256": "6d32e67bb7c562ac4d697aab9a0e99053fc67532ef8123d5db2600d7d4ad82ed",
+      "summary": {
+        "stream_bytes": 1048576,
+        "lifecycle_cycles": 1,
+        "native_failure_code": 7
+      }
+    }
+  },
+  "source_commit": "c05d2acead1bbfe1887a2c903d7add819f2c619b",
+  "run_id": 38580276421,
+  "run_url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38580276421"
+}

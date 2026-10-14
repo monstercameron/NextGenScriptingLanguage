@@ -1,0 +1,56 @@
+# All application control flow is here. Rust supplies generic widgets and operations.
+open a screen titled "Top 10 CPU processes"
+divide the screen into two columns
+place monitor on the left
+place details on the right
+give monitor 65 percent of the width
+connect processes from monitor to processes in details
+
+define a program named monitor
+  offer processes as text
+
+  show a heading named title with text "Top 10 by CPU usage"
+  show a bar chart named usage
+    label each bar from "label"
+    size each bar from "cpu"
+    label bar values with "%"
+  show a badge named status with text "Waiting for a sample"
+  show a button named refresh labelled "Refresh now"
+  show a text panel named note with text "CPU values come from ps. Bars scale to the busiest process."
+
+  whenever the program opens
+    press refresh
+
+  whenever key "Ctrl-R" is pressed
+    press refresh
+
+  whenever key "Ctrl-Q" is pressed
+    close the screen
+
+  every 2 seconds
+    press refresh
+
+  whenever refresh is pressed
+    show "Sampling processes..." in status
+    run ps with flags ["-A", "-o", "pid=", "-o", "pcpu=", "-o", "comm="]
+    pipe to jq.ps with limit 10
+    then show the result as bars in usage
+    then send the result as processes
+    then show "Live. Refreshes every 2 seconds." in status
+
+  whenever a command fails
+    show the error in status
+
+define a program named details
+  accept processes as text
+
+  show a heading named title with text "Process details"
+  show a table named records
+    column "PID" from "pid"
+    column "CPU %" from "cpu"
+    column "Name" from "name"
+  give records 14 rows
+  show a text panel named note with text "PID identifies each process. CPU can exceed 100% for a process using several cores."
+
+  whenever processes arrives
+    show the result as rows in records

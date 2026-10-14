@@ -9,6 +9,7 @@ check: rust-check
 	$(PYTHON) tests/model_catalog.py
 	$(PYTHON) -O tests/model_catalog.py
 	EXECUTE_TEST_BINARY="$(CURDIR)/target/release/execute" $(PYTHON) tests/omarchy_interfaces.py
+	EXECUTE_TEST_BINARY="$(CURDIR)/target/release/execute" $(PYTHON) tests/site.py
 	$(PYTHON) tests/unix_bench.py
 	$(PYTHON) tests/unix_matrix.py
 	$(PYTHON) -O tests/unix_matrix.py

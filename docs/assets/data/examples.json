@@ -1,0 +1,92 @@
+[
+  {
+    "category": "pipes",
+    "title": "Native pipes. Zero shell puzzles.",
+    "file": "examples/direct.program",
+    "download": "assets/examples/direct.program",
+    "description": "An input file becomes a line count through cat \u2192 tr \u2192 wc.",
+    "command": "execute direct.program --input path=input.txt",
+    "source": "# Purpose: Count lines after uppercasing a text file through native pipes.\n# Input: input.txt in the calling directory. Output: native wc line count.\naccept path as text with default \"input.txt\"\nrun \"cat\" with arguments [path]\npipe to \"tr\" with arguments [\"[:lower:]\", \"[:upper:]\"]\npipe to \"wc\" with arguments [\"-l\"]\n",
+    "sha256": "e0fac684688edb2b37068c6b34762d478d54394e8c71424148f59d1dd0f439c3"
+  },
+  {
+    "category": "status",
+    "title": "Let grep be more than true or false.",
+    "file": "examples/search-status.program",
+    "download": "assets/examples/search-status.program",
+    "description": "Capture matching lines and the real native exit code, then save a report.",
+    "command": "execute search-status.program --input path=app.log --input pattern=error --input report=report.txt",
+    "source": "# Search literal text in a file and save both native grep status and matching lines.\n# 0 = matches, 1 = no matches, 2 = grep error. The report records all three.\naccept path as text\naccept pattern as text\naccept report as text\nrun \"grep\" with arguments [\"-n\", \"-F\", \"-e\", pattern, \"--\", path] as matches and keep status as search_status\nthen \"printf\" with arguments [\"grep exit: %s\\n%s\", search_status, matches]\nthen save to report\n",
+    "sha256": "a3518242c28436374788d9bf3a9c1049e5f96b75f06241c5305632f25341b887"
+  },
+  {
+    "category": "streams",
+    "title": "Keep the bytes moving.",
+    "file": "examples/stream-three-lines.program",
+    "download": "assets/examples/stream-three-lines.program",
+    "description": "A finite stream, native transformation and explicit record cutoff.",
+    "command": "execute stream-three-lines.program",
+    "source": "# Finite native source, with output delivered one line at a time.\nstream from printf with message \"one\\ntwo\\nthree\\nfour\"\npipe to tr with from \"[:lower:]\" and to \"[:upper:]\"\ntake the first 3 lines\nshow each line\n",
+    "sha256": "8a86629d1a5dc3c74e8a2ae1870b5e5715ba67750b9dc7c6354d519961a8c00a"
+  },
+  {
+    "category": "apps",
+    "title": "A whole CPU dashboard. One file.",
+    "file": "examples/top-cpu.program",
+    "download": "assets/examples/top-cpu.program",
+    "description": "ps supplies the numbers. The program defines layout, refresh, bars and table.",
+    "command": "execute top-cpu.program",
+    "source": "# All application control flow is here. Rust supplies generic widgets and operations.\nopen a screen titled \"Top 10 CPU processes\"\ndivide the screen into two columns\nplace monitor on the left\nplace details on the right\ngive monitor 65 percent of the width\nconnect processes from monitor to processes in details\n\ndefine a program named monitor\n  offer processes as text\n\n  show a heading named title with text \"Top 10 by CPU usage\"\n  show a bar chart named usage\n    label each bar from \"label\"\n    size each bar from \"cpu\"\n    label bar values with \"%\"\n  show a badge named status with text \"Waiting for a sample\"\n  show a button named refresh labelled \"Refresh now\"\n  show a text panel named note with text \"CPU values come from ps. Bars scale to the busiest process.\"\n\n  whenever the program opens\n    press refresh\n\n  whenever key \"Ctrl-R\" is pressed\n    press refresh\n\n  whenever key \"Ctrl-Q\" is pressed\n    close the screen\n\n  every 2 seconds\n    press refresh\n\n  whenever refresh is pressed\n    show \"Sampling processes...\" in status\n    run ps with flags [\"-A\", \"-o\", \"pid=\", \"-o\", \"pcpu=\", \"-o\", \"comm=\"]\n    pipe to jq.ps with limit 10\n    then show the result as bars in usage\n    then send the result as processes\n    then show \"Live. Refreshes every 2 seconds.\" in status\n\n  whenever a command fails\n    show the error in status\n\ndefine a program named details\n  accept processes as text\n\n  show a heading named title with text \"Process details\"\n  show a table named records\n    column \"PID\" from \"pid\"\n    column \"CPU %\" from \"cpu\"\n    column \"Name\" from \"name\"\n  give records 14 rows\n  show a text panel named note with text \"PID identifies each process. CPU can exceed 100% for a process using several cores.\"\n\n  whenever processes arrives\n    show the result as rows in records\n",
+    "sha256": "9318693eb08a33b9d465d4e731e22d2a6313a956ef59b4f533442ef36345a7a9"
+  },
+  {
+    "category": "apps",
+    "title": "Stars, forks, and a little history.",
+    "file": "examples/github-stars.program",
+    "download": "assets/examples/github-stars.program",
+    "description": "gh supplies repository data; components communicate through explicit ports.",
+    "command": "execute github-stars.program",
+    "source": "# A single file: layout first, then each component's interface and behavior.\nopen a screen titled \"GitHub star tracker\"\ndivide the screen into two columns\nplace chooser on the left\nplace tracker on the right\ngive chooser 30 percent of the width\nconnect repository from chooser to repository in tracker\n\ndefine a program named chooser\n  offer repository as text\n\n  show a heading named title with text \"Repositories\"\n  show a text field named repo with value \"morluto/rea\"\n  show a button named track labelled \"Track repository\"\n  show a list named saved\n    include \"morluto/rea\"\n    include \"cli/cli\"\n    include \"ratatui/ratatui\"\n\n  whenever key \"Ctrl-Q\" is pressed\n    close the screen\n\n  whenever the program opens\n    send the value of repo as repository\n\n  whenever repo is submitted\n    send the value of repo as repository\n\n  whenever track is pressed\n    send the value of repo as repository\n\n  whenever an item is chosen in saved\n    show that item in repo\n    send that item as repository\n\ndefine a program named tracker\n  accept repository as text\n\n  show a heading named title with text \"Stars and forks\"\n  show a table named metrics\n    column \"Repository\" from \"nameWithOwner\"\n    column \"Stars\" from \"stargazerCount\"\n    column \"Forks\" from \"forkCount\"\n  show a line chart named history with key \"nameWithOwner\"\n  label the horizontal axis of history \"session seconds\"\n  label the vertical axis of history \"stars\"\n  show a text panel named description\n  show a badge named status with text \"Waiting for a repository\"\n  show a button named refresh labelled \"Refresh now\"\n\n  whenever repository arrives\n    press refresh\n\n  whenever key \"Ctrl-R\" is pressed\n    press refresh\n\n  every 60 seconds\n    press refresh\n\n  whenever refresh is pressed\n    show \"Refreshing...\" in status\n    run gh.repo with repository repository\n    then show the result as rows in metrics\n    then add field \"stargazerCount\" to history\n    then show field \"description\" in description\n    then show \"Live data. Graph shows this session.\" in status\n\n  whenever a command fails\n    show the error in status\n",
+    "sha256": "046b5f89c7e881e417b72ae2d80d697b7e3265702353e8971f7770fb0b8ea58b"
+  },
+  {
+    "category": "services",
+    "title": "A tiny program with a pulse.",
+    "file": "examples/heartbeat.program",
+    "download": "assets/examples/heartbeat.program",
+    "description": "Stay alive and run a native command on a regular interval.",
+    "command": "execute heartbeat.program --max-runs 3",
+    "source": "every 1 second\n  run pwd\n",
+    "sha256": "5b77f5a4185b40e0f7474b8b161416ad5b88a2f5c2bb792af1da6d91f263be78"
+  },
+  {
+    "category": "data",
+    "title": "Structured without the subprocess shuffle.",
+    "file": "examples/json-event-names.program",
+    "download": "assets/examples/json-event-names.program",
+    "description": "Parse JSON and select typed fields inside the shared runtime.",
+    "command": "Open the source for its input contract.",
+    "source": "# Follow one JSON object per line; each object must have a text `name`.\naccept path as text\nlisten to \"tail\" with arguments [\"-n\", \"0\", \"-F\", path]\nwhenever a line arrives as event\n  then parse json as record\n  take text at \"/name\" from record as name\n  then \"printf\" with arguments [\"%s\\n\", name]\n",
+    "sha256": "5096bfc5556179498a9d903a7232ae555ed943a20d379b30554c3fe580008424"
+  },
+  {
+    "category": "unix",
+    "title": "English, meet Omarchy.",
+    "file": "examples/omarchy-ports/omarchy-notification-dismiss.program",
+    "download": "assets/examples/omarchy-notification-dismiss.program",
+    "description": "A positional summary becomes one literal argument to omarchy-shell.",
+    "command": "execute omarchy-notification-dismiss.program -- \"Update complete\"",
+    "source": "#!/usr/bin/env -S execute --\n# Interface port of Omarchy v4.0.4; see README.md for compatibility limits.\naccept arguments as list of text from arguments\naccept summary as text from argument 1\nrun \"omarchy-shell\" with arguments [\"-q\", \"notifications\", \"dismiss\", summary]\n",
+    "sha256": "70eba95a31c0f5a43529e2decbde54e9c4eccb92cf9b7c1488f5a152c4f9eec1"
+  },
+  {
+    "category": "ai",
+    "title": "The model decides a label. The program decides what happens.",
+    "file": "examples/models/001-incident-timeline.program",
+    "download": "assets/examples/001-incident-timeline.program",
+    "description": "A complete fixture-backed classification workflow with explicit confidence/evidence checks. Requires the repository fixtures and manifests.",
+    "command": "Run from examples/models with its catalog inputs; see the AI guide.",
+    "source": "# Purpose: Build an evidence-linked incident timeline; prepare bounded evidence and save a review-only model-assisted report.\n# Inputs: local source.json evidence, explicit model fixtures, and a private empty environment file.\n# Outputs: out/incident-timeline.json; the workflow never changes the source evidence.\naccept source_path as text with default \"fixtures/001/source.json\"\naccept report_path as text with default \"out/incident-timeline.json\"\naccept classify_fixture_path as text with default \"fixtures/001/classify-evidence-ready.json\"\naccept draft_fixture_path as text with default \"fixtures/001/draft.json\"\naccept generator_model as text with default \"gpt-6-luna\"\naccept env_file as text with default \".env\"\naccept live as boolean with default false\n# Refuse an output path that aliases an existing evidence or schema file.\nrun \"test\" with arguments [\"!\", source_path, \"-ef\", report_path]\nrun cat with path source_path\nthen jq with flags [\"-c\", \"-S\"] and filter \"{incident,events:(.events|sort_by(.at))}\" as evidence\nif live is true\n  then jev.classify with question \"Do these time-ordered event records support drafting an incident timeline?\" and labels [\"evidence-ready\", \"insufficient-evidence\"] and minimum 80 and env_file env_file as raw\notherwise\n  then jev.classify with question \"Do these time-ordered event records support drafting an incident timeline?\" and labels [\"evidence-ready\", \"insufficient-evidence\"] and minimum 80 and fixture classify_fixture_path and env_file env_file as raw\nthen parse json as decision\ntake text at \"/label\" from decision as label\ntake boolean at \"/accepted\" from decision as accepted\ntake integer at \"/confidence_percent\" from decision as confidence\nif accepted is true\n  if label is \"evidence-ready\"\n    run cat with path source_path\n    then jq with flags [\"-c\", \"-S\"] and filter \"{incident,events:(.events|sort_by(.at))}\"\n    if live is true\n      then llm.ask with model generator_model and instruction \"Draft a compact, timestamp-ordered incident timeline using only the supplied event records. Cite INC-104 and label causal links as unverified.\" and env_file env_file as draft_raw\n    otherwise\n      then llm.ask with model generator_model and instruction \"Draft a compact, timestamp-ordered incident timeline using only the supplied event records. Cite INC-104 and label causal links as unverified.\" and fixture draft_fixture_path and env_file env_file as draft_raw\n    then parse json as generated\n    take text at \"/text\" from generated as draft\n    run jq with flags [\"-n\", \"-r\", \"-j\", \"--arg\", \"draft\", draft, \"--arg\", \"evidence\", evidence] and filter \"if ($draft | startswith(\\\"EVIDENCE:\\\")) and ([$evidence | scan(\\\"[A-Z][A-Z0-9]+-[A-Z0-9-]+\\\") | . as $id | select($draft | contains($id))] | length > 0) then $draft else error(\\\"draft must start with EVIDENCE and cite an ID in bounded local evidence\\\") end\" as validated_draft\n    then \"jq\" with arguments [\"-n\", \"-c\", \"-S\", \"--arg\", \"artifact\", \"incident_timeline\", \"--arg\", \"status\", \"draft-for-human-review\", \"--arg\", \"classification\", label, \"--argjson\", \"confidence\", confidence, \"--arg\", \"evidence\", evidence, \"--arg\", \"timeline_draft\", validated_draft, \"--arg\", \"action\", \"A human owner reviews this proposed analysis before acting.\", \"{artifact:$artifact,status:$status,confidence_percent:$confidence,evidence_excerpt:$evidence,timeline_draft:$timeline_draft,action:$action,classification:$classification}\"]\n    then save to report_path\n  otherwise\n    then \"jq\" with arguments [\"-n\", \"-c\", \"-S\", \"--arg\", \"artifact\", \"incident_timeline\", \"--arg\", \"status\", \"needs-human-review\", \"--arg\", \"classification\", label, \"--argjson\", \"confidence\", confidence, \"--arg\", \"evidence\", evidence, \"--arg\", \"reason\", \"The accepted result did not match this workflow\u2019s positive label, decision, or score level; generated analysis was withheld.\", \"--arg\", \"action\", \"An owner checks the original records and decides the next step.\", \"{artifact:$artifact,status:$status,confidence_percent:$confidence,evidence_excerpt:$evidence,timeline_draft:null,reason:$reason,action:$action,classification:$classification}\"]\n    then save to report_path\notherwise\n  then \"jq\" with arguments [\"-n\", \"-c\", \"-S\", \"--arg\", \"artifact\", \"incident_timeline\", \"--arg\", \"status\", \"needs-human-review\", \"--arg\", \"classification\", label, \"--argjson\", \"confidence\", confidence, \"--arg\", \"evidence\", evidence, \"--arg\", \"reason\", \"The model signal is below the configured 80 percent floor; no generated analysis was requested.\", \"--arg\", \"action\", \"An owner checks the original records and decides the next step.\", \"{artifact:$artifact,status:$status,confidence_percent:$confidence,evidence_excerpt:$evidence,timeline_draft:null,reason:$reason,action:$action,classification:$classification}\"]\n  then save to report_path\nthen cat with path report_path\n",
+    "sha256": "1af0dc3989c4b6118d133d439d50340b7312a40b21fd8d7c7cb7d75c05ff5e5a"
+  }
+]

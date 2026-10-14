@@ -392,38 +392,49 @@ impl App {
             events: Vec::new(),
         }
     }
-    fn apply_live_state(&mut self, ui: UiState) -> Result<()> {
+    fn apply_live_state(&mut self, mut ui: UiState) -> Result<()> {
+        // Source/state validation gives each placed component and widget one
+        // owner. Transfer incoming payloads into the renderer without a copy.
         for i in 0..self.instances.len() {
-            let desired = &ui.programs[&self.instances[i].name];
-            let old = self.instances[i].inputs.clone();
-            self.instances[i].inputs = desired.inputs.clone();
-            for (port, value) in &desired.inputs {
-                if old.get(port) != Some(value) {
-                    self.instances[i].generation = self.instances[i].generation.wrapping_add(1);
-                    self.enqueue(i, &Event::Input(port.clone()), value.clone(), String::new());
-                }
+            let mut desired = ui
+                .programs
+                .remove(&self.instances[i].name)
+                .expect("validated UI component");
+            let old = std::mem::replace(&mut self.instances[i].inputs, desired.inputs);
+            let changed: Vec<_> = self.instances[i]
+                .inputs
+                .iter()
+                .filter(|(port, value)| old.get(*port) != Some(*value))
+                .map(|(port, value)| (port.clone(), value.clone()))
+                .collect();
+            for (port, value) in changed {
+                self.instances[i].generation = self.instances[i].generation.wrapping_add(1);
+                self.enqueue(i, &Event::Input(port), value, String::new());
             }
             for j in 0..self.instances[i].views.len() {
                 let instance = &mut self.instances[i];
                 let widget = &mut instance.component.widgets[j];
                 let view = &mut instance.views[j];
-                let desired = &desired.widgets[&widget.id];
-                widget.items = desired.items.clone();
-                instance.list_items[j] = desired
+                let desired = desired
+                    .widgets
+                    .remove(&widget.id)
+                    .expect("validated UI widget");
+                widget.items = desired.items;
+                instance.list_items[j] = widget
                     .items
                     .iter()
                     .map(|item| safe(item).into_owned())
                     .collect();
-                view.text = desired.text.clone();
+                view.text = desired.text;
                 view.selected = desired.selected;
-                view.rows = desired.rows.clone();
+                view.rows = desired.rows;
                 view.bars = desired
                     .bars
-                    .iter()
-                    .map(|b| (b.label.clone(), b.value))
+                    .into_iter()
+                    .map(|bar| (bar.label, bar.value))
                     .collect();
-                view.series = desired.series.clone();
-                view.active = desired.active_series.clone();
+                view.series = desired.series;
+                view.active = desired.active_series;
             }
         }
         if let Some(focus) = ui.focus {
@@ -947,6 +958,192 @@ mod bench {
         for event in &ui.events {
             validate_event(screen, &ui, event)?;
         }
+        Ok(())
+    }
+    fn new_handoff_app(screen: &Screen) -> App {
+        App::new(
+            screen,
+            &Registry::default(),
+            &RunOptions {
+                inputs: BTreeMap::new(),
+                working_directory: ".".into(),
+                cache_directory: None,
+                trace: false,
+                max_output_bytes: 1024 * 1024,
+                command_timeout: Some(Duration::from_secs(5)),
+            },
+        )
+    }
+    fn handoff_snapshot(app: &App) -> Result<Json> {
+        Ok(
+            json!({"ui":serde_json::to_value(app.live_state())?,"frame":app.rendered_frame(),"dirty":app.dirty,"focused":app.focused,"instances":app.instances.iter().map(|instance|json!({"name":instance.name,"generation":instance.generation,"queue":instance.queue,"list_items":instance.list_items})).collect::<Vec<_>>()}),
+        )
+    }
+    #[test]
+    fn owned_handoff_matches_legacy_state_queues_generation_and_frames() -> Result<()> {
+        for name in ["empty_control", "list256", "table64k", "table4m", "chart"] {
+            let (screen, initial) = fixture(name)?;
+            for input in [None, Some("old"), Some("literal $HOME; * 雪")] {
+                for fill_queue in [false, true] {
+                    for generation in [0, u64::MAX] {
+                        let mut previous = new_handoff_app(&screen);
+                        let mut candidate = new_handoff_app(&screen);
+                        for app in [&mut previous, &mut candidate] {
+                            app.instances[0].generation = generation;
+                            app.instances[0]
+                                .inputs
+                                .insert("incoming".into(), "old".into());
+                            if fill_queue {
+                                app.instances[0].queue = (0..32)
+                                    .map(|n| (n, format!("item{n}"), String::new()))
+                                    .collect();
+                            }
+                        }
+                        for step in 0..3 {
+                            let mut value = initial.clone();
+                            if let Some(input) = input {
+                                value["programs"]["console"]["inputs"]["incoming"] = json!(input);
+                            }
+                            value["focus"] = json!({"program":"console","widget":if step%2==0 {"send"} else {"message"}});
+                            value["events"] = json!([{"type":"press","program":"console","widget":"send"},{"type":"submit","program":"console","widget":"message"},{"type":"choose","program":"console","widget":"choices","index":0},{"type":"open","program":"console"}]);
+                            validate_state(&screen, &value)?;
+                            let ui = UiState::deserialize(&value)?;
+                            legacy_apply(&mut previous, ui.clone())?;
+                            candidate.apply_live_state(ui)?;
+                            assert_eq!(handoff_snapshot(&candidate)?,handoff_snapshot(&previous)?,"fixture={name},input={input:?},fullqueue={fill_queue},generation={generation},step={step}");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "explicit release owned UI handoff timing"]
+    #[allow(clippy::assertions_on_constants)]
+    fn ui_owned_handoff() -> Result<()> {
+        assert!(!cfg!(debug_assertions), "use --release");
+        let mut results = BTreeMap::new();
+        for name in [
+            "empty_control",
+            "list256",
+            "table64k",
+            "table4m",
+            "chart",
+            "port64k",
+        ] {
+            let (screen, mut value) = fixture(name)?;
+            if name == "port64k" {
+                value["programs"]["console"]["inputs"]["incoming"] = json!("p".repeat(64 * 1024));
+            }
+            validate_state(&screen, &value)?;
+            let ui = UiState::deserialize(&value)?;
+            let bytes = serde_json::to_vec(&value)?;
+            let fingerprint = format!("{:x}", Sha256::digest(&bytes));
+            let mut app = new_handoff_app(&screen);
+            app.apply_live_state(ui.clone())?;
+            let expected = handoff_snapshot(&app)?;
+            let count = if name == "table4m" { 5 } else { 20 };
+            let mut raw = Vec::new();
+            for batch in 0..60 {
+                let inputs = (0..count).map(|_| ui.clone()).collect::<Vec<_>>();
+                let start = Instant::now();
+                for input in inputs {
+                    app.apply_live_state(std::hint::black_box(input))?;
+                }
+                if batch >= 10 {
+                    raw.push(start.elapsed().as_secs_f64() * 1e9 / f64::from(count));
+                }
+            }
+            assert_eq!(handoff_snapshot(&app)?, expected);
+            let mut sorted = raw.clone();
+            sorted.sort_by(f64::total_cmp);
+            results.insert(name,json!({"p50_ns":(sorted[24]+sorted[25])/2.0,"p95_ns":sorted[47],"raw_batch_average_ns":raw,"state_sha256":fingerprint,"serialized_state_bytes":bytes.len(),"full_state_frame_queue_generation_oracle":true}));
+        }
+        std::fs::write(
+            std::env::var("OPT_BENCH_REPORT")?,
+            serde_json::to_vec_pretty(
+                &json!({"results":results,"method":"Private App::apply_live_state owned handoff. Parsed screen,typed incoming state,App construction,warm initial apply,per-batch incoming typed clones and full output oracle hashes excluded. Timed apply consumes each state,updates existing App,destroys replaced/temporary payloads and drops input pool.10warmup/50measured batches,5or20operations. No decode/validation/publication/rendering/IPC/native jobs/providers; full final state/frame/queue/generation unchanged. Not whole-widget latency or allocation/RSS."}),
+            )?,
+        )?;
+        Ok(())
+    }
+
+    fn legacy_apply(app: &mut App, ui: UiState) -> Result<()> {
+        for i in 0..app.instances.len() {
+            let desired = &ui.programs[&app.instances[i].name];
+            let old = app.instances[i].inputs.clone();
+            app.instances[i].inputs = desired.inputs.clone();
+            for (port, value) in &desired.inputs {
+                if old.get(port) != Some(value) {
+                    app.instances[i].generation = app.instances[i].generation.wrapping_add(1);
+                    app.enqueue(i, &Event::Input(port.clone()), value.clone(), String::new());
+                }
+            }
+            for j in 0..app.instances[i].views.len() {
+                let instance = &mut app.instances[i];
+                let widget = &mut instance.component.widgets[j];
+                let view = &mut instance.views[j];
+                let desired = &desired.widgets[&widget.id];
+                widget.items = desired.items.clone();
+                instance.list_items[j] = desired
+                    .items
+                    .iter()
+                    .map(|item| safe(item).into_owned())
+                    .collect();
+                view.text = desired.text.clone();
+                view.selected = desired.selected;
+                view.rows = desired.rows.clone();
+                view.bars = desired
+                    .bars
+                    .iter()
+                    .map(|b| (b.label.clone(), b.value))
+                    .collect();
+                view.series = desired.series.clone();
+                view.active = desired.active_series.clone();
+            }
+        }
+        if let Some(focus) = ui.focus {
+            app.focused = app
+                .focus
+                .iter()
+                .position(|&(i, j)| {
+                    app.instances[i].name == focus.program
+                        && app.instances[i].component.widgets[j].id == focus.widget
+                })
+                .context("invalid focus")?;
+        }
+        for event in ui.events {
+            let program = match &event {
+                LiveEvent::Press { program, .. }
+                | LiveEvent::Submit { program, .. }
+                | LiveEvent::Choose { program, .. }
+                | LiveEvent::Open { program } => program,
+            };
+            let i = app
+                .instances
+                .iter()
+                .position(|instance| &instance.name == program)
+                .context("unknown component")?;
+            match event {
+                LiveEvent::Press { widget, .. } => {
+                    app.enqueue(i, &Event::Press(widget), String::new(), String::new())
+                }
+                LiveEvent::Submit { widget, .. } => {
+                    app.enqueue(i, &Event::Submit(widget), String::new(), String::new())
+                }
+                LiveEvent::Choose { widget, index, .. } => {
+                    let j = app.widget(i, &widget)?;
+                    app.instances[i].views[j].selected = index;
+                    let item = app.instances[i].component.widgets[j].items[index].clone();
+                    app.enqueue(i, &Event::Choose(widget), item, String::new());
+                }
+                LiveEvent::Open { .. } => {
+                    app.enqueue(i, &Event::Open, String::new(), String::new())
+                }
+            }
+        }
+        app.dirty = true;
         Ok(())
     }
 }

@@ -1,3 +1,39 @@
+# Owned widget handoff
+
+The [widget-handoff report](performance-2026-10-14-ui-handoff.json) compares
+`f07b3e2` with transferring already-owned widget values into the renderer.
+Inputs, text, items, rows, bar labels and chart series move into place. Changed
+input payloads still reach the same ordered queues after inputs are installed;
+generation wrapping, deduplication, focus and validation limits remain intact.
+
+Three alternating release rounds measured private handoff medians 35–72% lower
+for populated widgets. A 4 MiB table moved from 1.35 to 0.37 ms; unchanged 64 KiB
+ports measured 55% lower and the small control 9% lower. Parsed screen and typed
+incoming state construction, per-batch input clones and output checks are excluded;
+consuming the incoming state and destroying replaced/temporary values are included.
+These timings exclude decoding, validation, publication, rendering and IPC.
+
+Two real-renderer repeats, each with 20 measured eight-edit trials per variant
+and table size, measured about 6% lower edit-to-applied medians for the 4 MiB
+table. Acknowledgements were about 1% higher; small cases stayed within 1.5%.
+Complete frame hashes match across binaries and trials, alongside exact retained
+rows/text, empty UI errors and clean child exit. These are headless observations
+including RPC, scheduling and Python/socket overhead, not event-to-photon latency.
+
+There is a measured tradeoff: an unchanged 256-item manifest-validation control
+is consistently about 8% slower, roughly 498 to 539 ns. An unchanged cron
+microcontrol is 11–13% faster. The cause is not established; build/code-layout
+effects are a possibility. Neither change is claimed as an improvement from UI
+ownership. Five fresh CLI check controls, 120 samples per variant each, remain
+within 0.5% with identical plans and exact status/output. Runtime API controls
+vary -0.4% to +2.6%. All raw results remain in the report.
+
+The old handoff remains a test oracle across 180 full state transitions,
+including saturated queues, changed/unchanged/removed ports and generation
+wrapping. The native executable shrinks by 112 bytes; WASM is byte-identical.
+Allocation traffic, peak memory, RSS, cold startup and Linux timing were not
+measured. Keep measurements separate from builds and stress.
+
 # Live widget state decoding
 
 The [UI-state report](performance-2026-10-14-ui-state.json) compares `5ac9361`

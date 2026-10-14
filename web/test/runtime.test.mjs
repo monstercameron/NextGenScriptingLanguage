@@ -53,5 +53,5 @@ test('build receipt binds source and WASM; local assets and full licenses ship t
  const notices=await readFile(path.join(root,'docs/playground/THIRD_PARTY.txt'),'utf8');
  for(const text of ['@xterm/xterm 6.0.0','@xterm/addon-fit 0.11.0','Permission is hereby granted','serde'])assert.ok(notices.includes(text));
  const html=await readFile(path.join(root,'docs/playground/index.html'),'utf8');
- for(const match of html.matchAll(/(?:href|src)="([^"]+)"/g)){const url=match[1];if(!url.startsWith('#')&&!url.includes('://'))await readFile(path.resolve(root,'docs/playground',url.endsWith('/')?url+'index.html':url));}
+ for(const match of html.matchAll(/(?:href|src)="([^"]+)"/g)){const url=match[1];if(!url.startsWith('#')&&!url.includes('://')){const target=new URL(url,new URL('../../docs/playground/index.html',import.meta.url));if(target.pathname.endsWith('/'))target.pathname+='index.html';await readFile(fileURLToPath(target));}}
 });

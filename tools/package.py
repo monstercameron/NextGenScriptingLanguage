@@ -119,7 +119,7 @@ def linux_packages(work, binaries, target, dest, value, epoch):
         "--root-owner-group",
         "--build",
         pkg,
-        dest / ("execute_" + pv + "_" + debarch + ".deb"),
+        dest / ("execute_" + value + "_" + debarch + ".deb"),
         env=env,
     )
     rpmroot = work / "rpm"
@@ -168,7 +168,7 @@ cp -a "%s/usr/." %%{buildroot}/usr/
     packages = list((rpmroot / "RPMS").rglob("*.rpm"))
     if len(packages) != 1:
         raise ValueError("expected exactly one RPM")
-    shutil.copyfile(packages[0], dest / ("execute-" + pv + "-1." + rpmarch + ".rpm"))
+    shutil.copyfile(packages[0], dest / ("execute-" + value + "-1." + rpmarch + ".rpm"))
 
 
 def main():

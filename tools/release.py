@@ -78,8 +78,8 @@ def expected_assets(value):
         stem = "execute-" + value + "-" + label
         names.add(stem + (".zip" if "windows" in label else ".tar.gz"))
         if deb:
-            names.add("execute_" + package_version(value) + "_" + deb + ".deb")
-            names.add("execute-" + package_version(value) + "-1." + rpm + ".rpm")
+            names.add("execute_" + value + "_" + deb + ".deb")
+            names.add("execute-" + value + "-1." + rpm + ".rpm")
             names.add(stem + ".flatpak")
     return names
 

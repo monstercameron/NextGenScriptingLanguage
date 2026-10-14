@@ -49,9 +49,9 @@ flatpak run io.github.monstercameron.Execute check_weather.program
 ```
 
 These are alternative formats; install the one appropriate for your system.
-Prerelease package versions replace the SemVer hyphen with `~` (for example
-`0.9.0~rc.1`) so package managers order them before `0.9.0`. The executable and
-archive retain the original SemVer spelling. Flatpak uses `beta` for prereleases
+Prerelease DEB/RPM metadata versions replace the SemVer hyphen with `~` (for example
+`0.9.0~rc.1`) so package managers order them before `0.9.0`. Download filenames and executable versions retain the original SemVer spelling;
+GitHub normalizes tildes in asset filenames, so `~` appears only inside package metadata. Flatpak uses `beta` for prereleases
 and `stable` for normal releases. Bundles do not configure an automatic update
 repository. This pipeline publishes downloads to GitHub, not to Flathub or a
 public apt/yum repository.
@@ -82,15 +82,15 @@ runtime binaries embed that version. The VS Code extension versions separately.
 python3 tools/release.py version
 python3 tools/release.py bump patch
 # Or explicitly prepare a candidate:
-python3 tools/release.py set-version 0.9.0-rc.2
+python3 tools/release.py set-version 0.9.0-rc.3
 make check
 git add Cargo.toml Cargo.lock
-git commit -m "Prepare Execute 0.9.0-rc.2"
+git commit -m "Prepare Execute 0.9.0-rc.3"
 git push origin main
 # Wait for native checks and a manually dispatched Package validation run.
-python3 tools/release.py verify-tag v0.9.0-rc.2
-git tag -a v0.9.0-rc.2 -m "Execute 0.9.0-rc.2"
-git push origin v0.9.0-rc.2
+python3 tools/release.py verify-tag v0.9.0-rc.3
+git tag -a v0.9.0-rc.3 -m "Execute 0.9.0-rc.3"
+git push origin v0.9.0-rc.3
 ```
 
 Release tags use strict SemVer without build metadata. Leading zeros, malformed

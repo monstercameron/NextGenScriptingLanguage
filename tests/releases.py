@@ -68,6 +68,11 @@ class Releases(unittest.TestCase):
             folder = Path(tmp)
             names = release.expected_assets("0.9.0-rc.1")
             self.assertEqual(len(names), 12)
+            self.assertTrue(
+                all(release.re.fullmatch(r"[A-Za-z0-9._-]+", name) for name in names)
+            )
+            self.assertIn("execute_0.9.0-rc.1_amd64.deb", names)
+            self.assertIn("execute-0.9.0-rc.1-1.x86_64.rpm", names)
             with self.assertRaises(ValueError):
                 release.verify_assets(folder, "0.9.0-rc.1")
             for name in names:

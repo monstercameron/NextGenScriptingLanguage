@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Ranking and scheduling belong to the .program; only ps is replaced in fixtures.
 use std::{
     fs,

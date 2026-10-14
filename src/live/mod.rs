@@ -1,6 +1,10 @@
 //! Local, opt-in JSON control plane for real program execution state.
 pub(crate) mod state;
+#[cfg(windows)]
+mod windows_transport;
 mod worker;
+#[cfg(windows)]
+use windows_transport::{Listener as UnixListener, Stream as UnixStream};
 
 use self::state::*;
 use crate::manifest::Registry;
@@ -10,8 +14,11 @@ use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -467,7 +474,7 @@ fn dispatch(
     if encoded.len() >= MAX_MESSAGE {
         bail!("request exceeds 1 MiB");
     }
-    let mut stream = UnixStream::connect(socket).context("could not connect to live session")?;
+    let mut stream = UnixStream::connect(&socket).context("could not connect to live session")?;
     if !peer_is_owner(&stream) {
         bail!("live session peer does not match the current user");
     }
@@ -490,11 +497,13 @@ fn dispatch(
     Ok(response)
 }
 
+#[cfg(unix)]
 struct SocketGuard {
     path: PathBuf,
     dev: u64,
     ino: u64,
 }
+#[cfg(unix)]
 impl Drop for SocketGuard {
     fn drop(&mut self) {
         if fs::symlink_metadata(&self.path)
@@ -515,20 +524,20 @@ impl Drop for SignalGuard {
 fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions) -> Result<Json> {
     let listener = UnixListener::bind(socket)
         .context("could not bind socket; an existing path is never replaced")?;
-    let metadata = fs::symlink_metadata(socket)?;
-    let _socket_guard = SocketGuard {
-        path: socket.to_owned(),
-        dev: metadata.dev(),
-        ino: metadata.ino(),
+    #[cfg(unix)]
+    let _socket_guard = {
+        let metadata = fs::symlink_metadata(socket)?;
+        let guard = SocketGuard {
+            path: socket.to_owned(),
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        };
+        fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
+        guard
     };
-    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
     let mut signals = SignalGuard(Vec::new());
-    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGQUIT] {
-        signals
-            .0
-            .push(signal_hook::flag::register(signal, shared.stop.clone())?);
-    }
+    signals.0 = crate::platform::signals(shared.stop.clone())?;
     writeln!(
         std::io::stdout(),
         "{}",
@@ -541,21 +550,26 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions) -> Result<Json
     let mut clients = Vec::new();
     let result = (|| -> Result<()> {
         while !shared.stop.load(Ordering::Relaxed) {
-            let mut poll = libc::pollfd {
-                fd: listener.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let ready = unsafe { libc::poll(&mut poll, 1, 20) };
-            if ready < 0 {
-                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            #[cfg(unix)]
+            {
+                let mut poll = libc::pollfd {
+                    fd: listener.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ready = unsafe { libc::poll(&mut poll, 1, 20) };
+                if ready < 0 {
+                    if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(std::io::Error::last_os_error().into());
+                }
+                if ready == 0 {
                     continue;
                 }
-                return Err(std::io::Error::last_os_error().into());
             }
-            if ready == 0 {
-                continue;
-            }
+            #[cfg(windows)]
+            thread::sleep(Duration::from_millis(10));
             let (stream, _) = match listener.accept() {
                 Ok(stream) => stream,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
@@ -599,8 +613,16 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions) -> Result<Json
     Ok(json!({"ok":true,"event":"stopped"}))
 }
 fn peer_is_owner(stream: &UnixStream) -> bool {
-    peer_has_uid(stream, unsafe { libc::geteuid() })
+    #[cfg(unix)]
+    {
+        peer_has_uid(stream, unsafe { libc::geteuid() })
+    }
+    #[cfg(windows)]
+    {
+        stream.peer_is_owner()
+    }
 }
+#[cfg(unix)]
 fn peer_has_uid(stream: &UnixStream, owner: libc::uid_t) -> bool {
     #[cfg(target_os = "macos")]
     unsafe {
@@ -694,7 +716,7 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod peer_tests {
     use super::*;
 

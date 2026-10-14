@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Real CLI/socket/native-process regressions for opt-in live execution.
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Keep all practical utilities and the retained recovery regressions executable.
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

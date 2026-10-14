@@ -6,13 +6,14 @@ use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "macos")]
 use std::os::fd::{FromRawFd, OwnedFd};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -30,6 +31,7 @@ mod streaming;
 pub use checkpoint::CheckpointOptions;
 pub use resume::run_checkpointed;
 pub use streaming::{run_stream, StreamResult};
+#[cfg_attr(windows, path = "runtime/windows_stdio.rs")]
 mod stdio;
 pub(crate) use service::next_interval;
 pub use service::{
@@ -62,6 +64,7 @@ fn check_deadline(deadline: Option<Instant>) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(unix)]
 fn deadline_poll_timeout(deadline: Option<Instant>, maximum_ms: libc::c_int) -> libc::c_int {
     deadline.map_or(maximum_ms, |deadline| {
         let remaining_ms = deadline
@@ -77,6 +80,7 @@ pub struct RunResult {
     pub launched_processes: usize,
 }
 
+#[cfg(unix)]
 const SMALL_STDIN_PREFILL_LIMIT: usize = 64 * 1024;
 
 fn check_value(value: &Value, names: &BTreeSet<String>) -> Result<()> {
@@ -904,275 +908,10 @@ impl Input {
     }
 }
 
-/// Own all children from spawn until wait. Errors kill and reap the whole group.
-struct ManagedChild {
-    child: Child,
-    reaped: bool,
-    stderr: Option<std::process::ChildStderr>,
-    diagnostic: Vec<u8>,
-}
-#[derive(Default)]
-struct Children(Vec<ManagedChild>);
-fn kill_group(child: &Child) {
-    // Each applet starts its own group. A negative PID addresses descendants
-    // that retain that group, without touching the runner or its terminal.
-    unsafe {
-        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
-    }
-}
-impl Drop for Children {
-    fn drop(&mut self) {
-        for child in &mut self.0 {
-            if !child.reaped {
-                kill_group(&child.child);
-            }
-        }
-        for child in &mut self.0 {
-            if !child.reaped {
-                let _ = child.child.wait();
-            }
-        }
-    }
-}
-
-#[derive(Default)]
-struct InputWriter {
-    handle: Option<std::thread::JoinHandle<Result<()>>>,
-    stop: Option<Arc<AtomicBool>>,
-}
-
-impl InputWriter {
-    fn spawn<W>(
-        &mut self,
-        mut sink: W,
-        data: Vec<u8>,
-        offset: usize,
-        cancelled: Arc<AtomicBool>,
-        deadline: Option<Instant>,
-    ) where
-        W: Write + AsRawFd + Send + 'static,
-    {
-        debug_assert!(offset <= data.len());
-        let stop = Arc::new(AtomicBool::new(false));
-        self.stop = Some(stop.clone());
-        self.handle = Some(std::thread::spawn(move || {
-            write_input(&mut sink, &data[offset..], &cancelled, &stop, deadline)
-        }));
-    }
-
-    fn join(&mut self) -> Result<()> {
-        if let Some(writer) = self.handle.take() {
-            writer
-                .join()
-                .map_err(|_| anyhow!("input writer panicked"))??;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for InputWriter {
-    fn drop(&mut self) {
-        // Never join during error propagation. Stop the private writer even if
-        // an escaped descendant retains a reader outside our process groups.
-        if let Some(stop) = &self.stop {
-            stop.store(true, Ordering::Relaxed);
-        }
-    }
-}
-
-fn write_input(
-    sink: &mut (impl Write + AsRawFd),
-    data: &[u8],
-    cancelled: &AtomicBool,
-    stop: &AtomicBool,
-    deadline: Option<Instant>,
-) -> Result<()> {
-    // This is the newly created pipe's private write end, owned by this worker.
-    // It must not hold the global stdout/trace lock while feeding native stdin.
-    let fd = sink.as_raw_fd();
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        return Err(std::io::Error::last_os_error()).context("setting applet input nonblocking");
-    }
-    let mut offset = 0;
-    loop {
-        check_deadline(deadline)?;
-        if cancelled.load(Ordering::Relaxed) || stop.load(Ordering::Relaxed) {
-            bail!("workflow cancelled while feeding applet input");
-        }
-        if offset == data.len() {
-            return Ok(());
-        }
-        match sink.write(&data[offset..]) {
-            Ok(0) => bail!("writing applet input made no progress"),
-            Ok(count) => offset += count,
-            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                let mut descriptor = libc::pollfd {
-                    fd,
-                    events: libc::POLLOUT,
-                    revents: 0,
-                };
-                let ready =
-                    unsafe { libc::poll(&mut descriptor, 1, deadline_poll_timeout(deadline, 20)) };
-                if ready < 0 {
-                    let error = std::io::Error::last_os_error();
-                    if error.kind() != std::io::ErrorKind::Interrupted {
-                        return Err(error).context("waiting for applet input");
-                    }
-                }
-            }
-            Err(error) => return Err(error).context("writing applet input"),
-        }
-    }
-}
-
-type StdinRemainder = (std::io::PipeWriter, Vec<u8>, usize);
-
-fn prefill_stdin_pipe(data: Vec<u8>) -> Result<(std::io::PipeReader, Option<StdinRemainder>)> {
-    let (reader, mut pipe_writer) = std::io::pipe().context("creating applet stdin pipe")?;
-    let fd = pipe_writer.as_raw_fd();
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags == -1 {
-        return Err(std::io::Error::last_os_error()).context("getting applet stdin pipe flags");
-    }
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        return Err(std::io::Error::last_os_error())
-            .context("setting applet stdin pipe nonblocking");
-    }
-
-    // Exactly one nonblocking write is attempted. EINTR and WouldBlock leave
-    // the unaccepted suffix for the post-spawn writer thread.
-    let write_result = pipe_writer.write(&data);
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags) } == -1 {
-        return Err(std::io::Error::last_os_error()).context("restoring applet stdin pipe flags");
-    }
-    let written = match write_result {
-        Ok(written) => written,
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
-            ) =>
-        {
-            0
-        }
-        Err(error) => return Err(error).context("prefilling applet stdin pipe"),
-    };
-
-    if written == data.len() {
-        drop(pipe_writer);
-        Ok((reader, None))
-    } else {
-        Ok((reader, Some((pipe_writer, data, written))))
-    }
-}
-
-struct ChildObserver {
-    #[cfg(target_os = "macos")]
-    queue: OwnedFd,
-}
-impl ChildObserver {
-    #[cfg(target_os = "macos")]
-    fn new() -> Option<Self> {
-        let fd = unsafe { libc::kqueue() };
-        if fd == -1 {
-            return None;
-        }
-        // Darwin installs close-on-exec and close-on-fork before publishing
-        // kqueue descriptors (XNU kqueue creation); no fcntl race or extra
-        // descriptor configuration is needed here.
-        let queue = unsafe { OwnedFd::from_raw_fd(fd) };
-        Some(Self { queue })
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn new() -> Option<Self> {
-        None
-    }
-
-    #[cfg(target_os = "macos")]
-    fn raw_fd(&self) -> libc::c_int {
-        self.queue.as_raw_fd()
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn raw_fd(&self) -> libc::c_int {
-        -1
-    }
-
-    fn observe(&self, pid: u32) -> std::io::Result<()> {
-        #[cfg(target_os = "macos")]
-        {
-            let change = libc::kevent {
-                ident: pid as _,
-                filter: libc::EVFILT_PROC,
-                flags: libc::EV_ADD | libc::EV_ENABLE | libc::EV_ONESHOT,
-                fflags: libc::NOTE_EXIT,
-                data: 0,
-                udata: std::ptr::null_mut(),
-            };
-            let no_wait = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            let result = unsafe {
-                libc::kevent(
-                    self.queue.as_raw_fd(),
-                    &change,
-                    1,
-                    std::ptr::null_mut(),
-                    0,
-                    &no_wait,
-                )
-            };
-            if result == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        let _ = pid;
-        Ok(())
-    }
-
-    fn drain(&self) -> std::io::Result<()> {
-        #[cfg(target_os = "macos")]
-        {
-            let mut events: [libc::kevent; 16] = unsafe { std::mem::zeroed() };
-            let no_wait = libc::timespec {
-                tv_sec: 0,
-                tv_nsec: 0,
-            };
-            loop {
-                let ready = unsafe {
-                    libc::kevent(
-                        self.queue.as_raw_fd(),
-                        std::ptr::null(),
-                        0,
-                        events.as_mut_ptr(),
-                        events.len() as _,
-                        &no_wait,
-                    )
-                };
-                if ready == -1 {
-                    let error = std::io::Error::last_os_error();
-                    if error.kind() == std::io::ErrorKind::Interrupted {
-                        return Ok(());
-                    }
-                    return Err(error);
-                }
-                if ready == 0 {
-                    return Ok(());
-                }
-                // Only direct-child NOTE_EXIT registrations can enter this
-                // queue, so draining until empty is bounded by this group.
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        Ok(())
-    }
-}
+#[cfg(unix)]
+include!("runtime/unix_process.rs");
+#[cfg(windows)]
+include!("runtime/windows_process.rs");
 
 struct Signals {
     cancelled: Arc<AtomicBool>,
@@ -1188,12 +927,7 @@ impl Signals {
             capture_diagnostics: false,
             deadline: None,
         };
-        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGQUIT] {
-            guard.registrations.push(signal_hook::flag::register(
-                signal,
-                guard.cancelled.clone(),
-            )?);
-        }
+        guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
         Ok(guard)
     }
 
@@ -1219,10 +953,10 @@ fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
     }
     // Keep the selected path spelling: multicall tools and symlink aliases
     // dispatch on argv[0], so canonicalizing to the target changes behavior.
-    if binary.contains('/') {
-        let candidate = cwd.join(binary);
+    if binary.contains(['/', '\\']) || Path::new(binary).is_absolute() {
+        let candidate = crate::platform::executable_path(cwd.join(binary))?;
         let metadata = fs::metadata(&candidate)?;
-        if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        if !metadata.is_file() || !crate::platform::executable(&metadata) {
             bail!("{} is not an executable file", candidate.display());
         }
         Ok(candidate)
@@ -1235,11 +969,15 @@ fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
 /// Locate the version-matched native model applet beside this executable.
 pub fn bundled_model_applet() -> Result<PathBuf> {
     let executable = std::env::current_exe().context("locating the running interpreter")?;
-    let helper = executable.with_file_name("execute-model");
+    let helper = executable.with_file_name(if cfg!(windows) {
+        "execute-model.exe"
+    } else {
+        "execute-model"
+    });
     let metadata = fs::metadata(&helper).with_context(|| {
         "bundled execute-model helper missing; build both binaries with cargo build --release"
     })?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+    if !metadata.is_file() || !crate::platform::executable(&metadata) {
         bail!("bundled execute-model helper is not an executable file");
     }
     Ok(helper)
@@ -1258,11 +996,12 @@ fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Re
             candidate.push(entry);
         }
         candidate.push(binary);
+        candidate = crate::platform::executable_path(candidate)?;
 
         let Ok(metadata) = fs::metadata(&candidate) else {
             continue;
         };
-        if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 {
+        if metadata.is_file() && crate::platform::executable(&metadata) {
             return Ok(candidate);
         }
     }
@@ -1271,7 +1010,7 @@ fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Re
 fn event(enabled: bool, value: serde_json::Value, signals: &Signals) -> Result<()> {
     if enabled {
         stdio::write_with_deadline(
-            libc::STDERR_FILENO,
+            2,
             format!("{value}\n").as_bytes(),
             &signals.cancelled,
             signals.deadline,
@@ -1291,6 +1030,7 @@ fn lazy_event(
     }
 }
 
+#[cfg(unix)]
 fn scan_child_statuses(
     children: &mut Children,
     calls: &[(&Invocation, &Manifest, usize)],
@@ -1396,6 +1136,7 @@ fn execute_group(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(unix)]
 fn execute_group_with_sink(
     calls: &[(&Invocation, &Manifest, usize)],
     input: Input,
@@ -1776,8 +1517,8 @@ where
     serialized.clear();
     serde_json::to_writer(&mut serialized, argv)?;
     hash_field(&mut hash, &serialized);
-    hash_field(&mut hash, cwd.as_os_str().as_bytes());
-    hash_field(&mut hash, executable.as_os_str().as_bytes());
+    hash_field(&mut hash, cwd.as_os_str().as_encoded_bytes());
+    hash_field(&mut hash, executable.as_os_str().as_encoded_bytes());
     let mut binary_hash = Sha256::new();
     let mut file = File::open(executable)?;
     let mut chunk = [0u8; 32768];
@@ -1809,8 +1550,8 @@ where
         {
             continue;
         }
-        hash_field(hash, name.as_os_str().as_bytes());
-        hash_field(hash, value.as_os_str().as_bytes());
+        hash_field(hash, name.as_os_str().as_encoded_bytes());
+        hash_field(hash, value.as_os_str().as_encoded_bytes());
     }
 }
 
@@ -1822,16 +1563,15 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         std::process::id(),
         TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut file = OpenOptions::new()
+    let mut file = crate::platform::private_options()
         .write(true)
         .create_new(true)
-        .mode(0o600)
         .open(&temporary)
         .with_context(|| format!("creating temporary output for {}", path.display()))?;
     let result = (|| -> Result<()> {
         file.write_all(data)?;
         file.sync_all()?;
-        fs::rename(&temporary, path)?;
+        crate::platform::replace_file(&temporary, path)?;
         Ok(())
     })();
     if result.is_err() {
@@ -2384,6 +2124,7 @@ pub fn run_with_context(
         None,
     )
 }
+#[cfg(unix)]
 fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
     let mut reached_eof = false;
     let Some(stderr) = child.stderr.as_mut() else {
@@ -2412,7 +2153,7 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod child_observer_tests {
     use super::*;
 
@@ -2470,7 +2211,7 @@ mod child_observer_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod argv_construction_tests {
     use super::*;
     use tempfile::tempdir;
@@ -2587,7 +2328,7 @@ mod argv_construction_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod opt_manifest_path_cache_tests {
     use super::*;
     use std::os::unix::ffi::OsStringExt;
@@ -2655,8 +2396,8 @@ mod opt_manifest_path_cache_tests {
         hash_field(&mut hash, b"flow-cache-v1");
         hash_field(&mut hash, &serde_json::to_vec(manifest)?);
         hash_field(&mut hash, &serde_json::to_vec(argv)?);
-        hash_field(&mut hash, cwd.as_os_str().as_bytes());
-        hash_field(&mut hash, executable.as_os_str().as_bytes());
+        hash_field(&mut hash, cwd.as_os_str().as_encoded_bytes());
+        hash_field(&mut hash, executable.as_os_str().as_encoded_bytes());
         let mut binary_hash = Sha256::new();
         let mut file = File::open(executable)?;
         let mut chunk = [0u8; 32768];
@@ -2670,8 +2411,8 @@ mod opt_manifest_path_cache_tests {
         hash_field(&mut hash, &binary_hash.finalize());
         let environment: BTreeMap<_, _> = environment_source().into_iter().collect();
         for (name, value) in environment {
-            hash_field(&mut hash, name.as_os_str().as_bytes());
-            hash_field(&mut hash, value.as_os_str().as_bytes());
+            hash_field(&mut hash, name.as_os_str().as_encoded_bytes());
+            hash_field(&mut hash, value.as_os_str().as_encoded_bytes());
         }
         hash_field(&mut hash, input);
         Ok(format!("{:x}", hash.finalize()))
@@ -2696,8 +2437,8 @@ mod opt_manifest_path_cache_tests {
     {
         let environment: BTreeMap<_, _> = environment.into_iter().collect();
         for (name, value) in environment {
-            hash_field(hash, name.as_os_str().as_bytes());
-            hash_field(hash, value.as_os_str().as_bytes());
+            hash_field(hash, name.as_os_str().as_encoded_bytes());
+            hash_field(hash, value.as_os_str().as_encoded_bytes());
         }
     }
 
@@ -2834,7 +2575,7 @@ mod opt_manifest_path_cache_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod opt_manifest_binary_path_tests {
     use super::*;
     use std::ffi::{OsStr, OsString};
@@ -2844,10 +2585,10 @@ mod opt_manifest_binary_path_tests {
 
     fn opt_manifest_legacy_binary_path(binary: &str, cwd: &Path, path: &OsStr) -> Result<PathBuf> {
         // This preserves the original candidate construction as a parity oracle.
-        if binary.contains('/') {
-            let candidate = cwd.join(binary);
+        if binary.contains(['/', '\\']) || Path::new(binary).is_absolute() {
+            let candidate = crate::platform::executable_path(cwd.join(binary))?;
             let metadata = fs::metadata(&candidate)?;
-            if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+            if !metadata.is_file() || !crate::platform::executable(&metadata) {
                 bail!("{} is not an executable file", candidate.display());
             }
             Ok(candidate)
@@ -2856,7 +2597,7 @@ mod opt_manifest_binary_path_tests {
                 .find_map(|entry| {
                     let candidate = cwd.join(entry).join(binary);
                     let metadata = fs::metadata(&candidate).ok()?;
-                    (metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+                    (metadata.is_file() && crate::platform::executable(&metadata))
                         .then_some(candidate)
                 })
                 .ok_or_else(|| anyhow!("executable {binary:?} not found in PATH"))
@@ -2881,8 +2622,8 @@ mod opt_manifest_binary_path_tests {
         let optimized = binary_path_from_path(binary, cwd, path);
         match (legacy, optimized) {
             (Ok(legacy), Ok(optimized)) => assert_eq!(
-                legacy.as_os_str().as_bytes(),
-                optimized.as_os_str().as_bytes(),
+                legacy.as_os_str().as_encoded_bytes(),
+                optimized.as_os_str().as_encoded_bytes(),
                 "selected path bytes differ"
             ),
             (Err(legacy), Err(optimized)) => {
@@ -2901,7 +2642,7 @@ mod opt_manifest_binary_path_tests {
         fs::create_dir_all(&cwd).unwrap();
         let binary = "probe";
 
-        let mut double_slash_bytes = cwd.as_os_str().as_bytes().to_vec();
+        let mut double_slash_bytes = cwd.as_os_str().as_encoded_bytes().to_vec();
         double_slash_bytes.extend_from_slice(b"/double//child");
         let double_slash = PathBuf::from(OsString::from_vec(double_slash_bytes));
         let non_utf8 = PathBuf::from(OsString::from_vec(vec![b'n', 0x80, b'd']));
@@ -2929,8 +2670,8 @@ mod opt_manifest_binary_path_tests {
             opt_manifest_assert_path_parity(binary, &cwd, &path);
             let selected = binary_path_from_path(binary, &cwd, &path).unwrap();
             assert_eq!(
-                selected.as_os_str().as_bytes(),
-                candidate.as_os_str().as_bytes()
+                selected.as_os_str().as_encoded_bytes(),
+                candidate.as_os_str().as_encoded_bytes()
             );
         }
 
@@ -2938,8 +2679,8 @@ mod opt_manifest_binary_path_tests {
         let path = opt_manifest_join_path(std::slice::from_ref(&non_utf8));
         let split = std::env::split_paths(&path).next().unwrap();
         assert_eq!(
-            split.as_os_str().as_bytes(),
-            non_utf8.as_os_str().as_bytes()
+            split.as_os_str().as_encoded_bytes(),
+            non_utf8.as_os_str().as_encoded_bytes()
         );
         assert!(double_slash
             .as_os_str()
@@ -2989,8 +2730,8 @@ mod opt_manifest_binary_path_tests {
         opt_manifest_assert_path_parity(binary, &cwd, &late_path);
         let selected = binary_path_from_path(binary, &cwd, &late_path).unwrap();
         assert_eq!(
-            selected.as_os_str().as_bytes(),
-            expected.as_os_str().as_bytes()
+            selected.as_os_str().as_encoded_bytes(),
+            expected.as_os_str().as_encoded_bytes()
         );
     }
 
@@ -3005,12 +2746,12 @@ mod opt_manifest_binary_path_tests {
         let legacy = opt_manifest_legacy_binary_path(binary, &cwd, irrelevant_path).unwrap();
         let current = binary_path(binary, &cwd).unwrap();
         assert_eq!(
-            legacy.as_os_str().as_bytes(),
-            expected.as_os_str().as_bytes()
+            legacy.as_os_str().as_encoded_bytes(),
+            expected.as_os_str().as_encoded_bytes()
         );
         assert_eq!(
-            current.as_os_str().as_bytes(),
-            expected.as_os_str().as_bytes()
+            current.as_os_str().as_encoded_bytes(),
+            expected.as_os_str().as_encoded_bytes()
         );
 
         let missing = "missing/probe";
@@ -3099,7 +2840,7 @@ mod opt_manifest_binary_path_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod input_writer_drop_tests {
     use super::InputWriter;
     use std::io::{PipeWriter, Write};

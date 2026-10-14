@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 
@@ -40,9 +42,15 @@ fn main() {
                 failure
                     .status
                     .code()
-                    .unwrap_or_else(|| failure.status.signal().map_or(1, |signal| 128 + signal))
+                    .unwrap_or_else(|| signal_status(&failure.status))
             })
-            .filter(|status| (1..=255).contains(status))
+            .filter(|status| {
+                if cfg!(windows) {
+                    *status != 0
+                } else {
+                    (1..=255).contains(status)
+                }
+            })
             .unwrap_or(1);
         std::process::exit(status);
     }
@@ -62,11 +70,17 @@ fn execute() -> Result<()> {
         return flow::live::cli(&arguments[1..], default_manifest_dir(), workflow_path);
     }
     if arguments.first().is_some_and(|a| a == "model") {
-        let helper = runtime::bundled_model_applet()?;
-        let error = std::process::Command::new(helper)
-            .args(&arguments[1..])
-            .exec();
-        return Err(error).context("starting the bundled model applet");
+        #[cfg(unix)]
+        {
+            let helper = runtime::bundled_model_applet()?;
+            let mut command = std::process::Command::new(helper);
+            command.args(&arguments[1..]);
+            return Err(command.exec()).context("starting the bundled model applet");
+        }
+        #[cfg(windows)]
+        {
+            std::process::exit(runtime::model_cli(&arguments[1..])?);
+        }
     }
     let args = match parse_args(arguments)? {
         Some(args) => args,
@@ -75,7 +89,7 @@ fn execute() -> Result<()> {
 
     if args.json {
         let path = args.file.to_string_lossy().into_owned();
-        let path_bytes = args.file.as_os_str().as_bytes().to_vec();
+        let path_bytes = args.file.as_os_str().as_encoded_bytes().to_vec();
         let result = execute_workflow(args);
         let diagnostics = result
             .as_ref()
@@ -253,12 +267,7 @@ fn execute_workflow(args: Args) -> Result<()> {
                     |bytes: &[u8],
                      cancelled: &std::sync::atomic::AtomicBool,
                      deadline: Option<std::time::Instant>| {
-                        runtime::write_with_deadline(
-                            libc::STDOUT_FILENO,
-                            bytes,
-                            cancelled,
-                            deadline,
-                        )
+                        runtime::write_with_deadline(1, bytes, cancelled, deadline)
                     };
                 runtime::run_stream(
                     &stream,
@@ -367,7 +376,7 @@ fn execute_workflow(args: Args) -> Result<()> {
                     max_record_bytes: args.max_record_bytes,
                 };
                 let mut emit = |bytes: &[u8], cancelled: &std::sync::atomic::AtomicBool| {
-                    runtime::write_cancellable(libc::STDOUT_FILENO, bytes, cancelled)
+                    runtime::write_cancellable(1, bytes, cancelled)
                 };
                 if let Some(checkpoint) = checkpoint.as_ref() {
                     runtime::run_service_checkpointed(
@@ -646,7 +655,21 @@ fn workflow_path(argument: &str) -> Result<PathBuf> {
         }
         decoded.push(value);
     }
-    Ok(PathBuf::from(std::ffi::OsString::from_vec(decoded)))
+    #[cfg(unix)]
+    return Ok(PathBuf::from(std::ffi::OsString::from_vec(decoded)));
+    #[cfg(windows)]
+    {
+        let path = String::from_utf8(decoded).context("Windows file URI must contain UTF-8")?;
+        let path = path
+            .strip_prefix('/')
+            .filter(|p| p.as_bytes().get(1) == Some(&b':'))
+            .unwrap_or(&path);
+        let path = PathBuf::from(path);
+        if !path.is_absolute() {
+            bail!("Windows file URI requires an absolute drive path");
+        }
+        Ok(path)
+    }
 }
 
 fn parse_positive_usize(arguments: &[String], index: &mut usize, option: &str) -> Result<usize> {
@@ -698,6 +721,14 @@ fn default_manifest_dir() -> PathBuf {
             if sibling.is_dir() {
                 return sibling;
             }
+            let system = parent
+                .join("..")
+                .join("share")
+                .join("execute")
+                .join("manifests");
+            if system.is_dir() {
+                return system;
+            }
         }
     }
 
@@ -720,4 +751,16 @@ fn write_json(value: &serde_json::Value) -> Result<()> {
 fn print_help() -> Result<()> {
     writeln!(std::io::stdout().lock(), "{}", usage())?;
     Ok(())
+}
+
+fn signal_status(status: &std::process::ExitStatus) -> i32 {
+    #[cfg(unix)]
+    {
+        status.signal().map_or(1, |signal| 128 + signal)
+    }
+    #[cfg(windows)]
+    {
+        let _ = status;
+        1
+    }
 }

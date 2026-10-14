@@ -867,8 +867,14 @@ fn post_json(
         .timeout_global(Some(Duration::from_millis(timeout_ms)))
         .http_status_as_error(false)
         .max_redirects(0)
-        .proxy(None)
-        .build();
+        .proxy(None);
+    #[cfg(windows)]
+    let config = config.tls_config(
+        ureq::tls::TlsConfig::builder()
+            .provider(ureq::tls::TlsProvider::NativeTls)
+            .build(),
+    );
+    let config = config.build();
     let agent: ureq::Agent = config.into();
     let mut response = agent
         .post(endpoint)

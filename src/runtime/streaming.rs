@@ -210,6 +210,7 @@ mod tests {
             .contains("cancelled"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn completed_native_failure_during_final_emit_is_propagated() {
         let directory = tempfile::tempdir().unwrap();

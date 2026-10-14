@@ -25,7 +25,7 @@ use ratatui::{
     },
     Frame, Terminal,
 };
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use serde_json::json;
 use serde_json::Value as Json;
 use std::{
@@ -1460,11 +1460,7 @@ impl Signals {
             cancel: Arc::new(AtomicBool::new(false)),
             ids: Vec::new(),
         };
-        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGQUIT] {
-            guard
-                .ids
-                .push(signal_hook::flag::register(signal, guard.cancel.clone())?);
-        }
+        guard.ids = crate::platform::signals(guard.cancel.clone())?;
         Ok(guard)
     }
 }
@@ -1692,7 +1688,7 @@ pub fn run(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     fn legacy_snapshot_projection(app: &App) -> Json {

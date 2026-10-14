@@ -4,10 +4,13 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -82,17 +85,57 @@ struct Identity {
     mode: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct EncodedPath(Vec<u8>);
 
+impl<'de> Deserialize<'de> for EncodedPath {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let bytes = Vec::<u8>::deserialize(deserializer)?;
+        #[cfg(windows)]
+        if bytes.len() % 2 != 0 {
+            return Err(serde::de::Error::custom(
+                "Windows checkpoint path must contain complete UTF-16 units",
+            ));
+        }
+        Ok(Self(bytes))
+    }
+}
 impl EncodedPath {
     fn from_path(path: &Path) -> Self {
-        Self(path.as_os_str().as_bytes().to_vec())
+        #[cfg(unix)]
+        {
+            Self(path.as_os_str().as_bytes().to_vec())
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            Self(
+                path.as_os_str()
+                    .encode_wide()
+                    .flat_map(u16::to_le_bytes)
+                    .collect(),
+            )
+        }
     }
-
     fn to_path(&self) -> PathBuf {
-        PathBuf::from(std::ffi::OsString::from_vec(self.0.clone()))
+        #[cfg(unix)]
+        {
+            PathBuf::from(std::ffi::OsString::from_vec(self.0.clone()))
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            let wide: Vec<u16> = self
+                .0
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|v| u16::from_le_bytes([v[0], v[1]]))
+                .collect();
+            PathBuf::from(std::ffi::OsString::from_wide(&wide))
+        }
     }
 }
 
@@ -187,7 +230,7 @@ pub(super) struct Journal {
 }
 
 impl Journal {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn open(
         options: &CheckpointOptions,
         initial_cwd: &Path,
@@ -221,6 +264,8 @@ impl Journal {
         let requested_directory: PathBuf = options.directory.components().collect();
         let checkpoint_dir_existed = fs::symlink_metadata(&requested_directory).is_ok();
         let original = real_directory(&requested_directory, "checkpoint", !options.resume)?;
+        #[cfg(windows)]
+        let original_identity = crate::platform::windows::directory_identity(&requested_directory)?;
         let directory = fs::canonicalize(&requested_directory).with_context(|| {
             format!(
                 "resolving checkpoint directory {}",
@@ -228,11 +273,18 @@ impl Journal {
             )
         })?;
         let resolved = real_directory(&directory, "checkpoint", false)?;
+        #[cfg(unix)]
         if original.dev() != resolved.dev() || original.ino() != resolved.ino() {
             bail!("checkpoint directory changed while resolving its path");
         }
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-            .context("restricting checkpoint directory permissions")?;
+        #[cfg(windows)]
+        {
+            let _ = (original, resolved);
+            if crate::platform::windows::directory_identity(&directory)? != original_identity {
+                bail!("checkpoint directory changed while resolving its path");
+            }
+        }
+        restrict_directory(&directory)?;
         if !options.resume && !checkpoint_dir_existed {
             if let Some(parent) = directory.parent() {
                 sync_directory(parent)?;
@@ -241,9 +293,12 @@ impl Journal {
 
         let lock_path = directory.join("lock");
         let lock = open_regular(&lock_path, "checkpoint lock", true)?;
-        lock.set_permissions(fs::Permissions::from_mode(0o600))
-            .context("restricting checkpoint lock permissions")?;
+        restrict_file(&lock)?;
+        #[cfg(windows)]
+        crate::platform::windows::lock(&lock)?;
+        #[cfg(unix)]
         let lock_result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        #[cfg(unix)]
         if lock_result == -1 {
             let error = std::io::Error::last_os_error();
             if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
@@ -269,8 +324,7 @@ impl Journal {
                 bail!("unsupported checkpoint version {}", data.version);
             }
             real_directory(&blobs_directory, "checkpoint blob", false)?;
-            fs::set_permissions(&blobs_directory, fs::Permissions::from_mode(0o700))
-                .context("restricting checkpoint blob directory permissions")?;
+            restrict_directory(&blobs_directory)?;
             let mut journal = Self {
                 directory,
                 blobs_directory,
@@ -296,8 +350,7 @@ impl Journal {
                 bail!("checkpoint already exists; use resume explicitly");
             }
             real_directory(&blobs_directory, "checkpoint blob", true)?;
-            fs::set_permissions(&blobs_directory, fs::Permissions::from_mode(0o700))
-                .context("restricting checkpoint blob directory permissions")?;
+            restrict_directory(&blobs_directory)?;
             sync_directory(&directory)?;
             let identity = Identity {
                 program_path: EncodedPath::from_path(&program_path),
@@ -395,7 +448,7 @@ impl Journal {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn begin_execution(&mut self, state: &ExecutionState) -> Result<()> {
         self.begin_execution_parts(
             &state.cwd,
@@ -480,7 +533,7 @@ impl Journal {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn complete_node(&mut self, state: &ExecutionState) -> Result<()> {
         self.complete_node_parts(
             &state.cwd,
@@ -661,6 +714,10 @@ fn real_directory(path: &Path, label: &str, create: bool) -> Result<fs::Metadata
                 .with_context(|| format!("reading {label} directory {}", path.display()))
         }
     };
+    #[cfg(windows)]
+    if crate::platform::windows::is_reparse(&metadata) {
+        bail!("checkpoint directory cannot be a reparse point");
+    }
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         bail!("{label} path must be a real directory");
     }
@@ -674,15 +731,31 @@ fn open_regular(path: &Path, label: &str, create: bool) -> Result<File> {
             bail!("{label} must be a regular file");
         }
     }
-    let file = OpenOptions::new()
+    let mut options = crate::platform::private_options();
+    options
         .read(true)
         .write(create)
         .create(create)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
+        .truncate(false);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::{Foundation::*, Storage::FileSystem::*};
+        options
+            .access_mode(
+                GENERIC_READ | WRITE_DAC | READ_CONTROL | if create { GENERIC_WRITE } else { 0 },
+            )
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
         .open(path)
         .with_context(|| format!("opening {label} {}", path.display()))?;
+    #[cfg(windows)]
+    if crate::platform::windows::is_reparse(&file.metadata()?) {
+        bail!("checkpoint file cannot be a reparse point");
+    }
     if !file.metadata()?.is_file() {
         bail!("{label} must be a regular file");
     }
@@ -701,8 +774,7 @@ fn validate_mode(mode: &str) -> Result<()> {
 
 fn read_journal(path: &Path) -> Result<JournalData> {
     let file = open_regular(path, "checkpoint journal", false)?;
-    file.set_permissions(fs::Permissions::from_mode(0o600))
-        .context("restricting checkpoint journal permissions")?;
+    restrict_file(&file)?;
     let mut bytes = Vec::new();
     file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > 16 * 1024 * 1024 {
@@ -939,10 +1011,9 @@ fn atomic_write(directory: &Path, stem: &str, suffix: &str, bytes: &[u8]) -> Res
     for _ in 0..100 {
         let number = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = directory.join(format!(".{stem}-{}-{number}.tmp", std::process::id()));
-        match OpenOptions::new()
+        match crate::platform::private_options()
             .write(true)
             .create_new(true)
-            .mode(0o600)
             .open(&path)
         {
             Ok(mut file) => {
@@ -958,7 +1029,7 @@ fn atomic_write(directory: &Path, stem: &str, suffix: &str, bytes: &[u8]) -> Res
     }
     let temporary =
         temporary.ok_or_else(|| anyhow!("could not allocate checkpoint temporary file"))?;
-    if let Err(error) = fs::rename(&temporary, &target) {
+    if let Err(error) = crate::platform::replace_file(&temporary, &target) {
         let _ = fs::remove_file(&temporary);
         return Err(error)
             .with_context(|| format!("publishing checkpoint file {}", target.display()));
@@ -966,6 +1037,7 @@ fn atomic_write(directory: &Path, stem: &str, suffix: &str, bytes: &[u8]) -> Res
     sync_directory(directory)
 }
 
+#[cfg(unix)]
 fn sync_directory(directory: &Path) -> Result<()> {
     File::open(directory)
         .with_context(|| format!("opening directory {} for sync", directory.display()))?
@@ -983,7 +1055,7 @@ fn serialized_digest<T: Serialize>(value: &T) -> Result<String> {
     Ok(format!("{:x}", digest.0.finalize()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use tempfile::tempdir;
@@ -1479,4 +1551,33 @@ mod tests {
         journal.finish().unwrap();
         assert!(journal.is_finished());
     }
+}
+
+fn restrict_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .context("restricting checkpoint directory permissions")
+    }
+    #[cfg(windows)]
+    {
+        crate::platform::windows::restrict_directory(path)
+    }
+}
+fn restrict_file(file: &File) -> Result<()> {
+    #[cfg(unix)]
+    {
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .context("restricting checkpoint file permissions")
+    }
+    #[cfg(windows)]
+    {
+        crate::platform::windows::restrict_file(file)
+    }
+}
+#[cfg(windows)]
+fn sync_directory(_directory: &Path) -> Result<()> {
+    // Publication uses MOVEFILE_WRITE_THROUGH after flushing each file. Windows
+    // does not provide the Unix directory-fsync contract through std::fs.
+    Ok(())
 }

@@ -1051,6 +1051,7 @@ mod capacity_tests {
         assert_eq!(serde_json::to_vec(&doc).unwrap(), before);
     }
 
+    #[cfg(unix)]
     #[test]
     fn serialization_errors_are_propagated_and_enqueue_rolls_back() {
         use std::os::unix::ffi::OsStringExt;

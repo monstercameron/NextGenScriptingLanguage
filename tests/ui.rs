@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! UI tests never contact GitHub; the gh fixture records argv and returns controlled JSON.
 use std::{
     fs,

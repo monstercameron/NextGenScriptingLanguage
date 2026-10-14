@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Finite stdin composition through the real CLI, native pipes and checkpoints.
 use std::{
     fs,

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 use flow::manifest::Registry;
 use std::collections::BTreeMap;
 use std::fs;

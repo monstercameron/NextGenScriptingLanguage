@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Standalone integration test source for the round-14 stdin-prefill experiment.
 //! Copy to `tests/round14_stdin_prefill.rs` and run before applying the runtime
 //! patch; all behavioral cases use only the public `run_with_context` API.

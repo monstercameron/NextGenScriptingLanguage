@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! All workers and effects are owned temporary fixtures; no host processes targeted.
 use std::{
     fs,

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Static diagnostics are one JSON document, with no application execution.
 use serde_json::{json, Value};
 use std::{

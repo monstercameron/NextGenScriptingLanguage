@@ -2,6 +2,7 @@
 use super::*;
 use checkpoint::Journal;
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
 #[derive(PartialEq, Eq)]
@@ -14,12 +15,27 @@ struct BinaryIdentity {
 }
 impl From<std::fs::Metadata> for BinaryIdentity {
     fn from(value: std::fs::Metadata) -> Self {
-        Self {
+        #[cfg(unix)]
+        return Self {
             device: value.dev(),
             inode: value.ino(),
             length: value.size(),
             modified: (value.mtime(), value.mtime_nsec()),
             changed: (value.ctime(), value.ctime_nsec()),
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            Self {
+                device: 0,
+                inode: 0,
+                length: value.file_size(),
+                modified: (value.last_write_time() as i64, 0),
+                changed: (
+                    value.creation_time() as i64,
+                    i64::from(value.file_attributes()),
+                ),
+            }
         }
     }
 }
@@ -57,16 +73,19 @@ fn manifest_identity(
                 // changes the completed conditional's identity on resume.
                 hash_field(hash, b"\0execute-unresolved-conditional-binary-v1");
                 hash_field(hash, manifest.binary_for(call).as_bytes());
-                hash_field(hash, cwd.as_os_str().as_bytes());
+                hash_field(hash, cwd.as_os_str().as_encoded_bytes());
                 return Ok(());
             }
             Err(error) => return Err(error),
         };
-        hash_field(hash, binary.as_os_str().as_bytes());
+        hash_field(hash, binary.as_os_str().as_encoded_bytes());
         let identity = BinaryIdentity::from(fs::metadata(&binary)?);
+        #[cfg(unix)]
         let cached = binary_digests
             .get(&binary)
             .filter(|(observed, _)| observed == &identity);
+        #[cfg(windows)]
+        let cached: Option<&(BinaryIdentity, [u8; 32])> = None;
         let contents = if let Some((_, contents)) = cached {
             *contents
         } else {
@@ -325,7 +344,7 @@ pub fn run_checkpointed(
     Ok(result)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::ast::{Connection, Invocation, Step};
@@ -502,7 +521,7 @@ mod tests {
             if let StepKind::Invoke { call, .. } = &step.kind {
                 let manifest = registry.resolve_call(call).unwrap();
                 hash_field(&mut expected, &serde_json::to_vec(manifest).unwrap());
-                hash_field(&mut expected, binary.as_os_str().as_bytes());
+                hash_field(&mut expected, binary.as_os_str().as_encoded_bytes());
                 let contents = Sha256::digest(std::fs::read(&binary).unwrap());
                 hash_field(&mut expected, &contents);
             }

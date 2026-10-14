@@ -341,6 +341,46 @@ pub(crate) fn validate_state(screen: &Screen, value: &Json) -> Result<()> {
     Ok(())
 }
 impl App {
+    fn live_state_json(&self) -> Result<Json> {
+        // The publication owns one final JSON tree. Rows already are JSON;
+        // copy them once at this boundary rather than through an owned UiState.
+        let programs = self
+            .instances
+            .iter()
+            .map(|instance| -> Result<_> {
+                let widgets = instance
+                    .component
+                    .widgets
+                    .iter()
+                    .zip(&instance.views)
+                    .map(|(widget, view)| -> Result<_> {
+                        Ok((widget.id.clone(), Json::Object(serde_json::Map::from_iter([
+                            ("text".into(), Json::String(view.text.clone())),
+                            ("selected".into(), Json::from(view.selected)),
+                            ("items".into(), Json::Array(widget.items.iter().cloned().map(Json::String).collect())),
+                            ("rows".into(), Json::Array(view.rows.clone())),
+                            ("bars".into(), Json::Array(view.bars.iter().map(|(label, value)| json!({"label":label,"value":value})).collect())),
+                            ("series".into(), serde_json::to_value(&view.series)?),
+                            ("active_series".into(), Json::String(view.active.clone())),
+                        ]))))
+                    })
+                    .collect::<Result<serde_json::Map<String, Json>>>()?;
+                Ok((instance.name.clone(), Json::Object(serde_json::Map::from_iter([
+                    ("inputs".into(), serde_json::to_value(&instance.inputs)?),
+                    ("widgets".into(), Json::Object(widgets)),
+                ]))))
+            })
+            .collect::<Result<serde_json::Map<String, Json>>>()?;
+        let focus = self.focus.get(self.focused).map_or(Json::Null, |&(i, j)| {
+            json!({"program":self.instances[i].name,"widget":self.instances[i].component.widgets[j].id})
+        });
+        Ok(Json::Object(serde_json::Map::from_iter([
+            ("programs".into(), Json::Object(programs)),
+            ("focus".into(), focus),
+            ("events".into(), Json::Array(Vec::new())),
+        ])))
+    }
+    #[cfg(test)]
     fn live_state(&self) -> UiState {
         let programs = self
             .instances
@@ -488,7 +528,7 @@ fn publish(
     shared: &Shared,
     force: bool,
 ) -> Result<()> {
-    let ui = serde_json::to_value(app.live_state())?;
+    let ui = app.live_state_json()?;
     let changed = ui != state.doc.ui;
     if !state.doc.replace_ui(ui)? {
         bail!("UI state exceeds 8 MiB; effects may have completed");
@@ -1144,6 +1184,125 @@ mod bench {
             }
         }
         app.dirty = true;
+        Ok(())
+    }
+    #[test]
+    fn publication_matches_legacy_json_bytes_and_state_validation() -> Result<()> {
+        for name in ["empty_control", "list256", "table64k", "table4m", "chart"] {
+            let (screen, value) = fixture(name)?;
+            let mut app = new_handoff_app(&screen);
+            app.apply_live_state(UiState::deserialize(&value)?)?;
+            for case in 0..12 {
+                if case > 0 {
+                    for instance in &mut app.instances {
+                        instance
+                            .inputs
+                            .insert("incoming".into(), format!("port 雪 \n \t \u{1b} {case}"));
+                        for (widget, view) in instance
+                            .component
+                            .widgets
+                            .iter_mut()
+                            .zip(&mut instance.views)
+                        {
+                            view.text = format!("text 雪 \n\t\u{1b} {case}");
+                            if widget.kind == Kind::List {
+                                widget.items = vec!["first 雪".into(), "second\n\u{1b}".into()];
+                                view.selected = case % 2;
+                            }
+                            if widget.kind == Kind::Bars {
+                                view.bars = vec![(
+                                    "bar 雪".into(),
+                                    if case % 3 == 0 { f64::NAN } else { case as f64 },
+                                )];
+                            }
+                            if widget.kind == Kind::Chart {
+                                view.series = BTreeMap::from([(
+                                    "series 雪".into(),
+                                    vec![(
+                                        if case % 4 == 0 { f64::INFINITY } else { -0.0 },
+                                        u64::MAX,
+                                    )],
+                                )]);
+                                view.active = "series 雪".into();
+                            }
+                            if widget.kind == Kind::Table {
+                                view.rows = vec![
+                                    json!({"name":"nested 雪","value":case,"record":{"min":i64::MIN,"max":u64::MAX,"negative_zero":-0.0,"values":[null,true,"escaped\n\t\u{1b}",9007199254740993_u64]}}),
+                                ];
+                            }
+                        }
+                    }
+                    app.focused = if case % 2 == 0 { usize::MAX } else { 0 };
+                }
+                let before = handoff_snapshot(&app)?;
+                let legacy = serde_json::to_value(app.live_state())?;
+                let current = app.live_state_json()?;
+                assert_eq!(current, legacy, "fixture={name},case={case}");
+                assert_eq!(
+                    serde_json::to_vec(&current)?,
+                    serde_json::to_vec(&legacy)?,
+                    "encoded bytes differ"
+                );
+                assert_eq!(
+                    validate_state(&screen, &current).map_err(|e| format!("{e:#}")),
+                    validate_state(&screen, &legacy).map_err(|e| format!("{e:#}"))
+                );
+                assert_eq!(
+                    before,
+                    handoff_snapshot(&app)?,
+                    "publication mutated renderer"
+                );
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "explicit paired release UI publication timing"]
+    #[allow(clippy::assertions_on_constants)]
+    fn ui_publication_json() -> Result<()> {
+        assert!(!cfg!(debug_assertions), "use --release");
+        let mut results = BTreeMap::new();
+        for name in [
+            "empty_control",
+            "list256",
+            "table64k",
+            "table4m",
+            "chart",
+            "port64k",
+        ] {
+            let (screen, mut value) = fixture(name)?;
+            if name == "port64k" {
+                value["programs"]["console"]["inputs"]["incoming"] = json!("p".repeat(64 * 1024));
+            }
+            validate_state(&screen, &value)?;
+            let mut app = new_handoff_app(&screen);
+            app.apply_live_state(UiState::deserialize(&value)?)?;
+            let expected = serde_json::to_vec(&serde_json::to_value(app.live_state())?)?;
+            let actual = serde_json::to_vec(&app.live_state_json()?)?;
+            assert_eq!(actual, expected);
+            let before = handoff_snapshot(&app)?;
+            let count = if name == "table4m" { 5 } else { 20 };
+            let mut raw = Vec::new();
+            for batch in 0..60 {
+                let start = Instant::now();
+                for _ in 0..count {
+                    std::hint::black_box(app.live_state_json()?);
+                }
+                if batch >= 10 {
+                    raw.push(start.elapsed().as_secs_f64() * 1e9 / f64::from(count));
+                }
+            }
+            assert_eq!(before, handoff_snapshot(&app)?);
+            let mut sorted = raw.clone();
+            sorted.sort_by(f64::total_cmp);
+            results.insert(name,json!({"p50_ns":(sorted[24]+sorted[25])/2.0,"p95_ns":sorted[47],"raw_batch_average_ns":raw,"state_sha256":format!("{:x}",Sha256::digest(serde_json::to_vec(&value)?)),"output_sha256":format!("{:x}",Sha256::digest(expected)),"output_bytes":actual.len(),"renderer_immutable":true}));
+        }
+        std::fs::write(
+            std::env::var("OPT_BENCH_REPORT")?,
+            serde_json::to_vec_pretty(
+                &json!({"results":results,"method":"Private renderer-to-final-JSON publication builder and result destruction. Parsed screen,input/renderer construction,validation,JSON-byte hashing and full state/frame/queue oracles excluded.10warmup/50measured batches,5or20operations. Exact legacy JSON and encoded-byte oracle,renderer unchanged. Excludes document mutex/equality/budget/rollback,rendering,IPC/native jobs/providers; not whole-widget latency or allocation/RSS."}),
+            )?,
+        )?;
         Ok(())
     }
 }

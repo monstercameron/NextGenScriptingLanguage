@@ -1,3 +1,37 @@
+# Widget publication JSON
+
+The [publication report](performance-2026-10-14-ui-publication.json) compares
+`cf84e91` with building final JSON directly from renderer data. The old path
+first cloned an owned typed UI snapshot and then serialized it into another
+owned tree. The exact typed serializer remains a test oracle; publication
+comparison, the 8 MiB document budget, rollback and uncertainty handling remain.
+
+Three alternating release rounds measured private JSON-publication medians
+39–56% lower for populated list, port and table fixtures, and 10–16% lower for
+chart/small controls. These include final JSON construction and destruction;
+they exclude setup, validation, document comparison/budget checks, rendering,
+IPC and output-oracle construction. They are not whole-widget measurements.
+
+Two real-renderer repeats, each with 20 measured eight-edit trials per variant
+and table size, measured 7.3–7.6% lower edit-to-applied medians for the 4 MiB
+table. Acknowledgements were about 1% lower. Small cases varied roughly -2% to
++3%. Complete frames and retained table/text/error state match across binaries
+and trials; all owned children exit cleanly. Headless applied observation includes
+RPC, scheduling and Python/socket costs, rather than event-to-photon latency.
+
+Sixty legacy comparisons require identical JSON and encoded bytes, including
+nested rows, Unicode/control text, large integers, negative zero, non-finite
+floats serialized as null, and absent focus. Existing capacity-failure rollback
+checks pass. Five fresh CLI check controls, 120 samples per variant each, stay
+within 0.8%; runtime API controls stay within 1.7%. Unchanged core controls vary
+from about -8% to +3% and remain recorded without attributing those changes to
+UI publication.
+
+The native executable grows by 17,456 bytes (0.60%). WASM is byte-identical.
+Allocation counts, peak memory, RSS, cold startup and Linux timing were not
+measured. Source, input, complete-output, catalog, harness and binary hashes and
+all raw samples are retained. Keep measurements separate from builds and stress.
+
 # Owned widget handoff
 
 The [widget-handoff report](performance-2026-10-14-ui-handoff.json) compares

@@ -693,6 +693,17 @@
       },
       "patterns": [
         {
+          "match": "\\b(from)[ \\t]+(environment|argument|arguments)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.source.execute"
+            },
+            "2": {
+              "name": "support.type.input-source.execute"
+            }
+          }
+        },
+        {
           "match": "\\bwith[ \\t]+default\\b",
           "name": "keyword.operator.default.execute"
         },

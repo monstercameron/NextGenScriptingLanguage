@@ -571,6 +571,52 @@ applet must stay alive until its descendants finish; remaining descendants in it
 group are stopped when it exits. Deliberately escaped process groups are outside
 that cleanup contract. Binaries run with the caller's privileges.
 
+## Process input sources
+
+Source candidate 0.9.0-dev adds explicit environment and Unix argument inputs:
+
+```text
+#!/usr/bin/env -S execute --
+accept root as text from environment "OMARCHY_PATH" with default "/usr/share/omarchy"
+accept count as integer from argument 1 with default 10
+accept arguments as list of text from arguments
+run "printf" with arguments ["%s|%s\n", root, count]
+```
+
+Run `execute tool.program -- 20`, or make the file executable and invoke it
+directly with `./tool.program 20`. The shebang's `--` separates interpreter
+options from the workflow filename and its argv. Without that shebang, put
+runtime options before `--`: `execute tool.program --input count=30 -- 20`.
+An explicit named input overrides its environment/argument source; a source
+overrides the literal default. Positional numbers start at 1. Extra arguments
+are rejected unless a `from arguments` list is declared. That list preserves
+empty values, option-looking strings and literal argv boundaries; it is empty
+when no arguments are supplied and cannot have a default. No shell expansion
+or interpolation occurs.
+
+Environment names are literal ASCII identifiers. An unset variable uses the
+default; an empty value remains empty and must satisfy the declared type.
+Integers, booleans, JSON and text lists use the same parsing as `--input`.
+Invalid UTF-8 or invalid typed input fails before commands run, with no value
+echoed in the error. `check`, `explain` and `inspect` do not read the process
+environment; inspection describes its source without exposing its value.
+Runtime values can appear in argv, live state or plaintext checkpoints, so only
+read the environment values that the program is intended to handle.
+
+Resolved values become ordinary declared inputs: checkpoints freeze them and
+reject incompatible resume values; live type constraints remain unchanged.
+Reusable finite program inputs remain explicit caller arguments. Read process
+inputs at the top level and pass them into helpers. General environment
+assignment/unset, shell sourcing and automatic string interpolation remain open.
+
+Unhandled native command failures now preserve their exit code through the CLI;
+a child terminated by signal N yields status 128+N. `and keep status as code`
+handles an ordinary nonzero exit and continues, so the CLI can still finish
+successfully. Syntax, validation, spawn/I/O, timeout and interpreter-cancellation
+errors retain status 1. Native failure diagnostics and failed finite-output
+discard remain explicit differences from Bash; pipeline failure policy is
+stricter than Bash without `pipefail`.
+
 ## CLI and manifests
 
 ```sh

@@ -1,0 +1,4 @@
+#!/usr/bin/env -S execute --
+# Interface port of Omarchy v4.0.4; see README.md for compatibility limits.
+accept arguments as list of text from arguments
+run "omarchy-webapp-remove" with arguments ["Xbox Cloud Gaming"]

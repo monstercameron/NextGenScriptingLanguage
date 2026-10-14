@@ -8,12 +8,13 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 struct Args {
     inputs: BTreeMap<String, String>,
+    program_arguments: Vec<String>,
     json: bool,
     command: String,
     file: PathBuf,
@@ -33,7 +34,17 @@ struct Args {
 fn main() {
     if let Err(error) = execute() {
         runtime::write_diagnostic(format!("execute: {error:#}\n").as_bytes());
-        std::process::exit(1);
+        let status = error
+            .downcast_ref::<runtime::CommandFailed>()
+            .map(|failure| {
+                failure
+                    .status
+                    .code()
+                    .unwrap_or_else(|| failure.status.signal().map_or(1, |signal| 128 + signal))
+            })
+            .filter(|status| (1..=255).contains(status))
+            .unwrap_or(1);
+        std::process::exit(status);
     }
 }
 
@@ -97,7 +108,7 @@ fn execute_workflow(args: Args) -> Result<()> {
     let source = fs::read_to_string(&args.file)
         .with_context(|| format!("could not read workflow {}", args.file.display()))?;
     if flow::ui::syntax::is_screen(&source) {
-        if !args.inputs.is_empty() {
+        if !args.inputs.is_empty() || !args.program_arguments.is_empty() {
             bail!("screen programs use component input ports and live widget state, not --input");
         }
         let screen = flow::ui::syntax::parse(&source).context("parsing UI")?;
@@ -187,7 +198,11 @@ fn execute_workflow(args: Args) -> Result<()> {
     }
     if flow::stream::is_stream(&source) {
         let stream = flow::stream::parse(&source).context("parsing stream")?;
-        let inputs = flow::inputs::parse_cli(&stream.pipeline.inputs, &args.inputs)?;
+        let inputs = flow::inputs::parse_cli_arguments(
+            &stream.pipeline.inputs,
+            &args.inputs,
+            &args.program_arguments,
+        )?;
         if args.command == "resume" || args.checkpoint_dir.is_some() || args.max_runs.is_some() {
             bail!("stream programs do not support resume, checkpoints, or --max-runs");
         }
@@ -262,7 +277,8 @@ fn execute_workflow(args: Args) -> Result<()> {
     }
     let program = parser::parse(&source)
         .with_context(|| format!("could not parse workflow {}", args.file.display()))?;
-    let inputs = flow::inputs::parse_cli(&program.inputs, &args.inputs)?;
+    let inputs =
+        flow::inputs::parse_cli_arguments(&program.inputs, &args.inputs, &args.program_arguments)?;
     if args.max_runs.is_some() && program.trigger.is_none() {
         bail!("--max-runs applies only to triggered programs");
     }
@@ -396,6 +412,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut file = None;
     let mut json = false;
     let mut inputs = BTreeMap::new();
+    let mut program_arguments = Vec::new();
     let mut manifest_dir = None;
     let mut cache_dir = None;
     let mut checkpoint_dir = None;
@@ -412,6 +429,18 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     while index < arguments.len() {
         let argument = &arguments[index];
         match argument.as_str() {
+            "--" => {
+                index += 1;
+                if file.is_none() {
+                    let argument = arguments
+                        .get(index)
+                        .context("missing workflow file after --")?;
+                    file = Some(workflow_path(argument)?);
+                    index += 1;
+                }
+                program_arguments.extend_from_slice(&arguments[index..]);
+                break;
+            }
             "--json" if command == "check" => {
                 if json {
                     bail!("--json may be specified only once");
@@ -546,6 +575,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     }
     Ok(Some(Args {
         inputs,
+        program_arguments,
         json,
         command,
         file,
@@ -675,7 +705,7 @@ fn default_manifest_dir() -> PathBuf {
 }
 
 fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  --manifest-dir DIR       Directory containing applet manifests\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory containing applet manifests\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

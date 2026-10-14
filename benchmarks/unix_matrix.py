@@ -247,9 +247,9 @@ def run(command, folder, env):
 def check(case, execute, bash):
     if case.difference in ('native_failure_diagnostic_and_buffered_stdout', 'strict_pipeline_failure'):
         require(bash['code'] == case.code, f'{case.name}: Bash status {bash["code"]} != {case.code}')
-        require(execute['code'] == 1 and b'execute:' in execute['stderr'], f'{case.name}: missing Execute failure')
-        require(execute['stdout'] == b'', f'{case.name}: failed finite output escaped')
         native_code = 7 if case.difference == 'strict_pipeline_failure' else case.code
+        require(execute['code'] == native_code and b'execute:' in execute['stderr'], f'{case.name}: missing Execute failure or wrong native exit code')
+        require(execute['stdout'] == b'', f'{case.name}: failed finite output escaped')
         require(f'exit status: {native_code}'.encode() in execute['stderr'], f'{case.name}: wrong native failure status')
         require(bash['stderr'] in execute['stderr'], f'{case.name}: native stderr was lost')
         if case.expected is not None:

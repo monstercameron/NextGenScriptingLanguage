@@ -5,7 +5,7 @@ literal argv (including shell-looking text), text and binary tools, multi-stage
 native pipes, paths, multiple files, typed CLI inputs and failure contracts.
 One hundred cases require exact matching status/stdout/stderr. Ten check explicit
 differences: literal wildcard handling, native failure diagnostics, discarded
-failed finite output, Execute's final status 1, and strict middle-stage pipeline
+failed finite output and strict middle-stage pipeline
 failure. A declared difference must meet its own oracle; arbitrary mismatches
 cannot pass. Independent byte expectations supplement Bash for many cases.
 
@@ -847,3 +847,25 @@ offline applet median was 2.94–2.98 ms; a fixture call through `.program` was
 [repeat](../docs/model-integration-validation/model-adapter-repeat.json) for exact
 hashes, raw samples, p95 values and limits. Earlier single synthetic live calls
 only verified connectivity; their elapsed observations are not API benchmarks.
+
+The 0.9.0-dev source candidate preserves unhandled native CLI status codes. The
+current Unix matrix requires the actual native failure status; older reports
+retain the generic status-1 contract they measured.
+
+## Process inputs, source 0.9.0-dev
+
+`process_inputs.py` compares a pre-feature helper pipeline with typed environment
+inputs, plus an unchanged literal-command control and equivalent Bash commands.
+Every sample checks exact bytes, stderr and status; separate traces verify three
+native processes become one. Two checked-in 80-sample runs measure an environment
+workflow median of 8.83–8.89 ms before and 5.43–5.52 ms after (about 38% lower).
+Bash is 4.94–4.95 ms. Literal controls remain about 5.32–5.34 ms. These are warm
+macOS arm64 process measurements including Python launch/capture; no universal
+interpreter, cold-start, Linux, memory or desktop improvement is claimed.
+
+```sh
+python3 benchmarks/process_inputs.py --baseline /path/to/prior/execute --candidate target/release/execute --report target/process-inputs.json --samples 80
+```
+
+Raw samples: [first run](process-inputs-v0.9.0-dev-macos-arm64.json),
+[repeat](process-inputs-v0.9.0-dev-macos-arm64-repeat.json).

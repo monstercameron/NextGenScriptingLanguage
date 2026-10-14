@@ -261,3 +261,14 @@ The separate 100-workflow collection adds authored fixture inputs and output
 oracles; it does not satisfy the held-out Bash replacement study or platform
 proof gates. Batch Jev questions, token streams, embeddings and provider failover
 remain future work. Installed 0.8.0 artifacts remain unchanged.
+
+### Source 0.9.0-dev production work
+
+The [current production gates](production-readiness.md) retain the complete
+Bash/Omarchy objective. [Local validation](production-validation-0.9.0-dev.json)
+covers native exit propagation and typed environment/positional/variadic input
+sources, including executable shebangs and checkpoint input identity. A pinned
+444-command Omarchy inventory and ten isolated interface ports now expose real
+porting requirements. These do not establish desktop acceptance. Two paired
+measurements show helper-process avoidance improves one workflow while Bash
+remains faster; no universal performance or readiness claim is allowed.

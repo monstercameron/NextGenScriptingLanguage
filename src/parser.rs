@@ -1,6 +1,6 @@
 use crate::ast::{
-    Condition, Connection, InputDeclaration, InputType, Invocation, ListenSource, Program, Step,
-    StepKind, Trigger, Value,
+    Condition, Connection, InputDeclaration, InputSource, InputType, Invocation, ListenSource,
+    Program, Step, StepKind, Trigger, Value,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use std::borrow::Cow;
@@ -326,6 +326,39 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         }
         _ => bail!("input type must be text, integer, boolean, list of text, or json"),
     };
+    let source = if word_is(tokens.get(cursor), "from") {
+        cursor += 1;
+        let source = match tokens.get(cursor) {
+            Some(Token::Word("environment")) => {
+                cursor += 1;
+                let value = parse_value(tokens, &mut cursor).context("environment name")?;
+                let Value::String(name) = value else {
+                    bail!("environment name must be a quoted literal");
+                };
+                InputSource::Environment(name)
+            }
+            Some(Token::Word("argument")) => {
+                cursor += 1;
+                let value = parse_value(tokens, &mut cursor).context("argument position")?;
+                let Value::Integer(position) = value else {
+                    bail!("argument position must be a positive integer");
+                };
+                let position = usize::try_from(position)
+                    .ok()
+                    .filter(|position| (1..=1_000_000).contains(position))
+                    .context("argument position must be between 1 and 1000000")?;
+                InputSource::Argument(position)
+            }
+            Some(Token::Word("arguments")) => {
+                cursor += 1;
+                InputSource::Arguments
+            }
+            _ => bail!("input source must be environment, argument, or arguments"),
+        };
+        Some(source)
+    } else {
+        None
+    };
     let default =
         if word_is(tokens.get(cursor), "with") && word_is(tokens.get(cursor + 1), "default") {
             cursor += 2;
@@ -338,6 +371,7 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         name,
         kind,
         default,
+        source,
         line,
     })
 }

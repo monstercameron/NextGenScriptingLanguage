@@ -130,7 +130,7 @@
       "evidence_and_gap": "Private local control sockets, revision checks, tracing, bounds, and recovery tests exist. Applets retain user privileges; scoped permissions, credential policy, safe contract upgrades, and a month-long deployment study are absent."
     }
   ],
-  "pending_candidate": {
+  "historical_candidate_before_model_integration": {
     "status": "verified_local_candidate_not_installed",
     "binary_sha256": "e02bb889359125968eeb1e9fceee3073c159b926334bdf122e1ac296a3d60e7a",
     "overall_claim": "not_established",
@@ -167,6 +167,37 @@
         "id": 13,
         "status": "partial",
         "evidence_and_gap": "Campaign retains paired local release measurements and raw samples for controls, JSON helper avoidance, completed resume and large live state. Reuse overhead is measured against explicit inlining; this is not true cold-cache p95, idle guarantees, native Linux parity or a universal runtime win."
+      }
+    ]
+  },
+  "pending_candidate": {
+    "status": "source_candidate_local_checks_passed_remote_ci_pending",
+    "version": "0.9.0-dev",
+    "binary_sha256": "eae11c0b128e2b1ca7849aeeaa8b497cbc3464f2745d2326129792305fe99507",
+    "installed": false,
+    "overall_claim": "not_established",
+    "full_replacement_claim_allowed": false,
+    "local_evidence": "production-validation-0.9.0-dev.json",
+    "gate_updates": [
+      {
+        "id": 1,
+        "status": "partial",
+        "evidence_and_gap": "Source CLI preserves native exit statuses; updated 110-case/46-tool matrix passes with 100 exact matches and ten explicit differences. Finite failure output, diagnostic enrichment, wildcard and pipeline policy differences remain; broad Bash syntax and job/sourcing semantics remain absent."
+      },
+      {
+        "id": 4,
+        "status": "partial",
+        "evidence_and_gap": "Typed environment, positional and variadic input sources complement scalar conditions and same-file finite reuse. Loops, jobs, external modules, environment overrides/unset and full redirection remain missing."
+      },
+      {
+        "id": 5,
+        "status": "partial",
+        "evidence_and_gap": "Pinned Omarchy v4.0.4 inventory has 444 command files, 439 Bash and five Python. Ten small wrappers have isolated command-interface ports and 41 differential pairs with explicit gap checks. None is certified for real desktop effects; all inventory command statuses remain unverified. This is not 150 certified ports."
+      },
+      {
+        "id": 13,
+        "status": "partial",
+        "evidence_and_gap": "Two 80-sample paired runs remove two helper processes for typed environment inputs. Median improves about 38% versus the equivalent prior-runtime workflow; Bash remains faster for that workload. Literal controls stay similar. No universal speed, cold-start, memory, desktop or native Linux timing claim."
       }
     ]
   }

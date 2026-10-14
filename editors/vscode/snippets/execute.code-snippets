@@ -259,5 +259,17 @@
       "accept user as text with default \"world\"",
       "run program greet with name user"
     ]
+  },
+  "Unix command inputs": {
+    "prefix": "program-command",
+    "description": "Executable Unix command with typed argv and explicit environment input.",
+    "body": [
+      "#!/usr/bin/env -S execute --",
+      "accept message as text from argument 1",
+      "accept root as text from environment \"${1:OMARCHY_PATH}\" with default \"${2:/usr/share/omarchy}\"",
+      "run \"printf\" with arguments [\"%s\\n\", message]",
+      "$0"
+    ],
+    "isFileTemplate": true
   }
 }

@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "execute"
-version = "0.8.0"
+version = "0.9.0-dev"
 dependencies = [
  "anyhow",
  "chrono",

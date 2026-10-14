@@ -184,7 +184,7 @@ function expand(body) {
 }
 test('complete snippet defaults pass the actual execute check without running commands', () => {
   const snippets = JSON.parse(fs.readFileSync(path.join(extension, 'snippets/execute.code-snippets'), 'utf8'));
-  assert.equal(Object.keys(snippets).length, 22);
+  assert.equal(Object.keys(snippets).length, 23);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'execute-vscode-'));
   const binary = process.env.EXECUTE_TEST_BINARY || path.join(project, 'bin/execute');
   assert.ok(fs.existsSync(binary), 'Use the checked-out runtime or set EXECUTE_TEST_BINARY');
@@ -201,7 +201,7 @@ test('complete snippet defaults pass the actual execute check without running co
       assert.equal(result.status, 0, `${name}: ${result.stderr || result.error}`);
       checked++;
     }
-    assert.equal(checked, 14);
+    assert.equal(checked, 15);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -280,4 +280,12 @@ test('reusable program calls distinguish the program and its explicit parameters
   }
   scope('  accept active as boolean with default true', 'boolean', 'support.type.input');
   scope('  accept data as json', 'data', 'variable.parameter.input');
+});
+
+test('process input sources distinguish environment and positional argv', () => {
+  for (const source of ['environment "OMARCHY_PATH"', 'argument 1', 'arguments']) {
+    const line = `accept setting as text from ${source}`;
+    scope(line, 'from', 'keyword.operator.source');
+    scope(line, source.split(' ')[0], 'support.type.input-source');
+  }
 });

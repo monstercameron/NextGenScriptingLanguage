@@ -1,5 +1,7 @@
 # Execute
 
+Production tracking: [Bash and Omarchy acceptance gates](docs/production-readiness.md), [pinned command inventory](docs/omarchy-inventory.json), and [initial isolated interface ports](examples/omarchy-ports/README.md). Source 0.9.0-dev remains a candidate; packaged 0.8.0 is unchanged.
+
 **English for the glue. Unix for the work.**
 
 Execute turns existing command-line tools into readable programs, live services,
@@ -23,7 +25,7 @@ is deterministic; running a program requires no LLM, API key, or model inference
 
 **0.8.0 · macOS + Linux · Rust · [MIT](LICENSE)**
 
-The packaged runtime is 0.8.0. Building the working source also includes pending
+The packaged runtime is 0.8.0; the working source is 0.9.0-dev. Building it includes pending
 stdin, discovery, status, conditional, JSON, reusable-program and explicit model
 applet features. See
 [release and source status](#release-and-source-status) before choosing a binary.
@@ -191,6 +193,12 @@ pipe to "head" with arguments ["-n", lines]
 
 Save this as `preview.program`, then run
 `execute preview.program --input 'path=server log.txt' --input lines=10`.
+Source builds also support `accept root as text from environment "OMARCHY_PATH"`
+and `accept message as text from argument 1`; pass Unix arguments after `--`.
+Use `#!/usr/bin/env -S execute --` for an executable `.program` command.
+[Process input contracts](docs/language.md#process-input-sources) explain precedence,
+static inspection and checkpoint behavior.
+
 Text, integers, booleans, and lists of text are supported. Missing required inputs,
 bad types, unknown names, and known manifest constraint violations fail before
 commands run. `check` and `explain` can inspect a signature without supplying
@@ -467,8 +475,9 @@ Terminal components currently live in one file. The [roadmap](docs/thesis-progre
 places Linux desktop and optional Quickshell integration after the Unix foundation.
 
 Applets run with your permissions; process supervision is not sandboxing. Native
-pipeline failures stop ordinary execution and produce CLI status 1 with the child
-status in diagnostics. Finite captures default to 16 MiB; listener/stream records
+pipeline failures stop ordinary execution. The source candidate preserves the
+failing child's exit code (or 128 plus its signal); validation and runtime
+errors return 1. Packaged 0.8.0 retains its generic failure status. Finite captures default to 16 MiB; listener/stream records
 default to 64 KiB. Timeouts and capture limits are configurable. Durable recovery
 does not capture an unread source queue or guarantee exactly-once external effects.
 
@@ -516,6 +525,7 @@ Ubuntu CI remains the validation route for this source candidate.
 | Native status bindings and scalar `if`/`otherwise` | Pending | Available |
 | Finite JSON parse, typed selection, encoding and JSON inputs | Pending | Available |
 | Same-file finite definitions/calls with local scope | Pending | Available |
+| Typed environment/positional inputs and native CLI exit statuses | Pending | Available |
 | Jev classification/judgment/scoring and OpenAI generation/extraction | Pending | Available through model applets |
 | External modules, jobs, GUI backends and dedicated AI syntax | Roadmap | Roadmap |
 

@@ -1,5 +1,5 @@
 //! Declared program inputs: one schema for CLI values, runtime calls and live edits.
-use crate::ast::{InputDeclaration, InputType, Value};
+use crate::ast::{InputDeclaration, InputSource, InputType, Value};
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -111,6 +111,40 @@ pub fn validate(declarations: &[InputDeclaration]) -> Result<()> {
         if let Some(default) = &input.default {
             input.validate_value(default)?;
         }
+        match &input.source {
+            Some(InputSource::Environment(name)) => {
+                let mut bytes = name.bytes();
+                if !bytes
+                    .next()
+                    .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+                    || !bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    bail!(
+                        "line {}: environment name must be an ASCII identifier",
+                        input.line
+                    );
+                }
+            }
+            Some(InputSource::Argument(position)) if !(1..=1_000_000).contains(position) => {
+                bail!(
+                    "line {}: argument position must be between 1 and 1000000",
+                    input.line
+                );
+            }
+            Some(InputSource::Arguments) if input.kind != InputType::TextList => {
+                bail!(
+                    "line {}: `from arguments` requires list of text",
+                    input.line
+                );
+            }
+            Some(InputSource::Arguments) if input.default.is_some() => {
+                bail!(
+                    "line {}: `from arguments` always supplies a list; omit its default",
+                    input.line
+                );
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
@@ -133,8 +167,34 @@ pub fn resolve(
     declarations
         .iter()
         .map(|input| {
+            let environment = if supplied.contains_key(&input.name) {
+                None
+            } else if let Some(InputSource::Environment(name)) = &input.source {
+                match std::env::var_os(name) {
+                    Some(value) => {
+                        let text = value.into_string().map_err(|_| {
+                            anyhow!(
+                                "line {}: environment input {:?} is not valid UTF-8",
+                                input.line,
+                                input.name
+                            )
+                        })?;
+                        Some(input.parse_cli(&text).with_context(|| {
+                            format!(
+                                "line {}: invalid environment input {:?}",
+                                input.line, input.name
+                            )
+                        })?)
+                    }
+                    None => None,
+                }
+            } else {
+                matches!(input.source, Some(InputSource::Arguments))
+                    .then(|| Value::List(Vec::new()))
+            };
             let value = supplied
                 .get(&input.name)
+                .or(environment.as_ref())
                 .or(input.default.as_ref())
                 .ok_or_else(|| {
                     anyhow!(
@@ -169,6 +229,56 @@ pub fn parse_cli(
         .collect()
 }
 
+/// Bind the explicit Unix argv tail once at the process boundary. Named CLI
+/// values take precedence, and runtime/checkpoint APIs receive ordinary inputs.
+pub fn parse_cli_arguments(
+    declarations: &[InputDeclaration],
+    supplied: &BTreeMap<String, String>,
+    arguments: &[String],
+) -> Result<BTreeMap<String, Value>> {
+    let mut values = parse_cli(declarations, supplied)?;
+    let variadic = declarations
+        .iter()
+        .any(|d| d.source == Some(InputSource::Arguments));
+    let maximum = declarations
+        .iter()
+        .filter_map(|d| match d.source {
+            Some(InputSource::Argument(position)) => Some(position),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    if !variadic && arguments.len() > maximum {
+        bail!(
+            "program accepts at most {maximum} positional arguments; received {}",
+            arguments.len()
+        );
+    }
+    for input in declarations {
+        if values.contains_key(&input.name) {
+            continue;
+        }
+        let value = match input.source {
+            Some(InputSource::Argument(position)) => arguments
+                .get(position - 1)
+                .map(|value| input.parse_cli(value))
+                .transpose()?,
+            Some(InputSource::Arguments) => Some(Value::List(
+                arguments
+                    .iter()
+                    .map(|value| Value::String(value.clone()))
+                    .collect(),
+            )),
+            _ => None,
+        };
+        if let Some(value) = value {
+            input.validate_value(&value)?;
+            values.insert(input.name.clone(), value);
+        }
+    }
+    Ok(values)
+}
+
 /// Describe a partial input interface without requiring values or running effects.
 /// Types use language spellings; defaults and effective values use native JSON.
 pub fn describe(
@@ -185,6 +295,18 @@ pub fn describe(
         });
         if let Some(default) = &input.default {
             spec["default"] = literal_json(default)?;
+        }
+        match &input.source {
+            Some(InputSource::Environment(name)) => {
+                spec["source"] = serde_json::json!({"kind":"environment", "name":name});
+            }
+            Some(InputSource::Argument(position)) => {
+                spec["source"] = serde_json::json!({"kind":"argument", "position":position});
+            }
+            Some(InputSource::Arguments) => {
+                spec["source"] = serde_json::json!({"kind":"arguments"});
+            }
+            None => {}
         }
         if let Some(value) = known.get(&input.name) {
             spec["value"] = literal_json(value)?;

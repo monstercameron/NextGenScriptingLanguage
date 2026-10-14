@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -268,6 +269,30 @@ class ModelCatalogTests(unittest.TestCase):
             runner.invoke(fake_binary, self.root, [], timeout=0.1)
         time.sleep(1.1)
         self.assertFalse((self.root / "descendant-ran").exists())
+
+    def test_cleanup_keeps_launcher_unreaped_until_group_escalation(self) -> None:
+        process = mock.Mock(pid=12345, returncode=None)
+        events = []
+        process.wait.side_effect = lambda **kwargs: events.append("wait")
+        with mock.patch.object(runner.os, "killpg", side_effect=lambda pid, sig: events.append(sig)), mock.patch.object(runner.time, "sleep"):
+            runner.terminate_owned_group(process)
+        self.assertEqual(events, [runner.signal.SIGTERM, runner.signal.SIGKILL, "wait"])
+
+    def test_cleanup_permission_error_is_ignored_only_after_all_members_are_dead(self) -> None:
+        for state in ("Z", "S"):
+            process = mock.Mock(pid=12345, returncode=None)
+            with mock.patch.object(runner.os, "killpg", side_effect=[None, PermissionError()]), mock.patch.object(runner.time, "sleep"), mock.patch.object(runner.subprocess, "run", return_value=mock.Mock(stdout=f"12345 {state}\n")):
+                if state == "Z":
+                    runner.terminate_owned_group(process)
+                else:
+                    with self.assertRaises(PermissionError):
+                        runner.terminate_owned_group(process)
+
+    def test_cleanup_never_signals_an_already_reaped_launcher_group(self) -> None:
+        process = mock.Mock(pid=12345, returncode=0)
+        with mock.patch.object(runner.os, "killpg") as killpg:
+            runner.terminate_owned_group(process)
+        killpg.assert_not_called()
 
 
 if __name__ == "__main__":

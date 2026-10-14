@@ -243,3 +243,51 @@ fn capture_preserves_named_manifest_calls_and_output_limits() {
     assert!(format!("{error:#}").contains("output exceeds maximum"));
     assert!(!dir.path().join("forbidden").exists());
 }
+
+#[test]
+fn cli_preserves_unhandled_native_statuses_and_keeps_handled_failures_successful() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("status.program");
+    for code in [0, 1, 2, 7, 42, 126, 127, 255] {
+        fs::write(
+            &file,
+            format!("run \"sh\" with arguments [\"-c\", \"exit {code}\"]\n"),
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{code}: {:?}",
+            output.stderr
+        );
+        assert!(output.stdout.is_empty());
+    }
+    fs::write(&file, "run \"sh\" with arguments [\"-c\", \"exit 42\"] and keep status as code\nrun \"printf\" with arguments [\"%s\", code]\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(output.stdout, b"42");
+}
+
+#[test]
+fn cli_reports_signaled_native_children_with_conventional_shell_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("signal.program");
+    fs::write(
+        &file,
+        "run \"sh\" with arguments [\"-c\", \"kill -TERM $$\"]\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(143), "{:?}", output.stderr);
+    assert!(output.stdout.is_empty());
+}

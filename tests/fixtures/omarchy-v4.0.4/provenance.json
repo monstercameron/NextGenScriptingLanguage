@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/omacom/omarchy",
+  "tag": "v4.0.4",
+  "commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+  "files": [
+    "bin/omarchy-menu-clipboard",
+    "bin/omarchy-menu-emoji",
+    "bin/omarchy-notification-weather",
+    "bin/omarchy-hyprland-window-gaps-toggle",
+    "bin/omarchy-powerprofiles-init",
+    "bin/omarchy-launch-terminal-herdr",
+    "bin/omarchy-restart-hyprsunset",
+    "bin/omarchy-remove-gaming-xbox-cloud",
+    "bin/omarchy-launch-nautilus",
+    "bin/omarchy-notification-dismiss"
+  ],
+  "purpose": "Read-only source fixtures for isolated command-interface differential tests; never invoke real desktop or package tools."
+}

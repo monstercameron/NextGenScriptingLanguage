@@ -146,7 +146,16 @@ pub struct InputDeclaration {
     pub name: String,
     pub kind: InputType,
     pub default: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<InputSource>,
     pub line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum InputSource {
+    Environment(String),
+    Argument(usize),
+    Arguments,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

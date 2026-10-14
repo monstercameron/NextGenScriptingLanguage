@@ -253,7 +253,7 @@ def main():
             assert result['code']!=0 and not (cwd/'must-not-exist').exists()
             assert b'deliberate middle failure' in result['stderr']
             errors[key]=dict(exit_code=result['code'],stderr=result['stderr'].decode(errors='replace'),stdout_bytes=len(result['stdout']),later_effect_prevented=True)
-        report['cases']['middle_pipeline_failure']=dict(status='verified',results=errors,note='Bash uses pipefail; Execute currently returns generic CLI status 1, not the failing applet\'s status 7')
+        report['cases']['middle_pipeline_failure']=dict(status='verified',results=errors,note='Bash uses pipefail; actual CLI and native diagnostic status codes are retained above. Source candidate0.9.0-dev preserves native status codes.')
         progress('middle-failure workload complete')
         listener=cwd/'events.program';listener.write_text('listen to stdin\nwhenever a line arrives as record\n  then tr with from "[:lower:]" and to "[:upper:]"\n')
         listener_bash=cwd/'events.bash'

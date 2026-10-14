@@ -116,6 +116,9 @@ pub(super) fn parse_definition<'arena, 'source: 'arena>(
         );
     }
     crate::inputs::validate(&inputs)?;
+    if let Some(input) = inputs.iter().find(|input| input.source.is_some()) {
+        bail!("line {}: reusable inputs must be passed explicitly; read environment or arguments in the caller", input.line);
+    }
     Ok((
         name,
         ReusableProgram {

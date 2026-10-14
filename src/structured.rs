@@ -126,6 +126,7 @@ pub(crate) fn take<'a>(
         name: format!("JSON pointer {pointer}"),
         kind,
         default: None,
+        source: None,
         line,
     }
     .validate_value(selected)?;

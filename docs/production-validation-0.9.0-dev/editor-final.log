@@ -1,0 +1,34 @@
+
+> execute-program@0.2.0 test
+> node --test test/*.test.cjs
+
+Tokenized 292 real programs / 6542 lines
+✔ registers a declarative .program language without an activation entrypoint (6.982792ms)
+✔ highlights native stages, dotted and multiword applets, parameters and bindings (9.384125ms)
+✔ quoted executable calls preserve function, string, parameter and binding scopes (6.750042ms)
+✔ keyword-shaped applets, parameter names and references retain their role (0.745208ms)
+✔ top-level program inputs distinguish types, defaults and values from component ports (1.391917ms)
+✔ strings are literal and JSON escapes are distinct from comments and keywords (1.370041ms)
+✔ comments and malformed single-line strings never leak into subsequent code (1.041625ms)
+✔ numbers, booleans and list punctuation use distinct scopes (2.8425ms)
+✔ highlights lifetime declarations and stream directives (1.289875ms)
+✔ highlights components, all nine widget types, ports, and UI event actions (1.219459ms)
+✔ unsupported control blocks are not advertised as implemented syntax (0.291167ms)
+✔ editor configuration uses two-space blocks and only real syntactic brackets (0.390041ms)
+✔ all real .program files tokenize with bounded lines and closed line states (451.624042ms)
+✔ complete snippet defaults pass the actual execute check without running commands (64.514166ms)
+✔ large single-line strings and malformed lists recover within the tokenization budget (47.853542ms)
+✔ finite stdin is an I/O directive and keeps its optional result binding (0.189541ms)
+✔ native status capture distinguishes stdout, integer status and keep parameters (0.312916ms)
+✔ scalar conditions preserve operand roles and indent their branches (0.203208ms)
+✔ structured JSON operations highlight types, pointers, sources and bindings (0.189708ms)
+✔ reusable program calls distinguish the program and its explicit parameters (0.228417ms)
+✔ process input sources distinguish environment and positional argv (0.144ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 695.355

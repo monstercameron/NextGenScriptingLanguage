@@ -402,16 +402,15 @@ def safe_environment(cwd: Path, binary: Path) -> dict[str, str]:
 
 
 def terminate_owned_group(process: subprocess.Popen[bytes]) -> None:
-    # The leader may have exited while a descendant still holds its pipes.
-    # Signal the owned group regardless of the leader's status.
+    # Keep the launcher's PID reserved until group escalation finishes. Reaping
+    # it first permits PID/PGID reuse and can target a different user's group.
+    if process.returncode is not None:
+        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    try:
-        process.wait(timeout=1.0)
-    except subprocess.TimeoutExpired:
-        pass
+    time.sleep(1.0)
     # Runtime applets usually live in their own groups and are reaped by the
     # runner's TERM handler.  This final escalation catches leaked descendants
     # that remained in the launcher's owned group after its leader exited.
@@ -419,6 +418,17 @@ def terminate_owned_group(process: subprocess.Popen[bytes]) -> None:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        # Darwin may report EPERM for a group containing only dead processes.
+        # Do not hide an inability to stop a living group member.
+        states = subprocess.run(
+            ["/bin/ps", "-A", "-o", "pgid=,stat="],
+            capture_output=True, text=True, timeout=2, check=True,
+        ).stdout.splitlines()
+        for line in states:
+            fields = line.split()
+            if len(fields) == 2 and fields[0] == str(process.pid) and not fields[1].startswith("Z"):
+                raise
     try:
         process.wait(timeout=2.0)
     except subprocess.TimeoutExpired:

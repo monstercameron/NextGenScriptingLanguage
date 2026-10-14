@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "status": "source_candidate_not_production_ready",
+  "recorded_at_utc": "2026-10-14T14:07:28.140900+00:00",
+  "source_version": "0.9.0-dev",
+  "installed_release_changed": false,
+  "runtime_sha256": "eae11c0b128e2b1ca7849aeeaa8b497cbc3464f2745d2326129792305fe99507",
+  "installed_binary_sha256": "c081006721eb427a97e0eec6644a1f913ae894639aef15b36a1178a13e6d0100",
+  "baseline_runtime_sha256": "207907d6a98907909f680a5d9bf92e6caa79a662aa28aaf66f6f891af1ea042e",
+  "local_platform": "macOS arm64",
+  "validation": {
+    "rust_passed": 408,
+    "rust_ignored_opt_in": 14,
+    "rustfmt": "passed",
+    "clippy_all_targets_deny_warnings": "passed",
+    "editor_tests": 21,
+    "editor_snippets_checked": 15,
+    "model_catalog_contract_tests": 17,
+    "model_catalog_contract_tests_optimized_python": 17,
+    "unix_matrix_contract_tests": 9,
+    "omarchy_interface_tests": 4,
+    "omarchy_interface_success_pairs": 30,
+    "omarchy_interface_native_failure_pairs": 10,
+    "omarchy_missing_input_gap_pairs": 1,
+    "notes": "make check passed, followed by separate normal/optimized Omarchy interface checks and updated matrix contract checks. Added Omarchy check to make check/CI. Interface tests use fake backends and explicitly assert known failure-output differences."
+  },
+  "unix_matrix": "unix-matrix-v0.9.0-dev-macos-arm64.json",
+  "benchmarks": [
+    "../benchmarks/process-inputs-v0.9.0-dev-macos-arm64.json",
+    "../benchmarks/process-inputs-v0.9.0-dev-macos-arm64-repeat.json"
+  ],
+  "proof_scope": "110 Unix cases/46 native executables; pinned ten Omarchy wrapper interfaces with isolated fake backends; no Arch/Omarchy desktop effects or Bash syntax emulation.",
+  "performance_claim": "Environment-input workflow removes printenv/jq helper processes; no general speed advantage over Bash. Literal native control remains similar to prior runtime.",
+  "remaining_gates": "production-readiness.md",
+  "ci": "pending new pushed candidate; previous native Ubuntu passed, previous Mac failure was the model test-harness group cleanup race addressed here.",
+  "raw_evidence": "production-validation-0.9.0-dev/"
+}

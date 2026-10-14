@@ -33,13 +33,19 @@ class MatrixContracts(unittest.TestCase):
                           difference='native_failure_diagnostic_and_buffered_stdout')
         for error in (b'execute: parsing failed', b'execute: failed (exit status: 3)'):
             with self.subTest(error=error), self.assertRaisesRegex(proof.ProofFailure, 'wrong native failure status'):
-                proof.check(case, observed(1, stderr=error), observed(7))
+                proof.check(case, observed(7, stderr=error), observed(7))
+
+    def test_generic_failure_cannot_hide_native_exit_code(self):
+        case = proof.Case('failure', 'test', (), code=7, expected=b'',
+                          difference='native_failure_diagnostic_and_buffered_stdout')
+        with self.assertRaises(proof.ProofFailure):
+            proof.check(case, observed(1, stderr=b'execute: exit status: 7'), observed(7))
 
     def test_native_stderr_and_failed_output_contract_are_checked(self):
         case = proof.Case('failure', 'test', (), code=7, expected=b'',
                           difference='native_failure_diagnostic_and_buffered_stdout')
-        for value in (observed(1, stderr=b'execute: exit status: 7'),
-                      observed(1, stdout=b'escaped', stderr=b'native error\nexecute: exit status: 7')):
+        for value in (observed(7, stderr=b'execute: exit status: 7'),
+                      observed(7, stdout=b'escaped', stderr=b'native error\nexecute: exit status: 7')):
             with self.subTest(value=value), self.assertRaises(proof.ProofFailure):
                 proof.check(case, value, observed(7, stderr=b'native error\n'))
 

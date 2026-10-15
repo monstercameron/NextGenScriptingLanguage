@@ -782,6 +782,7 @@ fn create_journal_stage(final_path: &Path) -> Result<(PathBuf, PathBuf), AppletE
         stage_name.push(name);
         stage_name.push(format!(".prepare.{}.{}", std::process::id(), sequence));
         let stage = parent.join(stage_name);
+        #[allow(unused_mut)]
         let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         builder.mode(0o700);
@@ -1287,8 +1288,12 @@ fn validate_journal_directory(path: &Path) -> Result<(), AppletError> {
     }
     check_private_metadata(&metadata, "transaction journal directory")?;
     #[cfg(windows)]
-    crate::platform::windows::restrict_directory(path)
-        .map_err(|error| super::io_error(error, "protecting transaction journal directory"))?;
+    crate::platform::windows::restrict_directory(path).map_err(|error| {
+        failed(
+            "io_error",
+            format!("protecting transaction journal directory: {error:#}"),
+        )
+    })?;
     Ok(())
 }
 
@@ -1297,8 +1302,12 @@ fn restrict_directory(path: &Path) -> Result<(), AppletError> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
         .map_err(|error| super::io_error(error, "protecting transaction journal directory"))?;
     #[cfg(windows)]
-    crate::platform::windows::restrict_directory(path)
-        .map_err(|error| super::io_error(error, "protecting transaction journal directory"))?;
+    crate::platform::windows::restrict_directory(path).map_err(|error| {
+        failed(
+            "io_error",
+            format!("protecting transaction journal directory: {error:#}"),
+        )
+    })?;
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| super::io_error(error, "checking transaction journal directory"))?;
     check_private_metadata(&metadata, "transaction journal directory")
@@ -1309,8 +1318,12 @@ fn restrict_file(file: &File) -> Result<(), AppletError> {
     file.set_permissions(fs::Permissions::from_mode(0o600))
         .map_err(|error| super::io_error(error, "protecting transaction journal file"))?;
     #[cfg(windows)]
-    crate::platform::windows::restrict_file(file)
-        .map_err(|error| super::io_error(error, "protecting transaction journal file"))?;
+    crate::platform::windows::restrict_file(file).map_err(|error| {
+        failed(
+            "io_error",
+            format!("protecting transaction journal file: {error:#}"),
+        )
+    })?;
     check_private_metadata(
         &file
             .metadata()

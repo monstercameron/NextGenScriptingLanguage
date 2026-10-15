@@ -1,5 +1,7 @@
 //! Explicit applet-boundary benchmark. Run the prebuilt release test binary
 //! through benchmarks/applet_boundaries.py; this test never compiles itself.
+#![cfg(unix)]
+
 use flow::{
     ast::Value,
     manifest::Registry,

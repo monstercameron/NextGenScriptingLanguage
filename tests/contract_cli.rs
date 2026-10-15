@@ -1,8 +1,11 @@
 use serde_json::{json, Value};
 use std::fs;
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+#[cfg(unix)]
+use std::process::Stdio;
+use std::process::{Command, Output};
 
 fn cli(root: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_execute"))
@@ -12,6 +15,7 @@ fn cli(root: &Path, arguments: &[&str]) -> Output {
         .expect("start execute")
 }
 
+#[cfg(unix)]
 fn write_manifest(directory: &Path, name: &str, binary: &str) {
     let value = json!({
         "name": name,

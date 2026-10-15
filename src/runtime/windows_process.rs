@@ -1,6 +1,6 @@
 // Included only on Windows; the parser, validation, cache, branches, JSON,
 // same-file calls and checkpoint state machine remain shared with Unix.
-use crate::platform::windows::{available, Job};
+use crate::platform::windows::{Job, available};
 use std::os::windows::io::AsRawHandle;
 
 struct ManagedChild {
@@ -431,8 +431,8 @@ fn execute_group_with_sink(
 /// Native CLI delegation retains stdio and an owned job rather than orphaning
 /// a model request if its Windows parent is cancelled.
 pub fn model_cli(arguments: &[String]) -> Result<i32> {
-    let signals = Signals::register()?;
-    let mut command = Command::new(bundled_model_applet()?);
+    let signals = Signals::register_with_deadline(None)?;
+    let mut command = std::process::Command::new(bundled_model_applet()?);
     command
         .args(arguments)
         .stdin(Stdio::inherit())

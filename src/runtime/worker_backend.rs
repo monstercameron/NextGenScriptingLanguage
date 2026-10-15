@@ -7,27 +7,44 @@
 //! retained between calls. Frame limits count the terminating line feed and
 //! apply to both directions.
 
-use anyhow::{bail, Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{bail, Result};
+#[cfg(unix)]
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(unix)]
+use std::collections::HashSet;
 use std::error::Error as StdError;
-use std::ffi::{OsStr, OsString};
+#[cfg(unix)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fmt;
+#[cfg(unix)]
 use std::fs::File;
+#[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::AtomicBool;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
+#[cfg(unix)]
+use std::sync::Condvar;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const DEFAULT_POOL_CAPACITY: usize = 16;
 /// Upper bound for an explicitly configured worker pool.
 pub const MAX_POOL_CAPACITY: usize = 1024;
+#[cfg(unix)]
 const MAX_POOL_WAIT: Duration = Duration::from_secs(30);
+#[cfg(unix)]
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(20);
+#[cfg(unix)]
 const IO_CHUNK_BYTES: usize = 8192;
 
 /// Spawn configuration for one applet worker identity.
@@ -37,6 +54,7 @@ const IO_CHUNK_BYTES: usize = 8192;
 /// the current process environment consistently.
 #[derive(Clone)]
 pub(crate) struct WorkerLaunch {
+    #[cfg(unix)]
     pub registry: crate::manifest::Registry,
     pub applet_name: String,
     pub binary: PathBuf,
@@ -44,8 +62,11 @@ pub(crate) struct WorkerLaunch {
     pub environment: Vec<(OsString, OsString)>,
     policy_fingerprint: Option<[u8; 32]>,
     pub startup_arguments: Vec<OsString>,
+    #[cfg(unix)]
     pub timeout: Duration,
+    #[cfg(unix)]
     pub max_frame_bytes: usize,
+    #[cfg(unix)]
     pub max_stderr_bytes: usize,
 }
 
@@ -66,7 +87,10 @@ impl WorkerLaunch {
         if crate::capabilities::policy_fingerprint(&registry, &applet_name)? != policy_fingerprint {
             bail!("applet capability policy changed while preparing worker launch");
         }
+        #[cfg(not(unix))]
+        let _ = (timeout, max_frame_bytes, max_stderr_bytes);
         Ok(Self {
+            #[cfg(unix)]
             registry,
             applet_name,
             binary,
@@ -74,8 +98,11 @@ impl WorkerLaunch {
             environment,
             policy_fingerprint,
             startup_arguments,
+            #[cfg(unix)]
             timeout,
+            #[cfg(unix)]
             max_frame_bytes,
+            #[cfg(unix)]
             max_stderr_bytes,
         })
     }
@@ -84,6 +111,7 @@ impl WorkerLaunch {
 /// One applet invocation. The deadline is supplied by the surrounding native
 /// pipeline; the worker lifecycle timeout is applied in addition to it.
 #[derive(Clone, Debug)]
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) struct WorkerRequest {
     pub arguments: Vec<String>,
     pub input: Vec<u8>,
@@ -130,6 +158,7 @@ pub(crate) struct WorkerError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) enum WorkerErrorKind {
     Timeout,
     Cancelled,
@@ -159,6 +188,7 @@ impl WorkerError {
         }
     }
 
+    #[cfg(unix)]
     fn with_captured_response(mut self, stdout: Vec<u8>, stderr: Vec<u8>) -> Self {
         self.captured_stdout = Some(stdout);
         self.captured_stderr = Some(stderr);
@@ -174,6 +204,7 @@ impl fmt::Display for WorkerError {
 
 impl StdError for WorkerError {}
 
+#[cfg(unix)]
 fn as_worker_error(error: anyhow::Error, fallback: WorkerErrorKind) -> anyhow::Error {
     if error.downcast_ref::<WorkerError>().is_some() {
         error
@@ -229,6 +260,7 @@ impl WorkerKey {
             && self.startup_arguments == launch.startup_arguments
     }
 
+    #[cfg(unix)]
     fn from_launch(
         launch: &WorkerLaunch,
         deadline: Option<Instant>,
@@ -255,6 +287,7 @@ impl WorkerKey {
     }
 }
 
+#[cfg(unix)]
 struct WorkerSlot {
     id: u64,
     key: WorkerKey,
@@ -262,6 +295,7 @@ struct WorkerSlot {
     busy: bool,
 }
 
+#[cfg(unix)]
 #[derive(Default)]
 struct PoolState {
     slots: Vec<WorkerSlot>,
@@ -274,9 +308,12 @@ struct PoolState {
 /// the same pool and dropping the last registry reference drops the pool,
 /// which kills and reaps all retained workers.
 pub struct WorkerPool {
+    #[cfg(unix)]
     capacity: usize,
+    #[cfg(unix)]
     state: Mutex<PoolState>,
     sensitivity_history: Mutex<HashMap<WorkerKey, crate::security::SensitivitySet>>,
+    #[cfg(unix)]
     changed: Condvar,
 }
 
@@ -299,9 +336,12 @@ impl WorkerPool {
             bail!("worker pool capacity must be between 1 and {MAX_POOL_CAPACITY}");
         }
         Ok(Self {
+            #[cfg(unix)]
             capacity,
+            #[cfg(unix)]
             state: Mutex::new(PoolState::default()),
             sensitivity_history: Mutex::new(HashMap::new()),
+            #[cfg(unix)]
             changed: Condvar::new(),
         })
     }
@@ -355,13 +395,13 @@ impl WorkerPool {
         #[cfg(not(unix))]
         {
             let _ = (launch, request);
-            return Err(WorkerError::new(
+            Err(WorkerError::new(
                 WorkerErrorKind::UnknownError,
                 false,
                 None,
                 "persistent JSON-lines applet workers are not supported on this platform",
             )
-            .into());
+            .into())
         }
 
         #[cfg(unix)]
@@ -530,6 +570,7 @@ impl WorkerPool {
         }
     }
 
+    #[cfg(unix)]
     fn acquire(
         &self,
         key: WorkerKey,
@@ -585,12 +626,14 @@ impl WorkerPool {
         }
     }
 
+    #[cfg(unix)]
     fn lock_state(&self) -> std::sync::MutexGuard<'_, PoolState> {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    #[cfg(unix)]
     fn sensitivity_history_for_key(&self, key: &WorkerKey) -> crate::security::SensitivitySet {
         self.sensitivity_history
             .lock()
@@ -600,6 +643,7 @@ impl WorkerPool {
             .unwrap_or_else(crate::security::SensitivitySet::empty)
     }
 
+    #[cfg(unix)]
     fn extend_sensitivity_history(
         &self,
         key: &WorkerKey,
@@ -615,6 +659,7 @@ impl WorkerPool {
             .extend(sensitivities);
     }
 
+    #[cfg(unix)]
     fn reset_sensitivity_history(&self, key: &WorkerKey) {
         self.sensitivity_history
             .lock()
@@ -622,6 +667,7 @@ impl WorkerPool {
             .remove(key);
     }
 
+    #[cfg(unix)]
     fn release(&self, id: u64, worker: Option<WorkerProcess>, retain: bool) {
         if retain {
             let mut retired = None;
@@ -660,6 +706,7 @@ impl WorkerPool {
     }
 }
 
+#[cfg(unix)]
 fn next_slot_id(state: &mut PoolState) -> u64 {
     loop {
         state.next_id = state.next_id.checked_add(1).unwrap_or(1).max(1);
@@ -669,6 +716,7 @@ fn next_slot_id(state: &mut PoolState) -> u64 {
     }
 }
 
+#[cfg(unix)]
 struct WorkerLease<'a> {
     pool: &'a WorkerPool,
     id: u64,
@@ -676,6 +724,7 @@ struct WorkerLease<'a> {
     retain: bool,
 }
 
+#[cfg(unix)]
 impl<'a> WorkerLease<'a> {
     fn new(pool: &'a WorkerPool, id: u64, worker: Option<WorkerProcess>) -> Self {
         Self {
@@ -691,6 +740,7 @@ impl<'a> WorkerLease<'a> {
     }
 }
 
+#[cfg(unix)]
 impl Drop for WorkerLease<'_> {
     fn drop(&mut self) {
         self.pool.release(self.id, self.worker.take(), self.retain);
@@ -698,6 +748,7 @@ impl Drop for WorkerLease<'_> {
 }
 
 #[derive(Serialize)]
+#[cfg(unix)]
 struct RequestFrame<'a> {
     id: u64,
     arguments: &'a [String],
@@ -705,6 +756,7 @@ struct RequestFrame<'a> {
 }
 
 #[derive(Deserialize)]
+#[cfg(unix)]
 #[serde(deny_unknown_fields)]
 struct ResponseFrame {
     id: u64,
@@ -944,9 +996,6 @@ impl Drop for WorkerProcess {
     }
 }
 
-#[cfg(not(unix))]
-struct WorkerProcess;
-
 #[cfg(unix)]
 fn exchange_failure(error: anyhow::Error, transmitted: bool) -> ExchangeFailure {
     let kind = error
@@ -1110,11 +1159,13 @@ fn read_frame(
     }
 }
 
+#[cfg(unix)]
 struct CappedBuffer {
     bytes: Vec<u8>,
     maximum: usize,
 }
 
+#[cfg(unix)]
 impl CappedBuffer {
     fn new(maximum: usize) -> Self {
         Self {
@@ -1135,6 +1186,7 @@ impl CappedBuffer {
     }
 }
 
+#[cfg(unix)]
 impl Write for CappedBuffer {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let remaining = self.maximum.saturating_sub(self.bytes.len());
@@ -1154,6 +1206,7 @@ impl Write for CappedBuffer {
     }
 }
 
+#[cfg(unix)]
 fn validate_launch(launch: &WorkerLaunch) -> Result<()> {
     if launch.applet_name.trim().is_empty() || launch.applet_name.contains('\0') {
         bail!("persistent worker applet name must be nonempty and contain no NUL byte");
@@ -1188,6 +1241,7 @@ fn validate_launch(launch: &WorkerLaunch) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn validate_request(launch: &WorkerLaunch, request: &WorkerRequest) -> Result<()> {
     if request
         .arguments
@@ -1234,6 +1288,7 @@ fn validate_request(launch: &WorkerLaunch, request: &WorkerRequest) -> Result<()
     Ok(())
 }
 
+#[cfg(unix)]
 fn ensure_policy_unchanged(launch: &WorkerLaunch) -> Result<()> {
     if crate::capabilities::policy_fingerprint(&launch.registry, &launch.applet_name)?
         != launch.policy_fingerprint
@@ -1243,10 +1298,12 @@ fn ensure_policy_unchanged(launch: &WorkerLaunch) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn os_str_contains_nul(value: &OsStr) -> bool {
     value.as_encoded_bytes().contains(&0)
 }
 
+#[cfg(unix)]
 fn binary_identity(
     binary: &PathBuf,
     deadline: Option<Instant>,
@@ -1267,6 +1324,7 @@ fn binary_identity(
     Ok(hasher.finalize().into())
 }
 
+#[cfg(unix)]
 fn min_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.min(right)),
@@ -1275,6 +1333,7 @@ fn min_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant
     }
 }
 
+#[cfg(unix)]
 fn check_cancel_deadline(cancelled: &AtomicBool, deadline: Option<Instant>) -> Result<()> {
     if cancelled.load(Ordering::Relaxed) {
         return Err(WorkerError::new(
@@ -1297,7 +1356,7 @@ fn check_cancel_deadline(cancelled: &AtomicBool, deadline: Option<Instant>) -> R
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

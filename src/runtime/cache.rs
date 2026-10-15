@@ -5,7 +5,9 @@ use std::io::Seek;
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
-use std::time::{Duration, SystemTime};
+#[cfg(unix)]
+use std::time::Duration;
+use std::time::SystemTime;
 
 const MAX_CACHE_ENTRIES: usize = 128;
 const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;

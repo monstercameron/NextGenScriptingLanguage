@@ -681,19 +681,20 @@ pub(crate) fn validate_lock_path(lock: &Path, target: &Path) -> Result<(), Apple
             "lock path must be distinct from the file being updated",
         ));
     }
-    let lock_metadata = fs::symlink_metadata(lock).ok();
-    let target_metadata = fs::symlink_metadata(target).ok();
+    #[cfg(unix)]
+    let (lock_metadata, target_metadata) = (
+        fs::symlink_metadata(lock).ok(),
+        fs::symlink_metadata(target).ok(),
+    );
+    #[cfg(unix)]
     if let (Some(lock_metadata), Some(target_metadata)) = (lock_metadata, target_metadata) {
-        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        if lock_metadata.dev() == target_metadata.dev()
+            && lock_metadata.ino() == target_metadata.ino()
         {
-            use std::os::unix::fs::MetadataExt;
-            if lock_metadata.dev() == target_metadata.dev()
-                && lock_metadata.ino() == target_metadata.ino()
-            {
-                return Err(invalid(
-                    "lock path must be distinct from the file being updated",
-                ));
-            }
+            return Err(invalid(
+                "lock path must be distinct from the file being updated",
+            ));
         }
     }
     Ok(())
@@ -921,6 +922,8 @@ fn sync_directory(path: &Path) -> Result<(), AppletError> {
             .and_then(|directory| directory.sync_all())
             .map_err(|error| io_error(error, format!("syncing directory {}", path.display())))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

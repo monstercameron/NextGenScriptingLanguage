@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
 use std::net::TcpListener;
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command as ProcessCommand;
 use std::thread;
 

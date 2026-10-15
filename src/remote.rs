@@ -39,6 +39,7 @@ pub const DEFAULT_MAX_REQUEST_BYTES: usize = 1_048_576;
 pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 1_048_576;
 pub const MAX_TIMEOUT_MS: u64 = 300_000;
 pub const MAX_FRAME_BYTES: usize = 16 * 1_048_576;
+#[cfg(not(windows))]
 const MAX_CREDENTIAL_FILE_BYTES: usize = 64 * 1024;
 const MAX_TOKEN_BYTES: usize = 8192;
 const MAX_TEXT_FIELD_BYTES: usize = 16 * 1024;

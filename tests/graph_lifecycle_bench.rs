@@ -170,6 +170,7 @@ fn integer_schema() -> ValueSchema {
         items: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
+        enum_values: None,
     }
 }
 

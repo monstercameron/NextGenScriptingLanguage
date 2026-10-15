@@ -521,7 +521,7 @@ impl Journal {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn listener_event_cursor(&self) -> Option<ListenerEventCursor> {
         self.data.listener_cursor.clone()
     }

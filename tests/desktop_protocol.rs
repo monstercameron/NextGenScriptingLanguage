@@ -6,11 +6,12 @@
 
 use flow::capabilities::{AppletGrant, CapabilityPolicy, FilesystemGrant};
 use flow::contracts::{OutputType, PortDelivery, ValueSchema};
+#[cfg(unix)]
+use flow::desktop::QuickShellRenderer;
 use flow::desktop::{
-    EventDisposition, ProtocolRange, QuickShellRenderer, RendererCommand, RendererEvent,
-    RendererProtocol, RendererReply, RendererRequest, RendererResponse, WidgetContract,
-    DEFAULT_MAX_FRAME_BYTES, DEFAULT_MAX_QUEUED_EVENTS, DEFAULT_MAX_WIDGETS, RENDERER_PROTOCOL,
-    RENDERER_PROTOCOL_VERSION,
+    EventDisposition, ProtocolRange, RendererCommand, RendererEvent, RendererProtocol,
+    RendererReply, RendererRequest, RendererResponse, WidgetContract, DEFAULT_MAX_FRAME_BYTES,
+    DEFAULT_MAX_QUEUED_EVENTS, DEFAULT_MAX_WIDGETS, RENDERER_PROTOCOL, RENDERER_PROTOCOL_VERSION,
 };
 use flow::graph::PortSchema;
 use serde_json::json;

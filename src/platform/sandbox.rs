@@ -6,17 +6,29 @@
 //! command when a required sandbox cannot be established.
 
 use crate::capabilities::AppletGrant;
-use anyhow::{anyhow, bail, Context, Result};
+#[cfg(target_os = "macos")]
+use anyhow::anyhow;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use anyhow::Context;
+use anyhow::{bail, Result};
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 #[cfg(target_os = "linux")]
 use std::ffi::OsString;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::fmt;
 #[cfg(target_os = "macos")]
 use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::path::Path;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::path::PathBuf;
+use std::process::Command;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::process::Stdio;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use std::process::{Child, ExitStatus};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "macos")]
@@ -25,21 +37,25 @@ const MAC_SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 /// Classified only when a basic, permissive no-op probe proves that the OS
 /// facility itself cannot be used. Invalid applet profiles remain hard errors.
 #[derive(Debug)]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 struct SandboxUnavailable(String);
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl fmt::Display for SandboxUnavailable {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl std::error::Error for SandboxUnavailable {}
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn is_unavailable(error: &anyhow::Error) -> bool {
     error.downcast_ref::<SandboxUnavailable>().is_some()
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn unavailable(reason: impl Into<String>) -> anyhow::Error {
     SandboxUnavailable(reason.into()).into()
 }
@@ -84,6 +100,7 @@ fn preflight_with_probe(
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (grant, binary, cwd);
+        let _ = probe;
         bail!("required applet sandbox is unsupported on this platform");
     }
 }
@@ -123,6 +140,7 @@ where
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn wait_bounded(mut child: Child, description: &str) -> Result<ExitStatus> {
     const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
     let deadline = Instant::now() + PROBE_TIMEOUT;
@@ -867,6 +885,7 @@ fn is_system_runtime_path(path: &Path) -> bool {
         .any(|root| path == Path::new(root) || path.starts_with(root))
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn resolved_path(path: &Path, cwd: &Path) -> Result<PathBuf> {
     crate::capabilities::canonicalize_for_grant(path, cwd)
 }

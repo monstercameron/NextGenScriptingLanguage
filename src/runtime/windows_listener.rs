@@ -218,7 +218,7 @@ mod native_listener_tests {
                 max_record_bytes: 1024,
             },
             &signals,
-            &mut |_, _| Ok(()),
+            &mut |_, _, _| Ok(()),
             &mut ServiceResult::default(),
             None,
         );

@@ -553,7 +553,9 @@ fn schema_from_output(output: &OutputSchema) -> ValueSchema {
 mod tests {
     use super::*;
     use crate::contracts::OutputType;
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use tempfile::tempdir;
 
     #[cfg(unix)]

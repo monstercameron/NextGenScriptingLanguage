@@ -631,16 +631,18 @@ def run_campaign(
     )
 
     definition, scenarios = load_scenarios()
-    script_paths: Dict[str, Path] = {}
+    script_paths_by_task: Dict[str, Dict[str, Path]] = {}
+    reference_directories: Dict[str, Path] = {}
     for task_id in TASK_IDS:
+        script_paths_by_task[task_id] = {}
         for side, path in source_files(task_id).items():
             if not path.is_file():
                 raise BenchmarkError("checked-in reference source is missing: " + str(path))
-            existing = script_paths.get(side)
-            if existing is None:
-                script_paths[side] = path.resolve(strict=True)
-            elif existing.parent != path.parent.resolve(strict=True):
+            resolved = path.resolve(strict=True)
+            existing = reference_directories.setdefault(side, resolved.parent)
+            if existing != resolved.parent:
                 raise BenchmarkError("unexpected reference directory layout")
+            script_paths_by_task[task_id][side] = resolved
 
     path_value = _build_path()
     tools = _tool_paths(path_value)
@@ -698,7 +700,8 @@ def run_campaign(
             workspace = fixture_workspace(scratch / "workspaces", scenario)
             workspaces[scenario.name] = workspace
             commands[scenario.name] = _commands(
-                scenario, script_paths, binaries, manifest_directory, command_timeout_ms
+                scenario, script_paths_by_task[scenario.task_id], binaries,
+                manifest_directory, command_timeout_ms,
             )
             missing_tools = [name for name in _required_tools(scenario.task_id) if name not in tools]
             if missing_tools:

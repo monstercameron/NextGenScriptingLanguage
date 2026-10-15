@@ -13,6 +13,34 @@ import source_pair
 
 
 class MatchedLanguageContracts(unittest.TestCase):
+    def _campaign_fixture(self, root):
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        execute = bin_dir / "execute"
+        helper = bin_dir / "execute-applet"
+        bash = bin_dir / "bash"
+        for path, body in (
+            (execute, b"fixture execute binary"),
+            (helper, b"fixture helper binary"),
+            (bash, b"#!/bin/sh\nprintf 'fixture bash version\\n'\n"),
+        ):
+            path.write_bytes(body)
+            path.chmod(0o755)
+        source_root = root / "source"
+        (source_root / "src").mkdir(parents=True)
+        (source_root / "Cargo.toml").write_text("[package]\nname='fixture'\nversion='0.0.0'\n")
+        (source_root / "src/main.rs").write_text("fn main() {}\n")
+        catalog = root / "catalog"
+        catalog.mkdir()
+        (catalog / "unused.json").write_text("{}\n")
+        fake_tools = {}
+        for name in ("find", "basename", "sort", "tee", "cat", "jq"):
+            path = bin_dir / name
+            path.write_text("fixture tool\n")
+            path.chmod(0o755)
+            fake_tools[name] = path
+        return execute, source_root, catalog, bash, fake_tools
+
     def test_public_reference_workloads_have_independent_expected_bytes(self):
         definition, scenarios = bench.load_scenarios()
         self.assertTrue(definition["fixture_only"])
@@ -62,32 +90,8 @@ class MatchedLanguageContracts(unittest.TestCase):
     def test_campaign_preflight_failure_carries_arm_and_creates_no_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            bin_dir = root / "bin"
-            bin_dir.mkdir()
-            execute = bin_dir / "execute"
-            helper = bin_dir / "execute-applet"
-            bash = bin_dir / "bash"
-            for path, body in (
-                (execute, b"fixture execute binary"),
-                (helper, b"fixture helper binary"),
-                (bash, b"#!/bin/sh\nprintf 'fixture bash version\\n'\n"),
-            ):
-                path.write_bytes(body)
-                path.chmod(0o755)
-            source_root = root / "source"
-            (source_root / "src").mkdir(parents=True)
-            (source_root / "Cargo.toml").write_text("[package]\nname='fixture'\nversion='0.0.0'\n")
-            (source_root / "src/main.rs").write_text("fn main() {}\n")
-            catalog = root / "catalog"
-            catalog.mkdir()
-            (catalog / "unused.json").write_text("{}\n")
+            execute, source_root, catalog, bash, fake_tools = self._campaign_fixture(root)
             report = root / "report.json"
-            fake_tools = {}
-            for name in ("find", "basename", "sort", "tee", "cat", "jq"):
-                path = bin_dir / name
-                path.write_text("fixture tool\n")
-                path.chmod(0o755)
-                fake_tools[name] = path
 
             def runner(command, cwd, environment, timeout):
                 return source_pair.Completed(0, b"wrong\n", b"", 1)
@@ -105,6 +109,40 @@ class MatchedLanguageContracts(unittest.TestCase):
                         process_runner=runner,
                     )
             self.assertFalse(report.exists())
+
+    def test_campaign_dispatches_each_case_to_its_task_reference(self):
+        _, scenarios = bench.load_scenarios()
+        by_task_and_case = {(item.task_id, item.case_id): item for item in scenarios}
+        observed = set()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            execute, source_root, catalog, bash, fake_tools = self._campaign_fixture(root)
+
+            def runner(command, cwd, environment, timeout):
+                script = next(Path(item) for item in command[1:] if Path(item).suffix in (".program", ".sh"))
+                # The executable protocol derives its task from the selected
+                # artifact, so dispatching an inventory script into another
+                # task's fixture cannot accidentally get that fixture's oracle.
+                self.assertEqual(script.stem, cwd.parent.name)
+                scenario = by_task_and_case[(script.stem, cwd.name)]
+                side = "execute" if script.suffix == ".program" else "bash"
+                observed.add((side, scenario.name))
+                if side == "execute":
+                    index = command.index("--input")
+                    self.assertEqual(command[index + 1], scenario.program_input + "=" + scenario.input_value)
+                else:
+                    self.assertEqual(environment[scenario.environment_input], scenario.input_value)
+                (cwd / scenario.output_path).write_bytes(scenario.expected_stdout)
+                return source_pair.Completed(0, scenario.expected_stdout, b"", 123)
+
+            with patch.object(bench, "_tool_paths", return_value=fake_tools):
+                bench.run_campaign(
+                    execute, source_root, catalog, root / "report.json",
+                    execute_revision="fixture-source", bash_binary=bash,
+                    samples=1, warmups=0, timeout_seconds=2,
+                    command_timeout_ms=1000, process_runner=runner,
+                )
+        self.assertEqual(observed, {(side, item.name) for side in ("execute", "bash") for item in scenarios})
 
     def test_unexpected_filesystem_effect_fails_even_when_stdout_matches(self):
         scenario = bench.Scenario(

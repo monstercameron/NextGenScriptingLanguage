@@ -156,6 +156,16 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                         }
                     }
                 }
+                crate::ast::StepKind::SpawnJob { stages, .. } => {
+                    for stage in stages {
+                        for value in stage.call.parameters.values() {
+                            references(value, &mut needed);
+                        }
+                    }
+                }
+                crate::ast::StepKind::InspectJob { .. }
+                | crate::ast::StepKind::AwaitJob { .. }
+                | crate::ast::StepKind::CancelJob { .. } => {}
                 crate::ast::StepKind::If { condition, .. } => {
                     references(&condition.left, &mut needed);
                     references(&condition.right, &mut needed);

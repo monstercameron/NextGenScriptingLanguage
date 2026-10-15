@@ -1,0 +1,3 @@
+accept label as text
+every 2 seconds
+  then encode {"text": label} as json

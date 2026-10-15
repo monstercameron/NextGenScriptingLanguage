@@ -7,32 +7,34 @@
 //! retained between calls. Frame limits count the terminating line feed and
 //! apply to both directions.
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use anyhow::Context;
 use anyhow::{bail, Result};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use serde::{Deserialize, Serialize};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::collections::HashSet;
 use std::error::Error as StdError;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fmt;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::fs::File;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::sync::atomic::Ordering;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::sync::Condvar;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -40,11 +42,11 @@ use std::time::{Duration, Instant};
 const DEFAULT_POOL_CAPACITY: usize = 16;
 /// Upper bound for an explicitly configured worker pool.
 pub const MAX_POOL_CAPACITY: usize = 1024;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_POOL_WAIT: Duration = Duration::from_secs(30);
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(20);
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const IO_CHUNK_BYTES: usize = 8192;
 
 /// Spawn configuration for one applet worker identity.
@@ -54,7 +56,7 @@ const IO_CHUNK_BYTES: usize = 8192;
 /// the current process environment consistently.
 #[derive(Clone)]
 pub(crate) struct WorkerLaunch {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub registry: crate::manifest::Registry,
     pub applet_name: String,
     pub binary: PathBuf,
@@ -62,11 +64,11 @@ pub(crate) struct WorkerLaunch {
     pub environment: Vec<(OsString, OsString)>,
     policy_fingerprint: Option<[u8; 32]>,
     pub startup_arguments: Vec<OsString>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub timeout: Duration,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub max_frame_bytes: usize,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub max_stderr_bytes: usize,
 }
 
@@ -87,10 +89,10 @@ impl WorkerLaunch {
         if crate::capabilities::policy_fingerprint(&registry, &applet_name)? != policy_fingerprint {
             bail!("applet capability policy changed while preparing worker launch");
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         let _ = (timeout, max_frame_bytes, max_stderr_bytes);
         Ok(Self {
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             registry,
             applet_name,
             binary,
@@ -98,11 +100,11 @@ impl WorkerLaunch {
             environment,
             policy_fingerprint,
             startup_arguments,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             timeout,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             max_frame_bytes,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             max_stderr_bytes,
         })
     }
@@ -188,7 +190,7 @@ impl WorkerError {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn with_captured_response(mut self, stdout: Vec<u8>, stderr: Vec<u8>) -> Self {
         self.captured_stdout = Some(stdout);
         self.captured_stderr = Some(stderr);
@@ -204,7 +206,7 @@ impl fmt::Display for WorkerError {
 
 impl StdError for WorkerError {}
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn as_worker_error(error: anyhow::Error, fallback: WorkerErrorKind) -> anyhow::Error {
     if error.downcast_ref::<WorkerError>().is_some() {
         error
@@ -260,7 +262,7 @@ impl WorkerKey {
             && self.startup_arguments == launch.startup_arguments
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn from_launch(
         launch: &WorkerLaunch,
         deadline: Option<Instant>,
@@ -287,7 +289,7 @@ impl WorkerKey {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct WorkerSlot {
     id: u64,
     key: WorkerKey,
@@ -295,7 +297,7 @@ struct WorkerSlot {
     busy: bool,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[derive(Default)]
 struct PoolState {
     slots: Vec<WorkerSlot>,
@@ -309,10 +311,10 @@ struct PoolState {
 /// which kills and reaps all retained workers.
 pub struct WorkerPool {
     capacity: usize,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     state: Mutex<PoolState>,
     sensitivity_history: Mutex<HashMap<WorkerKey, crate::security::SensitivitySet>>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     changed: Condvar,
 }
 
@@ -336,10 +338,10 @@ impl WorkerPool {
         }
         Ok(Self {
             capacity,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             state: Mutex::new(PoolState::default()),
             sensitivity_history: Mutex::new(HashMap::new()),
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             changed: Condvar::new(),
         })
     }
@@ -352,7 +354,7 @@ impl WorkerPool {
     }
 
     pub(crate) const fn supported() -> bool {
-        cfg!(unix)
+        cfg!(any(unix, windows))
     }
 
     /// Read retained labels for matching launch metadata without hashing the
@@ -397,7 +399,7 @@ impl WorkerPool {
         launch: WorkerLaunch,
         request: WorkerRequest,
     ) -> Result<WorkerResponse> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (launch, request);
             Err(WorkerError::new(
@@ -409,7 +411,7 @@ impl WorkerPool {
             .into())
         }
 
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             if !Self::supported() {
                 return Err(WorkerError::new(
@@ -443,7 +445,7 @@ impl WorkerPool {
             }
 
             if let Some(worker) = lease.worker.as_mut() {
-                match worker.probe_idle() {
+                match worker.probe_idle(&request.cancelled, deadline) {
                     Ok(true) => {}
                     Ok(false) => {
                         // A previous request completed, but this worker exited
@@ -575,7 +577,7 @@ impl WorkerPool {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn acquire(
         &self,
         key: WorkerKey,
@@ -631,14 +633,14 @@ impl WorkerPool {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn lock_state(&self) -> std::sync::MutexGuard<'_, PoolState> {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn sensitivity_history_for_key(&self, key: &WorkerKey) -> crate::security::SensitivitySet {
         self.sensitivity_history
             .lock()
@@ -648,7 +650,7 @@ impl WorkerPool {
             .unwrap_or_else(crate::security::SensitivitySet::empty)
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn extend_sensitivity_history(
         &self,
         key: &WorkerKey,
@@ -664,7 +666,7 @@ impl WorkerPool {
             .extend(sensitivities);
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn reset_sensitivity_history(&self, key: &WorkerKey) {
         self.sensitivity_history
             .lock()
@@ -672,7 +674,7 @@ impl WorkerPool {
             .remove(key);
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn release(&self, id: u64, worker: Option<WorkerProcess>, retain: bool) {
         if retain {
             let mut retired = None;
@@ -711,7 +713,7 @@ impl WorkerPool {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn next_slot_id(state: &mut PoolState) -> u64 {
     loop {
         state.next_id = state.next_id.checked_add(1).unwrap_or(1).max(1);
@@ -721,7 +723,7 @@ fn next_slot_id(state: &mut PoolState) -> u64 {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct WorkerLease<'a> {
     pool: &'a WorkerPool,
     id: u64,
@@ -729,7 +731,7 @@ struct WorkerLease<'a> {
     retain: bool,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl<'a> WorkerLease<'a> {
     fn new(pool: &'a WorkerPool, id: u64, worker: Option<WorkerProcess>) -> Self {
         Self {
@@ -745,7 +747,7 @@ impl<'a> WorkerLease<'a> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Drop for WorkerLease<'_> {
     fn drop(&mut self) {
         self.pool.release(self.id, self.worker.take(), self.retain);
@@ -753,7 +755,7 @@ impl Drop for WorkerLease<'_> {
 }
 
 #[derive(Serialize)]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct RequestFrame<'a> {
     id: u64,
     arguments: &'a [String],
@@ -761,7 +763,7 @@ struct RequestFrame<'a> {
 }
 
 #[derive(Deserialize)]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[serde(deny_unknown_fields)]
 struct ResponseFrame {
     id: u64,
@@ -772,24 +774,30 @@ struct ResponseFrame {
 }
 
 #[cfg(unix)]
+type WorkerOutput = std::process::ChildStdout;
+#[cfg(windows)]
+type WorkerOutput = crate::platform::windows::Pump;
+
+#[cfg(any(unix, windows))]
 struct WorkerProcess {
     child: std::process::Child,
     input: std::process::ChildStdin,
-    output: std::process::ChildStdout,
+    output: WorkerOutput,
+    #[cfg(windows)]
+    job: crate::platform::windows::Job,
     next_request_id: u64,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct ExchangeFailure {
     kind: WorkerErrorKind,
     message: String,
     transmitted: bool,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl WorkerProcess {
     fn spawn(launch: &WorkerLaunch, spawned: &AtomicBool) -> Result<Self> {
-        use std::os::unix::process::CommandExt;
         use std::process::Stdio;
 
         ensure_policy_unchanged(launch)?;
@@ -814,16 +822,27 @@ impl WorkerProcess {
             .stdout(Stdio::piped())
             // Worker applet diagnostics are returned inside the response frame.
             // Keep the transport process's own stderr from blocking the pipe.
-            .stderr(Stdio::null())
-            .process_group(0);
-        let mut child = command
-            .spawn()
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        let (mut child, ()) = {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+            let child = command.spawn().with_context(|| {
+                format!("launching worker executable {}", launch.binary.display())
+            })?;
+            (child, ())
+        };
+        #[cfg(windows)]
+        let (mut child, job) = crate::platform::windows::Job::spawn(&mut command)
             .with_context(|| format!("launching worker executable {}", launch.binary.display()))?;
         spawned.store(true, Ordering::Relaxed);
         let input = match child.stdin.take() {
             Some(input) => input,
             None => {
+                #[cfg(unix)]
                 kill_process_group(child.id());
+                #[cfg(windows)]
+                job.terminate();
                 let _ = child.wait();
                 bail!("worker stdin pipe was not created");
             }
@@ -831,48 +850,128 @@ impl WorkerProcess {
         let output = match child.stdout.take() {
             Some(output) => output,
             None => {
+                #[cfg(unix)]
                 kill_process_group(child.id());
+                #[cfg(windows)]
+                job.terminate();
                 let _ = child.wait();
                 bail!("worker stdout pipe was not created");
             }
         };
+        #[cfg(unix)]
         if let Err(error) = set_nonblocking(&input).and_then(|()| set_nonblocking(&output)) {
             kill_process_group(child.id());
             let _ = child.wait();
             return Err(error).context("configuring worker protocol pipes");
         }
+        #[cfg(windows)]
+        let output = crate::platform::windows::Pump::new(output);
         Ok(Self {
             child,
             input,
             output,
+            #[cfg(windows)]
+            job,
             next_request_id: 1,
         })
     }
 
-    fn probe_idle(&mut self) -> Result<bool> {
-        let mut byte = [0u8; 1];
-        loop {
-            match self.output.read(&mut byte) {
-                Ok(0) => return Ok(false),
-                Ok(_) => {
-                    return Err(WorkerError::new(
-                        WorkerErrorKind::ProtocolError,
-                        false,
-                        None,
-                        "persistent worker wrote unsolicited bytes between requests",
-                    )
-                    .into());
+    fn probe_idle(&mut self, cancelled: &AtomicBool, deadline: Option<Instant>) -> Result<bool> {
+        #[cfg(unix)]
+        {
+            let _ = (cancelled, deadline);
+            let mut byte = [0u8; 1];
+            loop {
+                match self.output.read(&mut byte) {
+                    Ok(0) => return Ok(false),
+                    Ok(_) => {
+                        return Err(WorkerError::new(
+                            WorkerErrorKind::ProtocolError,
+                            false,
+                            None,
+                            "persistent worker wrote unsolicited bytes between requests",
+                        )
+                        .into());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        return Ok(true);
+                    }
+                    Err(error) => {
+                        return Err(WorkerError::new(
+                            WorkerErrorKind::IoError,
+                            false,
+                            None,
+                            format!("checking idle worker stdout: {error}"),
+                        )
+                        .into());
+                    }
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(true),
+            }
+        }
+        #[cfg(windows)]
+        {
+            let exited = match self.child.try_wait() {
+                Ok(Some(_)) => true,
+                Ok(None) => false,
                 Err(error) => {
                     return Err(WorkerError::new(
                         WorkerErrorKind::IoError,
                         false,
                         None,
-                        format!("checking idle worker stdout: {error}"),
+                        format!("checking idle worker process: {error}"),
                     )
                     .into());
+                }
+            };
+            if exited {
+                // The direct worker cannot accept another request. Terminating
+                // its Job also closes stdout inherited by any child processes;
+                // drain one bounded read so already-written protocol violations
+                // are reported before deciding to replace the idle worker.
+                self.job.terminate();
+            }
+            let mut byte = [0u8; 1];
+            loop {
+                if exited {
+                    check_cancel_deadline(cancelled, deadline)?;
+                }
+                match self.output.read(&mut byte) {
+                    Ok(0) => return Ok(false),
+                    Ok(_) => {
+                        return Err(WorkerError::new(
+                            WorkerErrorKind::ProtocolError,
+                            false,
+                            None,
+                            "persistent worker wrote unsolicited bytes between requests",
+                        )
+                        .into());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if !exited {
+                            return Ok(true);
+                        }
+                        std::thread::sleep(
+                            IO_POLL_INTERVAL.min(
+                                deadline
+                                    .map(|until| until.saturating_duration_since(Instant::now()))
+                                    .unwrap_or(IO_POLL_INTERVAL),
+                            ),
+                        );
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                        return Ok(false);
+                    }
+                    Err(error) => {
+                        return Err(WorkerError::new(
+                            WorkerErrorKind::IoError,
+                            false,
+                            None,
+                            format!("checking idle worker stdout: {error}"),
+                        )
+                        .into());
+                    }
                 }
             }
         }
@@ -912,48 +1011,7 @@ impl WorkerProcess {
             transmitted: false,
         })?;
 
-        let mut transmitted = false;
-        let mut written = 0;
-        while written < frame.bytes.len() {
-            if let Err(error) = check_cancel_deadline(&request.cancelled, deadline) {
-                return Err(exchange_failure(error, transmitted));
-            }
-            match self.input.write(&frame.bytes[written..]) {
-                Ok(0) => {
-                    return Err(ExchangeFailure {
-                        kind: WorkerErrorKind::TransportError,
-                        message: "writing worker request made no progress".into(),
-                        transmitted,
-                    });
-                }
-                Ok(count) => {
-                    written += count;
-                    transmitted = true;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if let Err(error) = wait_ready(
-                        self.input.as_raw_fd(),
-                        libc::POLLOUT,
-                        &request.cancelled,
-                        deadline,
-                    ) {
-                        return Err(exchange_failure(error, transmitted));
-                    }
-                }
-                Err(error) => {
-                    return Err(ExchangeFailure {
-                        kind: if error.kind() == std::io::ErrorKind::BrokenPipe {
-                            WorkerErrorKind::TransportError
-                        } else {
-                            WorkerErrorKind::IoError
-                        },
-                        message: format!("writing worker request: {error}"),
-                        transmitted,
-                    });
-                }
-            }
-        }
+        let transmitted = self.write_frame(frame.bytes, request, deadline)?;
         self.next_request_id = next_id;
 
         let response_bytes = match read_frame(
@@ -989,19 +1047,155 @@ impl WorkerProcess {
             spawned_process: false,
         })
     }
+
+    fn write_frame(
+        &mut self,
+        bytes: Vec<u8>,
+        request: &WorkerRequest,
+        deadline: Option<Instant>,
+    ) -> std::result::Result<bool, ExchangeFailure> {
+        #[cfg(unix)]
+        {
+            let mut transmitted = false;
+            let mut written = 0;
+            while written < bytes.len() {
+                if let Err(error) = check_cancel_deadline(&request.cancelled, deadline) {
+                    return Err(exchange_failure(error, transmitted));
+                }
+                match self.input.write(&bytes[written..]) {
+                    Ok(0) => {
+                        return Err(ExchangeFailure {
+                            kind: WorkerErrorKind::TransportError,
+                            message: "writing worker request made no progress".into(),
+                            transmitted,
+                        });
+                    }
+                    Ok(count) => {
+                        written += count;
+                        transmitted = true;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if let Err(error) = wait_ready(
+                            self.input.as_raw_fd(),
+                            libc::POLLOUT,
+                            &request.cancelled,
+                            deadline,
+                        ) {
+                            return Err(exchange_failure(error, transmitted));
+                        }
+                    }
+                    Err(error) => {
+                        return Err(ExchangeFailure {
+                            kind: if error.kind() == std::io::ErrorKind::BrokenPipe {
+                                WorkerErrorKind::TransportError
+                            } else {
+                                WorkerErrorKind::IoError
+                            },
+                            message: format!("writing worker request: {error}"),
+                            transmitted,
+                        });
+                    }
+                }
+            }
+            Ok(transmitted)
+        }
+        #[cfg(windows)]
+        {
+            let input =
+                crate::platform::windows::duplicate_handle_file(self.input.as_raw_handle() as _)
+                    .map_err(|error| ExchangeFailure {
+                        kind: WorkerErrorKind::IoError,
+                        message: format!("duplicating worker stdin handle: {error:#}"),
+                        transmitted: false,
+                    })?;
+            let writer = std::thread::spawn(move || {
+                let mut input = input;
+                let mut written = 0;
+                let mut attempted = false;
+                while written < bytes.len() {
+                    attempted = true;
+                    match input.write(&bytes[written..]) {
+                        Ok(0) => {
+                            return (
+                                written,
+                                attempted,
+                                Err(std::io::Error::new(
+                                    std::io::ErrorKind::WriteZero,
+                                    "writing worker request made no progress",
+                                )),
+                            );
+                        }
+                        Ok(count) => written += count,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => return (written, attempted, Err(error)),
+                    }
+                }
+                (written, attempted, Ok(()))
+            });
+
+            loop {
+                if writer.is_finished() {
+                    let (written, _, result) = writer.join().map_err(|_| ExchangeFailure {
+                        kind: WorkerErrorKind::IoError,
+                        message: "worker stdin writer thread panicked".into(),
+                        transmitted: true,
+                    })?;
+                    if let Err(error) = result {
+                        return Err(ExchangeFailure {
+                            kind: if error.kind() == std::io::ErrorKind::BrokenPipe {
+                                WorkerErrorKind::TransportError
+                            } else {
+                                WorkerErrorKind::IoError
+                            },
+                            message: format!("writing worker request: {error}"),
+                            transmitted: written > 0,
+                        });
+                    }
+                    return Ok(written > 0);
+                }
+
+                if let Err(error) = check_cancel_deadline(&request.cancelled, deadline) {
+                    self.job.terminate();
+                    crate::platform::windows::cancel_synchronous_io(&writer);
+                    let transmitted = writer
+                        .join()
+                        .map(|(written, attempted, _)| written > 0 || attempted)
+                        .unwrap_or(true);
+                    return Err(exchange_failure(error, transmitted));
+                }
+
+                std::thread::sleep(
+                    IO_POLL_INTERVAL.min(
+                        deadline
+                            .map(|until| until.saturating_duration_since(Instant::now()))
+                            .unwrap_or(IO_POLL_INTERVAL),
+                    ),
+                );
+            }
+        }
+    }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Drop for WorkerProcess {
     fn drop(&mut self) {
-        // The child remains unreaped until wait, so its process-group id cannot
-        // be recycled between the group kill and reaping the direct child.
-        kill_process_group(self.child.id());
+        #[cfg(unix)]
+        {
+            // The child remains unreaped until wait, so its process-group id cannot
+            // be recycled between the group kill and reaping the direct child.
+            kill_process_group(self.child.id());
+        }
+        #[cfg(windows)]
+        {
+            self.job.terminate();
+            self.output.shutdown();
+        }
         let _ = self.child.wait();
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn exchange_failure(error: anyhow::Error, transmitted: bool) -> ExchangeFailure {
     let kind = error
         .downcast_ref::<WorkerError>()
@@ -1087,9 +1281,9 @@ fn wait_ready(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn read_frame(
-    reader: &mut (impl Read + std::os::fd::AsRawFd),
+    reader: &mut WorkerOutput,
     max_frame_bytes: usize,
     cancelled: &AtomicBool,
     deadline: Option<Instant>,
@@ -1097,56 +1291,65 @@ fn read_frame(
     let mut frame = Vec::with_capacity(max_frame_bytes.min(4096));
     let mut chunk = [0u8; IO_CHUNK_BYTES];
     loop {
-        check_cancel_deadline(cancelled, deadline)?;
-        match reader.read(&mut chunk) {
-            Ok(0) => {
+        let count = read_worker_chunk(reader, &mut chunk, cancelled, deadline)?;
+        if count == 0 {
+            return Err(WorkerError::new(
+                WorkerErrorKind::TransportError,
+                false,
+                None,
+                "persistent worker closed stdout before completing a response frame",
+            )
+            .into());
+        }
+        let received = &chunk[..count];
+        if let Some(newline) = received.iter().position(|byte| *byte == b'\n') {
+            let prefix = &received[..newline];
+            let total = frame.len().saturating_add(prefix.len()).saturating_add(1);
+            if total > max_frame_bytes {
                 return Err(WorkerError::new(
-                    WorkerErrorKind::TransportError,
+                    WorkerErrorKind::ProtocolError,
                     false,
                     None,
-                    "persistent worker closed stdout before completing a response frame",
+                    format!("persistent worker response frame exceeds {max_frame_bytes} bytes"),
                 )
                 .into());
             }
-            Ok(count) => {
-                let received = &chunk[..count];
-                if let Some(newline) = received.iter().position(|byte| *byte == b'\n') {
-                    let prefix = &received[..newline];
-                    let total = frame.len().saturating_add(prefix.len()).saturating_add(1);
-                    if total > max_frame_bytes {
-                        return Err(WorkerError::new(
-                            WorkerErrorKind::ProtocolError,
-                            false,
-                            None,
-                            format!(
-                                "persistent worker response frame exceeds {max_frame_bytes} bytes"
-                            ),
-                        )
-                        .into());
-                    }
-                    frame.extend_from_slice(prefix);
-                    if newline + 1 != received.len() {
-                        return Err(WorkerError::new(
-                            WorkerErrorKind::ProtocolError,
-                            false,
-                            None,
-                            "persistent worker wrote bytes after a response frame",
-                        )
-                        .into());
-                    }
-                    return Ok(frame);
-                }
-                if frame.len().saturating_add(count).saturating_add(1) > max_frame_bytes {
-                    return Err(WorkerError::new(
-                        WorkerErrorKind::ProtocolError,
-                        false,
-                        None,
-                        format!("persistent worker response frame exceeds {max_frame_bytes} bytes"),
-                    )
-                    .into());
-                }
-                frame.extend_from_slice(received);
+            frame.extend_from_slice(prefix);
+            if newline + 1 != received.len() {
+                return Err(WorkerError::new(
+                    WorkerErrorKind::ProtocolError,
+                    false,
+                    None,
+                    "persistent worker wrote bytes after a response frame",
+                )
+                .into());
             }
+            return Ok(frame);
+        }
+        if frame.len().saturating_add(count).saturating_add(1) > max_frame_bytes {
+            return Err(WorkerError::new(
+                WorkerErrorKind::ProtocolError,
+                false,
+                None,
+                format!("persistent worker response frame exceeds {max_frame_bytes} bytes"),
+            )
+            .into());
+        }
+        frame.extend_from_slice(received);
+    }
+}
+
+#[cfg(unix)]
+fn read_worker_chunk(
+    reader: &mut WorkerOutput,
+    buffer: &mut [u8],
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> Result<usize> {
+    loop {
+        check_cancel_deadline(cancelled, deadline)?;
+        match reader.read(buffer) {
+            Ok(count) => return Ok(count),
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 wait_ready(reader.as_raw_fd(), libc::POLLIN, cancelled, deadline)?;
@@ -1164,13 +1367,48 @@ fn read_frame(
     }
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+fn read_worker_chunk(
+    reader: &mut WorkerOutput,
+    buffer: &mut [u8],
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> Result<usize> {
+    loop {
+        check_cancel_deadline(cancelled, deadline)?;
+        match reader.read(buffer) {
+            Ok(count) => return Ok(count),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(
+                    IO_POLL_INTERVAL.min(
+                        deadline
+                            .map(|until| until.saturating_duration_since(Instant::now()))
+                            .unwrap_or(IO_POLL_INTERVAL),
+                    ),
+                );
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(0),
+            Err(error) => {
+                return Err(WorkerError::new(
+                    WorkerErrorKind::IoError,
+                    false,
+                    None,
+                    format!("reading persistent worker response: {error}"),
+                )
+                .into());
+            }
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
 struct CappedBuffer {
     bytes: Vec<u8>,
     maximum: usize,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl CappedBuffer {
     fn new(maximum: usize) -> Self {
         Self {
@@ -1191,7 +1429,7 @@ impl CappedBuffer {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Write for CappedBuffer {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let remaining = self.maximum.saturating_sub(self.bytes.len());
@@ -1211,7 +1449,7 @@ impl Write for CappedBuffer {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn validate_launch(launch: &WorkerLaunch) -> Result<()> {
     if launch.applet_name.trim().is_empty() || launch.applet_name.contains('\0') {
         bail!("persistent worker applet name must be nonempty and contain no NUL byte");
@@ -1246,7 +1484,7 @@ fn validate_launch(launch: &WorkerLaunch) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn validate_request(launch: &WorkerLaunch, request: &WorkerRequest) -> Result<()> {
     if request
         .arguments
@@ -1293,7 +1531,7 @@ fn validate_request(launch: &WorkerLaunch, request: &WorkerRequest) -> Result<()
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn ensure_policy_unchanged(launch: &WorkerLaunch) -> Result<()> {
     if crate::capabilities::policy_fingerprint(&launch.registry, &launch.applet_name)?
         != launch.policy_fingerprint
@@ -1303,12 +1541,20 @@ fn ensure_policy_unchanged(launch: &WorkerLaunch) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn os_str_contains_nul(value: &OsStr) -> bool {
-    value.as_encoded_bytes().contains(&0)
+    #[cfg(unix)]
+    {
+        value.as_encoded_bytes().contains(&0)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        value.encode_wide().any(|unit| unit == 0)
+    }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn binary_identity(
     binary: &PathBuf,
     deadline: Option<Instant>,
@@ -1329,7 +1575,7 @@ fn binary_identity(
     Ok(hasher.finalize().into())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn min_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.min(right)),
@@ -1338,7 +1584,7 @@ fn min_deadline(left: Option<Instant>, right: Option<Instant>) -> Option<Instant
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn check_cancel_deadline(cancelled: &AtomicBool, deadline: Option<Instant>) -> Result<()> {
     if cancelled.load(Ordering::Relaxed) {
         return Err(WorkerError::new(
@@ -1361,7 +1607,7 @@ fn check_cancel_deadline(cancelled: &AtomicBool, deadline: Option<Instant>) -> R
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
 

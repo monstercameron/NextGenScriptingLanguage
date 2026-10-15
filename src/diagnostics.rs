@@ -161,6 +161,10 @@ fn is_contextual_header(tokens: &[Token<'_>]) -> bool {
         || word(0, "while")
         || word(0, "parallel")
         || word(0, "race")
+        || word(0, "spawn")
+        || word(0, "inspect")
+        || word(0, "await")
+        || word(0, "cancel")
         || word(0, "otherwise")
         || word(0, "break")
         || word(0, "continue")
@@ -326,6 +330,9 @@ fn collect_calls<'a>(steps: &'a [Step], calls: &mut Vec<(usize, &'a Invocation)>
             StepKind::CallProgram { .. } => {}
             StepKind::TaskGroup { tasks, .. } => {
                 calls.extend(tasks.iter().map(|call| (step.line, call)));
+            }
+            StepKind::SpawnJob { stages, .. } => {
+                calls.extend(stages.iter().map(|stage| (stage.line, &stage.call)));
             }
             _ => {}
         }

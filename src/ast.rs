@@ -87,6 +87,13 @@ pub enum TaskGroupMode {
     Race,
 }
 
+/// One native command in a named background pipeline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobStage {
+    pub line: usize,
+    pub call: Invocation,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StepKind {
     /// Bounded, structured fan-out of independent named applet calls.
@@ -95,6 +102,27 @@ pub enum StepKind {
         limit: usize,
         binding: String,
         tasks: Vec<Invocation>,
+    },
+    /// Start one owned native pipeline and retain its handle in the current
+    /// finite or reusable-program scope.
+    SpawnJob {
+        name: String,
+        stages: Vec<JobStage>,
+    },
+    /// Read a nonblocking snapshot of a named job into a JSON binding.
+    InspectJob {
+        name: String,
+        binding: String,
+    },
+    /// Join a named job and optionally bind its terminal status and record.
+    AwaitJob {
+        name: String,
+        status_binding: Option<String>,
+        result_binding: Option<String>,
+    },
+    /// Request cancellation and wait for the named job's process tree to reap.
+    CancelJob {
+        name: String,
     },
     /// `end` is relative to the header and points just beyond EndLoop.
     Loop {

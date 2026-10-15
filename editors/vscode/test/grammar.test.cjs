@@ -182,11 +182,16 @@ test('all real .program files tokenize with bounded lines and closed line states
   console.log(`Tokenized ${files.length} real programs / ${lines} lines`);
 });
 function expand(body) {
-  return body.join('\n').replace(/\$\{\d+:([^}]*)\}/g, '$1').replace(/\$\d+/g, '') + '\n';
+  const defaults = new Map();
+  const source = body.join('\n').replace(/\$\{(\d+):([^}]*)\}/g, (_, index, value) => {
+    if (!defaults.has(index)) defaults.set(index, value);
+    return value;
+  });
+  return source.replace(/\$(\d+)\b/g, (_, index) => defaults.get(index) || '') + '\n';
 }
 test('complete snippet defaults pass the actual execute check without running commands', () => {
   const snippets = JSON.parse(fs.readFileSync(path.join(extension, 'snippets/execute.code-snippets'), 'utf8'));
-  assert.equal(Object.keys(snippets).length, 34);
+  assert.equal(Object.keys(snippets).length, 35);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'execute-vscode-'));
   const executable = process.platform === 'win32' ? 'execute.exe' : 'execute';
   const debugBinary = path.join(project, 'target/debug', executable);
@@ -206,7 +211,7 @@ test('complete snippet defaults pass the actual execute check without running co
       assert.equal(result.status, 0, `${name}: ${result.stderr || result.error}`);
       checked++;
     }
-    assert.equal(checked, 26);
+    assert.equal(checked, 27);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -331,6 +336,42 @@ test('try clauses, lexical transfers, and bounded task groups match current sour
   for (const line of ['try', 'catch failure', 'finally', 'parallel at most 2 as results', 'race at most 2 as winner']) {
     assert.ok(indent.test(line), line);
   }
+});
+
+test('named finite jobs distinguish controls, job references and result bindings', () => {
+  const spawn = 'spawn as build # a named finite job';
+  scope(spawn, 'spawn', 'keyword.control.job');
+  scope(spawn, 'as', 'keyword.operator.binding');
+  scope(spawn, 'build', 'variable.other.definition.job');
+  scope(spawn, '# a named', 'comment.line.number-sign');
+
+  const stage = '  run "printf" with arguments ["%s\\n", "await cancel"]';
+  scope(stage, 'printf', 'entity.name.function.applet');
+  scope(stage, '%s\\n', 'string.quoted.double');
+  scope(stage, 'await cancel', 'string.quoted.double');
+
+  const inspect = 'inspect build as build_state';
+  scope(inspect, 'inspect', 'keyword.control.job');
+  scope(inspect, 'build', 'variable.other.job');
+  scope(inspect, 'as', 'keyword.operator.binding');
+  scope(inspect, 'build_state', 'variable.other.definition');
+
+  const awaitJob = 'await build and keep status as code and keep result as record';
+  scope(awaitJob, 'await', 'keyword.control.job');
+  scope(awaitJob, 'build', 'variable.other.job');
+  scope(awaitJob, 'keep status', 'storage.modifier.status');
+  scope(awaitJob, 'code', 'variable.other.definition');
+  scope(awaitJob, 'keep result', 'storage.modifier.result');
+  scope(awaitJob, 'record', 'variable.other.definition');
+  scope('await build and keep result as record', 'keep result', 'storage.modifier.result');
+
+  scope('cancel build', 'cancel', 'keyword.control.job');
+  scope('cancel build', 'build', 'variable.other.job');
+  const commented = 'await build # await ignored';
+  scope(commented, 'await', 'keyword.control.job');
+  scope(commented, 'await', 'comment.line.number-sign', 1);
+  scope('run "await" with message "cancel job"', 'await', 'string.quoted.double');
+  scope('run "await" with message "cancel job"', 'cancel job', 'string.quoted.double');
 });
 
 test('JSON values highlight null, signed decimals, nested objects and dynamic pointers', () => {

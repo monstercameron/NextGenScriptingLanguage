@@ -4,9 +4,10 @@ struct ManagedChild {
     reaped: bool,
     stderr: Option<std::process::ChildStderr>,
     diagnostic: Vec<u8>,
+    diagnostic_truncated: bool,
 }
 #[derive(Default)]
-struct Children(Vec<ManagedChild>);
+struct Children(Vec<ManagedChild>, Option<Arc<Mutex<Vec<bool>>>>);
 fn kill_group(child: &Child) {
     // Each applet starts its own group. A negative PID addresses descendants
     // that retain that group, without touching the runner or its terminal.
@@ -16,6 +17,13 @@ fn kill_group(child: &Child) {
 }
 impl Drop for Children {
     fn drop(&mut self) {
+        if let Some(target) = &self.1 {
+            if let Ok(mut target) = target.lock() {
+                for (target, child) in target.iter_mut().zip(&self.0) {
+                    *target = child.diagnostic_truncated;
+                }
+            }
+        }
         for child in &mut self.0 {
             if !child.reaped {
                 kill_group(&child.child);

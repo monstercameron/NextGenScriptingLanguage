@@ -729,6 +729,15 @@ pub fn validate(screen: &Screen, registry: &Registry) -> Result<()> {
             for (index, action) in handler.actions.iter().enumerate() {
                 match action {
                     Action::Native(step) => {
+                        if matches!(
+                            step.kind,
+                            crate::ast::StepKind::SpawnJob { .. }
+                                | crate::ast::StepKind::InspectJob { .. }
+                                | crate::ast::StepKind::AwaitJob { .. }
+                                | crate::ast::StepKind::CancelJob { .. }
+                        ) {
+                            bail!("line {}: TUI handlers do not support finite background job handles", step.line);
+                        }
                         if matches!(step.kind, crate::ast::StepKind::ReadStdin { .. }) {
                             bail!("line {}: TUI handlers use component inputs and widget state, not read from stdin", step.line);
                         }

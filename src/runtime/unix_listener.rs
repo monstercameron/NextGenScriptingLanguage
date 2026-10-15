@@ -89,6 +89,7 @@ fn listen(
                 reaped: false,
                 stderr: None,
                 diagnostic: Vec::new(),
+                diagnostic_truncated: false,
             });
             stopped(signals)?;
             result.launched_processes += 1;

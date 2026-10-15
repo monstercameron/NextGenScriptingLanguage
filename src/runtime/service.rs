@@ -604,7 +604,7 @@ fn run_service_with_signals(
     limits: &ServiceLimits,
     checkpoint: Option<&CheckpointOptions>,
     schedule_options: ScheduleOptions,
-    signals: Signals,
+    mut signals: Signals,
     additional_sensitivity: Option<crate::security::SensitivitySet>,
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<ServiceResult> {
@@ -623,6 +623,10 @@ fn run_service_with_signals(
     stopped(&signals)?;
     let module_session =
         super::preload_program_modules(program, registry, &signals, &capability_cwd)?;
+    if module_session.has_background_job_operations() {
+        bail!("native background jobs are unsupported in services and listeners, including imported program modules");
+    }
+    signals.background_jobs_allowed = false;
     let mut sensitivity_floor = super::workflow_sensitivity_floor(
         program,
         registry,

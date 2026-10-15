@@ -65,6 +65,18 @@ test('unsupported source result capture is rejected before an earlier virtual sa
   assert.equal(response.files['/workspace/marker.txt'], undefined);
   assert.deepEqual(response.written_files, []);
 });
+test('native background jobs are rejected before virtual effects, including reusable calls', async () => {
+  const sources = [
+    'run printf with message "effect"\nthen save to "marker.txt"\nspawn as worker\n  run "true"\nawait worker',
+    'define a program named work\n  spawn as worker\n    run "true"\n  await worker\nrun printf with message "effect"\nthen save to "marker.txt"\nrun program work',
+  ];
+  for (const source of sources) {
+    const call = await session();
+    const response = bad(run(call, source), /native background jobs/);
+    assert.equal(response.files['/workspace/marker.txt'], undefined);
+    assert.deepEqual(response.written_files, []);
+  }
+});
 for (const example of examples) {
   test(`WASM example: ${example.id}`, async () => {
     const call = await seeded();

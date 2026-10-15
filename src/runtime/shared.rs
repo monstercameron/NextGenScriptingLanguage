@@ -70,9 +70,31 @@ fn pipe_in_steps(steps: &[crate::ast::Step], index: usize) -> bool {
     )
 }
 
+pub(super) fn has_job_operations(program: &Program) -> bool {
+    program
+        .steps
+        .iter()
+        .chain(
+            program
+                .definitions
+                .values()
+                .flat_map(|definition| &definition.steps),
+        )
+        .any(|step| {
+            matches!(
+                step.kind,
+                StepKind::SpawnJob { .. }
+                    | StepKind::InspectJob { .. }
+                    | StepKind::AwaitJob { .. }
+                    | StepKind::CancelJob { .. }
+            )
+        })
+}
+
 /// Validate the complete script before launching any command or saving files.
 pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
     crate::inputs::validate(&program.inputs)?;
+    let has_jobs = has_job_operations(program);
     #[cfg(target_arch = "wasm32")]
     if program
         .steps
@@ -87,6 +109,10 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
     {
         bail!("browser host does not support task groups");
     }
+    #[cfg(target_arch = "wasm32")]
+    if has_jobs {
+        bail!("browser host does not support native background jobs");
+    }
     #[cfg(not(target_arch = "wasm32"))]
     validate_worker_support(program, registry)?;
     #[cfg(target_arch = "wasm32")]
@@ -95,6 +121,9 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(trigger) = &program.trigger {
+        if has_jobs {
+            bail!("native background jobs are supported only in finite programs; services and listeners have separate lifetimes");
+        }
         let (setup, body) = service::split_program(program);
         if let Some(step) = body
             .steps
@@ -183,6 +212,9 @@ fn validate_worker_support(program: &Program, registry: &Registry) -> Result<()>
             match &step.kind {
                 StepKind::Invoke { call, .. } => calls.push(call),
                 StepKind::TaskGroup { tasks, .. } => calls.extend(tasks),
+                StepKind::SpawnJob { stages, .. } => {
+                    calls.extend(stages.iter().map(|stage| &stage.call))
+                }
                 _ => {}
             }
         }
@@ -234,6 +266,9 @@ pub(crate) fn validate_live(
     names: BTreeSet<String>,
     has_data: bool,
 ) -> Result<()> {
+    if has_job_operations(program) {
+        bail!("live programs do not support finite-scope background job handles");
+    }
     validate_inputs(program, registry, names, has_data, true)
 }
 
@@ -259,6 +294,8 @@ fn validate_inputs(
     let mut flow = control::FlowState {
         names,
         types,
+        jobs: BTreeSet::new(),
+        unresolved_jobs: BTreeSet::new(),
         has_data,
         stdout_unavailable: false,
         started: has_data && !allow_rebinding,
@@ -275,6 +312,17 @@ fn validate_inputs(
         allow_rebinding,
         false,
     )?;
+    if !flow.unresolved_jobs.is_empty() {
+        let names = flow
+            .unresolved_jobs
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "every background job must be awaited or cancelled before normal scope exit: {names}"
+        );
+    }
     if program.steps.iter().any(|step| {
         matches!(
             step.kind,
@@ -305,6 +353,17 @@ fn validate_range(
         } = &step.kind
         {
             let finish = index + end;
+            if steps[index + 1..finish - 1].iter().any(|step| {
+                matches!(
+                    step.kind,
+                    StepKind::SpawnJob { .. }
+                        | StepKind::InspectJob { .. }
+                        | StepKind::AwaitJob { .. }
+                        | StepKind::CancelJob { .. }
+                )
+            }) {
+                bail!("line {}: background job operations are unsupported inside try/catch/finally blocks", step.line);
+            }
             let catch_at = catch.map(|offset| index + offset);
             let finally_at = finally.map(|offset| index + offset);
             let try_body_end = catch_at.or(finally_at).unwrap_or(finish - 1);
@@ -356,6 +415,20 @@ fn validate_range(
             };
 
             if let Some(finally_index) = finally_at {
+                if steps[finally_index + 1..finish - 1].iter().any(|step| {
+                    matches!(
+                        step.kind,
+                        StepKind::SpawnJob { .. }
+                            | StepKind::InspectJob { .. }
+                            | StepKind::AwaitJob { .. }
+                            | StepKind::CancelJob { .. }
+                    )
+                }) {
+                    bail!(
+                        "line {}: background job operations are unsupported in finally blocks",
+                        steps[finally_index].line
+                    );
+                }
                 // Cancellation skips catch and may arrive at any point in the
                 // try body, so finally may rely only on names present on entry.
                 // Its definitely-bound outputs are then added to normal paths.
@@ -434,6 +507,12 @@ fn validate_range(
                 return_allowed,
             )
             .with_context(|| format!("loop at line {}", step.line))?;
+            if body.jobs != flow.jobs || body.unresolved_jobs != flow.unresolved_jobs {
+                bail!(
+                    "line {}: background job operations are unsupported inside loops",
+                    step.line
+                );
+            }
             // A loop may execute zero times. Its existing bindings retain their
             // types, and body-local names never become available afterwards.
             flow.has_data = true;
@@ -465,6 +544,8 @@ fn validate_range(
                     .iter()
                     .map(|input| (input.name.clone(), input.kind))
                     .collect(),
+                jobs: BTreeSet::new(),
+                unresolved_jobs: BTreeSet::new(),
                 has_data,
                 stdout_unavailable: *connection == Connection::Then && flow.stdout_unavailable,
                 started: false,
@@ -484,6 +565,9 @@ fn validate_range(
             .with_context(|| {
                 format!("program {:?}, called at line {}", call.operation, step.line)
             })?;
+            if !child.unresolved_jobs.is_empty() {
+                bail!("line {}: every background job in reusable program {:?} must be awaited or cancelled before return", step.line, call.operation);
+            }
             binding(
                 &call.binding,
                 &mut flow.names,
@@ -530,7 +614,11 @@ fn validate_range(
                     }
                     StepKind::ParseJson { .. }
                     | StepKind::TakeJson { .. }
-                    | StepKind::TaskGroup { .. } => true,
+                    | StepKind::TaskGroup { .. }
+                    | StepKind::SpawnJob { .. }
+                    | StepKind::InspectJob { .. }
+                    | StepKind::AwaitJob { .. }
+                    | StepKind::CancelJob { .. } => true,
                     StepKind::CallProgram { .. } | StepKind::Loop { .. } => true,
                     _ => false,
                 });
@@ -635,6 +723,8 @@ fn validate_range(
                             step.line
                         );
                     }
+                    flow.jobs.clear();
+                    flow.unresolved_jobs.clear();
                 }
                 StepKind::UseFolder { path } => {
                     if flow.started {
@@ -778,6 +868,132 @@ fn validate_range(
                     flow.bind_type(name, crate::ast::InputType::Json)?;
                     flow.has_data = true;
                     flow.stdout_unavailable = false;
+                    flow.started = true;
+                }
+                StepKind::SpawnJob { name, stages } => {
+                    if flow.loop_depth > 0 {
+                        bail!("background job operations are unsupported inside loops");
+                    }
+                    if stages.is_empty() || stages.len() > 16 {
+                        bail!("background pipeline must contain between 1 and 16 stages");
+                    }
+                    if !flow.jobs.insert(name.clone()) {
+                        bail!("background job {name:?} is already defined in this scope");
+                    }
+                    flow.unresolved_jobs.insert(name.clone());
+                    for (stage_index, stage) in stages.iter().enumerate() {
+                        let call = &stage.call;
+                        if call.cache
+                            || call.binding.is_some()
+                            || call.status_binding.is_some()
+                            || call.result_binding.is_some()
+                        {
+                            bail!("line {}: background pipeline stages cannot bind output, status, or result, or use `and cache`", stage.line);
+                        }
+                        let manifest = registry.resolve_call(call).with_context(|| {
+                            format!("line {}: resolving background stage", stage.line)
+                        })?;
+                        if manifest.builtin.is_some() {
+                            bail!(
+                                "line {}: interpreter builtins cannot run in a background pipeline",
+                                stage.line
+                            );
+                        }
+                        if manifest.execution_backend() != crate::contracts::AppletBackend::Command
+                        {
+                            bail!("line {}: background pipelines require native command applets or quoted direct executables", stage.line);
+                        }
+                        manifest
+                            .validate_with_types(call, &flow.types)
+                            .with_context(|| {
+                                format!("line {}: background pipeline parameters", stage.line)
+                            })?;
+                        if stage_index > 0 && !manifest.accepts_stdin {
+                            bail!(
+                                "line {}: applet {:?} does not accept background pipeline input",
+                                stage.line,
+                                manifest.name
+                            );
+                        }
+                        if let Some(stdio) = manifest.stdio() {
+                            if stdio.stderr.is_some_and(|mode| {
+                                mode != crate::contracts::StdioDisposition::Capture
+                            }) || (stage_index + 1 == stages.len()
+                                && stdio.stdout.is_some_and(|mode| {
+                                    mode != crate::contracts::StdioDisposition::Capture
+                                }))
+                            {
+                                bail!("line {}: background pipelines require captured stdout and stderr", stage.line);
+                            }
+                            if stage_index + 1 < stages.len()
+                                && stdio.stdout.is_some_and(|mode| {
+                                    mode != crate::contracts::StdioDisposition::Capture
+                                })
+                            {
+                                bail!("line {}: only the final background pipeline stage can discard or inherit stdout", stage.line);
+                            }
+                        }
+                        for value in call.parameters.values() {
+                            check_value(value, &flow.names)?;
+                        }
+                    }
+                    flow.started = true;
+                }
+                StepKind::InspectJob {
+                    name,
+                    binding: output,
+                } => {
+                    if flow.loop_depth > 0 {
+                        bail!("background job operations are unsupported inside loops");
+                    }
+                    if !flow.jobs.contains(name) {
+                        bail!("unknown or out-of-scope background job {name:?}");
+                    }
+                    binding(
+                        &Some(output.clone()),
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
+                    flow.bind_type(output, crate::ast::InputType::Json)?;
+                    flow.started = true;
+                }
+                StepKind::AwaitJob {
+                    name,
+                    status_binding,
+                    result_binding,
+                } => {
+                    if flow.loop_depth > 0 {
+                        bail!("background job operations are unsupported inside loops");
+                    }
+                    if !flow.jobs.contains(name) {
+                        bail!("unknown or out-of-scope background job {name:?}");
+                    }
+                    flow.unresolved_jobs.remove(name);
+                    for (binding_name, kind) in [
+                        (status_binding.as_ref(), crate::ast::InputType::Integer),
+                        (result_binding.as_ref(), crate::ast::InputType::Json),
+                    ] {
+                        if let Some(binding_name) = binding_name {
+                            binding(
+                                &Some(binding_name.clone()),
+                                &mut flow.names,
+                                allow_rebinding || flow.loop_depth > 0,
+                            )?;
+                            flow.bind_type(binding_name, kind)?;
+                        }
+                    }
+                    flow.has_data = true;
+                    flow.stdout_unavailable = false;
+                    flow.started = true;
+                }
+                StepKind::CancelJob { name } => {
+                    if flow.loop_depth > 0 {
+                        bail!("background job operations are unsupported inside loops");
+                    }
+                    if !flow.jobs.contains(name) {
+                        bail!("unknown or out-of-scope background job {name:?}");
+                    }
+                    flow.unresolved_jobs.remove(name);
                     flow.started = true;
                 }
                 StepKind::Invoke { call, connection } => {
@@ -1182,6 +1398,29 @@ pub fn explain_with_inputs(
                 "{mode:?} task group (limit {limit}) with {} applets as {binding}",
                 tasks.len()
             ),
+            StepKind::SpawnJob { name, stages } => format!(
+                "spawn named background job {name:?} with {} native pipeline stages",
+                stages.len()
+            ),
+            StepKind::InspectJob { name, binding } => {
+                format!("inspect background job {name:?} as {binding}")
+            }
+            StepKind::AwaitJob {
+                name,
+                status_binding,
+                result_binding,
+            } => format!(
+                "await background job {name:?}{}{}",
+                status_binding
+                    .as_ref()
+                    .map(|name| format!(" and keep status as {name}"))
+                    .unwrap_or_default(),
+                result_binding
+                    .as_ref()
+                    .map(|name| format!(" and keep result as {name}"))
+                    .unwrap_or_default()
+            ),
+            StepKind::CancelJob { name } => format!("cancel background job {name:?}"),
             StepKind::Save { path, .. } => format!(
                 "save finite output to {:?}",
                 resolve(path, &known).unwrap_or_else(|_| path.clone())

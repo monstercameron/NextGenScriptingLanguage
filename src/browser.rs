@@ -219,6 +219,10 @@ impl BrowserSession {
                 | StepKind::Finally
                 | StepKind::EndTry => Some("try/catch/finally"),
                 StepKind::TakeJsonDynamic { .. } => Some("dynamic JSON pointers"),
+                StepKind::SpawnJob { .. }
+                | StepKind::InspectJob { .. }
+                | StepKind::AwaitJob { .. }
+                | StepKind::CancelJob { .. } => Some("native background jobs"),
                 StepKind::Invoke { call, .. } if call.result_binding.is_some() => {
                     Some("source-level execution result capture")
                 }
@@ -375,6 +379,12 @@ impl BrowserSession {
                     }
                     StepKind::TaskGroup { .. } => {
                         bail!("browser host does not support task groups");
+                    }
+                    StepKind::SpawnJob { .. }
+                    | StepKind::InspectJob { .. }
+                    | StepKind::AwaitJob { .. }
+                    | StepKind::CancelJob { .. } => {
+                        bail!("browser host does not support native background jobs");
                     }
                     StepKind::Invoke { call, connection } => {
                         let manifest = self.registry.resolve_call(call)?.clone();

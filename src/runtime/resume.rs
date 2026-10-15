@@ -324,6 +324,11 @@ pub(super) fn uncertain_on_failure(
     Ok(false)
 }
 pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registry) -> Result<()> {
+    if super::has_job_operations(program) {
+        bail!(
+            "checkpointed and resumed programs do not support non-serializable background job handles"
+        );
+    }
     let mut depth = 0;
     for step in &program.steps {
         match &step.kind {
@@ -454,6 +459,9 @@ pub fn run_checkpointed(
     )?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     let module_session = preload_program_modules(program, registry, &signals, &cwd)?;
+    if module_session.has_background_job_operations() {
+        bail!("checkpointed and resumed programs do not support background job operations inside imported program modules");
+    }
     module_session.validate_checkpoint_identity()?;
     let sensitivity_floor =
         workflow_sensitivity_floor(program, registry, &module_session, &cwd, None)?;

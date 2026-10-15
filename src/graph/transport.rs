@@ -1832,12 +1832,16 @@ impl RuntimeGraphExecutor {
             stream_context = stream_context.with_module_session(Arc::clone(module_session));
         }
         let options = self.invocation_options(context)?;
-        let result = runtime::run_stream_with_context(
+        let metrics = Arc::clone(&context.metrics);
+        let process_observer: runtime::ProcessObserver =
+            Arc::new(move |count| metrics.add_processes(count));
+        runtime::run_stream_with_context_and_process_observer(
             &stream,
             &self.registry,
             &options,
             self.options.max_output_bytes,
             stream_context,
+            Some(process_observer),
             |record, run_cancelled, deadline| {
                 if run_cancelled.load(Ordering::Acquire) {
                     bail!("graph stream cancelled");
@@ -1860,7 +1864,6 @@ impl RuntimeGraphExecutor {
                 Ok(())
             },
         )?;
-        context.metrics.add_processes(result.launched_processes);
         if emit_status && node.outputs.contains_key("status") {
             io.emit("status", PortValue::Value(Value::Integer(0)))?;
         }
@@ -2272,15 +2275,14 @@ fn invoke_for_graph(
             std::iter::once(&call),
         )?),
     };
-    runtime::invoke_applet_with_module_session_and_sensitivity(
+    runtime::invoke_applet_with_context(
         registry,
         name,
         parameters,
         input,
         context.options,
         context.cancelled,
-        session,
-        context.sensitivities,
+        runtime::AppletInvocationContext::new(session, context.sensitivities),
     )
 }
 

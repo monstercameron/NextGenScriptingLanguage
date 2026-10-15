@@ -35,6 +35,60 @@ filesystem permission failures, process crashes, WAN outage recovery, service
 restarts, power use, or complete process-tree resource limits. Those require
 additional platform-specific fault fixtures and independent retained results.
 
+The mixed graph target exercises actual `RuntimeGraphExecutor` paths in one
+bounded graph. Its default is a 32-actor smoke run. The explicit 1,000-actor
+layout is 847 timers, 64 finite command applets, 16 distinct registry-owned
+JSON-lines workers, 32 in-process applet calls, 32 scheduled `.program`
+services, 8 loopback SSE listeners, and one typed timer collector. Timer edges
+are lossless with capacity one; the collector consumes them. The probe does
+not claim those queues saturated; it does count distinct timer source nodes
+and requires each source to emit at least once. A separate
+`cancelling_a_service_blocked_by_a_full_lossless_edge_queue_joins_it`
+integration regression holds a capacity-one queue full and checks that a
+fourth handler process did not launch before cancellation. The mixed graph
+admits exactly its actor count through `max_nodes` and `max_parallel`; its
+service fixture only encodes in-process and launches no child processes.
+Native invocations are capped at 64, worker identities at the default pool's
+16, and remote listener/readers at 8. Graph metrics and worker PID markers
+record process starts and registry-drop reaping. RSS and thread receipts cover
+only the Rust test process; child RSS, peak concurrent process-tree size, and
+remote fixture resources are not measured. A mixed report is lifecycle/resource
+evidence, not a throughput or whole-host capacity claim.
+The graph admits at most the requested number of actor tasks; remote event
+readers add at most eight tasks, and the probe itself adds three helper threads.
+Runtime command I/O helpers are sampled but have no separate probe-wide thread
+cap, so the harness does not assert a global thread ceiling.
+The worker PID receipt covers ordinary applet workers retained by the shared
+registry pool and reaped when its final owner drops. The separate
+`graph_service_cancellation_reaps_only_its_retained_json_lines_worker`
+regression covers a graph-owned service worker and cancellation join behavior.
+
+Build the ignored mixed target in a separate quiet release window, then run its
+prebuilt test binary with the wrapper. The wrapper defaults to 32 actors; use
+`--nodes 1000` only when the machine and release gate are ready. A failure
+checkpoint is retained as `<report-stem>-failure.json` with `status` set to
+`failed_unverified`; it is never imported as a successful measurement. The
+external watchdog runs the test in a process group and terminates that group
+on timeout. Fixture worker PIDs are recorded under the wrapper's private
+temporary directory; the watchdog validates those marker files and terminates
+the workers' separately isolated process groups before retaining the failure
+sidecar.
+
+    cargo test --release --test graph_mixed_lifecycle_bench --no-run
+    python3 benchmarks/stress_evidence.py mixed \
+      --test-binary target/release/deps/graph_mixed_lifecycle_bench-<hash> \
+      --report benchmarks/graph-mixed-lifecycle-linux-smoke-2026-10.json \
+      --final-release-build-confirmed --nodes 32
+
+After reviewing the smoke report and confirming the runner budget, the same
+command can be repeated with a fresh report name and `--nodes 1000`. Do not
+overlap the build, the mixed run, or the existing graph stress measurement.
+The manual `Mixed runtime lifecycle probe` workflow follows that order: it
+always requires the 32-actor smoke first, and its boolean `run_1000` input is
+the only path to one capped 1,000-actor run. Both successful raw reports and
+failure checkpoints are uploaded even when a step fails. The workflow runs on
+Ubuntu CI only; it does not infer desktop or Omarchy capacity.
+
 Compile each ignored release test target in a separate, quiet build window:
 
     cargo test --release --test graph_lifecycle_bench --no-run

@@ -31,6 +31,7 @@ mod control;
 mod control_flow;
 pub mod execution_result;
 pub mod invocation_io;
+mod jobs;
 pub(crate) mod live;
 mod loops;
 mod program_backend;
@@ -41,6 +42,7 @@ pub mod tasks;
 pub mod worker_backend;
 pub use checkpoint::CheckpointOptions;
 pub use resume::run_checkpointed;
+pub(crate) use streaming::run_stream_with_context_and_process_observer;
 pub use streaming::{
     run_stream, run_stream_with_cancellation, run_stream_with_context, StreamExecutionContext,
     StreamResult,
@@ -57,6 +59,7 @@ pub use service::{
 pub use stdio::{write_cancellable, write_diagnostic, write_with_deadline};
 
 pub(crate) type ProcessObserver = Arc<dyn Fn(usize) + Send + Sync>;
+type PreparedJobCommands = Vec<(PathBuf, Vec<String>)>;
 
 #[derive(Clone)]
 pub struct RunOptions {
@@ -274,12 +277,94 @@ pub(crate) struct Signals {
     capture_diagnostics: bool,
     deadline: Option<Instant>,
     graph_service_cancellation: bool,
+    background_jobs_allowed: bool,
     program_modules: Arc<Mutex<Option<Arc<crate::modules::ProgramModuleSession>>>>,
     sensitivity_floor: Arc<OnceLock<crate::security::SensitivitySet>>,
     process_launches: Arc<AtomicUsize>,
     process_observer: Arc<OnceLock<ProcessObserver>>,
     worker_pool: Option<Arc<worker_backend::WorkerPool>>,
+    outer_cancelled: Option<Arc<AtomicBool>>,
+    job_cancelled: Option<Arc<AtomicBool>>,
+    job_launch_ack: Option<Arc<Mutex<Option<jobs::LaunchAcknowledger>>>>,
+    job_output_budget: Option<Arc<AtomicUsize>>,
+    job_output_limit: Option<usize>,
+    prepared_job_commands: Option<Arc<PreparedJobCommands>>,
+    job_diagnostic_truncation: Option<Arc<Mutex<Vec<bool>>>>,
+    job_stage_results: Option<Arc<Mutex<Vec<Option<execution_result::StageResult>>>>>,
+    job_run_context: Arc<Mutex<Option<JobRunFrame>>>,
+    #[cfg(test)]
+    job_panic_before_ack: Option<Arc<JobAckPanicProbe>>,
 }
+
+pub(super) struct JobRunFrame {
+    depth: usize,
+    budget: Arc<jobs::RunBudget>,
+}
+
+pub(crate) struct JobRunGuard {
+    context: Arc<Mutex<Option<JobRunFrame>>>,
+}
+
+impl Drop for JobRunGuard {
+    fn drop(&mut self) {
+        if let Ok(mut context) = self.context.lock() {
+            if let Some(frame) = context.as_mut() {
+                frame.depth = frame.depth.saturating_sub(1);
+                if frame.depth == 0 {
+                    *context = None;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct JobAckPanicProbe {
+    panic_next: AtomicBool,
+    launched_pids: Mutex<Vec<u32>>,
+}
+
+/// Immutable execution state inherited by nested applet invocations.
+/// Process launch counters remain local to each invocation; only the observer
+/// and run-wide job budget are shared across concurrent children.
+#[derive(Clone)]
+pub(crate) struct AppletInvocationContext {
+    pub(crate) module_session: Arc<crate::modules::ProgramModuleSession>,
+    pub(crate) sensitivity_floor: crate::security::SensitivitySet,
+    pub(crate) worker_pool: Option<Arc<worker_backend::WorkerPool>>,
+    pub(crate) process_observer: Option<ProcessObserver>,
+    pub(crate) job_run_context: Arc<Mutex<Option<JobRunFrame>>>,
+    pub(crate) background_jobs_allowed: bool,
+}
+
+impl AppletInvocationContext {
+    pub(crate) fn new(
+        module_session: Arc<crate::modules::ProgramModuleSession>,
+        sensitivity_floor: crate::security::SensitivitySet,
+    ) -> Self {
+        Self {
+            module_session,
+            sensitivity_floor,
+            worker_pool: None,
+            process_observer: None,
+            job_run_context: Arc::new(Mutex::new(None)),
+            background_jobs_allowed: true,
+        }
+    }
+
+    pub(crate) fn from_signals(signals: &Signals) -> Result<Self> {
+        Ok(Self {
+            module_session: current_module_session(signals)?,
+            sensitivity_floor: signals.sensitivity_floor(),
+            worker_pool: signals.worker_pool.clone(),
+            process_observer: signals.process_observer.get().cloned(),
+            job_run_context: Arc::clone(&signals.job_run_context),
+            background_jobs_allowed: signals.background_jobs_allowed,
+        })
+    }
+}
+
 impl Signals {
     pub(crate) fn register_with_deadline(deadline: Option<Instant>) -> Result<Self> {
         let mut guard = Self {
@@ -288,11 +373,23 @@ impl Signals {
             capture_diagnostics: false,
             deadline,
             graph_service_cancellation: false,
+            background_jobs_allowed: true,
             program_modules: Arc::new(Mutex::new(None)),
             sensitivity_floor: Arc::new(OnceLock::new()),
             process_launches: Arc::new(AtomicUsize::new(0)),
             process_observer: Arc::new(OnceLock::new()),
             worker_pool: None,
+            outer_cancelled: None,
+            job_cancelled: None,
+            job_launch_ack: None,
+            job_output_budget: None,
+            job_output_limit: None,
+            prepared_job_commands: None,
+            job_diagnostic_truncation: None,
+            job_stage_results: None,
+            job_run_context: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            job_panic_before_ack: None,
         };
         guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
         Ok(guard)
@@ -323,18 +420,29 @@ impl Signals {
             capture_diagnostics,
             deadline,
             graph_service_cancellation: false,
+            background_jobs_allowed: true,
             program_modules: Arc::new(Mutex::new(None)),
             sensitivity_floor: Arc::new(OnceLock::new()),
             process_launches: Arc::new(AtomicUsize::new(0)),
             process_observer: Arc::new(OnceLock::new()),
             worker_pool: None,
+            outer_cancelled: None,
+            job_cancelled: None,
+            job_launch_ack: None,
+            job_output_budget: None,
+            job_output_limit: None,
+            prepared_job_commands: None,
+            job_diagnostic_truncation: None,
+            job_stage_results: None,
+            job_run_context: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            job_panic_before_ack: None,
         })
     }
 
     /// Fork the execution context for bounded finally cleanup. Cleanup gets
-    /// its own cancellation flag and no signal registrations, while preserving
-    /// the immutable module snapshot, worker-pool scope, provenance floor and
-    /// process accounting/observation of the parent execution.
+    /// fresh cancellation and deadline state while retaining its enclosing
+    /// module, worker, provenance, accounting, observation, and job-run scope.
     fn cleanup_scope(&self, deadline: Option<Instant>) -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -342,11 +450,180 @@ impl Signals {
             capture_diagnostics: self.capture_diagnostics,
             deadline,
             graph_service_cancellation: self.graph_service_cancellation,
+            background_jobs_allowed: self.background_jobs_allowed,
             program_modules: Arc::clone(&self.program_modules),
             sensitivity_floor: Arc::clone(&self.sensitivity_floor),
             process_launches: Arc::clone(&self.process_launches),
             process_observer: Arc::clone(&self.process_observer),
             worker_pool: self.worker_pool.clone(),
+            outer_cancelled: None,
+            job_cancelled: None,
+            job_launch_ack: None,
+            job_output_budget: None,
+            job_output_limit: None,
+            prepared_job_commands: None,
+            job_diagnostic_truncation: None,
+            job_stage_results: None,
+            job_run_context: Arc::clone(&self.job_run_context),
+            #[cfg(test)]
+            job_panic_before_ack: None,
+        }
+    }
+
+    pub(crate) fn inherit_applet_context(
+        &mut self,
+        context: &AppletInvocationContext,
+    ) -> Result<()> {
+        self.set_program_module_session(Arc::clone(&context.module_session))?;
+        self.set_sensitivity_floor(context.sensitivity_floor.clone());
+        self.worker_pool = context.worker_pool.clone();
+        self.job_run_context = Arc::clone(&context.job_run_context);
+        self.background_jobs_allowed = context.background_jobs_allowed;
+        if let Some(observer) = context.process_observer.clone() {
+            self.set_process_observer(observer)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn begin_job_run(&self, output_limit: usize) -> Result<JobRunGuard> {
+        let mut context = self
+            .job_run_context
+            .lock()
+            .map_err(|_| anyhow!("background job run context is poisoned"))?;
+        match context.as_mut() {
+            Some(frame) => {
+                frame.depth = frame
+                    .depth
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("background job run nesting limit exceeded"))?;
+            }
+            None => {
+                *context = Some(JobRunFrame {
+                    depth: 1,
+                    budget: Arc::new(jobs::RunBudget::new(output_limit)),
+                });
+            }
+        }
+        Ok(JobRunGuard {
+            context: Arc::clone(&self.job_run_context),
+        })
+    }
+
+    fn current_job_run_budget(&self) -> Option<Arc<jobs::RunBudget>> {
+        self.job_run_context
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|frame| Arc::clone(&frame.budget))
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+            || self
+                .outer_cancelled
+                .as_ref()
+                .is_some_and(|cancelled| cancelled.load(Ordering::Relaxed))
+            || self
+                .job_cancelled
+                .as_ref()
+                .is_some_and(|cancelled| cancelled.load(Ordering::Relaxed))
+    }
+
+    fn reserve_job_output(&self, requested: usize) -> usize {
+        let (Some(budget), Some(limit)) = (&self.job_output_budget, self.job_output_limit) else {
+            return requested;
+        };
+        let mut retained = budget.load(Ordering::Acquire);
+        loop {
+            let available = limit.saturating_sub(retained);
+            let reserved = requested.min(available);
+            match budget.compare_exchange_weak(
+                retained,
+                retained.saturating_add(reserved),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return reserved,
+                Err(observed) => retained = observed,
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn acknowledge_job_launch(
+        &self,
+        calls: &[(&Invocation, &Manifest, usize)],
+        children: &Children,
+    ) -> Result<()> {
+        #[cfg(test)]
+        if let Some(probe) = &self.job_panic_before_ack {
+            if probe.panic_next.swap(false, Ordering::AcqRel) {
+                let pids = children
+                    .0
+                    .iter()
+                    .map(|child| child.child.id())
+                    .collect::<Vec<_>>();
+                if let Ok(mut launched_pids) = probe.launched_pids.lock() {
+                    launched_pids.extend(pids);
+                }
+                panic!("test injected panic before job launch acknowledgment");
+            }
+        }
+        if self.job_launch_ack.is_some() && children.0.len() != calls.len() {
+            bail!(
+                "cannot acknowledge background job start: created {} of {} pipeline stages",
+                children.0.len(),
+                calls.len()
+            );
+        }
+        let ack = self
+            .job_launch_ack
+            .as_ref()
+            .and_then(|ack| ack.lock().ok()?.take());
+        let Some(ack) = ack else {
+            return Ok(());
+        };
+        let stages = calls
+            .iter()
+            .zip(&children.0)
+            .map(|((call, manifest, line), child)| jobs::StageLaunch {
+                line: *line,
+                applet: manifest.name_for(call).to_owned(),
+                pid: child.child.id(),
+            })
+            .collect();
+        ack.send_started(stages)?;
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn record_job_stage_launch(&self, stage: jobs::StageLaunch) {
+        if let Some(ack) = self
+            .job_launch_ack
+            .as_ref()
+            .and_then(|ack| ack.lock().ok()?.as_ref().cloned())
+        {
+            ack.record_stage(stage);
+        }
+    }
+
+    fn record_job_stage_result(&self, index: usize, stage: &execution_result::StageResult) {
+        if let Some(results) = &self.job_stage_results {
+            if let Ok(mut results) = results.lock() {
+                if let Some(target) = results.get_mut(index) {
+                    *target = Some(stage.clone());
+                }
+            }
+        }
+    }
+
+    fn fail_job_launch(&self, failure: jobs::LaunchFailure) {
+        if let Some(ack) = self
+            .job_launch_ack
+            .as_ref()
+            .and_then(|ack| ack.lock().ok()?.take())
+        {
+            ack.send_failed(failure);
         }
     }
 
@@ -635,6 +912,12 @@ fn scan_child_statuses(
                         stderr,
                     )
                 });
+                signals.record_job_stage_result(
+                    index,
+                    observed_stages[index]
+                        .as_ref()
+                        .expect("stage result was just set"),
+                );
                 lazy_event(
                     trace,
                     signals,
@@ -698,6 +981,7 @@ impl std::fmt::Display for CommandFailed {
 }
 impl std::error::Error for CommandFailed {}
 
+#[derive(Clone)]
 struct GroupOutput {
     bytes: Vec<u8>,
     status: Option<i32>,
@@ -797,10 +1081,19 @@ fn check_native_abort(
     observed: &[Option<execution_result::StageResult>],
     signals: &Signals,
 ) -> Result<()> {
-    if signals.cancelled.load(Ordering::Relaxed) {
+    if signals.is_cancelled() {
+        let message = if signals
+            .job_cancelled
+            .as_ref()
+            .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+        {
+            "background job cancelled by handle"
+        } else {
+            "workflow cancelled by signal"
+        };
         return Err(native_execution_failure(
             execution_result::ExecutionKind::Cancelled,
-            "workflow cancelled by signal",
+            message,
             calls,
             children,
             observed,
@@ -903,7 +1196,10 @@ fn execute_group_with_sink(
     mut sink: Option<&mut streaming::LineSink<'_>>,
 ) -> Result<GroupOutput> {
     let mut writer = InputWriter::default();
-    let mut children = Children(Vec::with_capacity(calls.len()));
+    let mut children = Children(
+        Vec::with_capacity(calls.len()),
+        signals.job_diagnostic_truncation.clone(),
+    );
     let mut observed_stages = vec![None; calls.len()];
     let mut input = Some(input);
     let mut prepared_first_call = prepared_first_call;
@@ -911,16 +1207,30 @@ fn execute_group_with_sink(
     let started = Instant::now();
     let mut child_observer = ChildObserver::new();
     let mut observer_ready = false;
+    let background_job = signals.job_launch_ack.is_some();
+    let mut pending_spawn_events = Vec::new();
     let bounded_signals = Signals {
         cancelled: signals.cancelled.clone(),
         registrations: Vec::new(),
         capture_diagnostics: signals.capture_diagnostics,
         graph_service_cancellation: signals.graph_service_cancellation,
+        background_jobs_allowed: signals.background_jobs_allowed,
         program_modules: Arc::clone(&signals.program_modules),
         sensitivity_floor: Arc::clone(&signals.sensitivity_floor),
         process_launches: Arc::clone(&signals.process_launches),
         process_observer: Arc::clone(&signals.process_observer),
         worker_pool: signals.worker_pool.clone(),
+        outer_cancelled: signals.outer_cancelled.clone(),
+        job_cancelled: signals.job_cancelled.clone(),
+        job_launch_ack: signals.job_launch_ack.clone(),
+        job_output_budget: signals.job_output_budget.clone(),
+        job_output_limit: signals.job_output_limit,
+        prepared_job_commands: signals.prepared_job_commands.clone(),
+        job_diagnostic_truncation: signals.job_diagnostic_truncation.clone(),
+        job_stage_results: signals.job_stage_results.clone(),
+        job_run_context: Arc::clone(&signals.job_run_context),
+        #[cfg(test)]
+        job_panic_before_ack: signals.job_panic_before_ack.clone(),
         deadline: {
             let command_deadline = options
                 .command_timeout
@@ -981,24 +1291,31 @@ fn execute_group_with_sink(
     }
     for (index, (call, manifest, line)) in calls.iter().enumerate() {
         check_native_abort(calls, &children, &observed_stages, signals)?;
-        let (binary, argv) = match prepared_first_call.take() {
-            Some((binary, argv)) => (binary, GroupArguments::Owned(argv)),
-            None => {
-                let argv = arguments_for_group_call(call, manifest, bindings)?;
-                let binary = binary_path(manifest.binary_for(call), cwd).map_err(|error| {
-                    native_spawn_failure(
-                        format!(
-                            "line {line}: resolving executable for {}: {error:#}",
-                            manifest.name_for(call)
-                        ),
-                        index,
-                        calls,
-                        &children,
-                        &mut observed_stages,
-                        signals,
-                    )
-                })?;
-                (binary, argv)
+        let (binary, argv) = if let Some(prepared) = &signals.prepared_job_commands {
+            let (binary, argv) = prepared
+                .get(index)
+                .with_context(|| format!("line {line}: missing preflighted background command"))?;
+            (binary.clone(), GroupArguments::Owned(argv.clone()))
+        } else {
+            match prepared_first_call.take() {
+                Some((binary, argv)) => (binary, GroupArguments::Owned(argv)),
+                None => {
+                    let argv = arguments_for_group_call(call, manifest, bindings)?;
+                    let binary = binary_path(manifest.binary_for(call), cwd).map_err(|error| {
+                        native_spawn_failure(
+                            format!(
+                                "line {line}: resolving executable for {}: {error:#}",
+                                manifest.name_for(call)
+                            ),
+                            index,
+                            calls,
+                            &children,
+                            &mut observed_stages,
+                            signals,
+                        )
+                    })?;
+                    (binary, argv)
+                }
             }
         };
         let mut command = match &argv {
@@ -1096,6 +1413,12 @@ fn execute_group_with_sink(
             reaped: false,
             stderr,
             diagnostic: Vec::new(),
+            diagnostic_truncated: false,
+        });
+        signals.record_job_stage_launch(jobs::StageLaunch {
+            line: *line,
+            applet: manifest.name_for(call).to_owned(),
+            pid: children.0.last().expect("just pushed child").child.id(),
         });
         if let Some((pipe_writer, data, offset)) = prefilled_input {
             writer.spawn(
@@ -1125,10 +1448,25 @@ fn execute_group_with_sink(
             }
         }
         // Parameter values are deliberately omitted from traces (may be secrets).
+        let pid = children.0.last().expect("just pushed child").child.id();
+        if background_job {
+            if options.trace {
+                pending_spawn_events.push((line, manifest.name_for(call).to_owned(), binary, pid));
+            }
+        } else {
+            lazy_event(
+                options.trace,
+                signals,
+                || serde_json::json!({"event":"spawn", "line":line,"applet":manifest.name_for(call),"binary":binary,"pid":pid}),
+            )?;
+        }
+    }
+    signals.acknowledge_job_launch(calls, &children)?;
+    for (line, applet, binary, pid) in pending_spawn_events {
         lazy_event(
             options.trace,
             signals,
-            || serde_json::json!({"event":"spawn", "line":line,"applet":manifest.name_for(call),"binary":binary,"pid":children.0.last().unwrap().child.id()}),
+            || serde_json::json!({"event":"spawn", "line":line,"applet":applet,"binary":binary,"pid":pid}),
         )?;
     }
     let mut stdout = previous;
@@ -1227,13 +1565,26 @@ fn execute_group_with_sink(
                             }
                         } else {
                             let remaining = options.max_output_bytes.saturating_sub(output.len());
-                            if count > remaining {
-                                output.extend_from_slice(&chunk[..remaining]);
-                                return Err(native_output_limit_failure(
+                            let job_exceeded = count > remaining;
+                            let requested = count.min(remaining);
+                            let retained = signals.reserve_job_output(requested);
+                            output.extend_from_slice(&chunk[..retained]);
+                            if retained < count {
+                                let message = if job_exceeded {
                                     format!(
-                                        "output exceeds maximum of {} bytes",
+                                        "background job output exceeds maximum of {} bytes",
                                         options.max_output_bytes
-                                    ),
+                                    )
+                                } else {
+                                    format!(
+                                        "retained background job output exceeds run-wide maximum of {} bytes",
+                                        signals
+                                            .job_output_limit
+                                            .unwrap_or(options.max_output_bytes)
+                                    )
+                                };
+                                return Err(native_output_limit_failure(
+                                    message,
                                     output,
                                     calls,
                                     &children,
@@ -1242,7 +1593,6 @@ fn execute_group_with_sink(
                                 )
                                 .into());
                             }
-                            output.extend_from_slice(&chunk[..count]);
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
@@ -2553,6 +2903,17 @@ pub(crate) fn workflow_sensitivity_floor(
                     )?;
                 }
             }
+            StepKind::SpawnJob { stages, .. } => {
+                for stage in stages {
+                    append_invocation_sensitivities(
+                        &stage.call,
+                        registry,
+                        cwd,
+                        &mut sensitivities,
+                        worker_pool,
+                    )?;
+                }
+            }
             // Reusable calls are expanded into the step sequence before the
             // runtime; scanning its actual Invoke steps avoids unused defs.
             StepKind::CallProgram { .. }
@@ -2572,6 +2933,9 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::UseFolder { .. }
             | StepKind::Read { .. }
             | StepKind::ReadStdin { .. }
+            | StepKind::InspectJob { .. }
+            | StepKind::AwaitJob { .. }
+            | StepKind::CancelJob { .. }
             | StepKind::ReadCallInput { .. }
             | StepKind::ParseJson { .. }
             | StepKind::TakeJson { .. }
@@ -2671,59 +3035,30 @@ pub fn invoke_applet_with_module_session(
     let manifest = registry.resolve_call(&call)?;
     let cwd = fs::canonicalize(&options.working_directory)?;
     let sensitivities = invocation_sensitivities(&call, manifest, registry, &cwd)?;
-    invoke_applet_with_module_session_and_sensitivity(
+    invoke_applet_with_context(
         registry,
         name,
         parameters,
         input,
         options,
         cancelled,
-        module_session,
-        sensitivities,
+        AppletInvocationContext::new(module_session, sensitivities),
     )
 }
 
-/// Invoke one applet with an explicit effective label set supplied by the
-/// enclosing finite workflow or graph, preserving producer provenance after
-/// parameter references have been resolved.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn invoke_applet_with_module_session_and_sensitivity(
+/// Invoke one applet with execution state inherited from its enclosing run.
+/// Nested modules and task children share module, worker, provenance, observer,
+/// and job-budget state while each invocation keeps its own process counter.
+pub(crate) fn invoke_applet_with_context(
     registry: &Registry,
     name: &str,
     parameters: BTreeMap<String, Value>,
     input: Vec<u8>,
     options: &RunOptions,
     cancelled: Arc<AtomicBool>,
-    module_session: Arc<crate::modules::ProgramModuleSession>,
-    sensitivities: crate::security::SensitivitySet,
+    context: AppletInvocationContext,
 ) -> Result<AppletInvocationResult> {
-    invoke_applet_with_module_session_and_worker_pool(
-        registry,
-        name,
-        parameters,
-        input,
-        options,
-        cancelled,
-        module_session,
-        sensitivities,
-        None,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn invoke_applet_with_module_session_and_worker_pool(
-    registry: &Registry,
-    name: &str,
-    parameters: BTreeMap<String, Value>,
-    input: Vec<u8>,
-    options: &RunOptions,
-    cancelled: Arc<AtomicBool>,
-    module_session: Arc<crate::modules::ProgramModuleSession>,
-    sensitivities: crate::security::SensitivitySet,
-    worker_pool: Option<Arc<worker_backend::WorkerPool>>,
-    process_observer: Option<ProcessObserver>,
-) -> Result<AppletInvocationResult> {
+    let module_session = Arc::clone(&context.module_session);
     let mut invocation_options = options.clone();
     invocation_options.working_directory = fs::canonicalize(&options.working_directory)?;
     let call = Invocation {
@@ -2760,11 +3095,7 @@ pub(crate) fn invoke_applet_with_module_session_and_worker_pool(
         true,
         deadline_after(invocation_options.total_timeout, "total timeout")?,
     )?;
-    signals.worker_pool = worker_pool;
-    if let Some(process_observer) = process_observer {
-        signals.set_process_observer(process_observer)?;
-    }
-    signals.set_sensitivity_floor(sensitivities);
+    signals.inherit_applet_context(&context)?;
     preflight_module_session(
         &module_session,
         registry,
@@ -2922,8 +3253,18 @@ fn run_finite_state(
     state_source: FiniteStateSource,
     state_out: Option<&mut live::NodeState>,
 ) -> Result<RunResult> {
+    // Nested finite module and task calls share one admission/output budget.
+    // The last returning lexical run drops the slot, so repeated service
+    // handlers begin with a fresh per-run budget while sharing their Signals.
+    let _job_run = signals.begin_job_run(options.max_output_bytes)?;
     let mut cwd = fs::canonicalize(&options.working_directory)?;
     let module_session = preload_program_modules(program, registry, signals, &cwd)?;
+    if (!signals.background_jobs_allowed || state_out.is_some() || journal.is_some())
+        && (has_job_operations(program) || module_session.has_background_job_operations())
+    {
+        bail!("finite-scope background job handles are unsupported in this execution lifetime, including imported program modules");
+    }
+    let mut job_supervisor = jobs::Supervisor::new(signals, options.max_output_bytes)?;
     let mut sensitivity_floor = workflow_sensitivity_floor(
         program,
         registry,
@@ -2992,6 +3333,19 @@ fn run_finite_state(
     }
     let mut journal_end = None;
     let mut journal_uncertain = false;
+    macro_rules! control_context {
+        () => {
+            ControlContext {
+                program,
+                state: &mut control_state,
+                call_frames: &mut call_frames,
+                loop_frames: &mut loop_frames,
+                bindings: &mut bindings,
+                cwd: &mut cwd,
+                job_supervisor: &mut job_supervisor,
+            }
+        };
+    }
     while index < program.steps.len() {
         if signals.cancelled.load(Ordering::Relaxed) && !control_state.cleanup_active() {
             let error = call_frames.iter().rev().fold(
@@ -3004,15 +3358,7 @@ fn run_finite_state(
                 },
             );
             let action = control_state.fail(error, true)?;
-            match apply_control_action(
-                action,
-                program,
-                &mut control_state,
-                &mut call_frames,
-                &mut loop_frames,
-                &mut bindings,
-                &mut cwd,
-            )? {
+            match apply_control_action(action, control_context!())? {
                 AppliedControl::Continue => {}
                 AppliedControl::Jump(target) => {
                     index = target;
@@ -3124,11 +3470,13 @@ fn run_finite_state(
                     let child = calls::bind(call, inputs, &bindings).with_context(|| {
                         format!("program {:?}, called at line {}", call.operation, step.line)
                     })?;
+                    let job_scope = job_supervisor.enter_scope()?;
                     control_state.enter_call(index + end);
                     call_frames.push(calls::Frame {
                         name: &call.operation,
                         line: step.line,
                         binding: call.binding.as_deref(),
+                        job_scope,
                         bindings: std::mem::replace(&mut bindings, child),
                         cwd: cwd.clone(),
                     });
@@ -3142,6 +3490,13 @@ fn run_finite_state(
                     )?;
                 }
                 StepKind::EndCall => {
+                    let scope = call_frames
+                        .last()
+                        .context("program end without call")?
+                        .job_scope;
+                    job_supervisor.finish_scope(scope).with_context(|| {
+                        format!("line {}: closing reusable-program job scope", step.line)
+                    })?;
                     control_state.leave_call(index + 1)?;
                     let frame = call_frames.pop().context("program return without call")?;
                     bindings = frame.bindings;
@@ -3174,15 +3529,7 @@ fn run_finite_state(
                         target.finish,
                         control_flow::UnwindTo::new(control_state.call_depth(), target.depth - 1),
                     )?;
-                    match apply_control_action(
-                        action,
-                        program,
-                        &mut control_state,
-                        &mut call_frames,
-                        &mut loop_frames,
-                        &mut bindings,
-                        &mut cwd,
-                    )? {
+                    match apply_control_action(action, control_context!())? {
                         AppliedControl::Continue => {}
                         AppliedControl::Jump(target) => jump_to = Some(target),
                         AppliedControl::Rethrow(error) => control_rethrow = Some(error),
@@ -3195,36 +3542,27 @@ fn run_finite_state(
                         target.finish - 1,
                         control_flow::UnwindTo::new(control_state.call_depth(), target.depth),
                     )?;
-                    match apply_control_action(
-                        action,
-                        program,
-                        &mut control_state,
-                        &mut call_frames,
-                        &mut loop_frames,
-                        &mut bindings,
-                        &mut cwd,
-                    )? {
+                    match apply_control_action(action, control_context!())? {
                         AppliedControl::Continue => {}
                         AppliedControl::Jump(target) => jump_to = Some(target),
                         AppliedControl::Rethrow(error) => control_rethrow = Some(error),
                     }
                 }
                 StepKind::Return => {
+                    let scope = call_frames
+                        .last()
+                        .context("return outside a reusable program")?
+                        .job_scope;
+                    job_supervisor.cancel_scope(scope).with_context(|| {
+                        format!("line {}: cancelling jobs before return", step.line)
+                    })?;
                     let target = control_state.current_call()?;
                     let action = control_state.transfer(
                         control_flow::TransferKind::Return,
                         target.end_marker,
                         control_flow::UnwindTo::new(target.call_depth, target.loop_depth),
                     )?;
-                    match apply_control_action(
-                        action,
-                        program,
-                        &mut control_state,
-                        &mut call_frames,
-                        &mut loop_frames,
-                        &mut bindings,
-                        &mut cwd,
-                    )? {
+                    match apply_control_action(action, control_context!())? {
                         AppliedControl::Continue => {}
                         AppliedControl::Jump(target) => jump_to = Some(target),
                         AppliedControl::Rethrow(error) => control_rethrow = Some(error),
@@ -3257,15 +3595,7 @@ fn run_finite_state(
                 }
                 StepKind::Catch { .. } => {
                     let action = control_state.catch_marker(index)?;
-                    match apply_control_action(
-                        action,
-                        program,
-                        &mut control_state,
-                        &mut call_frames,
-                        &mut loop_frames,
-                        &mut bindings,
-                        &mut cwd,
-                    )? {
+                    match apply_control_action(action, control_context!())? {
                         AppliedControl::Continue => {}
                         AppliedControl::Jump(target) => jump_to = Some(target),
                         AppliedControl::Rethrow(error) => control_rethrow = Some(error),
@@ -3273,15 +3603,7 @@ fn run_finite_state(
                 }
                 StepKind::Finally => {
                     let action = control_state.finally_marker(index)?;
-                    match apply_control_action(
-                        action,
-                        program,
-                        &mut control_state,
-                        &mut call_frames,
-                        &mut loop_frames,
-                        &mut bindings,
-                        &mut cwd,
-                    )? {
+                    match apply_control_action(action, control_context!())? {
                         AppliedControl::Continue => {}
                         AppliedControl::Jump(target) => jump_to = Some(target),
                         AppliedControl::Rethrow(error) => control_rethrow = Some(error),
@@ -3292,15 +3614,7 @@ fn run_finite_state(
                     // EndTry, so the runtime marker uses the same half-open
                     // boundary convention.
                     let action = control_state.end_try(index + 1)?;
-                    match apply_control_action(
-                        action,
-                        program,
-                        &mut control_state,
-                        &mut call_frames,
-                        &mut loop_frames,
-                        &mut bindings,
-                        &mut cwd,
-                    )? {
+                    match apply_control_action(action, control_context!())? {
                         AppliedControl::Continue => {}
                         AppliedControl::Jump(target) => jump_to = Some(target),
                         AppliedControl::Rethrow(error) => control_rethrow = Some(error),
@@ -3418,18 +3732,17 @@ fn run_finite_state(
                     tasks,
                 } => {
                     let group = tasks::run_group(
-                        *mode,
-                        *limit,
+                        tasks::TaskGroupConfig {
+                            mode: *mode,
+                            limit: *limit,
+                            outer_deadline: signals.deadline,
+                        },
                         tasks,
                         registry,
                         &bindings,
                         options,
                         Arc::clone(&signals.cancelled),
-                        current_module_session(signals)?,
-                        signals.sensitivity_floor(),
-                        signals.deadline,
-                        signals.worker_pool.clone(),
-                        signals.process_observer.get().cloned(),
+                        AppletInvocationContext::from_signals(signals)?,
                     );
                     let group = match group {
                         Ok(group) => group,
@@ -3454,6 +3767,139 @@ fn run_finite_state(
                         || serde_json::json!({"event":"task_group","line":step.line,"mode":mode,"tasks":tasks.len(),"output_bytes":bytes.len()}),
                     )?;
                     data = Input::Bytes(bytes);
+                }
+                StepKind::SpawnJob { name, stages } => {
+                    let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
+                    match job_supervisor.spawn(
+                        scope, name, stages, registry, &bindings, &cwd, options, signals,
+                    ) {
+                        Ok(launched) => {
+                            result.launched_processes += launched;
+                            // Job children own independent Signals. Their launch
+                            // observer already updates graph metrics at spawn;
+                            // mirror the count into this caller's counter for
+                            // nested module failure accounting without notifying
+                            // that observer a second time.
+                            signals.account_child_process_launches(launched);
+                        }
+                        Err(error) => {
+                            let error = if error.downcast_ref::<jobs::JobSpawnFailure>().is_none() {
+                                let mut failure = execution_result::result_for_error(&error);
+                                failure.effect_certainty =
+                                    execution_result::EffectCertainty::NotStarted;
+                                anyhow::Error::new(jobs::JobSpawnFailure {
+                                    message: format!("{error:#}"),
+                                    result: failure,
+                                    launched_processes: 0,
+                                })
+                            } else {
+                                error
+                            };
+                            if let Some(failure) = error.downcast_ref::<jobs::JobSpawnFailure>() {
+                                result.launched_processes += failure.launched_processes;
+                                signals.account_child_process_launches(failure.launched_processes);
+                            }
+                            return Err(error).with_context(|| {
+                                format!("line {}: starting background job {name:?}", step.line)
+                            });
+                        }
+                    }
+                    lazy_event(
+                        options.trace,
+                        signals,
+                        || serde_json::json!({"event":"job_spawn","line":step.line,"job":name,"stages":stages.len()}),
+                    )?;
+                }
+                StepKind::InspectJob { name, binding } => {
+                    let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
+                    let value = job_supervisor
+                        .inspect(scope, name)
+                        .with_context(|| format!("line {}: inspecting job {name:?}", step.line))?;
+                    let bytes = crate::structured::encode(&value, options.max_output_bytes)
+                        .with_context(|| format!("line {}: job inspection output", step.line))?;
+                    bindings.insert(binding.clone(), value);
+                    lazy_event(
+                        options.trace,
+                        signals,
+                        || serde_json::json!({"event":"job_inspect","line":step.line,"job":name,"output_bytes":bytes.len()}),
+                    )?;
+                }
+                StepKind::AwaitJob {
+                    name,
+                    status_binding,
+                    result_binding,
+                } => {
+                    let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
+                    let mut terminal = job_supervisor
+                        .await_job(scope, name)
+                        .with_context(|| format!("line {}: awaiting job {name:?}", step.line))?;
+                    let stage_failure = terminal
+                        .stages
+                        .iter()
+                        .take(terminal.stages.len().saturating_sub(1))
+                        .find(|stage| {
+                            stage.kind.is_some_and(|kind| {
+                                kind != execution_result::ExecutionKind::Success
+                            })
+                        });
+                    if let Some(stage) = stage_failure {
+                        terminal.kind = execution_result::ExecutionKind::Failure;
+                        terminal.message = Some(format!(
+                            "background pipeline stage {:?} ended with {:?}",
+                            stage.applet, stage.kind
+                        ));
+                        return Err(execution_result::ExecutionFailure::new(terminal).into());
+                    }
+                    let kept_terminal_failure = status_binding.is_some()
+                        && terminal.status.is_some()
+                        && matches!(
+                            terminal.kind,
+                            execution_result::ExecutionKind::Absence
+                                | execution_result::ExecutionKind::Failure
+                                | execution_result::ExecutionKind::Retryable
+                        );
+                    if terminal.kind != execution_result::ExecutionKind::Success
+                        && !kept_terminal_failure
+                    {
+                        if terminal.message.is_none() && terminal.status.is_some() {
+                            terminal.message = Some(format!(
+                                "background job {name:?} completed with {:?} outcome ({})",
+                                terminal.kind,
+                                terminal.status.unwrap_or_default()
+                            ));
+                        }
+                        return Err(execution_result::ExecutionFailure::new(terminal).into());
+                    }
+                    let status = terminal
+                        .status
+                        .context("background job finished without an exit status")?;
+                    if let Some(binding) = status_binding {
+                        bindings.insert(binding.clone(), Value::Integer(i64::from(status)));
+                    }
+                    if let Some(binding) = result_binding {
+                        let value =
+                            job_supervisor.result_value(scope, name, step.line, &terminal)?;
+                        crate::structured::encode(&value, options.max_output_bytes)
+                            .with_context(|| format!("line {}: job result record", step.line))?;
+                        bindings.insert(binding.clone(), value);
+                    }
+                    data = Input::Bytes(terminal.stdout.take().unwrap_or_default());
+                    lazy_event(
+                        options.trace,
+                        signals,
+                        || serde_json::json!({"event":"job_await","line":step.line,"job":name,"status":status}),
+                    )?;
+                }
+                StepKind::CancelJob { name } => {
+                    let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
+                    job_supervisor
+                        .cancel(scope, name)
+                        .with_context(|| format!("line {}: cancelling job {name:?}", step.line))?;
+                    lazy_event(
+                        options.trace,
+                        signals,
+                        || serde_json::json!({"event":"job_cancel","line":step.line,"job":name}),
+                    )?;
                 }
                 StepKind::Save { path, .. } => {
                     let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
@@ -3863,15 +4309,7 @@ fn run_finite_state(
             });
             let cancellation = !was_cleanup && parent_signals.cancelled.load(Ordering::Relaxed);
             let action = control_state.fail(error, cancellation)?;
-            match apply_control_action(
-                action,
-                program,
-                &mut control_state,
-                &mut call_frames,
-                &mut loop_frames,
-                &mut bindings,
-                &mut cwd,
-            )? {
+            match apply_control_action(action, control_context!())? {
                 AppliedControl::Continue => {}
                 AppliedControl::Jump(target) => jump_to = Some(target),
                 AppliedControl::Rethrow(error) => {
@@ -3916,6 +4354,9 @@ fn run_finite_state(
             )?;
         }
     }
+    job_supervisor
+        .finish_scope(0)
+        .context("closing finite-program background job scope")?;
     result.output = std::mem::replace(&mut data, Input::Empty).materialize(
         options.max_output_bytes,
         signals,
@@ -3940,15 +4381,29 @@ enum AppliedControl {
     Rethrow(anyhow::Error),
 }
 
+struct ControlContext<'program, 'frames> {
+    program: &'program Program,
+    state: &'program mut control_flow::RuntimeState,
+    call_frames: &'program mut Vec<calls::Frame<'frames>>,
+    loop_frames: &'program mut loops::LoopStack,
+    bindings: &'program mut BTreeMap<String, Value>,
+    cwd: &'program mut PathBuf,
+    job_supervisor: &'program mut jobs::Supervisor,
+}
+
 fn apply_control_action<'a>(
     action: control_flow::ControlAction,
-    program: &Program,
-    state: &mut control_flow::RuntimeState,
-    call_frames: &mut Vec<calls::Frame<'a>>,
-    loop_frames: &mut loops::LoopStack,
-    bindings: &mut BTreeMap<String, Value>,
-    cwd: &mut PathBuf,
+    context: ControlContext<'_, 'a>,
 ) -> Result<AppliedControl> {
+    let ControlContext {
+        program,
+        state,
+        call_frames,
+        loop_frames,
+        bindings,
+        cwd,
+        job_supervisor,
+    } = context;
     fn remove_bindings(bindings: &mut BTreeMap<String, Value>, names: Vec<String>) {
         for name in names {
             bindings.remove(&name);
@@ -3961,6 +4416,7 @@ fn apply_control_action<'a>(
         loop_frames: &mut loops::LoopStack,
         bindings: &mut BTreeMap<String, Value>,
         cwd: &mut PathBuf,
+        job_supervisor: &mut jobs::Supervisor,
     ) -> Result<()> {
         let control_flow::UnwindTo {
             call_depth,
@@ -3971,6 +4427,13 @@ fn apply_control_action<'a>(
             bail!("control transfer targets an inactive program scope");
         }
         while call_frames.len() > call_depth {
+            let scope = call_frames
+                .last()
+                .expect("active frame while above target depth")
+                .job_scope;
+            job_supervisor
+                .cancel_scope(scope)
+                .context("cancelling background jobs during reusable-program unwind")?;
             let frame = call_frames.pop().expect("call depth checked");
             *bindings = frame.bindings;
             *cwd = frame.cwd;
@@ -3992,7 +4455,15 @@ fn apply_control_action<'a>(
             unwind: target_scope,
         } => {
             let continuing = transfer == Some(control_flow::TransferKind::Continue);
-            unwind(target_scope, state, call_frames, loop_frames, bindings, cwd)?;
+            unwind(
+                target_scope,
+                state,
+                call_frames,
+                loop_frames,
+                bindings,
+                cwd,
+                job_supervisor,
+            )?;
             if continuing {
                 let Some(StepKind::EndLoop { back }) =
                     program.steps.get(target).map(|step| &step.kind)
@@ -4012,7 +4483,15 @@ fn apply_control_action<'a>(
             error,
             unwind: target_scope,
         } => {
-            unwind(target_scope, state, call_frames, loop_frames, bindings, cwd)?;
+            unwind(
+                target_scope,
+                state,
+                call_frames,
+                loop_frames,
+                bindings,
+                cwd,
+                job_supervisor,
+            )?;
             bindings.insert(binding, execution_result::error_value(&error));
             Ok(AppliedControl::Jump(target))
         }
@@ -4056,11 +4535,12 @@ pub fn run_with_context(
         let values = crate::inputs::resolve(&program.inputs, &supplied, true)?;
         preflight_inputs(program, registry, &values)?;
     }
-    let signals = Signals::with_cancellation_and_deadline(
+    let mut signals = Signals::with_cancellation_and_deadline(
         cancelled,
         true,
         deadline_after(options.total_timeout, "total timeout")?,
     )?;
+    signals.background_jobs_allowed = false;
     preload_program_modules(program, registry, &signals, &cwd)?;
     run_finite_state(
         program,
@@ -4088,8 +4568,10 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
                 break;
             }
             Ok(count) => {
-                let keep = count.min(8192usize.saturating_sub(child.diagnostic.len()));
+                let remaining = 8192usize.saturating_sub(child.diagnostic.len());
+                let keep = count.min(remaining);
                 child.diagnostic.extend_from_slice(&buffer[..keep]);
+                child.diagnostic_truncated |= keep < count;
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,

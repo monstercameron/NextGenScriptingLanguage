@@ -1442,3 +1442,52 @@ Native macOS and Ubuntu CI run this target and retain its JSON plus the
 streaming/lifecycle smoke report as `native-proofs-<os>` artifacts for 14 days.
 These are functional checks with descriptive timing only; Ubuntu is not an
 Arch/Omarchy desktop and CI load is not controlled for performance comparisons.
+
+## Matched current-source Execute/Bash/Nushell workflows
+
+`matched_language.py` runs the three checked-in public-development reference
+workflows (`filesystem_inventory`, `layered_config_merge`, and
+`typed_event_normalizer`) through current-source Execute, Bash, and an explicitly
+pinned Nushell binary. It runs all six valid fixture cases. The independent
+oracle checks exact status, stdout, empty stderr, the declared output file, and
+the full workspace delta for each arm before any sample is recorded and after
+every warmup/sample. All arms use one controlled working directory per fixture;
+Execute receives the explicit immutable manifest catalog. Sources, binaries,
+catalog, external tools, fixture payloads, and child environment are retained or
+hashed in the report. A missing Nu binary or external workload tool is shown as
+an unavailable cell. Execute-only applet matching and typed-graph workloads and
+external failure contracts remain explicit unmatched cells.
+
+These public references are fixture artifacts for checking the evaluator, not
+model-generated submissions or a held-out task study. The benchmark describes
+whole-workflow runtime only; it does not measure programmer effort, generated
+tokens, maintainability, isolated interpreter speed, CPU or RSS. The reference
+workflows may use different command plans (for example, Execute's internal
+`save` versus shell `tee`), so results include those workflow choices.
+
+The Nushell CLI should come from an exact official release archive with its
+published archive SHA-256. The [Nushell release page](https://github.com/nushell/nushell/releases)
+lists platform artifacts and checksums. Use a private work directory and pass
+the explicit paths and release label; the harness never installs Nu globally
+or downloads it. One example invocation is:
+
+```sh
+python3 benchmarks/matched_language.py \
+  --execute-binary /path/to/current/execute \
+  --execute-source-root /path/to/current/source \
+  --execute-revision current-source-label \
+  --manifest-dir /path/to/current/manifests \
+  --bash-binary /bin/bash \
+  --nushell-binary /path/to/pinned/nu \
+  --nushell-archive /path/to/pinned/nu-release.tar.gz \
+  --nushell-archive-sha256 published_archive_sha256 \
+  --nushell-release-url https://github.com/nushell/nushell/releases/download/version/asset.tar.gz \
+  --report /path/to/new-report.json
+python3 tests/matched_language.py
+```
+
+The default schedule is 30 measured three-arm rounds and five excluded warmups,
+balanced across all six language orders. Raw base64 streams, per-sample wall
+times, paired differences against Execute, exact environment, artifact hashes,
+and unavailable/unmatched cells are retained. Run only in a serialized idle
+window. This code addition includes no comparative timing receipt.

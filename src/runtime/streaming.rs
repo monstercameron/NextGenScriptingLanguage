@@ -202,6 +202,28 @@ pub fn run_stream_with_context(
     options: &RunOptions,
     max_record_bytes: usize,
     context: StreamExecutionContext,
+    emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
+) -> Result<StreamResult> {
+    run_stream_with_context_and_process_observer(
+        program,
+        registry,
+        options,
+        max_record_bytes,
+        context,
+        None,
+        emit,
+    )
+}
+
+/// Internal graph entry point for retaining launch metrics even when stream
+/// cancellation or downstream delivery fails before a StreamResult is returned.
+pub(crate) fn run_stream_with_context_and_process_observer(
+    program: &crate::stream::StreamProgram,
+    registry: &Registry,
+    options: &RunOptions,
+    max_record_bytes: usize,
+    context: StreamExecutionContext,
+    process_observer: Option<super::ProcessObserver>,
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<StreamResult> {
     let local_deadline = super::deadline_after(options.total_timeout, "total timeout")?;
@@ -214,6 +236,9 @@ pub fn run_stream_with_context(
         .cancelled
         .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let signals = Signals::register_with_cancellation_and_deadline(cancelled, deadline)?;
+    if let Some(observer) = process_observer {
+        signals.set_process_observer(observer)?;
+    }
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     crate::stream::validate(program, registry)?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;

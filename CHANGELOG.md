@@ -7,6 +7,17 @@ original version labels.
 
 ## Unreleased
 
+- Finite programs and calls can own named background native pipelines with
+  `spawn`, `inspect`, idempotent `await`, and isolated `cancel`. Handles and
+  captured output share run-wide budgets; unresolved jobs are canceled and
+  reaped on unwind. Persistent lifetimes and detached jobs remain unsupported.
+- JSON-lines applet workers support native Windows Job and pipe supervision.
+  Native Windows execution of this candidate remains subject to its CI results.
+- Process accounting retains job and native-stream launches when a nested call
+  fails or a graph stream is canceled, without counting observer reports twice.
+- Current source includes a narrow Quickshell graph adapter for text and button
+  components. It starts one renderer process per node; real desktop acceptance
+  and shared renderer sessions remain open.
 - Interface-2 `.program` modules can export an `every` or cron service as a
   typed graph node, with single startup inputs and one decoded event per
   handler. Graph cancellation owns its worker pool and cleanup; finite exports

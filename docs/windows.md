@@ -6,9 +6,10 @@ The MSVC C runtime is linked statically. Packaging inspects PE imports and rejec
 Visual C++ runtime DLL dependencies; no separate VC++ redistributable is required.
 
 The language, typed values, branches, reusable programs, JSON operations, cache,
-checkpoint state machine, intervals, listeners, headless widgets and live state
-protocol are shared with Unix. Commands must be installed for the host platform.
-A Unix command name does not magically install its Windows equivalent.
+checkpoint state machine, intervals, listeners, headless widgets, live state
+protocol and persistent JSON-lines workers are shared with Unix. Commands must
+be installed for the host platform. A Unix command name does not magically
+install its Windows equivalent.
 
 ```text
 run "C:\\tools\\my-tool.exe" with arguments ["--format", "json"]
@@ -27,6 +28,15 @@ Timeout, cancellation and normal cleanup terminate owned descendants. Child
 stdout connects directly to the next child stdin through OS byte pipes. The
 Windows supervisor currently polls readiness at a one millisecond interval;
 Unix timing measurements do not describe Windows overhead.
+
+Persistent JSON-lines workers use the same bounded pool, request protocol,
+sensitivity history, timeout and cancellation rules as Unix. A worker starts
+suspended and enters its owned Job Object before it can run. The parent checks
+worker stdout through one owned reader thread and a one-chunk bounded channel;
+that reader is cancelled and joined after terminating the Job if the request
+deadline or cancellation signal arrives. A bounded request write runs on one
+owned thread with the same cancellation and join rule. Workers remain
+unavailable to native pipe groups and the applet cache.
 
 `execute live --socket PATH` keeps the same JSON CRUD protocol. On Windows,
 PATH identifies a local named pipe namespace, scoped to the current user's SID;
@@ -47,7 +57,9 @@ Ctrl-C requests cooperative cancellation. Native console behavior, antivirus,
 filesystem and installed tools can differ from Unix; CI cannot prove arbitrary
 third-party commands or every terminal configuration.
 
-`tests/windows_native.rs` uses an owned Rust fixture executable to exercise argv,
-Unicode, binary pipelines, typed inputs, file replacement, exit statuses,
-timeouts, descendant cleanup, cache/resume, intervals, streaming/listeners,
-named-pipe CRUD and headless widgets. The Unix utility suites remain Unix-only.
+`tests/windows_native.rs` and `tests/worker_backend_windows.rs` use an owned Rust
+fixture executable to exercise argv, Unicode, binary pipelines, typed inputs,
+file replacement, exit statuses, timeouts, descendant cleanup, cache/resume,
+intervals, streaming/listeners, named-pipe CRUD, headless widgets and persistent
+worker reuse, frame failures, pool limits, cancellation and cleanup. The Unix
+utility suites remain Unix-only.

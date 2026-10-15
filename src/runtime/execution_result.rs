@@ -756,16 +756,24 @@ impl std::error::Error for ExecutionFailure {}
 /// Convert a runtime error into the stable value exposed by `catch`.
 /// Unrecognized errors are conservative: the effect may have happened.
 pub fn error_value(error: &anyhow::Error) -> Value {
+    result_for_error(error).to_value()
+}
+
+/// Preserve the typed execution metadata carried by a runtime error.
+pub(crate) fn result_for_error(error: &anyhow::Error) -> ExecutionResult {
     if let Some(failure) = error.downcast_ref::<ExecutionFailure>() {
-        return failure.error_value();
+        return failure.result.clone();
     }
     if let Some(error) = error.downcast_ref::<super::AppletInvocationError>() {
-        return error_value(&error.source);
+        return result_for_error(&error.source);
+    }
+
+    if let Some(error) = error.downcast_ref::<super::jobs::JobSpawnFailure>() {
+        return error.result.clone();
     }
 
     if let Some(error) = error.downcast_ref::<super::CommandFailed>() {
-        let result = command_failure_result(error);
-        return result.to_value();
+        return command_failure_result(error);
     }
 
     if error.downcast_ref::<super::CommandTimedOut>().is_some() {
@@ -776,8 +784,7 @@ pub fn error_value(error: &anyhow::Error) -> Value {
             // completed, so only a backend that knows no work began may
             // claim NotStarted.
             EffectCertainty::Uncertain,
-        )
-        .to_value();
+        );
     }
 
     if error.downcast_ref::<std::io::Error>().is_some() {
@@ -785,12 +792,11 @@ pub fn error_value(error: &anyhow::Error) -> Value {
             ExecutionKind::IoError,
             format!("{error:#}"),
             EffectCertainty::Uncertain,
-        )
-        .to_value();
+        );
     }
 
     if let Some(error) = error.downcast_ref::<super::worker_backend::WorkerError>() {
-        return worker_error_result(error, None).to_value();
+        return worker_error_result(error, None);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -800,8 +806,7 @@ pub fn error_value(error: &anyhow::Error) -> Value {
             kind,
             message,
             remote_effect_certainty(error.effect_certainty),
-        )
-        .to_value();
+        );
     }
 
     ExecutionResult::runtime_failure(
@@ -809,7 +814,6 @@ pub fn error_value(error: &anyhow::Error) -> Value {
         error.to_string(),
         EffectCertainty::Uncertain,
     )
-    .to_value()
 }
 
 /// Convert a typed worker failure into an execution record, attaching the
@@ -919,6 +923,10 @@ pub fn effect_certainty(error: &anyhow::Error) -> EffectCertainty {
     }
     if let Some(error) = error.downcast_ref::<super::AppletInvocationError>() {
         return effect_certainty(&error.source);
+    }
+
+    if let Some(error) = error.downcast_ref::<super::jobs::JobSpawnFailure>() {
+        return error.result.effect_certainty;
     }
     if let Some(error) = error.downcast_ref::<super::CommandFailed>() {
         return command_failure_result(error).effect_certainty;

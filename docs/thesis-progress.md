@@ -10,15 +10,15 @@ making the thesis's capabilities real. GUI rendering is a later phase.
 | Requirement | Implemented evidence | Remaining work |
 | --- | --- | --- |
 | Zero friction | A `.program` runs through an installed interpreter without generated application source or a build step. Direct quoted calls in 0.7.0 need no applet wrapper. | Verify clean distribution/install environments across supported platforms. |
-| Shell dominance | Direct commands, native byte pipes, typed declared inputs, named results, file read/save, cwd, timers, signals, integer status capture, scalar conditions, bounded loops and per-applet environment overlays. | Workflow-scoped environment mutation, substitution, redirection variants and general process/job control. |
+| Shell dominance | Direct commands, native byte pipes, typed declared inputs, named results, file read/save, cwd, timers, signals, integer status capture, scalar conditions, bounded loops, named finite background pipeline handles and per-applet environment overlays. | Workflow-scoped environment mutation, substitution, redirection variants and interactive/detached process job control. |
 | Structured data | JSON parse/get/set/map/filter helpers, recursive typed applet ports, explicit encodings, JSON inputs, structured checkpoint/live values, comment-preserving JSONC operations, finite typed CSV parse/stringify and bounded typed graph transport are in current source. | Richer general-purpose record transforms and general structured streaming; existing demos still use jq/awk/sed where needed. |
-| Composability | Versioned applet contracts use shared call syntax across commands, in-process operations and JSON-lines workers; typed CLI inputs, same-file finite calls, versioned external modules, scheduled module graph nodes and typed graphs with ordinary process inputs are in current source. | Listener-based reusable services, general structured streaming and unbounded terminal-output streaming composition. |
-| Low latency | Native spawning and OS pipes, bounded streams, optimization probes and paired source measurements. The first source comparison shows faster metadata matching with mixed ordinary-task medians and worse tails in some cases; a same-code applet-boundary harness still has no result. | Complete cold-start, file-change latency, allocation/memory and representative service measurements on macOS and Linux. |
+| Composability | Versioned applet contracts use shared call syntax across commands, in-process operations and JSON-lines workers; typed CLI inputs, same-file finite calls, versioned external modules, scheduled module graph nodes and typed graphs with ordinary process inputs. | Listener-based reusable services, general structured streaming and unbounded terminal-output streaming composition. |
+| Low latency | Native spawning and OS pipes, bounded streams, optimization probes and paired source measurements. A local macOS synthetic 1,000-manifest/top-100 matching workload improved; ordinary-task medians are mixed and some tails worsened. This does not prove actor scale. A same-code applet-boundary harness still has no result. | Complete cold-start, file-change latency, allocation/memory and representative service measurements on macOS and Linux. |
 | AI-native syntax | Deterministic parser, whole-program validation, structured source diagnostics, check/explain/inspect, safe executable discovery, typed port matching with bounded multistep converter plans, 150 tested utilities, editor grammar and snippets. | Formal grammar/discovery sufficient for held-out generation, repair evaluation and demonstrated productivity. |
-| Robust execution | Timeouts, cancellation, process-group cleanup, sequential handlers, durable checkpoints, explicit uncertain-effect retry, typed outcome branches and bounded parallel/race task groups. | General background jobs, comprehensive signal/trap semantics and wider fault injection. |
+| Robust execution | Timeouts, cancellation, process-group cleanup, sequential handlers, durable checkpoints, explicit uncertain-effect retry, typed outcome branches, bounded parallel/race task groups and scope-owned named jobs with individual cancellation and reap. | Detached and interactive job control, comprehensive signal/trap semantics and wider fault injection. |
 | Universal integration | `run "tool" with arguments [...]` executes installed tools directly; named manifests remain optional validated adapters. The Bash differential matrix covers 110 cases across 46 native tools, with exact matches and explicit contract differences. | A broader distinct-command/path/platform matrix; keep explicit shell invocation as an opt-in native command. |
 | Security | Literal argv, local peer-checked private control sockets, bounded queues/captures and inspectable execution plans. Current source adds opt-in strict v1 capability and data-flow policies, environment/path grants, cache-purity checks, exact-origin and persistence controls, and fail-closed macOS/Linux command sandboxes. | Wider platform and adversarial verification, complete ancestor-race protection, filesystem deadlines and controls for untrusted in-process operations. Without `sandbox_required`, native children still run with caller filesystem/network privileges. |
-| Incremental complexity | Finite commands, pipelines, services and TUI handlers share invocations and runtime supervision. Current source includes scalar conditions, finite JSON operations, bounded loops, same-file finite reuse, external modules, task groups and typed graph interfaces. | Lifecycle-owned background jobs and general structured streaming from the same primitives; continue auditing real programs as they arrive. |
+| Incremental complexity | Finite commands, pipelines, services and TUI handlers share invocations and runtime supervision. Current source includes scalar conditions, finite JSON operations, bounded loops, same-file finite reuse, external modules, task groups, scope-owned named native jobs and typed graph interfaces. | Bring job handles into persistent, browser, live and checkpointed lifecycles; add general structured streaming from the same primitives and continue auditing real programs as they arrive. |
 
 ### Current applet-contract source candidate
 
@@ -66,8 +66,10 @@ Desktop integration should build on that foundation in this order:
 
 The guiding principle is one language for Unix automation, interactive
 applications and desktop interfaces, with no traditional application source-code
-generation or user-facing compilation. Quickshell and native desktop support are
-roadmap goals, not implemented backends or completed proof gates.
+generation or user-facing compilation. Current source includes a narrow graph
+adapter for generic Quickshell text and button components, with one renderer
+process per node. Shared renderer sessions and real Quickshell/Hyprland/Omarchy
+acceptance remain open; broader desktop-shell integration is a roadmap goal.
 
 AI-capable CLIs may also become explicit applets for classification and control
 decisions. Begin with the existing native invocation, structured JSON, typed
@@ -75,10 +77,10 @@ selection and conditional primitives: the CLI returns a result, and `.program`
 owns the branch. A compact dedicated AI syntax should follow a real, verified
 CLI contract and demonstrated need. Provider/model selection, timeouts, failure
 behavior, data sent and any cache use must stay explicit; there is no implicit
-model invocation in ordinary control flow. The later human request explicitly authorized implementing TypeSafe Jev System
-One and LLM integration, with keys supplied privately and 100 runnable fixture
-workflows. Two bounded synthetic live calls verified Jev and `gpt-6-luna` through
-`.program`; these are connectivity proofs, not latency or accuracy benchmarks.
+model invocation in ordinary control flow. The separate 100-workflow model
+collection is authored and fixture-backed. Two bounded synthetic live requests
+checked Jev and `gpt-6-luna` connectivity through `.program`; neither establishes
+model accuracy, calibration, productivity or latency.
 
 The candidate's compact JSON boundary replaces simple helper-based extraction
 without adding an expression language. Parsing retains original bytes; typed
@@ -97,9 +99,9 @@ stdout remains the return interface. Recursion, instruction count and serialized
 expansion size are bounded. Calls share cancellation, native deadlines, caches
 and failures, and form conservative whole checkpoint/live nodes. Current source
 also provides versioned external program modules (see
-[program modules](program-modules.md)); async job lifecycle ownership, nested
-service lifecycle ownership and helper definitions in screen files remain
-separate gaps.
+[program modules](program-modules.md)); detached or persistent job lifecycles,
+nested service ownership and helper definitions in screen files remain separate
+gaps.
 Large typed values still copy for isolation, and live controls expose the caller
 scope. Complete body changes can shift expanded cursor indexes; richer node
 inspection remains open.

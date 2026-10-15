@@ -84,15 +84,15 @@ version. The private browser wrapper and VS Code extension version separately.
 python3 tools/release.py version
 python3 tools/release.py bump patch
 # Or explicitly prepare a candidate:
-python3 tools/release.py set-version 0.9.0-rc.4
+python3 tools/release.py set-version 0.9.0-rc.5
 make check
 git add Cargo.toml Cargo.lock browser/Cargo.lock
-git commit -m "Prepare Execute 0.9.0-rc.4"
+git commit -m "Prepare Execute 0.9.0-rc.5"
 git push origin main
 # Wait for native checks and a manually dispatched Package validation run.
-python3 tools/release.py verify-tag v0.9.0-rc.4
-git tag -a v0.9.0-rc.4 -m "Execute 0.9.0-rc.4"
-git push origin v0.9.0-rc.4
+python3 tools/release.py verify-tag v0.9.0-rc.5
+git tag -a v0.9.0-rc.5 -m "Execute 0.9.0-rc.5"
+git push origin v0.9.0-rc.5
 ```
 
 Release tags use strict SemVer without build metadata. Leading zeros, malformed

@@ -9,6 +9,11 @@ declared positional arguments follow the ordinary workflow rules. Graphs do not
 support checkpoints/resume, trigger/run limits or UI options. The small example
 is [`examples/graph/composition.program`](../examples/graph/composition.program).
 
+The [runtime composition proof](../examples/composition/graph-runtime/README.md)
+combines a scheduled module, a loopback remote event source, a persistent worker
+and a native stream. Its test injects a headless renderer and checks generation
+changes and cleanup; it does not establish actual terminal or desktop rendering.
+
 The same parser and executor are public through `flow::graph`. A Rust host can
 parse with `graph::parse(source, &registry)`, preflight with
 `GraphPlan::validate()` or `validate_with_registry()`, inspect with `to_json()`

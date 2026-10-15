@@ -1,9 +1,10 @@
 //! Owned executable fixtures for native Windows/Unix process contract tests.
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str).unwrap_or("") {
         "argv" => serde_json::to_writer(std::io::stdout(), &args[1..]).unwrap(),
+        "json-lines" => json_lines_worker(&args[1..]),
         "write" => {
             std::io::stdout().write_all(args[1].as_bytes()).unwrap();
         }
@@ -80,5 +81,111 @@ fn main() {
             }
         }
         _ => std::process::exit(64),
+    }
+}
+
+fn json_lines_worker(arguments: &[String]) {
+    let mode = arguments.first().map(String::as_str).unwrap_or("echo");
+    let marker = arguments
+        .get(1)
+        .expect("json-lines fixture needs a launch marker");
+    let effects = arguments.get(2);
+    use std::fs::OpenOptions;
+    let mut marker_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(marker)
+        .expect("opening worker launch marker");
+    writeln!(marker_file, "{}", std::process::id()).expect("recording worker pid");
+
+    if mode == "ignore" {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        return;
+    }
+
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    let mut sequence = 0u64;
+    for line in stdin.lock().lines() {
+        let line = line.expect("reading worker request");
+        let request: serde_json::Value =
+            serde_json::from_str(&line).expect("decoding worker request");
+        let request_id = request["id"].as_u64().expect("request id");
+        let input = request["input"]
+            .as_array()
+            .expect("request input bytes")
+            .iter()
+            .map(|byte| u8::try_from(byte.as_u64().expect("byte value")).expect("byte in range"))
+            .collect::<Vec<_>>();
+        let mut response_id = request_id;
+        let mut status = 0i32;
+        let mut output = input;
+        let mut stderr = None;
+
+        match mode {
+            "sequence" => {
+                sequence += 1;
+                output = sequence.to_string().into_bytes();
+            }
+            "typed" => {
+                output = br#"{"n":42}"#.to_vec();
+                stderr = Some("é: diagnostic");
+            }
+            "status" => {
+                status = -17;
+                output = vec![0, 255, 1];
+                stderr = Some("é: diagnostic");
+            }
+            "wrong-id" => response_id = response_id.wrapping_add(1),
+            "invalid-json" => {
+                stdout.write_all(b"{invalid json}\n").unwrap();
+                stdout.flush().unwrap();
+                return;
+            }
+            "partial" => {
+                stdout.write_all(b"{\"id\":").unwrap();
+                stdout.flush().unwrap();
+                return;
+            }
+            "eof" => return,
+            "oversized" => output = vec![b'x'; 256],
+            "slow" => {
+                if let Some(effects) = effects {
+                    let mut file = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(effects)
+                        .expect("opening effect marker");
+                    writeln!(file, "received").expect("recording request effect");
+                }
+                std::thread::sleep(std::time::Duration::from_secs(30));
+            }
+            _ => {}
+        }
+
+        let response = serde_json::json!({
+            "id": response_id,
+            "status": status,
+            "output": output,
+            "stderr": stderr,
+        });
+        serde_json::to_writer(&mut stdout, &response).expect("encoding worker response");
+        stdout.write_all(b"\n").expect("terminating worker frame");
+        stdout.flush().expect("flushing worker response");
+        if mode == "trailing-and-exit" {
+            let effects = effects.expect("trailing-output fixture needs a release marker");
+            while !std::path::Path::new(effects).exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            stdout
+                .write_all(b"unsolicited\n")
+                .expect("writing unsolicited worker bytes");
+            stdout.flush().expect("flushing unsolicited worker bytes");
+            return;
+        }
+        if mode == "exit-after-one" {
+            return;
+        }
     }
 }

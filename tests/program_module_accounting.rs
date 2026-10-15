@@ -68,6 +68,52 @@ fn write_failing_applet(catalog: &Path, script: &Path) {
     .unwrap();
 }
 
+fn write_bad_interpreter_applet(catalog: &Path, binary: &Path) {
+    let manifest = serde_json::json!({
+        "name": "fixture.bad-interpreter",
+        "binary": binary,
+        "accepts_stdin": true,
+        "parameters": {},
+        "arguments": [],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "capabilities": [],
+            "effects": []
+        }
+    });
+    fs::write(
+        catalog.join("fixture.bad-interpreter.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_failing_task_applet(catalog: &Path) {
+    let manifest = serde_json::json!({
+        "name": "fixture.task-fail",
+        "binary": "/usr/bin/false",
+        "accepts_stdin": false,
+        "parameters": {"value": {"type": "string", "required": true}},
+        "arguments": [{"parameter": "value"}],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"},
+            "capabilities": [],
+            "effects": []
+        }
+    });
+    fs::write(
+        catalog.join("fixture.task-fail.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {
         inputs: BTreeMap::new(),
@@ -136,6 +182,78 @@ fn module_body_failure_reports_all_successful_spawns_before_the_failed_step() {
         2,
         "the first command and the failing command both spawned"
     );
+}
+
+#[test]
+fn awaited_background_spawn_is_included_when_a_module_later_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("applets");
+    write_program_module(
+        &catalog,
+        "test.module",
+        "define a program named entry\n  spawn as completed\n    run \"true\"\n  await completed\n  then \"false\"\n",
+    );
+
+    let error = invoke_failure(&catalog, temp.path());
+    let invocation = error
+        .downcast_ref::<runtime::AppletInvocationError>()
+        .expect("failed applet calls retain typed process accounting");
+    assert_eq!(
+        invocation.launched_processes(),
+        2,
+        "the completed job child and subsequent failing command both spawned"
+    );
+}
+
+#[test]
+fn failed_task_module_with_an_awaited_job_is_counted_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("applets");
+    fs::create_dir_all(&catalog).unwrap();
+    write_failing_task_applet(&catalog);
+    write_program_module(
+        &catalog,
+        "test.module",
+        "define a program named entry\n  spawn as completed\n    run \"true\"\n  await completed\n  parallel at most 1 as results\n    run fixture.task-fail with value \"ok\" as child\n",
+    );
+
+    let error = invoke_failure(&catalog, temp.path());
+    let invocation = error
+        .downcast_ref::<runtime::AppletInvocationError>()
+        .expect("failed applet calls retain typed process accounting");
+    assert_eq!(
+        invocation.launched_processes(),
+        2,
+        "the awaited job and failing task child both spawned"
+    );
+    assert!(format!("{error:#}").contains("task group failed at task"));
+}
+
+#[test]
+fn partial_background_pipeline_spawn_is_included_when_module_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("applets");
+    fs::create_dir_all(&catalog).unwrap();
+    let binary = catalog.join("bad-interpreter");
+    fs::write(&binary, "#!/execute-test-missing-interpreter\nexit 0\n").unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    write_bad_interpreter_applet(&catalog, &binary);
+    write_program_module(
+        &catalog,
+        "test.module",
+        "define a program named entry\n  spawn as partial\n    run \"true\"\n    pipe to fixture.bad-interpreter\n  await partial\n",
+    );
+
+    let error = invoke_failure(&catalog, temp.path());
+    let invocation = error
+        .downcast_ref::<runtime::AppletInvocationError>()
+        .expect("failed applet calls retain typed process accounting");
+    assert_eq!(
+        invocation.launched_processes(),
+        1,
+        "the first stage remains counted when the next stage cannot spawn"
+    );
+    assert!(format!("{error:#}").contains("starting background job"));
 }
 
 #[test]

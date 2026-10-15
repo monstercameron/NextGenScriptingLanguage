@@ -1,0 +1,42 @@
+{
+  "name": "composition.scheduled_status",
+  "binary": "@program-module",
+  "parameters": {
+    "label": { "type": "string", "required": true }
+  },
+  "arguments": [],
+  "contract": {
+    "version": 1,
+    "backend": "program_module",
+    "program": {
+      "source": "scheduled.program",
+      "entry": "main",
+      "interface_version": 2
+    },
+    "lifecycle": { "kind": "program_service" },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": { "text": { "type": "text" } },
+      "required": ["text"]
+    },
+    "ports": {
+      "inputs": {
+        "label": {
+          "schema": { "type": "text" },
+          "delivery": "single"
+        }
+      },
+      "events": {
+        "updated": {
+          "schema": {
+            "type": "record",
+            "fields": { "text": { "type": "text" } },
+            "required": ["text"]
+          },
+          "delivery": "events"
+        }
+      }
+    }
+  }
+}

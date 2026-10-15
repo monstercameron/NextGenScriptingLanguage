@@ -695,6 +695,32 @@ impl ProgramModuleSession {
         Ok(())
     }
 
+    /// Whether any preloaded module source or reusable definition contains a
+    /// finite-scope background job operation. Persistent callers use this to
+    /// reject handles whose lifetime cannot be owned by the service or UI.
+    pub(crate) fn has_background_job_operations(&self) -> bool {
+        fn contains_job(steps: &[Step]) -> bool {
+            steps.iter().any(|step| {
+                matches!(
+                    step.kind,
+                    StepKind::SpawnJob { .. }
+                        | StepKind::InspectJob { .. }
+                        | StepKind::AwaitJob { .. }
+                        | StepKind::CancelJob { .. }
+                )
+            })
+        }
+
+        self.modules.values().any(|loaded| {
+            contains_job(&loaded.program.steps)
+                || loaded
+                    .program
+                    .definitions
+                    .values()
+                    .any(|definition| contains_job(&definition.steps))
+        })
+    }
+
     /// Calls inside preloaded module bodies, for runtime capability preflight.
     pub fn body_invocations(&self) -> &[(String, Invocation)] {
         &self.body_invocations

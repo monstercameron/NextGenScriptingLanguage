@@ -9,6 +9,8 @@ use flow::manifest::Registry;
 use flow::runtime::RunOptions;
 use serde_json::json;
 use std::collections::BTreeMap;
+#[cfg(unix)]
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::{mpsc, Arc, Mutex};
@@ -276,6 +278,85 @@ fn remote_listener_accounts_dns_helper_spawns_in_graph_result() {
         "GET /events/updates HTTP/1.1"
     );
     server.join().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn cancelled_native_stream_accounts_and_reaps_its_spawned_process() {
+    let temp = tempfile::tempdir().unwrap();
+    let pid_file = temp.path().join("native-stream.pid");
+    let script = "printf '%s\\n' \"$$\" > \"$1\"; printf 'ready\\n'; exec /bin/sleep 30";
+    let manifest = serde_json::json!({
+        "name": "fixture.hanging-stream",
+        "binary": "/bin/sh",
+        "accepts_stdin": false,
+        "parameters": {},
+        "arguments": [
+            {"literal": "-c"},
+            {"literal": script},
+            {"literal": "sh"},
+            {"literal": pid_file.to_string_lossy()}
+        ],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "bytes", "encoding": "raw"},
+            "capabilities": [],
+            "effects": []
+        }
+    });
+    let registry = Registry::from_sources(&[manifest.to_string()]).unwrap();
+    let plan = graph::parse(
+        "graph cancelled_native_stream\nstream from fixture.hanging-stream as source\nshow each line\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+    let executor = Arc::new(RuntimeGraphExecutor::new(
+        registry,
+        options_for_directory(temp.path()),
+    ));
+    let mut session = GraphSession::start(plan, executor, GraphRunOptions::default()).unwrap();
+
+    let ready = session
+        .recv_output()
+        .expect("the native stream emitted its readiness record")
+        .expect("the stream remains live after its first record");
+    assert_eq!(ready.payload, PortValue::Bytes(b"ready\n".to_vec()));
+    assert!(
+        pid_file.exists(),
+        "the child wrote its PID before readiness"
+    );
+    let pid: libc::pid_t = fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+
+    session.cancel_and_join().unwrap();
+    assert_eq!(session.context().metrics.launched_processes(), 1);
+
+    let started = Instant::now();
+    while unsafe { libc::kill(pid, 0) } == 0 && started.elapsed() < Duration::from_secs(2) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "cancelled stream child was reaped"
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH),
+        "the child PID no longer exists after graph cancellation"
+    );
+}
+
+#[cfg(unix)]
+fn options_for_directory(directory: &std::path::Path) -> RunOptions {
+    let mut run_options = options();
+    run_options.working_directory = directory.to_path_buf();
+    run_options
 }
 
 #[test]

@@ -178,6 +178,37 @@ pub(crate) fn available(handle: HANDLE) -> std::io::Result<Option<usize>> {
     Ok(Some(bytes as usize))
 }
 
+/// Duplicate a synchronous pipe handle for one bounded I/O operation. The
+/// caller owns and joins any thread using the duplicate before returning.
+pub(crate) fn duplicate_handle_file(handle: HANDLE) -> Result<File> {
+    let process = unsafe { GetCurrentProcess() };
+    let mut duplicate = std::ptr::null_mut();
+    if unsafe {
+        DuplicateHandle(
+            process,
+            handle,
+            process,
+            &mut duplicate,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("duplicating synchronous worker pipe handle");
+    }
+    Ok(unsafe { File::from_raw_handle(duplicate) })
+}
+
+/// Request cancellation of a blocking synchronous OS call on an owned thread.
+/// The caller remains responsible for joining the thread.
+pub(crate) fn cancel_synchronous_io<T>(worker: &std::thread::JoinHandle<T>) {
+    unsafe {
+        CancelSynchronousIo(worker.as_raw_handle());
+    }
+}
+
 pub(crate) fn user_sid(process: HANDLE) -> Result<Vec<u8>> {
     let mut token = std::ptr::null_mut();
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
@@ -346,10 +377,10 @@ pub(crate) fn lock(file: &File) -> Result<()> {
     Ok(())
 }
 
-/// One bounded reader worker for an inherited console, file or pipe. Shutdown
-/// cancels this exact worker; no thread is detached or allowed to fill a queue.
+/// One bounded reader for an inherited console, file or pipe. Shutdown cancels
+/// this exact worker; no thread is detached or allowed to fill a queue.
 pub(crate) struct Pump {
-    receiver: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    receiver: Option<std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>>,
     worker: Option<std::thread::JoinHandle<()>>,
     stop: Arc<AtomicBool>,
     pending: Vec<u8>,
@@ -393,7 +424,7 @@ impl Pump {
             }
         });
         Self {
-            receiver,
+            receiver: Some(receiver),
             worker: Some(worker),
             stop,
             pending: Vec::new(),
@@ -411,14 +442,18 @@ impl std::io::Read for Pump {
             if self.eof {
                 return Ok(0);
             }
-            match self.receiver.try_recv() {
+            let Some(receiver) = self.receiver.as_ref() else {
+                self.eof = true;
+                return Ok(0);
+            };
+            match receiver.try_recv() {
                 Ok(result) => {
                     self.pending = result?;
                     self.offset = 0;
                     self.eof = self.pending.is_empty();
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    return Err(std::io::ErrorKind::WouldBlock.into())
+                    return Err(std::io::ErrorKind::WouldBlock.into());
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.eof = true;
@@ -432,9 +467,12 @@ impl std::io::Read for Pump {
         Ok(count)
     }
 }
-impl Drop for Pump {
-    fn drop(&mut self) {
+impl Pump {
+    /// Stop the bounded reader and join its blocking OS read. Dropping the
+    /// receiver first ensures a full channel cannot strand the sender thread.
+    pub(crate) fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        drop(self.receiver.take());
         if let Some(worker) = self.worker.take() {
             while !worker.is_finished() {
                 unsafe {
@@ -444,5 +482,10 @@ impl Drop for Pump {
             }
             let _ = worker.join();
         }
+    }
+}
+impl Drop for Pump {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }

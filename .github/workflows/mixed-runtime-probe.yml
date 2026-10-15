@@ -1,0 +1,59 @@
+name: Mixed runtime lifecycle probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_1000:
+        description: Run the capped 1,000-actor probe after the 32-actor smoke passes
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  mixed-runtime:
+    name: Linux mixed lifecycle probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - name: Build the release probe for this exact checkout
+        run: cargo test --locked --release --test graph_mixed_lifecycle_bench --no-run
+      - name: Select the freshly built probe binary
+        shell: bash
+        run: |
+          test_binary="$(find target/release/deps -maxdepth 1 -type f -name 'graph_mixed_lifecycle_bench-*' -perm -u+x -print -quit)"
+          if [[ -z "$test_binary" ]]; then
+            echo "release mixed probe binary was not produced" >&2
+            exit 1
+          fi
+          echo "MIXED_PROBE_TEST_BINARY=$GITHUB_WORKSPACE/$test_binary" >> "$GITHUB_ENV"
+      - name: Run the 32-actor correctness smoke
+        run: >-
+          python3 benchmarks/stress_evidence.py mixed
+          --test-binary "$MIXED_PROBE_TEST_BINARY"
+          --report "benchmarks/graph-mixed-lifecycle-${GITHUB_RUN_ID}-32.json"
+          --final-release-build-confirmed --nodes 32 --window-ms 1000
+          --overall-timeout-s 600
+      - name: Run the explicitly requested 1,000-actor probe
+        if: inputs.run_1000
+        run: >-
+          python3 benchmarks/stress_evidence.py mixed
+          --test-binary "$MIXED_PROBE_TEST_BINARY"
+          --report "benchmarks/graph-mixed-lifecycle-${GITHUB_RUN_ID}-1000.json"
+          --final-release-build-confirmed --nodes 1000 --window-ms 1000
+          --overall-timeout-s 600
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mixed-runtime-lifecycle-${{ github.run_id }}
+          path: benchmarks/graph-mixed-lifecycle-*.json
+          if-no-files-found: warn
+          retention-days: 30

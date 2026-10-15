@@ -8,9 +8,9 @@ for executable lookup, quoting, cancellation, checkpoints and live IPC.
 Persistent native streams have a [separate guide](streaming.md); managed runtime
 and widget edits are covered by the [live-control API](live-control.md).
 
-This reference describes the current native source. Loop blocks are unreleased
-and require a source build; other forms are available in the 0.9.0-rc.4 release
-candidate. Historical `bin/execute` 0.8.0 lacks several newer forms; use a matching
+This reference describes the current native source. Loop blocks and named
+background jobs are unreleased and require a source build; other forms are
+available in the 0.9.0-rc.4 release candidate. Historical `bin/execute` 0.8.0 lacks several newer forms; use a matching
 [release or source build](releases.md). The [browser host](playground.md) has its
 own explicit applet and lifecycle limits.
 
@@ -130,6 +130,70 @@ recognize it.
 When retaining both status and execution result, place `and keep status as`
 before `and keep result as`; output, status and result bindings must all use
 distinct names.
+
+### Named background jobs
+
+```text
+spawn as build
+  run "cargo" with arguments ["build"]
+  pipe to "tee" with arguments ["build.log"]
+inspect build as build_state
+await build and keep status as build_status and keep result as build_result
+```
+
+`spawn as <name>` starts one native command pipeline that can be inspected,
+awaited or cancelled by that name in later finite-program statements. Pipeline
+stages use the ordinary named applet or quoted executable syntax. The parser
+requires one indented `run` stage followed by zero or more `pipe to` stages at
+the same indentation. Before starting any stage, Execute resolves every argv
+value, executable and capability check, and snapshots the current directory and
+bindings. Job stdin is closed; later changes to the caller's bindings or
+directory do not change the running job. Spawn returns after every pipeline
+child has been created and acknowledged by the existing process supervisor,
+not after the commands finish. Spawn leaves the current pipeline value
+unchanged; awaiting the job makes its captured stdout the current value. If a
+later stage cannot start, already-created
+stages are terminated and reaped, and the spawn error reports whether any
+process started and the resulting effect certainty.
+
+`inspect <name> as <binding>` is nonblocking. Its JSON record contains the job
+state, each known stage's PID, state, exit status or signal, effect certainty,
+and captured diagnostic byte counts. `await <name>` waits for all output to be
+drained and every stage to be reaped, then makes the job's exact captured
+stdout bytes the current pipeline value. Optional `and keep status as <name>`
+and `and keep result as <name>` suffixes bind the terminal exit code and
+structured execution record. Repeated awaits return the same terminal record
+and output. As with a foreground pipeline, a non-success outcome stops the
+workflow unless status capture explicitly handles an ordinary exit outcome.
+`cancel <name>` requests cancellation of that job alone and returns after its
+process tree is terminated and reaped; other jobs continue. The terminal
+cancellation result remains available to inspection.
+
+The handle belongs to the current finite root or reusable-program call and
+cannot be serialized or returned as a value. Every handle must be explicitly
+awaited or cancelled before normal scope exit, even if its process already
+finished; inspection alone does not resolve ownership. An explicit reusable
+program `return`, an error unwind, or runtime cancellation cancels and reaps
+still-owned jobs before leaving that scope. Names are unique within a scope.
+To keep resource use bounded, a finite run can create at most 32 named jobs
+total, with at most 16 active jobs and 16 pipeline stages per job. Each job's
+captured stdout is limited by
+`--max-output-bytes`; all captured job stdout retained during the run shares the
+same aggregate byte limit. Exceeding either limit stops and reaps the job and
+reports an output-limit failure. Captured stderr is retained per stage up to
+8,192 bytes on Unix and 65,536 bytes on Windows. The result record's
+`stderr_by_stage` contains those exact retained byte prefixes, and its
+`stderr_truncated` list says whether the supervisor read additional bytes
+beyond each prefix. Inspection and result records report the platform limit and
+truncation flags.
+
+This finite feature has no detach/disown, `fg`/`bg`, stopped or continued
+states, controlling-terminal handoff, or durable service lifetime. Job
+operations are rejected inside loops and `try`/`catch`/`finally`, in services,
+live programs, TUI handlers, browser execution and checkpointed/resumed runs.
+A finite module called by one of those contexts cannot introduce job operations
+indirectly; the enclosing preflight rejects the imported source before effects.
+Those contexts do not yet provide a matching job-handle lifecycle.
 
 <a id="conditional-commands-pending-source-candidate"></a>
 

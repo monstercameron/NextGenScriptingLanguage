@@ -1,6 +1,6 @@
 //! Bounded applet task groups used by finite `.program` workflows.
 
-use super::{AppletInvocationResult, RunOptions};
+use super::{AppletInvocationContext, AppletInvocationResult, RunOptions};
 use crate::ast::{Invocation, TaskGroupMode, Value};
 use crate::contracts::{Outcome, OutcomeKind};
 use crate::manifest::{AppletBackend, Registry};
@@ -108,6 +108,12 @@ pub(crate) struct TaskGroupResult {
     pub launched_processes: usize,
 }
 
+pub(super) struct TaskGroupConfig {
+    pub mode: TaskGroupMode,
+    pub limit: usize,
+    pub outer_deadline: Option<Instant>,
+}
+
 struct Completion {
     index: usize,
     result: Result<AppletInvocationResult>,
@@ -194,21 +200,20 @@ pub(super) fn preflight_group(
 /// Execute a task group after validating every task before any worker starts.
 /// The returned `Value` is a typed record; task outputs are preserved as
 /// explicit `u8_array` fields when the applet has no typed output schema.
-#[allow(clippy::too_many_arguments)] // Keep runtime, policy, cancellation, module-snapshot, and deadline inputs explicit.
 pub(super) fn run_group(
-    mode: TaskGroupMode,
-    limit: usize,
+    config: TaskGroupConfig,
     tasks: &[Invocation],
     registry: &Registry,
     bindings: &std::collections::BTreeMap<String, Value>,
     options: &RunOptions,
     cancelled: Arc<AtomicBool>,
-    module_session: Arc<ProgramModuleSession>,
-    sensitivity_floor: crate::security::SensitivitySet,
-    outer_deadline: Option<Instant>,
-    worker_pool: Option<Arc<super::worker_backend::WorkerPool>>,
-    process_observer: Option<super::ProcessObserver>,
+    context: AppletInvocationContext,
 ) -> Result<TaskGroupResult> {
+    let TaskGroupConfig {
+        mode,
+        limit,
+        outer_deadline,
+    } = config;
     if cancelled.load(Ordering::Acquire) {
         bail!("task group was cancelled before preflight")
     }
@@ -223,7 +228,7 @@ pub(super) fn run_group(
         registry,
         bindings,
         &options.working_directory,
-        &module_session,
+        &context.module_session,
     )?
     .into_iter()
     .map(|(id, call)| {
@@ -296,8 +301,7 @@ pub(super) fn run_group(
             let index = next;
             let task = prepared[index].clone();
             let registry = registry.clone();
-            let module_session = Arc::clone(&module_session);
-            let sensitivity_floor = sensitivity_floor.clone();
+            let context = context.clone();
             let parent_cancelled = Arc::clone(&cancelled);
             let mut task_options = options.clone();
             task_options.max_output_bytes =
@@ -311,25 +315,20 @@ pub(super) fn run_group(
                 );
             }
             let sender = sender.clone();
-            let worker_pool = worker_pool.clone();
-            let process_observer = process_observer.clone();
             let handle = match scope.spawn(move |token| {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     token.check()?;
                     if parent_cancelled.load(Ordering::Acquire) {
                         bail!("task group was cancelled before task launch")
                     }
-                    super::invoke_applet_with_module_session_and_worker_pool(
+                    super::invoke_applet_with_context(
                         &registry,
                         &task.applet,
                         task.parameters,
                         Vec::new(),
                         &task_options,
                         token.cancellation_flag(),
-                        module_session,
-                        sensitivity_floor,
-                        worker_pool,
-                        process_observer,
+                        context,
                     )
                 }))
                 .unwrap_or_else(|payload| Err(task_panic(payload)));

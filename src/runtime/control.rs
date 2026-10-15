@@ -375,6 +375,10 @@ pub(super) fn evaluate(condition: &Condition, bindings: &BTreeMap<String, Value>
 pub(super) struct FlowState {
     pub names: BTreeSet<String>,
     pub types: BTreeMap<String, InputType>,
+    /// Job handles available for inspection/await/cancel in this lexical call.
+    pub jobs: BTreeSet<String>,
+    /// Handles that have not yet been explicitly awaited or cancelled.
+    pub unresolved_jobs: BTreeSet<String>,
     pub has_data: bool,
     /// Whether the last process stage explicitly discarded or inherited its
     /// stdout. This is distinct from an initially empty stream: legacy `then`
@@ -415,6 +419,9 @@ impl FlowState {
         }
         yes.types
             .retain(|name, _| yes.names.contains(name) && no.types.contains_key(name));
+        yes.jobs.retain(|name| no.jobs.contains(name));
+        yes.unresolved_jobs
+            .extend(no.unresolved_jobs.iter().cloned());
         yes.has_data &= no.has_data;
         yes.stdout_unavailable |= no.stdout_unavailable;
         yes.started |= no.started;

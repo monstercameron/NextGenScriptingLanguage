@@ -89,6 +89,7 @@ execute preview.program --input 'path=server log.txt' --input lines=10
 | `then parse json as data` | Parse JSON for typed field selection and encoding. |
 | `and cache` | Cache an explicitly cacheable named transformation. |
 | `then save to "output.txt"` | Atomically replace a file with the current output. |
+| `spawn as job` / `inspect job as state` / `await job` / `cancel job` | Own a bounded background native pipeline in a finite program or call. |
 
 Use one statement per line, double-quoted JSON strings, `#` comments and consistent
 space indentation. Computation stays in tools such as `jq`, `awk` and `sort`.
@@ -200,10 +201,11 @@ apply. These features are source-only until a new release is published; the
 retained 0.8.0 binary and published 0.9.0-rc.4 packages remain unchanged.
 
 Current source also includes [versioned external program modules](docs/program-modules.md),
-scheduled module graph nodes, finite task and graph APIs, and native desktop
-protocol groundwork. These are
-source-candidate interfaces and do not complete the remaining jobs, richer
-redirection, or Omarchy desktop acceptance gates.
+scheduled module graph nodes, scoped background jobs, finite task and graph APIs,
+and a narrow Quickshell adapter for graph text and button components. Each
+Quickshell renderer node starts one process. These source-candidate interfaces
+leave detached jobs, terminal ownership, richer redirection, shared rendering
+sessions, and real Omarchy desktop acceptance open.
 
 The [data-flow policy](docs/security-dataflow.md) is a separate opt-in boundary
 for remote egress, cache/checkpoint/save persistence and reviewed cache purity.

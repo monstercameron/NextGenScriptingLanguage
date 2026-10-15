@@ -16,6 +16,9 @@
       "include": "#task-group"
     },
     {
+      "include": "#job-control"
+    },
+    {
       "include": "#graph"
     },
     {
@@ -341,6 +344,87 @@
           "name": "variable.other.definition.execute"
         }
       }
+    },
+    "job-control": {
+      "patterns": [
+        {
+          "match": "^[ \\t]*(spawn)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.job.execute"
+            },
+            "2": {
+              "name": "keyword.operator.binding.execute"
+            },
+            "3": {
+              "name": "variable.other.definition.job.execute"
+            }
+          }
+        },
+        {
+          "match": "^[ \\t]*(inspect)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.job.execute"
+            },
+            "2": {
+              "name": "variable.other.job.execute"
+            },
+            "3": {
+              "name": "keyword.operator.binding.execute"
+            },
+            "4": {
+              "name": "variable.other.definition.execute"
+            }
+          }
+        },
+        {
+          "match": "^[ \\t]*(await)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?:[ \\t]+(and)[ \\t]+(keep[ \\t]+status)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*))?(?:[ \\t]+(and)[ \\t]+(keep[ \\t]+result)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*))?(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.job.execute"
+            },
+            "2": {
+              "name": "variable.other.job.execute"
+            },
+            "3": {
+              "name": "keyword.operator.parameter.execute"
+            },
+            "4": {
+              "name": "storage.modifier.status.execute"
+            },
+            "5": {
+              "name": "keyword.operator.binding.execute"
+            },
+            "6": {
+              "name": "variable.other.definition.execute"
+            },
+            "7": {
+              "name": "keyword.operator.parameter.execute"
+            },
+            "8": {
+              "name": "storage.modifier.result.execute"
+            },
+            "9": {
+              "name": "keyword.operator.binding.execute"
+            },
+            "10": {
+              "name": "variable.other.definition.execute"
+            }
+          }
+        },
+        {
+          "match": "^[ \\t]*(cancel)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.job.execute"
+            },
+            "2": {
+              "name": "variable.other.job.execute"
+            }
+          }
+        }
+      ]
     },
     "graph": {
       "patterns": [

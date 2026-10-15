@@ -21,6 +21,8 @@ pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Re
                     .iter()
                     .map(|input| (input.name.clone(), input.kind))
                     .collect(),
+                jobs: BTreeSet::new(),
+                unresolved_jobs: BTreeSet::new(),
                 has_data: true,
                 stdout_unavailable: false,
                 started: false,
@@ -37,6 +39,13 @@ pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Re
                 false,
                 true,
             )
+            .and_then(|()| {
+                if flow.unresolved_jobs.is_empty() {
+                    Ok(())
+                } else {
+                    bail!("every background job must be awaited or cancelled before normal reusable-program exit")
+                }
+            })
         })();
         checked.with_context(|| format!("program {name:?} defined at line {}", definition.line))?;
     }
@@ -49,7 +58,9 @@ pub(super) fn validate_arguments(
     flow: &control::FlowState,
 ) -> Result<()> {
     if call.direct || call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
-        bail!("program calls cannot be direct binaries, cached or capture native status or execution results");
+        bail!(
+            "program calls cannot be direct binaries, cached or capture native status or execution results"
+        );
     }
     crate::inputs::validate(inputs)?;
     // Keep tiny schemas on a linear lookup, as inputs::validated_specs does.
@@ -118,6 +129,8 @@ pub(super) struct Frame<'a> {
     pub name: &'a str,
     pub line: usize,
     pub binding: Option<&'a str>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub job_scope: usize,
     pub bindings: BTreeMap<String, Value>,
     pub cwd: PathBuf,
 }
@@ -301,6 +314,29 @@ pub(super) fn preflight(
                 }
                 forget(&mut values, binding);
                 types.insert(binding.clone(), InputType::Json);
+            }
+            StepKind::SpawnJob { stages, .. } => {
+                for stage in stages {
+                    native(&stage.call, stage.line, registry, &values, &types)?;
+                }
+            }
+            StepKind::InspectJob { binding, .. } => {
+                forget(&mut values, binding);
+                types.insert(binding.clone(), InputType::Json);
+            }
+            StepKind::AwaitJob {
+                status_binding,
+                result_binding,
+                ..
+            } => {
+                if let Some(name) = status_binding {
+                    forget(&mut values, name);
+                    types.insert(name.clone(), InputType::Integer);
+                }
+                if let Some(name) = result_binding {
+                    forget(&mut values, name);
+                    types.insert(name.clone(), InputType::Json);
+                }
             }
             StepKind::Invoke { call, .. } => {
                 native(call, step.line, registry, &values, &types)?;

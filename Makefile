@@ -51,6 +51,7 @@ applet-boundaries-harness-check:
 	$(PYTHON) tests/applet_boundaries.py
 	$(PYTHON) tests/omarchy_success_bench.py
 	$(PYTHON) tests/source_pair_bench.py
+	$(PYTHON) tests/matched_language.py
 
 # Keep this sequence shared by local development and macOS/Linux CI.
 check: rust-check docs-check applet-boundaries-harness-check

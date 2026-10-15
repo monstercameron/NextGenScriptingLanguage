@@ -49,6 +49,7 @@ struct StatementScope {
 }
 
 mod control_flow;
+mod jobs;
 mod reusable;
 mod tasks;
 
@@ -143,6 +144,22 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
         Some(Token::Word("repeat" | "for" | "while"))
     ) {
         return parse_loop(line_at, cursor, indent, steps, depth, scope);
+    }
+    if word_is(line.tokens.first(), "spawn") {
+        return jobs::parse_spawn(line_at, cursor, indent, steps);
+    }
+    if matches!(
+        line.tokens.first(),
+        Some(Token::Word("inspect" | "await" | "cancel"))
+    ) {
+        let kind = jobs::parse_action(line.tokens)
+            .map_err(|error| anyhow!("line {}: {error:#}", line.number))?;
+        steps.push(Step {
+            line: line.number,
+            kind,
+        });
+        *cursor += 1;
+        return Ok(());
     }
     if matches!(line.tokens.first(), Some(Token::Word("parallel" | "race"))) {
         if depth >= MAX_CONTROL_DEPTH {

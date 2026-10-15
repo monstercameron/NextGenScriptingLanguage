@@ -402,5 +402,21 @@
       "end graph",
       "$0"
     ]
+  },
+  "Named finite background job": {
+    "prefix": [
+      "program-job",
+      "job"
+    ],
+    "description": "Spawn, inspect and await one finite native job while retaining its status and result.",
+    "isFileTemplate": true,
+    "body": [
+      "spawn as ${1:build}",
+      "  run \"printf\" with arguments [\"%s\\n\", \"${2:ready}\"]",
+      "inspect $1 as ${3:build_state}",
+      "await $1 and keep status as ${4:build_status} and keep result as ${5:build_result}",
+      "then encode {\"state\": $3, \"status\": $4, \"result\": $5} as json",
+      "$0"
+    ]
   }
 }

@@ -1,0 +1,12 @@
+graph graph_runtime_composition
+  listen to composition.remote_feed as remote
+  stream from composition.native_stream as native
+  show each line
+  run composition.worker_transform as transform
+  run composition.scheduled_status with label "scheduled" as schedule
+  render tui:text with properties {"text": "ready"} as display
+  bind remote.updates to transform.stdin with capacity 1 lossless
+  bind schedule.updated to transform.stdin with capacity 1 lossless
+  bind transform.stdout to display.property_updates with capacity 1 lossless
+  bind native.stdout to display.property_updates with capacity 1 lossless
+end graph

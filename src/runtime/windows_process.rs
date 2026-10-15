@@ -1,6 +1,6 @@
 // Included only on Windows; the parser, validation, cache, branches, JSON,
 // same-file calls and checkpoint state machine remain shared with Unix.
-use crate::platform::windows::{Job, available};
+use crate::platform::windows::{available, Job};
 use std::os::windows::io::AsRawHandle;
 
 struct ManagedChild {
@@ -163,6 +163,14 @@ fn execute_group_with_sink(
     let result = (|| -> Result<GroupOutput> {
         if calls.is_empty() {
             bail!("cannot execute an empty native command group");
+        }
+        let sensitivities = signals.sensitivity_floor();
+        for (_, manifest, _) in calls {
+            crate::security::authorize_declared_filesystem_write(
+                registry,
+                manifest,
+                &sensitivities,
+            )?;
         }
         for (index, (_, manifest, line)) in calls.iter().enumerate() {
             if index + 1 != calls.len()

@@ -7,7 +7,65 @@ pub struct StreamResult {
     pub launched_processes: usize,
 }
 
+/// Execution context inherited by a native stream node.
+///
+/// The optional module snapshot and sensitivity set let graph adapters preserve
+/// their whole-plan preflight and per-node provenance instead of reloading or
+/// reconstructing either at stream execution time.
+#[derive(Clone, Default)]
+pub struct StreamExecutionContext {
+    cancelled: Option<Arc<AtomicBool>>,
+    deadline: Option<Instant>,
+    module_session: Option<Arc<crate::modules::ProgramModuleSession>>,
+    sensitivity_floor: Option<crate::security::SensitivitySet>,
+}
+
+impl StreamExecutionContext {
+    pub fn new(cancelled: Arc<AtomicBool>) -> Self {
+        Self {
+            cancelled: Some(cancelled),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_deadline(mut self, deadline: Option<Instant>) -> Self {
+        self.deadline = deadline;
+        self
+    }
+
+    pub fn with_module_session(
+        mut self,
+        module_session: Arc<crate::modules::ProgramModuleSession>,
+    ) -> Self {
+        self.module_session = Some(module_session);
+        self
+    }
+
+    pub fn with_sensitivity_floor(
+        mut self,
+        sensitivity_floor: crate::security::SensitivitySet,
+    ) -> Self {
+        self.sensitivity_floor = Some(sensitivity_floor);
+        self
+    }
+}
+
 type Emit<'a> = dyn FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()> + 'a;
+
+fn stream_sensitivity_floor(
+    program: &crate::stream::StreamProgram,
+    registry: &Registry,
+    module_session: &crate::modules::ProgramModuleSession,
+    inherited: Option<&crate::security::SensitivitySet>,
+) -> Result<crate::security::SensitivitySet> {
+    let mut floor = super::workflow_sensitivity_floor(&program.pipeline, registry, module_session)?;
+    if let Some(inherited) = inherited {
+        // The enclosing graph/run context can add provenance, but it cannot
+        // erase labels found in the stream's own source or module bodies.
+        floor.extend(inherited);
+    }
+    Ok(floor)
+}
 
 pub(super) struct LineSink<'a> {
     emit: &'a mut Emit<'a>,
@@ -98,16 +156,94 @@ pub fn run_stream(
     registry: &Registry,
     options: &RunOptions,
     max_record_bytes: usize,
+    emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
+) -> Result<StreamResult> {
+    run_stream_with_context(
+        program,
+        registry,
+        options,
+        max_record_bytes,
+        StreamExecutionContext::default(),
+        emit,
+    )
+}
+
+/// Run a native stream while sharing an enclosing runtime's cancellation flag.
+/// The enclosing total deadline, module snapshot, and sensitivity floor can be
+/// supplied through [`StreamExecutionContext`] using
+/// [`run_stream_with_context`].
+pub fn run_stream_with_cancellation(
+    program: &crate::stream::StreamProgram,
+    registry: &Registry,
+    options: &RunOptions,
+    max_record_bytes: usize,
+    cancelled: Arc<AtomicBool>,
+    emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
+) -> Result<StreamResult> {
+    run_stream_with_context(
+        program,
+        registry,
+        options,
+        max_record_bytes,
+        StreamExecutionContext::new(cancelled),
+        emit,
+    )
+}
+
+/// Run a native stream with inherited cancellation, deadline, and run-scoped
+/// policy/preflight context. `options.total_timeout` is measured from entry and
+/// min-composed with the supplied absolute parent deadline; each native group
+/// further min-composes its `command_timeout`.
+pub fn run_stream_with_context(
+    program: &crate::stream::StreamProgram,
+    registry: &Registry,
+    options: &RunOptions,
+    max_record_bytes: usize,
+    context: StreamExecutionContext,
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<StreamResult> {
+    let local_deadline = super::deadline_after(options.total_timeout, "total timeout")?;
+    let deadline = match (context.deadline, local_deadline) {
+        (Some(parent), Some(local)) => Some(parent.min(local)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    };
+    let cancelled = context
+        .cancelled
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    let signals = Signals::register_with_cancellation_and_deadline(cancelled, deadline)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     crate::stream::validate(program, registry)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     let capability_cwd = fs::canonicalize(&options.working_directory)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     crate::capabilities::preflight(&program.pipeline, registry, &capability_cwd)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     let configured = configured_inputs(&program.pipeline, registry, options)?;
     let options = configured.as_ref();
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     if max_record_bytes == 0 {
         bail!("stream record limit must be greater than zero");
     }
+    let module_session = if let Some(session) = context.module_session {
+        super::preflight_module_session(&session, registry, &capability_cwd)?;
+        let mut slot = signals
+            .program_modules
+            .lock()
+            .map_err(|_| anyhow!("program module session lock is poisoned"))?;
+        *slot = Some(Arc::clone(&session));
+        session
+    } else {
+        super::preload_program_modules(&program.pipeline, registry, &signals, &capability_cwd)?
+    };
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    let sensitivity_floor = stream_sensitivity_floor(
+        program,
+        registry,
+        &module_session,
+        context.sensitivity_floor.as_ref(),
+    )?;
+    signals.set_sensitivity_floor(sensitivity_floor);
     let calls = program
         .pipeline
         .steps
@@ -119,7 +255,7 @@ pub fn run_stream(
             Ok((call, registry.resolve_call(call)?, step.line))
         })
         .collect::<Result<Vec<_>>>()?;
-    let signals = Signals::register()?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     let mut sink = LineSink {
         emit: &mut emit,
         limit: program.line_limit,
@@ -152,9 +288,54 @@ pub fn run_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn signals() -> Signals {
         Signals::with_cancellation(Arc::new(AtomicBool::new(false)), false).unwrap()
+    }
+
+    #[test]
+    fn inherited_stream_sensitivity_cannot_hide_a_secret_source() {
+        let manifest = json!({
+            "name": "secret.source",
+            "binary": "/bin/true",
+            "parameters": {},
+            "arguments": [],
+            "contract": {
+                "version": 1,
+                "output": {"type": "text", "encoding": "raw"},
+                "ports": {
+                    "inputs": {},
+                    "outputs": {
+                        "value": {
+                            "schema": {"type": "text"},
+                            "delivery": "single",
+                            "sensitivity": "secret"
+                        }
+                    },
+                    "events": {}
+                }
+            }
+        })
+        .to_string();
+        let registry = Registry::from_sources(&[manifest]).unwrap();
+        let program = crate::stream::parse("stream from secret.source\nshow each line\n").unwrap();
+        let inherited = crate::security::SensitivitySet::from_labels([
+            crate::contracts::Sensitivity::Public,
+            crate::contracts::Sensitivity::Unknown,
+        ]);
+
+        let floor = stream_sensitivity_floor(
+            &program,
+            &registry,
+            &crate::modules::ProgramModuleSession::default(),
+            Some(&inherited),
+        )
+        .unwrap();
+
+        assert!(floor.contains(&crate::contracts::Sensitivity::Secret));
+        assert!(floor.contains(&crate::contracts::Sensitivity::Public));
+        assert!(floor.contains(&crate::contracts::Sensitivity::Unknown));
     }
 
     #[test]

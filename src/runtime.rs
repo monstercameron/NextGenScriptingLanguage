@@ -41,7 +41,10 @@ pub mod tasks;
 pub mod worker_backend;
 pub use checkpoint::CheckpointOptions;
 pub use resume::run_checkpointed;
-pub use streaming::{run_stream, StreamResult};
+pub use streaming::{
+    run_stream, run_stream_with_cancellation, run_stream_with_context, StreamExecutionContext,
+    StreamResult,
+};
 #[cfg_attr(windows, path = "runtime/windows_stdio.rs")]
 mod stdio;
 pub(crate) use service::next_interval;
@@ -262,10 +265,6 @@ pub(crate) struct Signals {
     sensitivity_floor: Arc<OnceLock<crate::security::SensitivitySet>>,
 }
 impl Signals {
-    fn register() -> Result<Self> {
-        Self::register_with_deadline(None)
-    }
-
     pub(crate) fn register_with_deadline(deadline: Option<Instant>) -> Result<Self> {
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -275,6 +274,15 @@ impl Signals {
             program_modules: Arc::new(Mutex::new(None)),
             sensitivity_floor: Arc::new(OnceLock::new()),
         };
+        guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
+        Ok(guard)
+    }
+
+    pub(crate) fn register_with_cancellation_and_deadline(
+        cancelled: Arc<AtomicBool>,
+        deadline: Option<Instant>,
+    ) -> Result<Self> {
+        let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
         guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
         Ok(guard)
     }
@@ -823,6 +831,10 @@ fn execute_group_with_sink(
     let signals = &bounded_signals;
     if calls.is_empty() {
         bail!("cannot execute an empty native command group");
+    }
+    let sensitivities = signals.sensitivity_floor();
+    for (_, manifest, _) in calls {
+        crate::security::authorize_declared_filesystem_write(registry, manifest, &sensitivities)?;
     }
     for (index, (_, manifest, line)) in calls.iter().enumerate() {
         if index + 1 != calls.len()
@@ -1867,14 +1879,6 @@ fn execute_call_group(
     let Some((call, manifest, line)) = calls.first().copied() else {
         bail!("cannot execute an empty applet group");
     };
-    let sensitivities = signals.sensitivity_floor();
-    for (_, stage_manifest, _) in calls {
-        crate::security::authorize_declared_filesystem_write(
-            registry,
-            stage_manifest,
-            &sensitivities,
-        )?;
-    }
     let backend = manifest.execution_backend();
     if backend == AppletBackend::Command {
         if calls.iter().any(|(_, stage_manifest, _)| {
@@ -1893,6 +1897,14 @@ fn execute_call_group(
             launched,
             signals,
         );
+    }
+    let sensitivities = signals.sensitivity_floor();
+    for (_, stage_manifest, _) in calls {
+        crate::security::authorize_declared_filesystem_write(
+            registry,
+            stage_manifest,
+            &sensitivities,
+        )?;
     }
     if calls.len() != 1 {
         bail!(

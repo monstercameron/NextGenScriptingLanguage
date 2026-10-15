@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use flow::{manifest::Registry, parser, runtime, stream};
 use serde_json::{json, Value};
 use std::fs;
 #[cfg(target_os = "macos")]
@@ -9,7 +10,10 @@ use std::io::Write;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Mutex,
+};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -136,6 +140,60 @@ fn workflow_path(dir: &TempDir, source: &str) -> PathBuf {
     let path = dir.path().join("case.program");
     fs::write(&path, source).unwrap();
     path
+}
+
+fn runtime_options(
+    dir: &TempDir,
+    command_timeout: Option<Duration>,
+    total_timeout: Option<Duration>,
+) -> runtime::RunOptions {
+    runtime::RunOptions {
+        inputs: Default::default(),
+        working_directory: dir.path().to_owned(),
+        cache_directory: None,
+        trace: false,
+        max_output_bytes: 1024,
+        command_timeout,
+        total_timeout,
+    }
+}
+
+fn add_idle_closed_stdout_child(dir: &TempDir) {
+    add_python_applet(
+        dir,
+        "idle.child",
+        "idle_child.py",
+        "import os, time\nfrom pathlib import Path\nPath('child.pid').write_text(str(os.getpid()))\nos.close(1)\nwhile True: time.sleep(1)\n",
+        json!({}),
+        json!([]),
+        false,
+    );
+}
+
+fn wait_for_child_pid(path: &Path) -> libc::pid_t {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Ok(pid) = fs::read_to_string(path) {
+            return pid.parse().expect("fixture child pid");
+        }
+        assert!(Instant::now() < deadline, "idle fixture did not start");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn assert_process_group_reaped(pid: libc::pid_t) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let result = unsafe { libc::kill(-pid, 0) };
+        if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "owned process group was not reaped"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn run_capture(dir: &TempDir, command: &str, source: &str, extra: &[&str]) -> std::process::Output {
@@ -809,4 +867,251 @@ fn blocked_stdout_remains_deadline_bounded_and_cancellable() {
         );
         assert_spawn_lines(&error, &["writer"]);
     }
+}
+
+#[test]
+fn shared_cancellation_kills_idle_child_after_stdout_closes() {
+    let dir = fixture();
+    add_idle_closed_stdout_child(&dir);
+    let registry = Registry::load(&manifest_dir(&dir)).unwrap();
+    let program = stream::parse("stream from idle.child\nshow each line\n").unwrap();
+    let options = runtime_options(
+        &dir,
+        Some(Duration::from_secs(5)),
+        Some(Duration::from_secs(5)),
+    );
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let watcher_flag = Arc::clone(&cancelled);
+    let pid_path = dir.path().join("child.pid");
+    let watcher = thread::spawn(move || {
+        let pid = wait_for_child_pid(&pid_path);
+        watcher_flag.store(true, Ordering::Relaxed);
+        pid
+    });
+    let started = Instant::now();
+    let mut records = 0;
+    let result = runtime::run_stream_with_cancellation(
+        &program,
+        &registry,
+        &options,
+        1024,
+        cancelled,
+        |_, _, _| {
+            records += 1;
+            Ok(())
+        },
+    );
+    let elapsed = started.elapsed();
+    let pid = watcher.join().unwrap();
+    assert!(result.is_err(), "idle child unexpectedly succeeded");
+    assert!(
+        format!("{:#}", result.unwrap_err()).contains("cancelled"),
+        "external cancellation should be observable"
+    );
+    assert_eq!(
+        records, 0,
+        "the child closed stdout before emitting records"
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "cancellation took {elapsed:?}"
+    );
+    assert_process_group_reaped(pid);
+}
+
+#[test]
+fn inherited_absolute_deadline_kills_idle_child_after_stdout_closes() {
+    let dir = fixture();
+    add_idle_closed_stdout_child(&dir);
+    let registry = Registry::load(&manifest_dir(&dir)).unwrap();
+    let program = stream::parse("stream from idle.child\nshow each line\n").unwrap();
+    let options = runtime_options(
+        &dir,
+        Some(Duration::from_secs(5)),
+        Some(Duration::from_secs(4)),
+    );
+    let deadline = Instant::now() + Duration::from_millis(750);
+    let context = runtime::StreamExecutionContext::default().with_deadline(Some(deadline));
+    let started = Instant::now();
+    let mut records = 0;
+    let result = runtime::run_stream_with_context(
+        &program,
+        &registry,
+        &options,
+        1024,
+        context,
+        |_, _, _| {
+            records += 1;
+            Ok(())
+        },
+    );
+    let elapsed = started.elapsed();
+    let pid = wait_for_child_pid(&dir.path().join("child.pid"));
+    assert!(
+        result.is_err(),
+        "idle child outlived the inherited deadline"
+    );
+    assert_eq!(records, 0);
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "deadline took {elapsed:?}"
+    );
+    assert_process_group_reaped(pid);
+}
+
+#[test]
+fn total_and_command_timeouts_still_bound_idle_stream_children() {
+    for timeout in [
+        (
+            Some(Duration::from_secs(5)),
+            Some(Duration::from_millis(750)),
+        ),
+        (Some(Duration::from_millis(750)), None),
+    ] {
+        let dir = fixture();
+        add_idle_closed_stdout_child(&dir);
+        let registry = Registry::load(&manifest_dir(&dir)).unwrap();
+        let program = stream::parse("stream from idle.child\nshow each line\n").unwrap();
+        let options = runtime_options(&dir, timeout.0, timeout.1);
+        let started = Instant::now();
+        let result = runtime::run_stream(&program, &registry, &options, 1024, |_, _, _| Ok(()));
+        let elapsed = started.elapsed();
+        let pid = wait_for_child_pid(&dir.path().join("child.pid"));
+        assert!(result.is_err(), "idle child outlived timeout configuration");
+        assert!(elapsed < Duration::from_secs(3), "timeout took {elapsed:?}");
+        assert_process_group_reaped(pid);
+    }
+}
+
+#[test]
+fn secret_stream_cannot_reach_a_declared_writer_even_with_a_weaker_context_floor() {
+    let dir = fixture();
+    add_python_applet(
+        &dir,
+        "secret.source",
+        "secret_source.py",
+        "import os\nfrom pathlib import Path\nPath('source-launched').touch()\nos.write(1, b'secret\\n')\n",
+        json!({}),
+        json!([]),
+        false,
+    );
+    let mut source_manifest: Value =
+        serde_json::from_slice(&fs::read(manifest_dir(&dir).join("secret.source.json")).unwrap())
+            .unwrap();
+    source_manifest["contract"] = json!({
+        "version": 1,
+        "output": {"type": "text", "encoding": "raw"},
+        "ports": {
+            "inputs": {},
+            "outputs": {
+                "value": {
+                    "schema": {"type": "text"},
+                    "delivery": "single",
+                    "sensitivity": "secret"
+                }
+            },
+            "events": {}
+        }
+    });
+    write_manifest(&dir, "secret.source", source_manifest);
+    add_python_applet(
+        &dir,
+        "fixture.writer",
+        "writer.py",
+        "import sys\nfrom pathlib import Path\nPath('writer-launched').touch()\nPath('writer-output').write_bytes(sys.stdin.buffer.read())\n",
+        json!({}),
+        json!([]),
+        true,
+    );
+    let mut writer_manifest: Value =
+        serde_json::from_slice(&fs::read(manifest_dir(&dir).join("fixture.writer.json")).unwrap())
+            .unwrap();
+    writer_manifest["contract"] = json!({
+        "version": 1,
+        "capabilities": ["filesystem.write"],
+        "effects": ["filesystem.write"]
+    });
+    write_manifest(&dir, "fixture.writer", writer_manifest);
+
+    let registry = Registry::load(&manifest_dir(&dir)).unwrap();
+    let program =
+        stream::parse("stream from secret.source\npipe to fixture.writer\nshow each line\n")
+            .unwrap();
+    let options = runtime_options(&dir, Some(Duration::from_secs(3)), None);
+    let weak_context = runtime::StreamExecutionContext::default().with_sensitivity_floor(
+        flow::security::SensitivitySet::from_labels([
+            flow::contracts::Sensitivity::Public,
+            flow::contracts::Sensitivity::Unknown,
+        ]),
+    );
+    let result = runtime::run_stream_with_context(
+        &program,
+        &registry,
+        &options,
+        1024,
+        weak_context,
+        |_, _, _| Ok(()),
+    );
+    assert!(result.is_err(), "secret bytes reached a declared writer");
+    assert!(format!("{:#}", result.unwrap_err()).contains("persist"));
+    assert!(!dir.path().join("source-launched").exists());
+    assert!(!dir.path().join("writer-launched").exists());
+    assert!(!dir.path().join("writer-output").exists());
+}
+
+#[test]
+fn secret_listener_source_is_rejected_before_spawn_when_it_declares_writes() {
+    let dir = fixture();
+    add_python_applet(
+        &dir,
+        "fixture.listener",
+        "listener.py",
+        "import os\nfrom pathlib import Path\nPath('listener-launched').touch()\nos.write(1, b'secret\\n')\n",
+        json!({}),
+        json!([]),
+        false,
+    );
+    let mut listener_manifest: Value = serde_json::from_slice(
+        &fs::read(manifest_dir(&dir).join("fixture.listener.json")).unwrap(),
+    )
+    .unwrap();
+    listener_manifest["contract"] = json!({
+        "version": 1,
+        "capabilities": ["filesystem.write"],
+        "effects": ["filesystem.write"],
+        "ports": {
+            "inputs": {},
+            "outputs": {},
+            "events": {
+                "records": {
+                    "schema": {"type": "text"},
+                    "delivery": "events",
+                    "sensitivity": "secret"
+                }
+            }
+        }
+    });
+    write_manifest(&dir, "fixture.listener", listener_manifest);
+    let registry = Registry::load(&manifest_dir(&dir)).unwrap();
+    let program = parser::parse(
+        "listen to fixture.listener\nwhenever a line arrives as event\n  then \"cat\"\n",
+    )
+    .unwrap();
+    let options = runtime_options(&dir, Some(Duration::from_secs(3)), None);
+    let result = runtime::run_service(
+        &program,
+        &registry,
+        &options,
+        &runtime::ServiceLimits {
+            max_runs: Some(1),
+            max_record_bytes: 1024,
+        },
+        |_| Ok(()),
+    );
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("secret listener source unexpectedly started"),
+    };
+    assert!(format!("{error:#}").contains("persist"));
+    assert!(!dir.path().join("listener-launched").exists());
 }

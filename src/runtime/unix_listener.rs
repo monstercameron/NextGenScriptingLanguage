@@ -59,6 +59,11 @@ fn listen(
         ListenSource::Stdin => Reader::Stdin(std::io::stdin()),
         ListenSource::Applet(call) => {
             let manifest = registry.resolve_call(call)?;
+            crate::security::authorize_declared_filesystem_write(
+                registry,
+                manifest,
+                &signals.sensitivity_floor(),
+            )?;
             let binary = binary_path(manifest.binary_for(call), &options.working_directory)?;
             let argv = arguments_for_call(call, manifest, &options.inputs)?;
             stopped(signals)?;

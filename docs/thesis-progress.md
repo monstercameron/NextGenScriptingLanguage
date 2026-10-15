@@ -302,3 +302,11 @@ valid handler waits separate. LF/EOF framing and byte limits remain; expired
 incomplete requests cannot mutate state. This addresses the demonstrated same-user
 availability fault without claiming connect/CPU/filesystem deadlines or a separate
 application authorization boundary.
+
+A subsequent actual-CLI proof found that macOS can keep a single blocking
+socket write active beyond its requested timeout while a peer drains bytes.
+The Unix transport now temporarily uses a nonblocking connection and polls only
+for the remaining monotonic budget, restoring descriptor flags afterwards.
+Owned slow response and slow request-drain fixtures verify the actual CLI boundaries;
+Windows retains its overlapped I/O implementation. See the
+[follow-up security evidence](../benchmarks/security-2026-10-15-live-client.json).

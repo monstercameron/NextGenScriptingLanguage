@@ -42,12 +42,20 @@ system separating applications or agents of that user.
 
 Established live connections have absolute wire-I/O budgets: two seconds for
 server request reads and response writes, and CLI request writes; twelve seconds
-for CLI response reads. Byte progress does not renew them. Expired incomplete
+for CLI response reads. Unix temporarily makes each exclusively owned connection
+nonblocking and polls only for the remaining budget; this also bounds a single
+write while the peer continues draining bytes. Original descriptor flags are
+restored when the wire operation ends. Windows retains its overlapped I/O with
+a shrinking timeout. Byte progress does not renew the budget. Expired incomplete
 requests are rejected before state mutation; error replies are best effort when
 the peer keeps writing. Handler `wait` time remains separate, up to ten seconds.
 These are transport budgets, not connect, mutex/CPU, filesystem or native-command
 deadlines. The [live transport evidence](benchmarks/security-2026-10-15-live-transport.json)
 retains the owned partial-request/shutdown reproduction and regressions.
+The [CLI deadline proof](benchmarks/security-2026-10-15-live-client.json)
+additionally tests a slowly responding peer and a slowly draining peer against
+the actual CLI. The latter exposed a macOS blocking-write gap in the initial
+transport fix; the nonblocking path closes it.
 
 Model operations require an explicit invocation. Transport uses HTTPS, with HTTP
 allowed only for loopback endpoints; redirects and environment proxies are

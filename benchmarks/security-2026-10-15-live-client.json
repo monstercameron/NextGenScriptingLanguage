@@ -1,0 +1,312 @@
+{
+  "schema": "execute.security-live-client-followup/1",
+  "recorded_at_utc": "2026-10-15T00:32:34.858849+00:00",
+  "baseline_commit": "969ad7b9ba9859c41e70515d3fba5f534313f45e",
+  "scope": "Same-user local live-control availability on macOS arm64; actual CLI transport and healthy socket RPC. No privilege escalation, providers or application workflow effects.",
+  "defect": "The previous wrapper checked its monotonic budget around blocking Unix socket syscalls. On this host, a single write kept progressing beyond SO_SNDTIMEO as the peer slowly drained bytes. Two owned fixture repetitions kept the previous candidate alive at3.5seconds despite its intended2second write budget.",
+  "change": "Temporarily put the exclusively owned Unix connection in O_NONBLOCK mode. Check the monotonic remaining budget before and after transfers; poll only for the remaining rounded-up milliseconds on WouldBlock; retry interrupted calls. Restore the original descriptor flags when the operation guard drops. Keep Rust UnixStream I/O, LF/EOF framing, byte limits, peer checks and separate valid handler wait. Windows retains overlapped I/O with shrinking per-operation timeouts.",
+  "environment": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "rustc": "1.99.0 (b940084d7 2026-09-28)",
+    "release": "thin LTO, stripped",
+    "child_environment": {
+      "PATH": "/usr/bin:/bin",
+      "LC_ALL": "C",
+      "LANG": "C",
+      "HOME": "OWNED_FIXTURE",
+      "TMPDIR": "OWNED_FIXTURE"
+    },
+    "measurement": "Serial preserved release baseline/candidate, no local builds/tests/stress concurrent with timing; uncontrolled background activity. Healthy RPC uses three alternating server rounds,20reads/variant/round,three warmups,identical workload/catalog/cwd/environment and exact full reply/state hash oracles. Python JSON decoding and hashing outside the timer. Two repeats."
+  },
+  "binaries_sha256": {
+    "baseline": "04ad204bb8ae06c80ef5a3b31ed77bc3acb34b057465b8b46409758ac498f760",
+    "candidate": "bb7e4760dfb7b133686a973eaea7c8936bba86452ef5f07eea127cb2877009af"
+  },
+  "source_sha256": {
+    "src/live/transport.rs": "5695220b1a7273b12b01b4cef98edb5ee73d0413e2ab2d8170e1cf84650e1f33",
+    "benchmarks/live_client_security.py": "e8ad2f09218a8969f189ffe74dc2106e231c2222431dddc8ec2fb3a154ecd23a",
+    "benchmarks/live_transport.py": "8a6937e72a8792453e3256ec9e2ce671d9e4f8cbd0667ba543b3ed9f37628a83"
+  },
+  "CLI_deadline_observations": {
+    "response_drip": {
+      "baseline": {
+        "elapsed_before_peer_close_seconds": 12.015166,
+        "observer_seconds": 13.2,
+        "alive_at_observer": false,
+        "observed_at_seconds": null,
+        "progress_events": 113,
+        "peer_received_bytes": 29,
+        "peer_received_sha256": "4e4bc98949228d4ddcfeedda863ddeca45823a0184f4629e198c67b14e4ea058",
+        "peer_sent_bytes": 134,
+        "request_lf_received": true,
+        "CLI_exit": 1,
+        "CLI_error": {
+          "error": {
+            "code": "invalid_request",
+            "message": "live transport deadline exceeded"
+          },
+          "ok": false
+        },
+        "CLI_stderr_bytes": 0,
+        "owned_child_reaped": true,
+        "peer_closed": true,
+        "requested_socket_receive_buffer_bytes": 4096,
+        "actual_socket_receive_buffer_bytes": 4096
+      },
+      "candidate": {
+        "elapsed_before_peer_close_seconds": 12.350017084,
+        "observer_seconds": 13.2,
+        "alive_at_observer": false,
+        "observed_at_seconds": null,
+        "progress_events": 112,
+        "peer_received_bytes": 29,
+        "peer_received_sha256": "4e4bc98949228d4ddcfeedda863ddeca45823a0184f4629e198c67b14e4ea058",
+        "peer_sent_bytes": 133,
+        "request_lf_received": true,
+        "CLI_exit": 1,
+        "CLI_error": {
+          "error": {
+            "code": "invalid_request",
+            "message": "live transport deadline exceeded"
+          },
+          "ok": false
+        },
+        "CLI_stderr_bytes": 0,
+        "owned_child_reaped": true,
+        "peer_closed": true,
+        "requested_socket_receive_buffer_bytes": 4096,
+        "actual_socket_receive_buffer_bytes": 4096
+      }
+    },
+    "request_drain": {
+      "baseline": {
+        "elapsed_before_peer_close_seconds": 3.5115712079999994,
+        "observer_seconds": 3.5,
+        "alive_at_observer": true,
+        "observed_at_seconds": 3.5115704580000013,
+        "progress_events": 33,
+        "peer_received_bytes": 33792,
+        "peer_received_sha256": "0f948fff51e119db226bcfd7a8218a0ef0e8a5ecd99eccf99a7729955899ce7d",
+        "peer_sent_bytes": 0,
+        "request_lf_received": false,
+        "CLI_exit": 1,
+        "CLI_error": {
+          "error": {
+            "code": "invalid_request",
+            "message": "Broken pipe (os error 32)"
+          },
+          "ok": false
+        },
+        "CLI_stderr_bytes": 0,
+        "owned_child_reaped": true,
+        "peer_closed": true,
+        "requested_socket_receive_buffer_bytes": 4096,
+        "actual_socket_receive_buffer_bytes": 4096
+      },
+      "candidate": {
+        "elapsed_before_peer_close_seconds": 2.017967542000001,
+        "observer_seconds": 3.5,
+        "alive_at_observer": false,
+        "observed_at_seconds": null,
+        "progress_events": 19,
+        "peer_received_bytes": 19456,
+        "peer_received_sha256": "9e6a387dccab7687db1b798fdf2a95106f308930eb4272f009d3b692a0d2c60c",
+        "peer_sent_bytes": 0,
+        "request_lf_received": false,
+        "CLI_exit": 1,
+        "CLI_error": {
+          "error": {
+            "code": "invalid_request",
+            "message": "live transport deadline exceeded"
+          },
+          "ok": false
+        },
+        "CLI_stderr_bytes": 0,
+        "owned_child_reaped": true,
+        "peer_closed": true,
+        "requested_socket_receive_buffer_bytes": 4096,
+        "actual_socket_receive_buffer_bytes": 4096
+      }
+    }
+  },
+  "healthy_RPC_repeats": [
+    {
+      "raw_report": "healthy-rpc-first.json",
+      "results": {
+        "0": {
+          "round_p50_ns": {
+            "baseline": [
+              42417.0,
+              69229.0,
+              70229.0
+            ],
+            "candidate": [
+              65979.5,
+              79500.0,
+              76312.5
+            ]
+          },
+          "median_of_round_p50_ns": {
+            "baseline": 69229.0,
+            "candidate": 76312.5
+          },
+          "candidate_change_percent": 10.231983706250269,
+          "full_reply_sha256": "f4463b1279c83427c47c82bb21642e292e71fdad93c3ced14676b58b1999e35f",
+          "expected_result_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "round_order": [
+            [
+              "baseline",
+              "candidate"
+            ],
+            [
+              "candidate",
+              "baseline"
+            ],
+            [
+              "baseline",
+              "candidate"
+            ]
+          ]
+        },
+        "4194304": {
+          "round_p50_ns": {
+            "baseline": [
+              6548687.0,
+              6557958.5,
+              6568021.0
+            ],
+            "candidate": [
+              7712166.5,
+              7620749.5,
+              7644437.5
+            ]
+          },
+          "median_of_round_p50_ns": {
+            "baseline": 6557958.5,
+            "candidate": 7644437.5
+          },
+          "candidate_change_percent": 16.56733570363398,
+          "full_reply_sha256": "41651f0ffb0ca170e5ac6ce724fe6ffafdc0aef9e61d1f60619e71cdcf876370",
+          "expected_result_sha256": "002136891dd361a3a2d4d3dd7b77e288eb518e324a59bec2f13415ab503169d4",
+          "round_order": [
+            [
+              "baseline",
+              "candidate"
+            ],
+            [
+              "candidate",
+              "baseline"
+            ],
+            [
+              "baseline",
+              "candidate"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "raw_report": "healthy-rpc-repeat.json",
+      "results": {
+        "0": {
+          "round_p50_ns": {
+            "baseline": [
+              65666.5,
+              73021.0,
+              82166.5
+            ],
+            "candidate": [
+              47813.0,
+              68208.0,
+              42874.5
+            ]
+          },
+          "median_of_round_p50_ns": {
+            "baseline": 73021.0,
+            "candidate": 47813.0
+          },
+          "candidate_change_percent": -34.52157598499062,
+          "full_reply_sha256": "f4463b1279c83427c47c82bb21642e292e71fdad93c3ced14676b58b1999e35f",
+          "expected_result_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "round_order": [
+            [
+              "baseline",
+              "candidate"
+            ],
+            [
+              "candidate",
+              "baseline"
+            ],
+            [
+              "baseline",
+              "candidate"
+            ]
+          ]
+        },
+        "4194304": {
+          "round_p50_ns": {
+            "baseline": [
+              6653813.0,
+              6659958.5,
+              6600542.0
+            ],
+            "candidate": [
+              7774812.0,
+              7766000.5,
+              7811562.0
+            ]
+          },
+          "median_of_round_p50_ns": {
+            "baseline": 6653813.0,
+            "candidate": 7774812.0
+          },
+          "candidate_change_percent": 16.847467760215086,
+          "full_reply_sha256": "41651f0ffb0ca170e5ac6ce724fe6ffafdc0aef9e61d1f60619e71cdcf876370",
+          "expected_result_sha256": "002136891dd361a3a2d4d3dd7b77e288eb518e324a59bec2f13415ab503169d4",
+          "round_order": [
+            [
+              "baseline",
+              "candidate"
+            ],
+            [
+              "candidate",
+              "baseline"
+            ],
+            [
+              "baseline",
+              "candidate"
+            ]
+          ]
+        }
+      }
+    }
+  ],
+  "verification": {
+    "targeted_transport_units": 4,
+    "clippy_all_targets": "passed -Dwarnings",
+    "full_integration": "passed",
+    "Rust_passed": 460,
+    "Rust_ignored": 24,
+    "live_Python_scenarios": 61,
+    "editor_tests": 22,
+    "Node_WASM_contracts": 34,
+    "Windows_x64_ARM64": "all-targets local compile checks passed; slow-peer probes remain Unix-only",
+    "proof_smoke": "exact1MiBbinary, two native launches, seven lifecycle probes passed",
+    "measured_release_matches_final_full_build": true,
+    "WASM_sha256": "f1a8ca86af68f2314fab09b86ffb58edfc182c80d192d8cea5cd42736791e5e2",
+    "WASM_byte_identical": true,
+    "docs_links_Python_compile_Black_diff_check": "passed",
+    "owned_children": "All exact slow-peer CLI children reaped; sockets removed; rejected owned test/cargo/shell no longer present"
+  },
+  "retained_experiments": [
+    "MSG_DONTWAIT-only Unix candidate blocked in the unread-peer unit test on this host; rejected, exact owned test/cargo/shell terminated and source retained. It is not the accepted implementation.",
+    "First final harness comparison wrongly expected969ad7b to have the pre-fix response behavior.969ad7b already expires response reads at12seconds. Corrected the explicit baseline response expectation and reran; no runtime change was made for that fixture correction. Failed report and harness retained."
+  ],
+  "interpretation": [
+    "Slow response reads expire for both previous and final clients (about12.02/12.35seconds here). The previous write remains alive at3.51seconds until the owned peer closes; the final write returns a deadline error at2.02seconds despite19progress events. No full request LF reaches the synthetic peer. All exact owned clients are reaped and sockets removed. No real server mutation or native/model execution is involved.",
+    "The healthy4MiBreply costs16.57% and16.85% more elapsed RPC time in two paired repeats:about6.6ms to7.7ms. This is an accepted security cost,not a performance gain. Empty replies vary+10.2%/-34.5%; no repeatable small-request gain or regression is attributed. All exact full reply and state hashes match.",
+    "These budgets bound established-connection wire I/O; they do not bound connection setup,CPU/mutex handling,filesystem operations,stdout consumers or native commands. OS scheduling can delay observation; no hard real-time guarantee. Same-user control remains trusted and powerful.",
+    "New slow-peer probes are Unix-only. Windows local compilation and ordinary cross-platformCI do not establish equivalent dynamic slow-peer timing. No sandbox,exactly-once mutation,arbitrary Bash compatibility or production-completeness claim."
+  ],
+  "evidence_directory": "work/performance-five-hours-2026-10-14/passes/18-live-client-deadline-proofs"
+}

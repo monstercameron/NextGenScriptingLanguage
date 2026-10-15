@@ -1711,6 +1711,7 @@ fn is_policy_safe_in_process(name: &str) -> bool {
             | "number.compare"
             | "number.parse_integer"
             | "number.parse_integer.result"
+            | "number.to_text"
             | "path.basename"
             | "path.dirname"
             | "path.remove_suffix"

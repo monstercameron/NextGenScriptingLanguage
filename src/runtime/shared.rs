@@ -872,6 +872,25 @@ fn validate_range(
                         if !manifest.accepts_stdin {
                             bail!("applet {:?} does not accept piped input", manifest.name);
                         }
+                        if index > 0 {
+                            if let StepKind::Invoke {
+                                call: producer_call,
+                                ..
+                            } = &steps[index - 1].kind
+                            {
+                                let producer = registry.resolve_call(producer_call)?;
+                                let issues = producer.native_pipe_compatibility_issues(manifest);
+                                if !issues.is_empty() {
+                                    bail!(
+                                        "line {}: native pipe from {:?} to {:?} is incompatible: {}",
+                                        step.line,
+                                        producer.name,
+                                        manifest.name,
+                                        issues.join("; ")
+                                    );
+                                }
+                            }
+                        }
                         if (index == 0 && !initial_has_data)
                             || !matches!(
                                 steps[index.saturating_sub(1)].kind,

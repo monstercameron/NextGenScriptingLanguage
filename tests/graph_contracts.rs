@@ -17,6 +17,7 @@ fn leaf(kind: OutputType) -> ValueSchema {
     ValueSchema {
         kind,
         nullable: false,
+        enum_values: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
@@ -114,6 +115,7 @@ fn required_inputs_and_record_items_are_validated_recursively() {
     let list = ValueSchema {
         kind: OutputType::List,
         nullable: false,
+        enum_values: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: Some(Box::new(item)),
@@ -122,6 +124,7 @@ fn required_inputs_and_record_items_are_validated_recursively() {
     let invalid = ValueSchema {
         kind: OutputType::List,
         nullable: false,
+        enum_values: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
@@ -271,6 +274,77 @@ fn streamed_formatter_registry(output_delivery: &str, event_output: bool) -> Reg
     }
     let source = manifest.to_string();
     Registry::from_sources(&[&source]).unwrap()
+}
+
+fn enum_transfer_registry(source_values: &[&str], target_values: &[&str]) -> Registry {
+    let source = serde_json::json!({
+        "name": "demo.source",
+        "binary": "/bin/echo",
+        "arguments": [{"literal": source_values[0]}],
+        "contract": {
+            "version": 1,
+            "output": {"type": "text", "encoding": "raw", "enum": source_values},
+            "ports": {
+                "outputs": {
+                    "stdout": {
+                        "schema": {"type": "text", "enum": source_values},
+                        "delivery": "single"
+                    }
+                }
+            }
+        }
+    });
+    let target = serde_json::json!({
+        "name": "demo.target",
+        "binary": "/bin/cat",
+        "parameters": {"value": {"type": "string", "required": true}},
+        "arguments": [{"parameter": "value"}],
+        "contract": {
+            "version": 1,
+            "output": {"type": "bytes", "encoding": "raw"},
+            "ports": {
+                "inputs": {
+                    "value": {
+                        "schema": {"type": "text", "enum": target_values},
+                        "delivery": "single"
+                    }
+                }
+            }
+        }
+    });
+    let source = source.to_string();
+    let target = target.to_string();
+    Registry::from_sources(&[&source, &target]).unwrap()
+}
+
+#[test]
+fn connected_text_enums_use_subset_assignability_and_valid_preflight_values() {
+    let registry = enum_transfer_registry(&["json"], &["json", "yaml"]);
+    let plan = graph::parse(
+        "graph enum_ok\nrun demo.source as producer\nrun demo.target as consumer\nbind producer.stdout to consumer.value with capacity 1 lossless\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+    assert_eq!(
+        plan.nodes()[1].inputs["value"]
+            .schema
+            .enum_values
+            .as_deref()
+            .unwrap()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["json", "yaml"]
+    );
+
+    let registry = enum_transfer_registry(&["json", "xml"], &["json", "yaml"]);
+    let error = graph::parse(
+        "graph enum_bad\nrun demo.source as producer\nrun demo.target as consumer\nbind producer.stdout to consumer.value with capacity 1 lossless\nend graph\n",
+        &registry,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("port_schema_mismatch"), "{error}");
 }
 
 const STREAM_FORMATTER_GRAPH: &str = "graph clocked\nevery 1 second as clock\nrun demo.format_integer as formatter\nbind clock.tick to formatter.value with capacity 2 lossless\nend graph\n";

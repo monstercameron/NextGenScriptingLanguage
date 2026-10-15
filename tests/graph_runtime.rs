@@ -32,6 +32,7 @@ fn bytes() -> ValueSchema {
     ValueSchema {
         kind: OutputType::Bytes,
         nullable: false,
+        enum_values: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
@@ -42,6 +43,7 @@ fn int() -> ValueSchema {
     ValueSchema {
         kind: OutputType::Integer,
         nullable: false,
+        enum_values: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
@@ -114,6 +116,7 @@ fn fanout_merges_record_ports_in_order_with_lossless_bounded_queues() {
             PortSchema::single(ValueSchema {
                 kind: OutputType::List,
                 nullable: false,
+                enum_values: None,
                 fields: BTreeMap::new(),
                 required: Vec::new(),
                 items: Some(Box::new(int())),
@@ -366,6 +369,7 @@ fn emitted_labels_preserve_secret_unknown_and_public_provenance() {
     let mut secret = PortSchema::single(ValueSchema {
         kind: OutputType::Text,
         nullable: false,
+        enum_values: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
@@ -374,6 +378,7 @@ fn emitted_labels_preserve_secret_unknown_and_public_provenance() {
     let mut declared_public_in = PortSchema::single(ValueSchema {
         kind: OutputType::Text,
         nullable: false,
+        enum_values: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
@@ -474,6 +479,7 @@ fn runtime_provenance_union_denies_remote_before_invocation() {
     let mut source = PortSchema::single(ValueSchema {
         kind: OutputType::Text,
         nullable: false,
+        enum_values: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,

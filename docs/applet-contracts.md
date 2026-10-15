@@ -93,6 +93,11 @@ record-valued parameters use the explicit `json_parameter` mapping for one
 parameter or `json_arguments` to encode the entire argument map. They cannot
 be passed through ordinary scalar `parameter` or `spread` nodes.
 
+Native pipes carry the producer's stdout bytes directly. Preflight checks both
+the declared value schemas and wire encodings: raw text cannot feed JSON stdin,
+while JSON-encoded text can feed a JSON stdin port. Semantic widening such as
+Number to JSON applies to typed values and does not rewrite raw pipe bytes.
+
 ## Input and output types
 
 Legacy manifests that omit `contract` remain command applets with one-shot
@@ -106,14 +111,15 @@ errors during catalog validation.
 | `text` | UTF-8 text, either raw bytes or a JSON string. Empty text is valid. |
 | `path` | A contract-only semantic string. Raw form must be UTF-8; JSON form must be a JSON string. It must be nonempty and contain no NUL. A path parameter accepts a string literal or text result reference and emits exactly one argv item. Path output uses the existing text binding type. |
 | `integer` | JSON signed 64-bit integer. |
+| `number` | Any finite JSON number, including integers and fractional values. |
 | `boolean` | JSON boolean. |
 | `json` | Any complete JSON value. |
 | `record` | JSON object checked against recursively declared fields and required names. Undeclared fields and byte fields are rejected. A field of type `json` accepts any JSON value, including arrays and nested objects. |
 | `list` | JSON array checked item by item against its recursive `items` schema. Lists cannot contain raw-byte values; a top-level list output uses JSON encoding. |
 
 An output schema requires an explicit `encoding`. Text and path accept `raw` or
-`json`; integer, boolean, json, record and list require `json`; bytes require
-`raw`.
+`json`; integer, number, boolean, json, record and list require `json`; bytes
+require `raw`.
 `trim_final_lf: true` is permitted only for raw text or path, and removes one
 final LF only. It does not trim spaces, remove CR, or normalize line endings.
 There is no nominal Path value in the `.program` AST: path semantics are checked
@@ -124,6 +130,21 @@ declare `fields` and `required`; lists declare `items`. Those structural fields
 are rejected on other schema kinds. `nullable: true` explicitly permits JSON
 `null` in addition to the declared type, including for nested record fields and
 list items. Bytes cannot be nullable or embedded in a JSON record/list.
+For typed connections, every field a producer may emit must be accepted by
+the consumer, and every consumer-required field must be guaranteed by the
+producer. A consumer may declare additional optional fields.
+
+Text schemas may restrict values with a nonempty `enum` array:
+
+```json
+{"type":"text","enum":["json","yaml"]}
+```
+
+An enum validates literals and runtime values at the typed boundary. For a
+port connection, every value allowed by the producer must be accepted by the
+consumer: an enum containing only `json` can feed one containing `json` and
+`yaml`, while unconstrained text or an enum containing `xml` cannot. Graph
+preflight uses a declared allowed value when it validates a parameter binding.
 
 ## Named applet ports
 
@@ -131,8 +152,11 @@ The optional `contract.ports` object describes typed `inputs`, `outputs` and
 `events` by identifier. An input port maps to a manifest parameter of the same
 name. The special `stdin` input is available only when the manifest accepts
 stdin and must declare an encoding. Bytes use `raw`; text and path accept `raw`
-or `json`; integer, boolean, JSON, record and list values use `json`. Ordinary
+or `json`; integer, number, boolean, JSON, record and list values use `json`. Ordinary
 named parameters are already typed values and do not take a per-port encoding.
+When a parameter is declared as generic JSON but its input port is `number`, the
+contract refines it to a finite JSON number and rejects other JSON values during
+canonical invocation validation.
 
 An output port is selected from the contract's canonical decoded output. Its
 optional `pointer` is an RFC 6901 JSON Pointer; multiple fields from one record
@@ -355,7 +379,8 @@ helper executable.
 | `path.dirname`, `path.basename`, `path.remove_suffix` | Small path-string transformations; they do not access the filesystem. |
 | `text.trim_final_lf`, `text.normalize` | Return supplied `args.text` or UTF-8 stdin with one final LF removed. `text.normalize` is currently the same operation; neither trims other whitespace nor normalizes line endings. |
 | `text.concat`, `text.matches` | Join a string list with an optional separator; or return match presence, count and UTF-8 byte offsets for a literal needle. |
-| `number.add`, `number.subtract`, `number.multiply`, `number.divide`, `number.compare` | Operate on finite JSON numbers. Integer results are checked for overflow; division by zero fails; compare returns -1, 0 or 1. |
+| `number.add`, `number.subtract`, `number.multiply`, `number.divide`, `number.compare` | Operate on finite JSON numbers and declare Number input/output ports (compare returns an integer). Integral add/subtract/multiply use checked integer arithmetic; division and fractional arithmetic use IEEE-754 binary64, so decimal results are not guaranteed to be exact. Division by zero fails; compare returns -1, 0 or 1. |
+| `number.to_text` | Accepts a Number and returns its deterministic, locale-independent JSON numeric representation as text. It does not coerce strings or promise exact-decimal formatting. |
 | `number.parse_integer` | Parse UTF-8 decimal or explicitly based input in radix 2 through 36, with optional ASCII-whitespace trimming and signed 64-bit range checks. |
 | `color.rgb_to_hex`, `color.parse_rgb` | Convert three channels from 0 through 255 into `#rrggbb`, or parse a strict RGB triple with an explicit fallback color. |
 | `json.parse`, `json.stringify` | Parse strict UTF-8 JSON (up to 16 MiB and 128 nesting levels) or emit compact escaped JSON. Malformed or oversized input fails with status 2. |

@@ -440,6 +440,14 @@ pub struct OutputSchema {
     pub fields: BTreeMap<String, ValueSchema>,
     #[serde(default)]
     pub required: Vec<String>,
+    /// Allowed string values when `type` is `text`.
+    #[serde(
+        default,
+        rename = "enum",
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub enum_values: Option<Vec<String>>,
     /// Remove exactly one final LF from raw UTF-8 text or path output. No other
     /// whitespace or line ending is normalized.
     #[serde(default)]
@@ -454,6 +462,8 @@ pub enum OutputType {
     Text,
     Path,
     Integer,
+    /// Any finite JSON numeric value, including integers and fractions.
+    Number,
     Boolean,
     Json,
     Record,
@@ -480,6 +490,14 @@ pub struct ValueSchema {
     pub fields: BTreeMap<String, ValueSchema>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required: Vec<String>,
+    /// Allowed string values when `type` is `text`.
+    #[serde(
+        default,
+        rename = "enum",
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub enum_values: Option<Vec<String>>,
 }
 
 /// A named typed port on a versioned applet interface.
@@ -541,6 +559,7 @@ impl ValueSchema {
             self.items.as_deref(),
             &self.fields,
             &self.required,
+            self.enum_values.as_deref(),
             self.nullable,
             true,
         )
@@ -552,6 +571,7 @@ impl ValueSchema {
             self.items.as_deref(),
             &self.fields,
             &self.required,
+            self.enum_values.as_deref(),
             self.nullable,
         )
     }
@@ -562,6 +582,101 @@ impl ValueSchema {
         self.validate()?;
         validate_ast_value(self, value)
     }
+
+    /// Return whether every value produced by this schema is accepted by
+    /// `target`, without a conversion. This relation is directional: for
+    /// example, Integer is assignable to Number, while Number is not
+    /// assignable to Integer.
+    pub fn is_assignable_to(&self, target: &Self) -> bool {
+        schema_is_assignable(self, target)
+    }
+}
+
+fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
+    let kinds_assignable = source.kind == target.kind
+        || matches!(
+            (source.kind, target.kind),
+            (OutputType::Integer, OutputType::Number | OutputType::Json)
+                | (OutputType::Number, OutputType::Json)
+                | (
+                    OutputType::Text
+                        | OutputType::Path
+                        | OutputType::Boolean
+                        | OutputType::Record
+                        | OutputType::List,
+                    OutputType::Json
+                )
+        );
+    if !kinds_assignable {
+        return false;
+    }
+    let source_may_be_null = source.nullable || source.kind == OutputType::Json;
+    let target_accepts_null = target.nullable || target.kind == OutputType::Json;
+    if source_may_be_null && !target_accepts_null {
+        return false;
+    }
+    if source.kind != target.kind {
+        return true;
+    }
+    match source.kind {
+        OutputType::Text => {
+            enum_assignable(source.enum_values.as_deref(), target.enum_values.as_deref())
+        }
+        OutputType::Record => {
+            // A target may declare optional fields the source never emits.
+            // Conversely, every source field must be accepted by the target,
+            // and any target-required field must always be present in source
+            // values.
+            source.fields.iter().all(|(name, source_field)| {
+                target
+                    .fields
+                    .get(name)
+                    .is_some_and(|target_field| schema_is_assignable(source_field, target_field))
+            }) && target
+                .required
+                .iter()
+                .all(|name| source.required.contains(name))
+        }
+        OutputType::List => match (source.items.as_deref(), target.items.as_deref()) {
+            (Some(source_item), Some(target_item)) => {
+                schema_is_assignable(source_item, target_item)
+            }
+            _ => false,
+        },
+        _ => true,
+    }
+}
+
+fn enum_assignable(source: Option<&[String]>, target: Option<&[String]>) -> bool {
+    match (source, target) {
+        (_, None) => true,
+        (Some(source), Some(target)) => source.iter().all(|value| target.contains(value)),
+        (None, Some(_)) => false,
+    }
+}
+
+fn validate_enum_schema(kind: OutputType, values: Option<&[String]>) -> Result<()> {
+    let Some(values) = values else {
+        return Ok(());
+    };
+    if kind != OutputType::Text {
+        bail!("enum constraints apply only to text schemas");
+    }
+    if values.is_empty() {
+        bail!("text enum constraints must contain at least one value");
+    }
+    let mut unique = BTreeSet::new();
+    if values.iter().any(|value| !unique.insert(value)) {
+        bail!("text enum constraints must not contain duplicate values");
+    }
+    Ok(())
+}
+
+fn validate_enum_value(values: Option<&[String]>, value: &str) -> Result<()> {
+    if values.is_some_and(|values| !values.iter().any(|allowed| allowed == value)) {
+        bail!("text value {value:?} is outside the declared enum");
+    }
+    Ok(())
 }
 
 fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
@@ -572,14 +687,18 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
         (OutputType::Bytes, _) => {
             bail!("bytes use the raw byte transport and cannot be represented as a Value")
         }
-        (OutputType::Text, Value::String(_)) => Ok(()),
+        (OutputType::Text, Value::String(text)) => {
+            validate_enum_value(schema.enum_values.as_deref(), text)
+        }
         (OutputType::Path, Value::String(path)) => {
             if path.is_empty() || path.contains('\0') {
                 bail!("path value must be nonempty and contain no NUL bytes");
             }
             Ok(())
         }
-        (OutputType::Integer, Value::Integer(_)) | (OutputType::Boolean, Value::Bool(_)) => Ok(()),
+        (OutputType::Integer, Value::Integer(_))
+        | (OutputType::Number, Value::Integer(_) | Value::Number(_))
+        | (OutputType::Boolean, Value::Bool(_)) => Ok(()),
         (OutputType::Json, value) => crate::structured::to_json(value)
             .context("validating value as JSON")
             .map(|_| ()),
@@ -673,6 +792,7 @@ pub(crate) fn validate_stdin_port(port: &AppletPort) -> Result<()> {
         }
         (
             OutputType::Integer
+            | OutputType::Number
             | OutputType::Boolean
             | OutputType::Json
             | OutputType::Record
@@ -684,6 +804,7 @@ pub(crate) fn validate_stdin_port(port: &AppletPort) -> Result<()> {
             | OutputType::Text
             | OutputType::Path
             | OutputType::Integer
+            | OutputType::Number
             | OutputType::Boolean
             | OutputType::Json
             | OutputType::Record
@@ -694,6 +815,7 @@ pub(crate) fn validate_stdin_port(port: &AppletPort) -> Result<()> {
         }
         (
             OutputType::Integer
+            | OutputType::Number
             | OutputType::Boolean
             | OutputType::Json
             | OutputType::Record
@@ -784,6 +906,7 @@ impl OutputSchema {
             self.items.as_deref(),
             &self.fields,
             &self.required,
+            self.enum_values.as_deref(),
             false,
             true,
         )?;
@@ -792,6 +915,7 @@ impl OutputSchema {
             | (OutputType::Text | OutputType::Path, OutputEncoding::Raw | OutputEncoding::Json)
             | (
                 OutputType::Integer
+                | OutputType::Number
                 | OutputType::Boolean
                 | OutputType::Json
                 | OutputType::Record
@@ -803,6 +927,7 @@ impl OutputSchema {
             }
             (
                 OutputType::Integer
+                | OutputType::Number
                 | OutputType::Boolean
                 | OutputType::Json
                 | OutputType::Record
@@ -826,6 +951,7 @@ impl OutputSchema {
             OutputType::Bytes => None,
             OutputType::Text | OutputType::Path => Some(InputType::Text),
             OutputType::Integer => Some(InputType::Integer),
+            OutputType::Number => Some(InputType::Json),
             OutputType::Boolean => Some(InputType::Boolean),
             OutputType::Json | OutputType::Record => Some(InputType::Json),
             OutputType::List => Some(match self.items.as_deref().map(|item| item.kind) {
@@ -867,9 +993,11 @@ impl OutputSchema {
                         bail!("path output contains a NUL byte");
                     }
                 }
+                validate_enum_value(self.enum_values.as_deref(), &value)?;
                 Ok(AppletOutput::Value(Value::String(value)))
             }
             OutputType::Integer
+            | OutputType::Number
             | OutputType::Boolean
             | OutputType::Json
             | OutputType::Record
@@ -880,6 +1008,7 @@ impl OutputSchema {
                     self.items.as_deref(),
                     &self.fields,
                     &self.required,
+                    self.enum_values.as_deref(),
                     false,
                     &json,
                 )?;
@@ -894,6 +1023,7 @@ impl OutputSchema {
             self.items.as_deref(),
             &self.fields,
             &self.required,
+            self.enum_values.as_deref(),
             false,
         );
         let object = schema
@@ -912,6 +1042,7 @@ fn validate_schema_parts(
     items: Option<&ValueSchema>,
     fields: &BTreeMap<String, ValueSchema>,
     required: &[String],
+    enum_values: Option<&[String]>,
     nullable: bool,
     top_level: bool,
 ) -> Result<()> {
@@ -924,6 +1055,7 @@ fn validate_schema_parts(
     if nullable && kind == OutputType::Bytes {
         bail!("bytes schemas cannot be nullable; use the JSON output kind for null");
     }
+    validate_enum_schema(kind, enum_values)?;
     let mut unique = BTreeSet::new();
     for name in required {
         if !fields.contains_key(name) || !unique.insert(name) {
@@ -942,6 +1074,7 @@ fn validate_schema_parts(
             schema.items.as_deref(),
             &schema.fields,
             &schema.required,
+            schema.enum_values.as_deref(),
             schema.nullable,
             false,
         )?;
@@ -955,6 +1088,7 @@ fn validate_schema_parts(
             items.items.as_deref(),
             &items.fields,
             &items.required,
+            items.enum_values.as_deref(),
             items.nullable,
             false,
         )?;
@@ -970,11 +1104,18 @@ fn schema_json(
     items: Option<&ValueSchema>,
     fields: &BTreeMap<String, ValueSchema>,
     required: &[String],
+    enum_values: Option<&[String]>,
     nullable: bool,
 ) -> serde_json::Value {
     let mut schema = match kind {
         OutputType::Bytes => serde_json::json!({"type":"bytes"}),
-        OutputType::Text => serde_json::json!({"type":"string"}),
+        OutputType::Text => {
+            let mut schema = serde_json::json!({"type":"string"});
+            if let Some(values) = enum_values {
+                schema["enum"] = serde_json::json!(values);
+            }
+            schema
+        }
         OutputType::Path => serde_json::json!({
             "type":"string", "format":"path", "minLength":1,
             "pattern":"^[^\\u0000]+$"
@@ -982,6 +1123,7 @@ fn schema_json(
         OutputType::Integer => serde_json::json!({
             "type":"integer", "minimum":i64::MIN, "maximum":i64::MAX
         }),
+        OutputType::Number => serde_json::json!({"type":"number"}),
         OutputType::Boolean => serde_json::json!({"type":"boolean"}),
         OutputType::Json => serde_json::json!({}),
         OutputType::Record => {
@@ -995,6 +1137,7 @@ fn schema_json(
                             schema.items.as_deref(),
                             &schema.fields,
                             &schema.required,
+                            schema.enum_values.as_deref(),
                             schema.nullable,
                         ),
                     )
@@ -1016,12 +1159,16 @@ fn schema_json(
                     item.items.as_deref(),
                     &item.fields,
                     &item.required,
+                    item.enum_values.as_deref(),
                     item.nullable,
                 )
             })
         }
     };
     if nullable && kind != OutputType::Json {
+        if enum_values.is_some() {
+            return serde_json::json!({"anyOf":[schema,{"type":"null"}]});
+        }
         let object = schema
             .as_object_mut()
             .expect("schema projection is an object");
@@ -1044,6 +1191,7 @@ fn validate_json_value(
     items: Option<&ValueSchema>,
     fields: &BTreeMap<String, ValueSchema>,
     required: &[String],
+    enum_values: Option<&[String]>,
     nullable: bool,
     value: &serde_json::Value,
 ) -> Result<()> {
@@ -1064,6 +1212,9 @@ fn validate_json_value(
                     bail!("path output contains a NUL byte");
                 }
             }
+            if kind == OutputType::Text {
+                validate_enum_value(enum_values, value.as_str().expect("string checked above"))?;
+            }
         }
         OutputType::Integer => {
             if value.as_i64().is_none() {
@@ -1071,6 +1222,11 @@ fn validate_json_value(
                     "expected JSON signed 64-bit integer, got {}",
                     json_kind(value)
                 );
+            }
+        }
+        OutputType::Number => {
+            if !value.is_number() {
+                bail!("expected JSON number, got {}", json_kind(value));
             }
         }
         OutputType::Boolean => {
@@ -1100,6 +1256,7 @@ fn validate_json_value(
                         schema.items.as_deref(),
                         &schema.fields,
                         &schema.required,
+                        schema.enum_values.as_deref(),
                         schema.nullable,
                         value,
                     )
@@ -1118,6 +1275,7 @@ fn validate_json_value(
                     item_schema.items.as_deref(),
                     &item_schema.fields,
                     &item_schema.required,
+                    item_schema.enum_values.as_deref(),
                     item_schema.nullable,
                     value,
                 )
@@ -1545,6 +1703,7 @@ impl AppletContract {
             items: output.items.clone(),
             fields: output.fields.clone(),
             required: output.required.clone(),
+            enum_values: output.enum_values.clone(),
         };
         let text_schema = || ValueSchema {
             kind: OutputType::Text,
@@ -1552,6 +1711,7 @@ impl AppletContract {
             items: None,
             fields: BTreeMap::new(),
             required: Vec::new(),
+            enum_values: None,
         };
         let integer_schema = ValueSchema {
             kind: OutputType::Integer,
@@ -1559,6 +1719,7 @@ impl AppletContract {
             items: None,
             fields: BTreeMap::new(),
             required: Vec::new(),
+            enum_values: None,
         };
         let fields = BTreeMap::from([
             ("value".into(), value_schema),
@@ -1579,6 +1740,7 @@ impl AppletContract {
                 "effect_certainty".into(),
                 "status".into(),
             ],
+            enum_values: None,
         })
     }
 

@@ -208,7 +208,7 @@ fn help() -> &'static str {
      Operations: path.dirname, path.basename, path.remove_suffix, text.trim_final_lf,\n\
      text.normalize, text.concat, text.matches, number.add, number.subtract,\n\
      number.multiply, number.divide, number.compare, number.parse_integer,\n\
-     number.parse_integer.result, color.rgb_to_hex, color.parse_rgb,\n\
+     number.parse_integer.result, number.to_text, color.rgb_to_hex, color.parse_rgb,\n\
      color.parse_rgb.result, json.parse, json.stringify, json.get, json.set,\n\
      json.map, json.filter, jsonc.edit_content, fs.read, fs.snapshot,\n\
      fs.write_atomic, fs.unlink_checked, fs.transaction, fs.transaction.recover,\n\

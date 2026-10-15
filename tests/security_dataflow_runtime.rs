@@ -35,6 +35,7 @@ fn text_port(sensitivity: Sensitivity) -> AppletPort {
         schema: ValueSchema {
             kind: OutputType::Text,
             nullable: false,
+            enum_values: None,
             items: None,
             fields: BTreeMap::new(),
             required: Vec::new(),
@@ -65,6 +66,7 @@ fn remote_manifest(
         output: Some(flow::contracts::OutputSchema {
             kind: OutputType::Text,
             encoding: flow::contracts::OutputEncoding::Raw,
+            enum_values: None,
             items: None,
             fields: BTreeMap::new(),
             required: Vec::new(),

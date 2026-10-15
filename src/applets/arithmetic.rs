@@ -81,6 +81,13 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
     from_float(result)
 }
 
+pub(super) fn to_text(args: &Map<String, Value>) -> Result<Value, AppletError> {
+    // serde_json::Number formatting is deterministic and locale independent.
+    // It intentionally renders the JSON number representation; this does not
+    // coerce strings or promise exact decimal arithmetic.
+    Ok(Value::String(number(args, "value")?.to_string()))
+}
+
 pub(super) fn parse_integer(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
     let text = match args.get("text") {
         Some(Value::String(value)) => value.as_str(),

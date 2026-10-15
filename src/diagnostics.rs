@@ -5,7 +5,7 @@
 //! a line; token spans are emitted only when the token can be located reliably.
 
 use crate::ast::{Connection, Invocation, Program, Step, StepKind, Value};
-use crate::contracts::{OutputSchema, OutputType, ValueSchema};
+use crate::contracts::{OutputType, ValueSchema};
 use crate::manifest::{Manifest, Registry};
 use crate::parser::{self, Token};
 use serde::{Deserialize, Serialize};
@@ -524,34 +524,17 @@ fn collect_pipeline_step_pairs(
         ) else {
             continue;
         };
-        let Some(output) = producer_manifest
-            .execution_contract()
-            .and_then(|contract| contract.output.as_ref())
-        else {
+        if producer_manifest.execution_contract().is_none() {
             continue;
-        };
-        let Some(input) = consumer_manifest
+        }
+        if consumer_manifest
             .ports()
             .and_then(|ports| ports.inputs.get("stdin"))
-        else {
+            .is_none()
+        {
             continue;
-        };
-        let mut reasons = schema_mismatch_reasons(
-            &value_schema_from_output(output),
-            &input.schema,
-            "stdout",
-            "stdin",
-        );
-        match input.encoding {
-            Some(input_encoding) if output.encoding != input_encoding => {
-                reasons.push(format!(
-                    "stdout encoding is {:?}, expected stdin encoding {:?}",
-                    output.encoding, input_encoding
-                ));
-            }
-            None => reasons.push("stdin encoding is not declared".into()),
-            _ => {}
         }
+        let reasons = producer_manifest.native_pipe_compatibility_issues(consumer_manifest);
         if reasons.is_empty() {
             continue;
         }
@@ -568,19 +551,9 @@ fn collect_pipeline_step_pairs(
     }
 }
 
-fn value_schema_from_output(output: &OutputSchema) -> ValueSchema {
-    ValueSchema {
-        kind: output.kind,
-        nullable: false,
-        items: output.items.clone(),
-        fields: output.fields.clone(),
-        required: output.required.clone(),
-    }
-}
-
-/// Explain why a declared output cannot flow into an input schema without an
-/// explicit conversion. Kinds and recursive structure must agree; nullable
-/// output values may flow only into nullable inputs.
+/// Explain why values from a declared output cannot flow into an input schema
+/// without an explicit conversion. This compares semantic values only; native
+/// pipe callers must also compare the producer and consumer wire encodings.
 pub fn schema_mismatch_reasons(
     output: &ValueSchema,
     input: &ValueSchema,
@@ -598,8 +571,9 @@ pub fn schema_mismatch_reasons(
 }
 
 /// Whether values described by `output` can be supplied to `input` without
-/// conversion. A nonnullable producer safely satisfies a nullable input; a
-/// nullable producer cannot satisfy an input that rejects null.
+/// conversion. This does not compare byte framing or output encodings. A
+/// nonnullable producer safely satisfies a nullable input; a nullable producer
+/// cannot satisfy an input that rejects null.
 pub fn schemas_compatible(output: &ValueSchema, input: &ValueSchema) -> bool {
     schema_mismatch_reasons(output, input, "output", "input").is_empty()
 }
@@ -611,11 +585,13 @@ fn compare_schema(
     reasons: &mut Vec<String>,
 ) {
     if output.kind != input.kind {
-        reasons.push(format!(
-            "{path} is {}, expected {}",
-            output_type_name(output.kind),
-            output_type_name(input.kind)
-        ));
+        if !output.is_assignable_to(input) {
+            reasons.push(format!(
+                "{path} is {}, expected {}",
+                output_type_name(output.kind),
+                output_type_name(input.kind)
+            ));
+        }
         return;
     }
     // `Json` always admits JSON null; nullable adds meaning only to the typed
@@ -625,6 +601,13 @@ fn compare_schema(
     if output_may_be_null && !input_accepts_null {
         reasons.push(format!(
             "{path} may be null, but the input does not accept null"
+        ));
+    }
+    if output.kind == OutputType::Text
+        && !enum_constraint_assignable(output.enum_values.as_deref(), input.enum_values.as_deref())
+    {
+        reasons.push(format!(
+            "{path} does not guarantee one of the input's allowed enum values"
         ));
     }
     match output.kind {
@@ -639,29 +622,24 @@ fn compare_schema(
             (None, None) => {}
         },
         OutputType::Record => {
-            for (name, input_field) in &input.fields {
-                match output.fields.get(name) {
-                    Some(output_field) => compare_schema(
+            for (name, output_field) in &output.fields {
+                match input.fields.get(name) {
+                    Some(input_field) => compare_schema(
                         output_field,
                         input_field,
                         &format!("{path}.{name}"),
                         reasons,
                     ),
-                    None => reasons.push(format!("{path} is missing output field {name:?}")),
-                }
-            }
-            for name in output.fields.keys() {
-                if !input.fields.contains_key(name) {
-                    reasons.push(format!("{path} has extra output field {name:?}"));
+                    None => reasons.push(format!("{path} has extra output field {name:?}")),
                 }
             }
             let output_required = output.required.iter().collect::<BTreeSet<_>>();
-            let input_required = input.required.iter().collect::<BTreeSet<_>>();
-            if output_required != input_required {
-                reasons.push(format!(
-                    "{path} required fields are {:?}, expected {:?}",
-                    output.required, input.required
-                ));
+            for name in &input.required {
+                if !output_required.contains(name) {
+                    reasons.push(format!(
+                        "{path} does not guarantee required input field {name:?}"
+                    ));
+                }
             }
         }
         _ => {}
@@ -674,10 +652,19 @@ fn output_type_name(kind: OutputType) -> &'static str {
         OutputType::Text => "text",
         OutputType::Path => "path",
         OutputType::Integer => "integer",
+        OutputType::Number => "number",
         OutputType::Boolean => "boolean",
         OutputType::Json => "json",
         OutputType::Record => "record",
         OutputType::List => "list",
+    }
+}
+
+fn enum_constraint_assignable(output: Option<&[String]>, input: Option<&[String]>) -> bool {
+    match (output, input) {
+        (_, None) => true,
+        (Some(output), Some(input)) => output.iter().all(|value| input.contains(value)),
+        (None, Some(_)) => false,
     }
 }
 
@@ -827,9 +814,11 @@ mod tests {
                     items: None,
                     fields: BTreeMap::new(),
                     required: vec![],
+                    enum_values: None,
                 },
             )]),
             required: vec!["count".into()],
+            enum_values: None,
         };
         let input = ValueSchema {
             kind: OutputType::Record,
@@ -843,9 +832,11 @@ mod tests {
                     items: None,
                     fields: BTreeMap::new(),
                     required: vec![],
+                    enum_values: None,
                 },
             )]),
             required: vec!["count".into()],
+            enum_values: None,
         };
         assert_eq!(
             schema_mismatch_reasons(&output, &input, "stdout", "stdin"),
@@ -861,6 +852,7 @@ mod tests {
             items: None,
             fields: BTreeMap::new(),
             required: vec![],
+            enum_values: None,
         };
         let nullable = ValueSchema {
             nullable: true,
@@ -877,13 +869,14 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_requires_exact_kinds_and_record_shapes() {
+    fn compatibility_uses_directional_json_subtypes_and_record_width_variance() {
         let text = ValueSchema {
             kind: OutputType::Text,
             nullable: false,
             items: None,
             fields: BTreeMap::new(),
             required: vec![],
+            enum_values: None,
         };
         let json = ValueSchema {
             kind: OutputType::Json,
@@ -893,7 +886,7 @@ mod tests {
             kind: OutputType::Bytes,
             ..text.clone()
         };
-        assert!(!schemas_compatible(&text, &json));
+        assert!(schemas_compatible(&text, &json));
         assert!(!schemas_compatible(&json, &text));
         assert!(!schemas_compatible(&bytes, &json));
 
@@ -906,7 +899,7 @@ mod tests {
             items: Some(Box::new(json)),
             ..text_list.clone()
         };
-        assert!(!schemas_compatible(&text_list, &json_list));
+        assert!(schemas_compatible(&text_list, &json_list));
         assert!(!schemas_compatible(&json_list, &text_list));
 
         let output_record = ValueSchema {
@@ -917,20 +910,25 @@ mod tests {
         };
         let input_record = ValueSchema {
             fields: BTreeMap::from([
-                (
-                    "name".into(),
-                    ValueSchema {
-                        kind: OutputType::Json,
-                        ..text.clone()
-                    },
-                ),
+                ("name".into(), text.clone()),
                 ("optional".into(), text.clone()),
             ]),
             required: vec![],
             ..output_record.clone()
         };
-        assert!(!schemas_compatible(&output_record, &input_record));
+        assert!(schemas_compatible(&output_record, &input_record));
+        assert!(output_record.is_assignable_to(&input_record));
         assert!(schemas_compatible(&output_record, &output_record));
+
+        let input_requires_unproduced = ValueSchema {
+            required: vec!["optional".into()],
+            ..input_record.clone()
+        };
+        assert!(!output_record.is_assignable_to(&input_requires_unproduced));
+        assert!(!schemas_compatible(
+            &output_record,
+            &input_requires_unproduced
+        ));
 
         let output_with_optional = ValueSchema {
             fields: BTreeMap::from([
@@ -941,6 +939,35 @@ mod tests {
             ..output_record.clone()
         };
         assert!(!schemas_compatible(&output_with_optional, &output_record));
+        assert!(!output_with_optional.is_assignable_to(&output_record));
+    }
+
+    #[test]
+    fn numeric_and_enum_schemas_are_directional_refinements() {
+        let schema = |kind, enum_values| ValueSchema {
+            kind,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values,
+        };
+        let integer = schema(OutputType::Integer, None);
+        let number = schema(OutputType::Number, None);
+        let json = schema(OutputType::Json, None);
+        assert!(schemas_compatible(&integer, &number));
+        assert!(!schemas_compatible(&number, &integer));
+        assert!(schemas_compatible(&number, &json));
+        assert!(schemas_compatible(&integer, &json));
+        assert!(!schemas_compatible(&json, &number));
+
+        let unrestricted = schema(OutputType::Text, None);
+        let choices = schema(OutputType::Text, Some(vec!["red".into(), "blue".into()]));
+        let subset = schema(OutputType::Text, Some(vec!["red".into()]));
+        assert!(!schemas_compatible(&unrestricted, &choices));
+        assert!(schemas_compatible(&choices, &unrestricted));
+        assert!(schemas_compatible(&subset, &choices));
+        assert!(!schemas_compatible(&choices, &subset));
     }
 
     #[test]

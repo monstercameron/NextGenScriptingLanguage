@@ -30,7 +30,7 @@
       "kind": "oneshot"
     },
     "output": {
-      "type": "json",
+      "type": "number",
       "encoding": "json"
     },
     "capabilities": [
@@ -41,13 +41,13 @@
       "inputs": {
         "left": {
           "schema": {
-            "type": "json"
+            "type": "number"
           },
           "delivery": "single"
         },
         "right": {
           "schema": {
-            "type": "json"
+            "type": "number"
           },
           "delivery": "single"
         }
@@ -55,7 +55,7 @@
       "outputs": {
         "value": {
           "schema": {
-            "type": "json"
+            "type": "number"
           },
           "delivery": "single"
         }

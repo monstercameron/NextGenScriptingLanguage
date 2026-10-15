@@ -100,6 +100,7 @@ const REVIEWED_PURE_IN_PROCESS_APPLETS: &[&str] = &[
     "number.parse_integer",
     "number.parse_integer.result",
     "number.subtract",
+    "number.to_text",
     "path.basename",
     "path.dirname",
     "path.remove_suffix",
@@ -116,6 +117,7 @@ const PURE_CAPABILITIES: &[&str] = &[
     "json.transform",
     "jsonc.transform",
     "number.compute",
+    "number.convert",
     "path.inspect",
     "text.transform",
 ];

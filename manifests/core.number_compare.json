@@ -41,13 +41,13 @@
       "inputs": {
         "left": {
           "schema": {
-            "type": "json"
+            "type": "number"
           },
           "delivery": "single"
         },
         "right": {
           "schema": {
-            "type": "json"
+            "type": "number"
           },
           "delivery": "single"
         }

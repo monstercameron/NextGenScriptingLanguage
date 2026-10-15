@@ -432,6 +432,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         items: None,
         fields: fields.clone(),
         required: required.clone(),
+        enum_values: None,
     };
     let mut inputs = BTreeMap::from([("properties".into(), PortSchema::single(properties))]);
     let updates = ValueSchema {
@@ -440,6 +441,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         items: None,
         fields,
         required: Vec::new(),
+        enum_values: None,
     };
     inputs.insert("property_updates".into(), PortSchema::records(updates));
     let events = if component == "button" {
@@ -451,6 +453,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
                 items: None,
                 fields: BTreeMap::new(),
                 required: Vec::new(),
+                enum_values: None,
             }),
         )])
     } else {
@@ -549,6 +552,7 @@ fn node_for_call(
                 items: schema.items.clone(),
                 fields: schema.fields.clone(),
                 required: schema.required.clone(),
+                enum_values: schema.enum_values.clone(),
             })
             .unwrap_or_else(|| leaf_schema(OutputType::Bytes));
         outputs.insert(
@@ -618,7 +622,7 @@ fn validate_ports_against_manifest(
         let Some((schema, _)) = parameters.get(name) else {
             bail!("applet {:?} has no input parameter {name:?}", manifest.name);
         };
-        if schema != &graph_inputs[name].schema {
+        if !graph_inputs[name].schema.is_assignable_to(schema) {
             bail!(
                 "applet {:?} input port {name:?} schema {:?} does not match parameter schema {:?}",
                 manifest.name,
@@ -668,6 +672,7 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
         }
         Some("string") => OutputType::Text,
         Some("integer") => OutputType::Integer,
+        Some("number") => OutputType::Number,
         Some("boolean") => OutputType::Boolean,
         Some("array") => OutputType::List,
         Some("object") => OutputType::Record,
@@ -693,12 +698,14 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
                         .collect()
                 })
                 .unwrap_or_default();
+            let enum_values = parse_string_enum(value)?;
             return Ok(ValueSchema {
                 kind,
                 nullable: false,
                 fields,
                 required,
                 items: None,
+                enum_values,
             });
         }
         return Ok(leaf_schema(OutputType::Json));
@@ -711,12 +718,14 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
     } else {
         None
     };
+    let enum_values = parse_string_enum(value)?;
     Ok(ValueSchema {
         kind,
         nullable: false,
         fields: BTreeMap::new(),
         required: Vec::new(),
         items,
+        enum_values,
     })
 }
 
@@ -727,7 +736,27 @@ fn leaf_schema(kind: OutputType) -> ValueSchema {
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
+        enum_values: None,
     }
+}
+
+fn parse_string_enum(value: &serde_json::Value) -> Result<Option<Vec<String>>> {
+    let Some(values) = value.get("enum") else {
+        return Ok(None);
+    };
+    let values = values
+        .as_array()
+        .ok_or_else(|| anyhow!("string enum must be an array"))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow!("string enum values must all be strings"))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
 }
 
 fn parse_edge(line: &str, line_number: usize) -> Result<EdgeSpec> {

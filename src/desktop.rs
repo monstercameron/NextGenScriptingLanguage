@@ -2297,6 +2297,7 @@ fn schema_for_record(schema: &ValueSchema, required: Option<Vec<String>>) -> Res
         items: None,
         fields: schema.fields.clone(),
         required: required.unwrap_or_else(|| schema.required.clone()),
+        enum_values: schema.enum_values.clone(),
         trim_final_lf: false,
     };
     output.validate()?;

@@ -48,6 +48,7 @@ fn record_output() -> OutputSchema {
     OutputSchema {
         kind: OutputType::Record,
         encoding: OutputEncoding::Json,
+        enum_values: None,
         items: None,
         fields: BTreeMap::from([
             (
@@ -55,6 +56,7 @@ fn record_output() -> OutputSchema {
                 ValueSchema {
                     kind: OutputType::Text,
                     nullable: false,
+                    enum_values: None,
                     items: None,
                     fields: BTreeMap::new(),
                     required: Vec::new(),
@@ -65,6 +67,7 @@ fn record_output() -> OutputSchema {
                 ValueSchema {
                     kind: OutputType::Integer,
                     nullable: false,
+                    enum_values: None,
                     items: None,
                     fields: BTreeMap::new(),
                     required: Vec::new(),

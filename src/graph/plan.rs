@@ -68,6 +68,7 @@ pub(crate) fn value_schema_from_output(output: &OutputSchema) -> ValueSchema {
         items: output.items.clone(),
         fields: output.fields.clone(),
         required: output.required.clone(),
+        enum_values: output.enum_values.clone(),
     }
 }
 
@@ -506,6 +507,7 @@ impl GraphPlan {
                                 items: None,
                                 fields: BTreeMap::new(),
                                 required: Vec::new(),
+                                enum_values: None,
                             }),
                         )]),
                         crate::ast::ListenSource::Applet(_)
@@ -539,6 +541,7 @@ impl GraphPlan {
                                 items: None,
                                 fields: BTreeMap::new(),
                                 required: Vec::new(),
+                                enum_values: None,
                             }),
                         )]),
                     };
@@ -1169,33 +1172,7 @@ fn validate_schema(schema: &ValueSchema, nested: bool) -> Result<()> {
 }
 
 fn schemas_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
-    if source.kind != target.kind
-        || (source.kind != OutputType::Json && source.nullable && !target.nullable)
-    {
-        return false;
-    }
-    match source.kind {
-        OutputType::Record => {
-            if target
-                .required
-                .iter()
-                .any(|name| !source.required.contains(name))
-            {
-                return false;
-            }
-            source.fields.iter().all(|(name, source_field)| {
-                target
-                    .fields
-                    .get(name)
-                    .is_some_and(|target_field| schemas_assignable(source_field, target_field))
-            })
-        }
-        OutputType::List => match (source.items.as_deref(), target.items.as_deref()) {
-            (Some(source), Some(target)) => schemas_assignable(source, target),
-            _ => false,
-        },
-        _ => true,
-    }
+    source.is_assignable_to(target)
 }
 
 fn delivery_compatible(
@@ -1235,8 +1212,17 @@ fn contains_reference(value: &Value) -> bool {
 fn placeholder_value(schema: &ValueSchema) -> Result<Value> {
     Ok(match schema.kind {
         OutputType::Bytes => bail!("bytes cannot supply a named applet parameter"),
-        OutputType::Text | OutputType::Path => Value::String("__graph_preflight__".into()),
+        OutputType::Text => Value::String(
+            schema
+                .enum_values
+                .as_ref()
+                .and_then(|values| values.first())
+                .cloned()
+                .unwrap_or_else(|| "__graph_preflight__".into()),
+        ),
+        OutputType::Path => Value::String("__graph_preflight__".into()),
         OutputType::Integer => Value::Integer(0),
+        OutputType::Number => Value::Integer(0),
         OutputType::Boolean => Value::Bool(false),
         OutputType::Json => Value::Null,
         OutputType::Record => {
@@ -1262,86 +1248,12 @@ fn is_identifier(name: &str) -> bool {
 
 /// Validate a payload against the exact declared graph type before transport.
 pub(crate) fn validate_payload(schema: &ValueSchema, payload: &PortValue) -> Result<()> {
-    if schema.nullable && matches!(payload, PortValue::Value(Value::Null)) {
-        return Ok(());
-    }
     match (schema.kind, payload) {
         (OutputType::Bytes, PortValue::Bytes(_)) => Ok(()),
-        (OutputType::Text | OutputType::Path, PortValue::Value(Value::String(value))) => {
-            if schema.kind == OutputType::Path && (value.is_empty() || value.contains('\0')) {
-                bail!("path payload must be nonempty and contain no NUL byte");
-            }
-            Ok(())
-        }
-        (OutputType::Integer, PortValue::Value(Value::Integer(_)))
-        | (OutputType::Boolean, PortValue::Value(Value::Bool(_)))
-        | (OutputType::Json, PortValue::Value(_)) => Ok(()),
-        (OutputType::Record, PortValue::Value(Value::Record(fields))) => {
-            validate_record(&schema.fields, &schema.required, fields)
-        }
-        (OutputType::List, PortValue::Value(Value::List(values))) => {
-            let item_schema = schema
-                .items
-                .as_deref()
-                .ok_or_else(|| anyhow!("list schema must declare item type"))?;
-            for (index, value) in values.iter().enumerate() {
-                validate_value(item_schema, value)
-                    .map_err(|error| anyhow!("list item {index}: {error}"))?;
-            }
-            Ok(())
-        }
+        (_, PortValue::Value(value)) => schema.validate_value(value),
         (expected, actual) => bail!(
             "expected {expected:?} payload, received {}",
             actual.kind_name()
-        ),
-    }
-}
-
-fn validate_record(
-    schema: &BTreeMap<String, ValueSchema>,
-    required: &[String],
-    fields: &BTreeMap<String, Value>,
-) -> Result<()> {
-    for name in required {
-        if !fields.contains_key(name) {
-            bail!("record is missing required field {name:?}");
-        }
-    }
-    for (name, value) in fields {
-        let Some(field_schema) = schema.get(name) else {
-            bail!("record contains undeclared field {name:?}");
-        };
-        validate_value(field_schema, value).map_err(|error| anyhow!("field {name:?}: {error}"))?;
-    }
-    Ok(())
-}
-
-fn validate_value(schema: &ValueSchema, value: &Value) -> Result<()> {
-    if schema.nullable && matches!(value, Value::Null) {
-        return Ok(());
-    }
-    match (schema.kind, value) {
-        (OutputType::Text | OutputType::Path, Value::String(_))
-        | (OutputType::Integer, Value::Integer(_))
-        | (OutputType::Boolean, Value::Bool(_))
-        | (OutputType::Json, _) => Ok(()),
-        (OutputType::Record, Value::Record(fields)) => {
-            validate_record(&schema.fields, &schema.required, fields)
-        }
-        (OutputType::List, Value::List(values)) => {
-            let item_schema = schema
-                .items
-                .as_deref()
-                .ok_or_else(|| anyhow!("list schema must declare item type"))?;
-            for (index, value) in values.iter().enumerate() {
-                validate_value(item_schema, value)
-                    .map_err(|error| anyhow!("list item {index}: {error}"))?;
-            }
-            Ok(())
-        }
-        (expected, actual) => bail!(
-            "expected {expected:?}, received {}",
-            value_kind_name(actual)
         ),
     }
 }

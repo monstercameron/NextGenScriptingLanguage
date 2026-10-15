@@ -20,6 +20,7 @@ fn leaf(kind: OutputType) -> ValueSchema {
     ValueSchema {
         kind,
         nullable: false,
+        enum_values: None,
         items: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
@@ -30,6 +31,7 @@ fn record(fields: BTreeMap<String, ValueSchema>, required: &[&str]) -> ValueSche
     ValueSchema {
         kind: OutputType::Record,
         nullable: false,
+        enum_values: None,
         items: None,
         fields,
         required: required.iter().map(|item| (*item).to_owned()).collect(),

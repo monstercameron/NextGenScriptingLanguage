@@ -1,5 +1,9 @@
 use flow::applets::{self, execute, AppletError, AppletErrorKind};
+use flow::ast::{Invocation, Value as AstValue};
+use flow::contracts::OutputType;
+use flow::manifest::Registry;
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -75,8 +79,26 @@ fn path_text_arithmetic_and_color_operations_are_explicit() {
         json!(5)
     );
     assert_eq!(
+        run("number.add", json!({"left": 0.1, "right": 0.2}), &[]).unwrap(),
+        json!(0.1f64 + 0.2f64)
+    );
+    assert_eq!(
+        run("number.divide", json!({"left": 3, "right": 2}), &[]).unwrap(),
+        json!(1.5)
+    );
+    assert_eq!(
         run("number.compare", json!({"left": 9, "right": 10}), &[]).unwrap(),
         json!(-1)
+    );
+    assert_eq!(
+        run("number.to_text", json!({"value": 12.5}), &[]).unwrap(),
+        json!("12.5")
+    );
+    assert_eq!(
+        run("number.to_text", json!({"value": "12.5"}), &[])
+            .unwrap_err()
+            .exit_status(),
+        2
     );
     assert_eq!(
         run(
@@ -143,6 +165,93 @@ fn path_text_arithmetic_and_color_operations_are_explicit() {
         .exit_status(),
         2
     );
+}
+
+#[test]
+fn arithmetic_contracts_refine_json_parameters_to_number() {
+    let sources = [
+        include_str!("../manifests/core.number_add.json"),
+        include_str!("../manifests/core.number_subtract.json"),
+        include_str!("../manifests/core.number_multiply.json"),
+        include_str!("../manifests/core.number_divide.json"),
+        include_str!("../manifests/core.number_compare.json"),
+        include_str!("../manifests/core.number_to_text.json"),
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    let registry = Registry::from_sources(&sources).unwrap();
+
+    for (name, expected_output) in [
+        ("number.add", OutputType::Number),
+        ("number.subtract", OutputType::Number),
+        ("number.multiply", OutputType::Number),
+        ("number.divide", OutputType::Number),
+        ("number.compare", OutputType::Integer),
+    ] {
+        let manifest = registry.resolve(name).unwrap();
+        let ports = manifest.ports().unwrap();
+        assert_eq!(ports.inputs["left"].schema.kind, OutputType::Number);
+        assert_eq!(ports.inputs["right"].schema.kind, OutputType::Number);
+        assert_eq!(ports.outputs["value"].schema.kind, expected_output);
+
+        let make_invocation = |left, right| Invocation {
+            operation: name.to_owned(),
+            direct: false,
+            parameters: BTreeMap::from([("left".to_owned(), left), ("right".to_owned(), right)]),
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+        };
+        let decimal = AstValue::Number(serde_json::Number::from_f64(2.5).unwrap());
+        manifest
+            .validate(&make_invocation(AstValue::Integer(1), decimal))
+            .unwrap();
+        for invalid in [
+            AstValue::String("2.5".to_owned()),
+            AstValue::Bool(true),
+            AstValue::Null,
+        ] {
+            assert!(
+                manifest
+                    .validate(&make_invocation(invalid, AstValue::Integer(1)))
+                    .is_err(),
+                "{name} accepted a non-number JSON parameter"
+            );
+        }
+    }
+
+    let formatter = registry.resolve("number.to_text").unwrap();
+    let ports = formatter.ports().unwrap();
+    assert_eq!(ports.inputs["value"].schema.kind, OutputType::Number);
+    assert_eq!(ports.outputs["value"].schema.kind, OutputType::Text);
+    assert!(formatter.cacheable);
+    let valid = Invocation {
+        operation: "number.to_text".to_owned(),
+        direct: false,
+        parameters: BTreeMap::from([(
+            "value".to_owned(),
+            AstValue::Number(serde_json::Number::from_f64(12.5).unwrap()),
+        )]),
+        binding: None,
+        cache: false,
+        status_binding: None,
+        result_binding: None,
+    };
+    formatter.validate(&valid).unwrap();
+    for invalid in [
+        AstValue::String("12.5".to_owned()),
+        AstValue::Bool(true),
+        AstValue::Null,
+    ] {
+        let invalid_call = Invocation {
+            parameters: BTreeMap::from([("value".to_owned(), invalid)]),
+            ..valid.clone()
+        };
+        assert!(formatter.validate(&invalid_call).is_err());
+    }
+    flow::security::authorize_cache_purity(&registry, formatter).unwrap();
 }
 
 #[test]

@@ -544,6 +544,7 @@ fn remote_transport_failure_through_runtime_keeps_unknown_status_and_certainty()
     let output_schema = OutputSchema {
         kind: OutputType::Json,
         encoding: OutputEncoding::Json,
+        enum_values: None,
         items: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
@@ -563,6 +564,7 @@ fn remote_transport_failure_through_runtime_keeps_unknown_status_and_certainty()
                 schema: ValueSchema {
                     kind: OutputType::Json,
                     nullable: false,
+                    enum_values: None,
                     items: None,
                     fields: BTreeMap::new(),
                     required: Vec::new(),

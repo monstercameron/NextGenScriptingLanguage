@@ -1843,6 +1843,7 @@ mod tests {
                         items: None,
                         fields: BTreeMap::new(),
                         required: Vec::new(),
+                        enum_values: None,
                     },
                 ),
                 (
@@ -1853,10 +1854,12 @@ mod tests {
                         items: None,
                         fields: BTreeMap::new(),
                         required: Vec::new(),
+                        enum_values: None,
                     },
                 ),
             ]),
             required: vec!["text".into(), "length".into()],
+            enum_values: None,
             trim_final_lf: false,
         }
     }

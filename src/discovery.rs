@@ -431,20 +431,32 @@ fn endpoint_request_score(endpoint: &Endpoint, query: Option<&EndpointQuery>) ->
 /// `schema_mismatch_reasons`; this score prefers candidates whose recursive
 /// shapes agree before considering lexical tie breakers.
 fn schema_similarity(left: &ValueSchema, right: &ValueSchema) -> u32 {
-    if left.kind != right.kind {
+    let same_kind = left.kind == right.kind;
+    if !same_kind && !left.is_assignable_to(right) && !right.is_assignable_to(left) {
         return 0;
     }
-    let mut score = 60;
+    let mut score = if same_kind { 60 } else { 35 };
     if left.nullable == right.nullable {
         score += 10;
     }
-    match left.kind {
-        crate::contracts::OutputType::List => match (&left.items, &right.items) {
-            (Some(left), Some(right)) => score += schema_similarity(left, right) * 30 / 100,
-            (None, None) => score += 30,
-            _ => {}
-        },
-        crate::contracts::OutputType::Record => {
+    match (left.kind, right.kind) {
+        (crate::contracts::OutputType::Text, crate::contracts::OutputType::Text) => {
+            score += if left.enum_values == right.enum_values {
+                30
+            } else if schemas_compatible(left, right) || schemas_compatible(right, left) {
+                20
+            } else {
+                0
+            };
+        }
+        (crate::contracts::OutputType::List, crate::contracts::OutputType::List) => {
+            match (&left.items, &right.items) {
+                (Some(left), Some(right)) => score += schema_similarity(left, right) * 30 / 100,
+                (None, None) => score += 30,
+                _ => {}
+            }
+        }
+        (crate::contracts::OutputType::Record, crate::contracts::OutputType::Record) => {
             let names = left
                 .fields
                 .keys()
@@ -481,7 +493,8 @@ fn schema_similarity(left: &ValueSchema, right: &ValueSchema) -> u32 {
                 score += 10;
             }
         }
-        _ => score += 30,
+        (left_kind, right_kind) if left_kind == right_kind => score += 30,
+        _ => {}
     }
     score.min(100)
 }
@@ -532,6 +545,7 @@ fn schema_from_output(output: &OutputSchema) -> ValueSchema {
         items: output.items.clone(),
         fields: output.fields.clone(),
         required: output.required.clone(),
+        enum_values: output.enum_values.clone(),
     }
 }
 
@@ -628,6 +642,7 @@ mod tests {
             items: None,
             fields: Default::default(),
             required: Vec::new(),
+            enum_values: None,
         };
         let integer_items = ValueSchema {
             kind: OutputType::Integer,
@@ -735,6 +750,56 @@ mod tests {
         let suggestion = &matches[0].suggested_converters[0];
         assert_eq!(suggestion.applet, "fixture.text_to_integer");
         assert_eq!(suggestion.input_port, "text");
+        assert_eq!(suggestion.output_port, "value");
+        assert_eq!(suggestion.outcome, ConverterOutcome::ContractsMatch);
+    }
+
+    #[test]
+    fn number_to_text_manifest_is_suggested_for_number_to_text_ports() {
+        let target = serde_json::json!({
+            "name": "fixture.text_target",
+            "binary": "target",
+            "accepts_stdin": true,
+            "parameters": {},
+            "arguments": [],
+            "contract": {
+                "version": 1,
+                "ports": { "inputs": {
+                    "stdin": {
+                        "schema": { "type": "text" },
+                        "delivery": "single",
+                        "encoding": "raw"
+                    }
+                } }
+            }
+        });
+        let registry = Registry::from_sources(&[
+            include_str!("../manifests/core.number_add.json").to_owned(),
+            include_str!("../manifests/core.number_to_text.json").to_owned(),
+            target.to_string(),
+        ])
+        .unwrap();
+        let request = PortMatchRequest {
+            source: Some(EndpointQuery {
+                applet: Some("number.add".into()),
+                port: Some("value".into()),
+                ..EndpointQuery::default()
+            }),
+            target: Some(EndpointQuery {
+                applet: Some("fixture.text_target".into()),
+                port: Some("stdin".into()),
+                ..EndpointQuery::default()
+            }),
+            ..PortMatchRequest::default()
+        };
+
+        let matches = rank_port_matches(&registry, &request);
+        assert_eq!(matches.len(), 1);
+        assert!(!matches[0].compatible);
+        assert_eq!(matches[0].suggested_converters.len(), 1);
+        let suggestion = &matches[0].suggested_converters[0];
+        assert_eq!(suggestion.applet, "number.to_text");
+        assert_eq!(suggestion.input_port, "value");
         assert_eq!(suggestion.output_port, "value");
         assert_eq!(suggestion.outcome, ConverterOutcome::ContractsMatch);
     }

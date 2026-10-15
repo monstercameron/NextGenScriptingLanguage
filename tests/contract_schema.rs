@@ -1,6 +1,6 @@
 use flow::{
     ast::{Invocation, Value},
-    contracts::{AppletOutput, OutcomeKind},
+    contracts::{AppletOutput, OutcomeKind, OutputType, ValueSchema},
     manifest::Registry,
 };
 use serde_json::{json, Value as JsonValue};
@@ -594,4 +594,226 @@ fn scoped_manifests_shadow_canonical_names_without_mutating_the_parent_registry(
         &parent_state,
         &scoped.host_state::<String>()
     ));
+}
+
+#[test]
+fn number_output_is_finite_json_numeric_and_not_generic_json() {
+    let manifest = load(base(json!({
+        "version":1,
+        "output":{"type":"number","encoding":"json"}
+    })));
+    assert_eq!(manifest.output_kind(), Some(flow::ast::InputType::Json));
+    assert_eq!(
+        manifest.decode_output(b"12", 0).unwrap(),
+        AppletOutput::Value(Value::Integer(12))
+    );
+    assert_eq!(
+        manifest.decode_output(b"12.5", 0).unwrap(),
+        AppletOutput::Value(Value::Number(serde_json::Number::from_f64(12.5).unwrap()))
+    );
+    for invalid in [b"\"12\"".as_slice(), b"true", b"null", b"[]", b"NaN"] {
+        assert!(manifest.decode_output(invalid, 0).is_err(), "{invalid:?}");
+    }
+    assert_eq!(manifest.contract()["io"]["output_schema"]["type"], "number");
+}
+
+#[test]
+fn number_ports_refine_json_parameters_before_invocation_and_dispatch() {
+    let manifest = load(json!({
+        "name":"typed",
+        "binary":"fixture",
+        "parameters":{
+            "left":{"type":"json","required":true},
+            "right":{"type":"json","required":true}
+        },
+        "arguments":[],
+        "contract":{
+            "version":1,
+            "output":{"type":"number","encoding":"json"},
+            "ports":{
+                "inputs":{
+                    "left":{"schema":{"type":"number"},"delivery":"single"},
+                    "right":{"schema":{"type":"number"},"delivery":"single"}
+                },
+                "outputs":{"value":{"schema":{"type":"number"},"delivery":"single"}}
+            }
+        }
+    }));
+    let invocation = |left, right| Invocation {
+        operation: "typed".into(),
+        direct: false,
+        parameters: BTreeMap::from([("left".into(), left), ("right".into(), right)]),
+        binding: None,
+        cache: false,
+        status_binding: None,
+        result_binding: None,
+    };
+    assert!(manifest
+        .validate(&invocation(
+            Value::Integer(2),
+            Value::Number("2.5".parse().unwrap())
+        ))
+        .is_ok());
+    assert!(manifest
+        .validate(&invocation(Value::String("2".into()), Value::Integer(1)))
+        .is_err());
+    assert!(manifest
+        .validate(&invocation(Value::Bool(false), Value::Integer(1)))
+        .is_err());
+
+    let resolved_bad = BTreeMap::from([
+        ("left".into(), Value::Null),
+        ("right".into(), Value::Integer(1)),
+    ]);
+    assert!(manifest.parameters_json(&resolved_bad).is_err());
+}
+
+#[test]
+fn text_enums_validate_values_project_as_json_schema_and_allow_nullable_null() {
+    let manifest = load(base(json!({
+        "version":1,
+        "output":{"type":"text","encoding":"raw","enum":["red","blue"]}
+    })));
+    assert_eq!(
+        manifest.decode_output(b"red", 0).unwrap(),
+        AppletOutput::Value(Value::String("red".into()))
+    );
+    assert!(manifest.decode_output(b"green", 0).is_err());
+    assert_eq!(
+        manifest.contract()["io"]["output_schema"]["enum"],
+        json!(["red", "blue"])
+    );
+
+    let nullable = ValueSchema {
+        kind: OutputType::Text,
+        nullable: true,
+        items: None,
+        fields: BTreeMap::new(),
+        required: Vec::new(),
+        enum_values: Some(vec!["red".into(), "blue".into()]),
+    };
+    assert!(nullable.validate_value(&Value::Null).is_ok());
+    assert!(nullable
+        .validate_value(&Value::String("red".into()))
+        .is_ok());
+    assert!(nullable
+        .validate_value(&Value::String("green".into()))
+        .is_err());
+    let json_schema = nullable.json_schema();
+    assert_eq!(json_schema["anyOf"][0]["enum"], json!(["red", "blue"]));
+    assert_eq!(json_schema["anyOf"][1]["type"], "null");
+}
+
+#[test]
+fn new_optional_schema_fields_do_not_change_legacy_serialized_shapes() {
+    let value_schema: ValueSchema = serde_json::from_value(json!({"type":"text"})).unwrap();
+    assert_eq!(
+        serde_json::to_value(value_schema).unwrap(),
+        json!({"type":"text"})
+    );
+
+    let manifest = load(base(json!({
+        "version":1,
+        "output":{"type":"text","encoding":"raw"}
+    })));
+    let serialized = serde_json::to_value(manifest).unwrap();
+    assert!(serialized["contract"]["output"].get("enum").is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn native_pipes_validate_wire_encoding_before_launching_and_accept_json_text() {
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
+    use tempfile::tempdir;
+
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+    fn write_script(path: &Path, body: &str) {
+        fs::write(path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    fn options(cwd: &Path) -> flow::runtime::RunOptions {
+        flow::runtime::RunOptions {
+            inputs: BTreeMap::new(),
+            working_directory: cwd.to_path_buf(),
+            cache_directory: None,
+            trace: false,
+            max_output_bytes: 1024,
+            command_timeout: Some(Duration::from_secs(3)),
+            total_timeout: Some(Duration::from_secs(5)),
+        }
+    }
+
+    let directory = tempdir().unwrap();
+    let raw_producer = directory.path().join("raw-producer");
+    let json_producer = directory.path().join("json-producer");
+    let marker = directory.path().join("producer-ran");
+    write_script(
+        &raw_producer,
+        &format!(
+            ": > {}\nprintf '%s' 'hello'",
+            shell_quote(&marker.to_string_lossy())
+        ),
+    );
+    write_script(&json_producer, "printf '%s' '\"hello\"'");
+
+    let raw_manifest = json!({
+        "name":"fixture.raw_text",
+        "binary":raw_producer,
+        "parameters":{},
+        "arguments":[],
+        "contract":{"version":1,"output":{"type":"text","encoding":"raw"}}
+    });
+    let json_manifest = json!({
+        "name":"fixture.json_text",
+        "binary":json_producer,
+        "parameters":{},
+        "arguments":[],
+        "contract":{"version":1,"output":{"type":"text","encoding":"json"}}
+    });
+    let consumer_manifest = json!({
+        "name":"fixture.json_sink",
+        "binary":"/bin/cat",
+        "accepts_stdin":true,
+        "parameters":{},
+        "arguments":[],
+        "contract":{"version":1,"ports":{"inputs":{
+            "stdin":{"schema":{"type":"json"},"delivery":"single","encoding":"json"}
+        }}}
+    });
+    let registry = Registry::from_sources(&[
+        raw_manifest.to_string(),
+        json_manifest.to_string(),
+        consumer_manifest.to_string(),
+    ])
+    .unwrap();
+
+    let raw_source = "run fixture.raw_text\npipe to fixture.json_sink\n";
+    let diagnostic = flow::diagnostics::analyze_source(raw_source, &registry)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code == "applet.pipeline.incompatible")
+        .expect("raw text cannot be consumed as JSON framing");
+    assert!(diagnostic.message.contains("stdout encoding is Raw"));
+    let raw_program = flow::parser::parse(raw_source).unwrap();
+    let error = match flow::runtime::run(&raw_program, &registry, &options(directory.path())) {
+        Ok(_) => panic!("raw text unexpectedly reached a JSON stdin consumer"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{error:#}").contains("stdout encoding is Raw, expected stdin encoding Json"),
+        "{error:#}"
+    );
+    assert!(
+        !marker.exists(),
+        "pipe validation must run before producer effects"
+    );
+
+    let json_program =
+        flow::parser::parse("run fixture.json_text\npipe to fixture.json_sink\n").unwrap();
+    let result = flow::runtime::run(&json_program, &registry, &options(directory.path())).unwrap();
+    assert_eq!(result.output, br#""hello""#);
+    assert_eq!(result.launched_processes, 2);
 }

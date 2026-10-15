@@ -116,6 +116,7 @@ pub fn execute_in_cwd(
         "number.parse_integer" | "number.parse_integer.result" => {
             arithmetic::parse_integer(args, input)
         }
+        "number.to_text" => arithmetic::to_text(args),
         "color.rgb_to_hex" => arithmetic::rgb_to_hex(args),
         "color.parse_rgb" => arithmetic::parse_rgb(args, input),
         "color.parse_rgb.result" => arithmetic::parse_rgb_result(args, input),

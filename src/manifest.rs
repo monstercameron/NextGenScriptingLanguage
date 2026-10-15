@@ -530,6 +530,43 @@ impl Manifest {
         self.contract.as_ref().and_then(AppletContract::output_kind)
     }
 
+    /// Report schema and framing mismatches for a native stdout-to-stdin pipe.
+    /// Native stages exchange bytes directly, so semantic assignability alone
+    /// is not enough: structured inputs must agree on explicit framing. A
+    /// bytes input intentionally accepts any producer's stdout bytes.
+    pub(crate) fn native_pipe_compatibility_issues(&self, consumer: &Manifest) -> Vec<String> {
+        let Some(producer_contract) = self.execution_contract() else {
+            return Vec::new();
+        };
+        let Some(input) = consumer.ports().and_then(|ports| ports.inputs.get("stdin")) else {
+            return Vec::new();
+        };
+        if input.schema.kind == OutputType::Bytes {
+            return Vec::new();
+        };
+
+        let (output_schema, output_encoding) = producer_contract.output.as_ref().map_or_else(
+            || (leaf_value_schema(OutputType::Bytes), OutputEncoding::Raw),
+            |output| (output_value_schema(output), output.encoding),
+        );
+        let mut issues = Vec::new();
+        if !output_schema.is_assignable_to(&input.schema) {
+            issues.push(format!(
+                "stdout schema is {}, expected {}",
+                output_type_name(output_schema.kind),
+                output_type_name(input.schema.kind)
+            ));
+        }
+        match input.encoding {
+            Some(input_encoding) if output_encoding != input_encoding => issues.push(format!(
+                "stdout encoding is {output_encoding:?}, expected stdin encoding {input_encoding:?}"
+            )),
+            None => issues.push("stdin encoding is not declared".into()),
+            _ => {}
+        }
+        issues
+    }
+
     pub fn success_status(&self) -> Option<i32> {
         self.contract
             .as_ref()
@@ -747,7 +784,8 @@ impl Manifest {
                         | (ParameterType::Path, InputType::Text)
                         | (ParameterType::Integer, InputType::Integer)
                         | (ParameterType::Boolean, InputType::Boolean)
-                        | (ParameterType::Json | ParameterType::Record, InputType::Json)
+                        | (ParameterType::Json, _)
+                        | (ParameterType::Record, InputType::Json)
                 ) || (spec.kind == ParameterType::List
                     && kind == InputType::TextList
                     && matches!(
@@ -758,6 +796,15 @@ impl Manifest {
                     bail!(
                         "parameter {name:?} expects {}, but reference {reference:?} contains {kind}; named results contain text",
                         spec.kind,
+                    );
+                }
+                if self
+                    .ports()
+                    .and_then(|ports| ports.inputs.get(name))
+                    .is_some_and(|port| !schema_accepts_input_kind(&port.schema, kind))
+                {
+                    bail!(
+                        "parameter {name:?} contract port does not accept reference {reference:?} of type {kind}"
                     );
                 }
                 continue;
@@ -781,6 +828,13 @@ impl Manifest {
                 }
             }
             validate_value(name, value, spec, true)?;
+            if !contains_parameter_reference(value) {
+                if let Some(port) = self.ports().and_then(|ports| ports.inputs.get(name)) {
+                    port.schema
+                        .validate_value(value)
+                        .with_context(|| format!("validating input port {name:?}"))?;
+                }
+            }
         }
         Ok(())
     }
@@ -863,7 +917,14 @@ impl Manifest {
                     bail!("applet {:?} requires parameter {name:?}", self.name)
                 }
                 None => {}
-                Some(value) => validate_value(name, value, spec, false)?,
+                Some(value) => {
+                    validate_value(name, value, spec, false)?;
+                    if let Some(port) = self.ports().and_then(|ports| ports.inputs.get(name)) {
+                        port.schema
+                            .validate_value(value)
+                            .with_context(|| format!("validating input port {name:?}"))?;
+                    }
+                }
             }
         }
         Ok(())
@@ -1634,7 +1695,7 @@ fn validate_manifest_ports(manifest: &Manifest) -> Result<()> {
             bail!("parameter input port {name:?} carries a typed value, not an encoded stream");
         }
         let expected = parameter_value_schema(spec)?;
-        if port.schema != expected {
+        if !port.schema.is_assignable_to(&expected) {
             bail!("input port {name:?} schema does not match the manifest parameter schema");
         }
     }
@@ -1673,6 +1734,36 @@ fn validate_manifest_ports(manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
+fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
+    match schema.kind {
+        OutputType::Bytes => false,
+        OutputType::Text | OutputType::Path => kind == InputType::Text,
+        OutputType::Integer => kind == InputType::Integer,
+        OutputType::Number => matches!(kind, InputType::Integer | InputType::Json),
+        OutputType::Boolean => kind == InputType::Boolean,
+        OutputType::Json => true,
+        OutputType::Record => kind == InputType::Json,
+        OutputType::List => {
+            kind == InputType::Json
+                || (kind == InputType::TextList
+                    && schema.items.as_deref().is_some_and(|item| {
+                        matches!(item.kind, OutputType::Text | OutputType::Path)
+                    }))
+        }
+    }
+}
+
+fn contains_parameter_reference(value: &Value) -> bool {
+    match value {
+        Value::Reference(_) => true,
+        Value::List(values) => values.iter().any(contains_parameter_reference),
+        Value::Record(values) => values.values().any(contains_parameter_reference),
+        Value::String(_) | Value::Integer(_) | Value::Bool(_) | Value::Null | Value::Number(_) => {
+            false
+        }
+    }
+}
+
 fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
     if spec.kind == ParameterType::List {
         let item_type = spec.item_type.expect("list parameter validated");
@@ -1683,6 +1774,7 @@ fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
             items: Some(Box::new(item)),
             fields: BTreeMap::new(),
             required: Vec::new(),
+            enum_values: None,
         });
     }
     parameter_field_value_schema(spec.kind, spec.fields.as_ref())
@@ -1745,6 +1837,7 @@ fn parameter_field_value_schema(
         items: None,
         fields: value_fields,
         required,
+        enum_values: None,
     })
 }
 
@@ -1755,6 +1848,7 @@ fn output_value_schema(output: &OutputSchema) -> ValueSchema {
         items: output.items.clone(),
         fields: output.fields.clone(),
         required: output.required.clone(),
+        enum_values: output.enum_values.clone(),
     }
 }
 
@@ -1765,6 +1859,21 @@ fn leaf_value_schema(kind: OutputType) -> ValueSchema {
         items: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
+        enum_values: None,
+    }
+}
+
+fn output_type_name(kind: OutputType) -> &'static str {
+    match kind {
+        OutputType::Bytes => "bytes",
+        OutputType::Text => "text",
+        OutputType::Path => "path",
+        OutputType::Integer => "integer",
+        OutputType::Number => "number",
+        OutputType::Boolean => "boolean",
+        OutputType::Json => "json",
+        OutputType::Record => "record",
+        OutputType::List => "list",
     }
 }
 

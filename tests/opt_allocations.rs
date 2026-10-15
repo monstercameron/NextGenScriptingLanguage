@@ -190,7 +190,41 @@ fn report_release_allocation_counts() {
     assert_eq!(checked.output, b"42");
     assert_eq!(checked.launched_processes, 0);
 
+    // The borrowed metadata projection must not allocate a copy proportional
+    // to captured stdout. The input buffer is allocated before measurement.
+    let execution_stdout = vec![0_u8; 4 * 1024 * 1024];
+    let execution_outcome = flow::contracts::Outcome {
+        status: 0,
+        name: "success".into(),
+        kind: flow::contracts::OutcomeKind::Success,
+        effect_certainty: flow::contracts::EffectCertainty::KnownResponse,
+    };
+    let execution_metadata_allocations = measure(|| {
+        let mut history = runtime::execution_result::ExecutionHistory::default();
+        let record = history
+            .push_outcome(
+                1,
+                "fixture",
+                &execution_outcome,
+                Some(&execution_stdout),
+                None,
+                &[],
+            )
+            .expect("one execution fits in bounded history");
+        assert!(record.stdout_captured);
+        assert_eq!(record.stdout_bytes, execution_stdout.len());
+        history
+    });
+    assert!(
+        execution_metadata_allocations.allocation_requested_bytes < execution_stdout.len() as u64,
+        "metadata projection allocated a payload-sized buffer: {execution_metadata_allocations:?}"
+    );
+
     let mut operations = BTreeMap::new();
+    operations.insert(
+        "execution_metadata_projection_stdout_4mib",
+        execution_metadata_allocations,
+    );
     operations.insert(
         "runtime_json_input_4mib",
         measure(|| {
@@ -376,7 +410,7 @@ fn report_release_allocation_counts() {
             "allocation_bytes": "allocation_requested_bytes sums Layout::size() for alloc and alloc_zeroed calls",
             "reallocation_bytes": "reallocation_requested_bytes sums each realloc new_size request",
             "excluded": "deallocation calls, net live bytes, peak live bytes, and peak RSS are not counted",
-            "inputs": "paths, source strings, registry used by clone/argv, invocation, 256 list values, parsed JSON-selection program/options with 4 MiB padding, and completed compound checkpoints are prepared before measurement",
+            "inputs": "paths, source strings, registry used by clone/argv, invocation, 256 list values, parsed JSON-selection program/options with 4 MiB padding, a prebuilt 4 MiB stdout slice for borrowed metadata projection, and completed compound checkpoints are prepared before measurement",
             "reporting": "JSON construction, serialization, environment lookup, and report file writing happen after counting is disabled"
         },
         "operations": operations

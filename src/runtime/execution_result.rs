@@ -306,12 +306,89 @@ impl ExecutionRecord {
         result: &ExecutionResult,
         stage_limit: usize,
     ) -> Self {
-        let stage_count = result.stages.len();
+        Self::from_fields(
+            line,
+            applet,
+            result.kind,
+            result.outcome.as_deref(),
+            result.status,
+            result.signal,
+            result.effect_certainty,
+            result.stdout.as_deref(),
+            result.stderr.as_deref(),
+            &result.stages,
+            stage_limit,
+        )
+    }
+
+    /// Project the metadata available at a completed invocation boundary
+    /// without first owning copies of its captured output buffers.
+    pub fn from_outcome(
+        line: usize,
+        applet: impl Into<String>,
+        outcome: &Outcome,
+        stdout: Option<&[u8]>,
+        stderr: Option<&[u8]>,
+        stages: &[StageResult],
+    ) -> Self {
+        Self::from_outcome_with_stage_limit(
+            line,
+            applet,
+            outcome,
+            stdout,
+            stderr,
+            stages,
+            MAX_EXECUTION_STAGES,
+        )
+    }
+
+    fn from_outcome_with_stage_limit(
+        line: usize,
+        applet: impl Into<String>,
+        outcome: &Outcome,
+        stdout: Option<&[u8]>,
+        stderr: Option<&[u8]>,
+        stages: &[StageResult],
+        stage_limit: usize,
+    ) -> Self {
+        let effect_certainty = combine_effect_certainty(
+            std::iter::once(outcome.effect_certainty)
+                .chain(stages.iter().map(|stage| stage.effect_certainty)),
+        );
+        Self::from_fields(
+            line,
+            applet,
+            ExecutionKind::from_outcome(outcome.kind),
+            Some(&outcome.name),
+            Some(outcome.status),
+            None,
+            effect_certainty,
+            stdout,
+            stderr,
+            stages,
+            stage_limit,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_fields(
+        line: usize,
+        applet: impl Into<String>,
+        kind: ExecutionKind,
+        outcome: Option<&str>,
+        status: Option<i32>,
+        signal: Option<i32>,
+        effect_certainty: EffectCertainty,
+        stdout: Option<&[u8]>,
+        stderr: Option<&[u8]>,
+        source_stages: &[StageResult],
+        stage_limit: usize,
+    ) -> Self {
+        let stage_count = source_stages.len();
         let retained_stage_count = stage_count.min(stage_limit);
         let prefix_count = retained_stage_count.saturating_sub(1);
         let last_index = stage_count.checked_sub(1);
-        let stages = result
-            .stages
+        let stages = source_stages
             .iter()
             .enumerate()
             .filter(|(index, _)| {
@@ -322,15 +399,15 @@ impl ExecutionRecord {
         Self {
             line,
             applet: applet.into(),
-            kind: result.kind,
-            outcome: result.outcome.clone(),
-            status: result.status,
-            signal: result.signal,
-            effect_certainty: result.effect_certainty,
-            stdout_captured: result.stdout.is_some(),
-            stdout_bytes: result.stdout.as_ref().map_or(0, Vec::len),
-            stderr_captured: result.stderr.is_some(),
-            stderr_bytes: result.stderr.as_ref().map_or(0, Vec::len),
+            kind,
+            outcome: outcome.map(str::to_owned),
+            status,
+            signal,
+            effect_certainty,
+            stdout_captured: stdout.is_some(),
+            stdout_bytes: stdout.map_or(0, <[u8]>::len),
+            stderr_captured: stderr.is_some(),
+            stderr_bytes: stderr.map_or(0, <[u8]>::len),
             stages,
             stages_dropped: stage_count - retained_stage_count,
         }
@@ -396,6 +473,35 @@ impl ExecutionHistory {
         let record = ExecutionRecord::from_result_with_stage_limit(line, applet, result, remaining);
         self.dropped_stages = self.dropped_stages.saturating_add(record.stages_dropped);
         self.executions.push(record);
+    }
+
+    /// Retain metadata for a completed invocation directly from borrowed
+    /// captures. Returns the stored record when it also matches the normal
+    /// per-invocation stage projection, so a requested trace can reuse it.
+    pub fn push_outcome(
+        &mut self,
+        line: usize,
+        applet: impl Into<String>,
+        outcome: &Outcome,
+        stdout: Option<&[u8]>,
+        stderr: Option<&[u8]>,
+        stages: &[StageResult],
+    ) -> Option<&ExecutionRecord> {
+        if self.executions.len() >= MAX_EXECUTION_RECORDS {
+            self.dropped_executions = self.dropped_executions.saturating_add(1);
+            self.dropped_stages = self.dropped_stages.saturating_add(stages.len());
+            return None;
+        }
+
+        let retained_stages: usize = self.executions.iter().map(|item| item.stages.len()).sum();
+        let remaining = MAX_EXECUTION_STAGES.saturating_sub(retained_stages);
+        let trace_stages = stages.len().min(MAX_EXECUTION_STAGES);
+        let record = ExecutionRecord::from_outcome_with_stage_limit(
+            line, applet, outcome, stdout, stderr, stages, remaining,
+        );
+        self.dropped_stages = self.dropped_stages.saturating_add(record.stages_dropped);
+        self.executions.push(record);
+        (remaining >= trace_stages).then(|| self.executions.last().expect("record was just pushed"))
     }
 
     pub fn to_value(&self) -> Value {

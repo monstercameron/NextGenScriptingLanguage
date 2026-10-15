@@ -1525,10 +1525,11 @@ fn bind_call_output(
     bytes: &[u8],
     status: Option<i32>,
     stdout_captured: bool,
-    stderr: Option<Vec<u8>>,
-    stages: Vec<execution_result::StageResult>,
+    stderr: Option<&[u8]>,
+    stages: &[execution_result::StageResult],
+    retain_value: bool,
     bindings: &mut BTreeMap<String, Value>,
-) -> Result<Value> {
+) -> Result<Option<Value>> {
     let value = decode_call_output(
         manifest,
         line,
@@ -1538,8 +1539,13 @@ fn bind_call_output(
         stderr,
         stages,
     )?;
-    bindings.insert(name.to_owned(), value.clone());
-    Ok(value)
+    if retain_value {
+        bindings.insert(name.to_owned(), value.clone());
+        Ok(Some(value))
+    } else {
+        bindings.insert(name.to_owned(), value);
+        Ok(None)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1549,8 +1555,8 @@ fn decode_call_output(
     bytes: &[u8],
     status: Option<i32>,
     stdout_captured: bool,
-    stderr: Option<Vec<u8>>,
-    stages: Vec<execution_result::StageResult>,
+    stderr: Option<&[u8]>,
+    stages: &[execution_result::StageResult],
 ) -> Result<Value> {
     let decode_failure = |error: anyhow::Error, outcome: Option<crate::contracts::Outcome>| {
         let error = error.context(format!("line {line}: decoding applet output"));
@@ -1558,8 +1564,8 @@ fn decode_call_output(
             &error,
             outcome,
             stdout_captured.then(|| bytes.to_vec()),
-            stderr.clone(),
-            stages.clone(),
+            stderr.map(<[u8]>::to_vec),
+            stages.to_vec(),
         )
     };
     let value = if manifest.execution_contract().is_none() {
@@ -3217,7 +3223,7 @@ fn run_finite_state(
                         }
                         let output_call = calls.last().expect("invocation group is nonempty").0;
                         let output_manifest = calls.last().expect("invocation group is nonempty").1;
-                        let (bytes, status, stdout_captured, stderr, stages) = if call.cache {
+                        let (bytes, status, stdout_captured, stages) = if call.cache {
                             let input = input.materialize(
                                 options.max_output_bytes,
                                 signals,
@@ -3384,7 +3390,7 @@ fn run_finite_state(
                                 )?;
                                 // Cache entries retain terminal bytes/status,
                                 // not historical per-stage diagnostics.
-                                (bytes, status, true, None, Vec::new())
+                                (bytes, status, true, Vec::new())
                             } else {
                                 let completed = run_uncached()?;
                                 if let Some(cache_key) = key.take() {
@@ -3408,16 +3414,10 @@ fn run_finite_state(
                                         }
                                     }
                                 }
-                                let stderr = completed
-                                    .stages
-                                    .iter()
-                                    .rev()
-                                    .find_map(|stage| stage.stderr.clone());
                                 (
                                     completed.bytes,
                                     completed.status,
                                     completed.stdout_captured,
-                                    stderr,
                                     completed.stages,
                                 )
                             }
@@ -3433,19 +3433,17 @@ fn run_finite_state(
                                 signals,
                                 registry,
                             )?;
-                            let stderr = completed
-                                .stages
-                                .iter()
-                                .rev()
-                                .find_map(|stage| stage.stderr.clone());
                             (
                                 completed.bytes,
                                 completed.status,
                                 completed.stdout_captured,
-                                stderr,
                                 completed.stages,
                             )
                         };
+                        let stderr = stages
+                            .iter()
+                            .rev()
+                            .find_map(|stage| stage.stderr.as_deref());
                         if let Some(name) = &call.status_binding {
                             let code = status.context("applet finished without an exit code")?;
                             bindings.insert(name.clone(), Value::Integer(i64::from(code)));
@@ -3460,17 +3458,18 @@ fn run_finite_state(
                             return Err(execution_result::ExecutionFailure::new(failure).into());
                         }
                         let output_value = if let Some(name) = &output_call.binding {
-                            Some(bind_call_output(
+                            bind_call_output(
                                 name,
                                 output_manifest,
                                 calls.last().expect("invocation group is nonempty").2,
                                 &bytes,
                                 status,
                                 stdout_captured,
-                                stderr.clone(),
-                                stages.clone(),
+                                stderr,
+                                &stages,
+                                output_call.result_binding.is_some(),
                                 &mut bindings,
-                            )?)
+                            )?
                         } else if output_call.result_binding.is_some()
                             && stdout_captured
                             && status.is_some_and(|status| {
@@ -3486,47 +3485,59 @@ fn run_finite_state(
                                 &bytes,
                                 status,
                                 stdout_captured,
-                                stderr.clone(),
-                                stages.clone(),
+                                stderr,
+                                &stages,
                             )?)
                         } else {
                             None
                         };
                         if let Some(status) = status {
                             let outcome = output_manifest.outcome_for(status);
-                            let execution = execution_result::ExecutionResult::from_outcome(
-                                outcome,
-                                stdout_captured.then(|| bytes.clone()),
+                            let line = calls.last().expect("invocation group is nonempty").2;
+                            let applet = output_manifest.name_for(output_call);
+                            let history_record = execution_history.push_outcome(
+                                line,
+                                applet,
+                                &outcome,
+                                stdout_captured.then_some(bytes.as_slice()),
                                 stderr,
-                                output_value,
-                                stages,
+                                &stages,
                             );
+                            if options.trace {
+                                let execution_value = if let Some(record) = history_record {
+                                    record.to_value()
+                                } else {
+                                    execution_result::ExecutionRecord::from_outcome(
+                                        line,
+                                        applet,
+                                        &outcome,
+                                        stdout_captured.then_some(bytes.as_slice()),
+                                        stderr,
+                                        &stages,
+                                    )
+                                    .to_value()
+                                };
+                                let execution_json = crate::structured::to_json(&execution_value)?;
+                                lazy_event(true, signals, || {
+                                    serde_json::json!({
+                                        "event": "execution_result",
+                                        "execution": execution_json,
+                                    })
+                                })?;
+                            }
                             if let Some(name) = &output_call.result_binding {
-                                let record = execution.to_source_value(
-                                    calls.last().expect("invocation group is nonempty").2,
-                                    output_manifest.name_for(output_call),
+                                // The full output bytes are retained only when
+                                // the source program explicitly asks for them.
+                                let execution = execution_result::ExecutionResult::from_outcome(
+                                    outcome,
+                                    stdout_captured.then(|| bytes.clone()),
+                                    stderr.map(<[u8]>::to_vec),
+                                    output_value,
+                                    stages,
                                 );
+                                let record = execution.to_source_value(line, applet);
                                 bindings.insert(name.clone(), record);
                             }
-                            execution_history.push(
-                                calls.last().expect("invocation group is nonempty").2,
-                                output_manifest.name_for(output_call),
-                                &execution,
-                            );
-                            let execution_value = crate::structured::to_json(
-                                &execution_result::ExecutionRecord::from_result(
-                                    calls.last().expect("invocation group is nonempty").2,
-                                    output_manifest.name_for(output_call),
-                                    &execution,
-                                )
-                                .to_value(),
-                            )?;
-                            lazy_event(options.trace, signals, || {
-                                serde_json::json!({
-                                    "event": "execution_result",
-                                    "execution": execution_value,
-                                })
-                            })?;
                         }
                         data = Input::Bytes(bytes);
                     }

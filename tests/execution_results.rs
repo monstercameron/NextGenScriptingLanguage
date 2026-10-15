@@ -316,6 +316,39 @@ fn source_result_binding_decodes_typed_output_without_an_output_binding() {
     assert_eq!(record["value"]["count"], 5);
 }
 
+#[test]
+fn source_result_binding_keeps_the_value_alongside_a_named_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let catalog = registry(json!({
+        "name": "typed.fixture",
+        "binary": "printf",
+        "arguments": [{"literal": "{\"count\":5}"}],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "output": {
+                "type": "record",
+                "encoding": "json",
+                "fields": {"count": {"type": "integer"}},
+                "required": ["count"]
+            }
+        }
+    }));
+    let result = runtime::run(
+        &parser::parse(
+            "run typed.fixture as decoded and keep result as execution\ntake integer at \"/count\" from decoded as count\nthen encode execution as json\n",
+        )
+        .unwrap(),
+        &catalog,
+        &options(directory.path()),
+    )
+    .unwrap();
+    let record: JsonValue = serde_json::from_slice(&result.output).unwrap();
+
+    assert_eq!(record["value_captured"], true);
+    assert_eq!(record["value"]["count"], 5);
+}
+
 #[cfg(unix)]
 #[test]
 fn source_result_binding_preserves_missing_stdout_capture_and_does_not_swallow_failure() {

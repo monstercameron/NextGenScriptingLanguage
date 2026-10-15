@@ -1,3 +1,38 @@
+# Five-hour performance and security session
+
+The [session summary](session-2026-10-14-summary.json) indexes 17 retained reports
+from the fixed October 14–15 session. Runtime commit `41b08da` passed Linux,
+macOS, Windows x64/ARM64 and Pages CI. These source changes are separate from
+published release artifacts.
+
+| Workload | Observed per-pass result |
+| --- | --- |
+| Fresh CLI checks with 1,000 literal arguments | Median 6.3–6.7% lower across three repeats. |
+| In-process catalog decode / warm catalog load | Medians 50.9% / 12.5% lower. Ordinary CLI controls roughly flat. |
+| Fresh CLI with a 1,000-input interface | Medians about 27–33% lower; interfaces up to 64 inputs stay within 1%. |
+| Trace-heavy WASM in an actual Chromium worker | Operation medians about 21–32% lower; small cases quantized or flat. |
+| Real 4 MiB table edits, publication pass | Edit-to-applied medians 7.3–7.6% lower. Includes socket/scheduling observation. |
+| Actual native `cat` stream controls | Within 2%; no broad throughput or task-latency gain claimed. |
+
+Each row uses its own baseline and workload. Do not combine percentages or
+interpret private-helper gains as whole-application speedups. Timings are local
+macOS arm64 with warm filesystem caches; native Linux/Windows performance,
+true cold startup and peak memory remain unmeasured by this session.
+
+The session also added bounded `repeat`, `for each` and `while` loops and fixed
+cache filesystem and live socket availability defects. Security costs remain
+visible: cache checks add roughly 1–2% to the measured listener acknowledgement,
+and the final socket deadline fix makes healthy 4 MiB state replies about 17%
+slower (roughly 6.6 to 7.7 ms). The actual CLI now ends a slowly drained request
+write around two seconds; the previous commit was still writing at 3.5 seconds.
+This does not establish a sandbox or general filesystem deadlines.
+
+Final local verification passed 460 Rust tests, 61 live-control scenarios,
+34 WASM contracts and 22 editor tests, plus Windows compile checks and seven
+lifecycle smoke probes. Raw pairs, exact output oracles, source/binary hashes,
+rejected experiments and scope limits remain in the indexed reports and local
+session evidence. No universal Bash advantage or production completeness is claimed.
+
 # Native stream framing
 
 The [stream-framing report](performance-2026-10-14-stream-framing.json) compares

@@ -1,0 +1,273 @@
+{
+  "schema": "execute.bounded-session-summary/1",
+  "status": "runtime_changes_validated",
+  "prepared_at_utc": "2026-10-15T00:45:37.475540+00:00",
+  "window": {
+    "start_utc": "2026-10-14T20:06:29Z",
+    "deadline_utc": "2026-10-15T01:06:29Z",
+    "integration_started_utc": "2026-10-15T00:33:47.743254+00:00",
+    "extended": false
+  },
+  "source": {
+    "initial_commit": "f742a540df540be727776ecfa46cd260cf5e51ec",
+    "runtime_commit": "41b08da7fee84702654b6c8d593a66d9c017f068",
+    "initial_release_binary_sha256": "9ab66166cc1ac759434f6be1121dc9c3f2c0c0603e4a6218c65625ea211c6051",
+    "final_release_binary_sha256": "bb7e4760dfb7b133686a973eaea7c8936bba86452ef5f07eea127cb2877009af",
+    "installed_release": "The retained historical bin/execute 0.8.0 was not modified. No release tag or package was published during this session; session changes remain on main.",
+    "source_package_version": "0.9.0-rc.4",
+    "session_changes_released": false
+  },
+  "scope": "Bounded performance session, redirected by the human to loops and then security. Compact Unix glue, native applets and .program control flow retained. Shorthand stayed design-only. No providers invoked during this session.",
+  "method": {
+    "comparisons": "Per-pass unchanged-source release baseline versus candidate, identical workload/catalog/inputs/environment, alternating serial samples and independent output oracles. Raw samples, preimages, rejected candidates, hashes and verification logs retained per pass.",
+    "timing_scopes": "Fresh CLI, in-process helpers/runtime APIs, managed socket execution, widget acknowledgement/application and browser worker timings remain distinct. Warm filesystem cache is not cold startup; allocation request traffic is not RSS.",
+    "non_additive": "Each percentage compares its own pass baseline and workload. No cumulative final-versus-initial speedup was measured in final integration; do not add or multiply these percentages.",
+    "host_limits": "Local timing: macOS 26.6.2 arm64 M1 Pro, Rust 1.99, uncontrolled background activity. Actual Chromium measurements are identified in the browser pass. Native Linux/Windows performance, true cold-cache startup, peak memory/RSS and universal Bash superiority are unproved."
+  },
+  "selected_measured_results": [
+    {
+      "area": "Literal and mixed argv preflight",
+      "scope": "Fresh CLI static-check scaling workloads",
+      "result": "Three repeats:1,000 literal argv checks6.3\u20136.7% lower median;128 mixed argv4.2\u20134.4% lower;scalar references 2.6\u20132.9% lower. Ordinary task controls approximately flat.",
+      "evidence": "benchmarks/performance-2026-10-14-preflight-parameters.json"
+    },
+    {
+      "area": "Catalog decoder",
+      "scope": "In-process decode and warm filesystem catalog load",
+      "result": "Decode median 50.9% lower; load 12.5% lower. Load allocation requests 1487\u2192658; requested bytes 143356\u219259805. Fresh CLI controls approximately flat. Strict legacy decoding compatibility checked across about4000 nodes.",
+      "evidence": "benchmarks/performance-2026-10-14-catalog-decoding.json"
+    },
+    {
+      "area": "Input lookup",
+      "scope": "1,000-input interface scaling fixture",
+      "result": "Supplied-input parse ~86%, resolution ~80%, argument validation ~66% lower in process;two CLI repeats ~27\u201333% lower. Up to 64-input CLI cases remain within 1%. Index storage tradeoff retained.",
+      "evidence": "benchmarks/performance-2026-10-14-input-lookup.json"
+    },
+    {
+      "area": "Typed input setup/preflight",
+      "scope": "Native runtime API with large JSON values; no native child launches",
+      "result": "Removing avoidable owned copies reduced targeted large-value API latency. Later preflight pass:1 MiB 117.1\u219296.1us;4 MiB 531.0\u2192410.5us. Four-MiB requested allocation traffic 16786257\u219212590674bytes in three identical repeats. Fresh CLI/listener controls approximately flat; separate input-setup pass retained in index.",
+      "evidence": "benchmarks/performance-2026-10-14-preflight-state.json"
+    },
+    {
+      "area": "Managed execution state",
+      "scope": "32 pure JSON nodes with1\u20134 MiB state, actual local control plane",
+      "result": "State handoff pass:1 MiB about4% and4 MiB7.5\u20137.9% lower;small controls flat. No allocation/RSS gain inferred.",
+      "evidence": "benchmarks/performance-2026-10-14-live-state.json"
+    },
+    {
+      "area": "Checkpoint fingerprints",
+      "scope": "1,000-node completed-resume allocation probe",
+      "result": "Allocation calls 1066\u219265 and requested bytes 132916\u21924788. Actual fresh-CLI completed resume remains within 1.2%; no whole-task speedup claimed. Identity bytes and durability semantics retained.",
+      "evidence": "benchmarks/performance-2026-10-14-checkpoint-fingerprints.json"
+    },
+    {
+      "area": "Browser trace sizing",
+      "scope": "Actual WASM in Node and Chromium worker, trace-heavy fixtures",
+      "result": "Trace-heavy Chromium worker operation medians ~21\u201332% lower; roundtrip ~21\u201326% lower in retained repeats. Small cases quantized or flat. WASM grows 909 bytes. No native process or provider timing claim.",
+      "evidence": "benchmarks/performance-2026-10-14-browser-trace.json"
+    },
+    {
+      "area": "Widget state handoff/publication",
+      "scope": "Real4 MiB table edits, full-frame/state oracles; each trial sums eight edits",
+      "result": "Separate successive passes report edit-to-applied medians ~2.1\u20132.4%, 5.9\u20136.2%, and 7.3\u20137.6% lower against their respective baselines. These are distinct results, not an aggregate. Socket observation includes scheduling/Python overhead and is not event-to-photon. The handoff pass acknowledgement is ~1% higher and an unchanged validation microcontrol ~40 ns slower.",
+      "evidence": [
+        "benchmarks/performance-2026-10-14-ui-state.json",
+        "benchmarks/performance-2026-10-14-ui-handoff.json",
+        "benchmarks/performance-2026-10-14-ui-publication.json"
+      ]
+    },
+    {
+      "area": "Native stream record framing",
+      "scope": "Private callback helper plus actual cat stream controls",
+      "result": "Complete 8-byte record helper median ~53% lower;actual cat tasks within 2%,so no broad task gain claimed. Fragmented/error pending-byte semantics retained. Unchanged cron microcontrol ~2\u20133 ns slower is disclosed.",
+      "evidence": "benchmarks/performance-2026-10-14-stream-framing.json"
+    }
+  ],
+  "requested_feature": {
+    "loops": "repeat, for each and scalar-equality while in native/browser shared grammar; typed outer updates, local iteration scope, 64 combined nesting limit and 100,000 shared iteration guard. Whole-loop checkpoint/live nodes preserve explicit uncertain-effect retry; no per-iteration resume.",
+    "verification": "11 native loop integration cases, shared runtime/parser regressions, editor grammar and browser contracts. Existing loop commit cross-platformCI passed. Final source full regression verification below includes loops.",
+    "evidence": "benchmarks/loop-regression-2026-10-14.json"
+  },
+  "security": [
+    {
+      "area": "Cache filesystem boundary",
+      "result": "Owned baseline symlink returns canary bytes and FIFO blocks. Final rejects linked roots/files, special files, unsafe Unix owner/mode bits; new Unix directories 0700, entries 0600. Raw byte/key compatibility retained and invalid cache fails before native launch or later save.",
+      "cost": "Two matched cached-listener repeats add roughly 0.8\u20132.1% acknowledgement latency; accepted security cost.",
+      "evidence": "benchmarks/security-2026-10-14-cache.json"
+    },
+    {
+      "area": "Partial live requests and stop",
+      "result": "Fixed monotonic transport budget stops per-byte renewal. Baseline stayed alive beyond 2.5 s after an acknowledged stop while partial data arrived;candidate exited normally about 1.7 s after stop. Full document unchanged on expired incomplete mutation. Valid 2200 ms handler wait still succeeds.",
+      "evidence": "benchmarks/security-2026-10-15-live-transport.json"
+    },
+    {
+      "area": "Progressing Unix socket write",
+      "result": "Follow-up actual CLI revealed macOS blocking write could outlive SO_SNDTIMEO. Explicit nonblocking guard plus remaining-budget polling and flag restoration now expires around 2.02 s despite continuing drain;previous 969ad7b client still alive at 3.51 s. CLI response reads remain ~12 s.",
+      "cost": "Two paired 4 MiB healthy RPC repeats 16.57%/16.85% slower,about 6.6\u21927.7 ms. Empty reply variation +10.2%/-34.5% is not attributed. Accepted security cost, not a speedup.",
+      "evidence": "benchmarks/security-2026-10-15-live-client.json"
+    }
+  ],
+  "rejections_and_corrections": [
+    "Pass 04 manifest decoder experiment was parked, not shipped. Final pass 05 rejects broadened sequence acceptance and preserves the legacy map-only contract.",
+    "Compact input-index experiment reduced allocation traffic but made parsing consistently ~3.7\u20133.8% slower; rejected and original source restored.",
+    "Earlier preflight overwrite and tiny stream-fragment regressions were refined before acceptance; earlier raw data and sources retained.",
+    "MSG_DONTWAIT-only live transport candidate blocked an unread-peer unit on this host; rejected and exact owned test/cargo/shell terminated. Final explicit O_NONBLOCK guard passes.",
+    "A stale core executable was rejected by catalog identity before candidate timing; failed pairing excluded and current Cargo artifact selected explicitly.",
+    "Fixture corrections retained: deterministic middle-stage failure must drain bounded stdin to avoid legitimate upstream SIGPIPE; short macOS Unix socket path before renaming; expired partial request may close/reset instead of delivering an error frame; 969ad7b baseline already enforces 12 s response read."
+  ],
+  "final_local_verification": {
+    "targeted_transport_units": 4,
+    "clippy_all_targets": "passed -Dwarnings",
+    "full_integration": "passed",
+    "Rust_passed": 460,
+    "Rust_ignored": 24,
+    "live_Python_scenarios": 61,
+    "editor_tests": 22,
+    "Node_WASM_contracts": 34,
+    "Windows_x64_ARM64": "all-targets local compile checks passed; slow-peer probes remain Unix-only",
+    "proof_smoke": "exact1MiBbinary, two native launches, seven lifecycle probes passed",
+    "measured_release_matches_final_full_build": true,
+    "WASM_sha256": "f1a8ca86af68f2314fab09b86ffb58edfc182c80d192d8cea5cd42736791e5e2",
+    "WASM_byte_identical": true,
+    "docs_links_Python_compile_Black_diff_check": "passed",
+    "owned_children": "All exact slow-peer CLI children reaped; sockets removed; rejected owned test/cargo/shell no longer present"
+  },
+  "CI": {
+    "commit": "41b08da7fee84702654b6c8d593a66d9c017f068",
+    "native": {
+      "run_id": 38660657705,
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": {
+        "Native Windows (windows-2022)": "success",
+        "Unix (ubuntu-24.04)": "success",
+        "Release contracts and workflow lint": "success",
+        "Unix (macos-15)": "success",
+        "Native Windows (windows-11-arm)": "success"
+      }
+    },
+    "pages": {
+      "run_id": 38660657616,
+      "status": "completed",
+      "conclusion": "success"
+    },
+    "checked_at_utc": "2026-10-15T00:44:46.619240+00:00"
+  },
+  "provenance_audit": "19 pass records, 16 per-pass public reports plus loop report; all accepted commits are ancestors of final runtime HEAD. 20 explicit retained binary references matched; initial baseline, final native/WASM/source/harness and final pass evidence-manifest hashes checked. This audit did not rerun or aggregate timings.",
+  "remaining_gaps": [
+    "No enforced command sandbox or capabilities. Scripts, manifests, executables and same-user live clients remain trusted and inherit caller permissions.",
+    "Cache/checkpoint ancestor races, same-user tampering, cache authentication, Unix extended ACL inspection and equivalent Windows cache ACL enforcement remain open.",
+    "Established live wire deadlines do not bound connection setup, CPU/mutex handling, filesystem operations or arbitrary stdout consumers. Windows dynamic slow-peer timing is unverified by these Unix probes.",
+    "Bulk live reply security cost is a future measurement target;any improvement must retain deadlines, byte caps, peer checks and cleanup.",
+    "No cumulative final-versus-initial performance claim, true cold-cache/RSS study, native Linux/Windows timing or exhaustion-of-all-feasible-optimizations claim.",
+    "Full Bash/Omarchy compatibility, real desktop acceptance, modules/jobs/concurrency, richer redirection and structured streams remain project proof gates.",
+    "Held-out 100-real-Bash-script model generation/repair/readability study remains open. Existing 150 utilities and 100 model fixture workflows do not replace it. No provider inference, accuracy or prompt-injection security claim."
+  ],
+  "reports": [
+    {
+      "pass": "01-borrowed-definition-validation",
+      "path": "benchmarks/performance-2026-10-14-definition-validation.json",
+      "sha256": "8de3b6b5af1175558d1c4e18334de1514ccb42475010f5350550722b6794fb98",
+      "commit": "c95495b6e80bcef2d2a59a6988ce7823030a138f"
+    },
+    {
+      "pass": "02-preflight-parameters",
+      "path": "benchmarks/performance-2026-10-14-preflight-parameters.json",
+      "sha256": "bdb39274e895a2c528c00f8933f13e08cc8944f0c56bedb85ef1c89e7e1bbe5e",
+      "commit": "ca1bd98"
+    },
+    {
+      "pass": "03-input-setup",
+      "path": "benchmarks/performance-2026-10-14-input-setup.json",
+      "sha256": "6d8089f96dc1c3b3e194e3881067897941ac66277c2bfe92e057dcbce1d47dd1",
+      "commit": "7348c16a3290dada8943aa44bafbff11006ac0ad"
+    },
+    {
+      "pass": "05-manifest-decoding-after-loops",
+      "path": "benchmarks/performance-2026-10-14-catalog-decoding.json",
+      "sha256": "a88b84c34a7df1b4ec8c48e19ecbe5ba486b68f547d71867b4c8826123bf1da7",
+      "commit": "cc10290a34b8329e5e921eb342700cb4b75ff8a4"
+    },
+    {
+      "pass": "06-input-schema-lookup",
+      "path": "benchmarks/performance-2026-10-14-input-lookup.json",
+      "sha256": "b9c78a844f5d1e2d086d7c25b1f45390a8df024a20e0da29a6e0b83f4677b3eb",
+      "commit": "6685426acc3fa4796e8d132a9106a98782fab934"
+    },
+    {
+      "pass": "08-live-state-handoff",
+      "path": "benchmarks/performance-2026-10-14-live-state.json",
+      "sha256": "8c28fe832f1350488e5ed95540b0e88e2d73cb1aef11802ef2ab0b8133cf43a6",
+      "commit": "9d56b255d6c6dbad60369f07c7244e8e9213d1bf"
+    },
+    {
+      "pass": "09-checkpoint-fingerprints",
+      "path": "benchmarks/performance-2026-10-14-checkpoint-fingerprints.json",
+      "sha256": "1d2f2272ea62af3f6fd3ace889b10ba23560fd194267dd50593a33cce6050178",
+      "commit": "f7975244c716c34032188b2e921746e9749070e9"
+    },
+    {
+      "pass": "10-browser-trace-sizing",
+      "path": "benchmarks/performance-2026-10-14-browser-trace.json",
+      "sha256": "5ca3c0fdc9ff23c5ff8aaa427a11ccc4963ebc255d667013451b3ab07899c6e0",
+      "commit": "d83078a65d2dd00f90526d9a0dfc229347d82296"
+    },
+    {
+      "pass": "11-borrowed-preflight-state",
+      "path": "benchmarks/performance-2026-10-14-preflight-state.json",
+      "sha256": "6b9fe3723993da4a4df9494352e3df5648e934dfab3b0dd50fb2820ee651b9c7",
+      "commit": "5ac9361a4d9d2074f8a726f02fbf7cda9af637db"
+    },
+    {
+      "pass": "12-ui-state-validation",
+      "path": "benchmarks/performance-2026-10-14-ui-state.json",
+      "sha256": "8e6a7506d4b6579b92817ae3045e70bb40d1f55290ade95e11e9c27c8b7cd96e",
+      "commit": "f07b3e26acace376a98669028501f4bc1d3b5122"
+    },
+    {
+      "pass": "13-ui-owned-handoff",
+      "path": "benchmarks/performance-2026-10-14-ui-handoff.json",
+      "sha256": "770cb51a8dbfc3d9174ac13e0983fdf20224865d4b70d7979bcaf5019f59d325",
+      "commit": "cf84e9157cb37f8128fd75083285f255d96a0025"
+    },
+    {
+      "pass": "14-ui-publication",
+      "path": "benchmarks/performance-2026-10-14-ui-publication.json",
+      "sha256": "faa595b08d8fa959b83402877807874fe498d4409a5a28088ecd4bdcaf524667",
+      "commit": "3a07fe55b31fff07d66452807c437812d1c99c8d"
+    },
+    {
+      "pass": "15-borrowed-stream-records",
+      "path": "benchmarks/performance-2026-10-14-stream-framing.json",
+      "sha256": "7d9be43eacb3bc6b9f7458b538b2b37d91e878df75a2547944de3e387b1d5a19",
+      "commit": "f788abb2ab7ba31e870560c15c6dc64d79d373f0"
+    },
+    {
+      "pass": "16-cache-filesystem-security",
+      "path": "benchmarks/security-2026-10-14-cache.json",
+      "sha256": "bb09a0950d595706f8d00fafc6179a77cfe5ce0213b66ba55a9c543416167480",
+      "commit": "94fc9d13c43a754f999be202c364685c7f2a563a"
+    },
+    {
+      "pass": "17-live-transport-deadlines",
+      "path": "benchmarks/security-2026-10-15-live-transport.json",
+      "sha256": "eb27ea422a36d5ae6c8ce34cec8a655c990e1d851c92463e0df40de4acc9ffc6",
+      "commit": "969ad7b9ba9859c41e70515d3fba5f534313f45e"
+    },
+    {
+      "pass": "18-live-client-deadline-proofs",
+      "path": "benchmarks/security-2026-10-15-live-client.json",
+      "sha256": "a229d21b46e7bc91e82c6c9800e0dc83e834668263d122cee22972dec318e47b",
+      "commit": "41b08da7fee84702654b6c8d593a66d9c017f068"
+    },
+    {
+      "pass": "requested-loop-feature",
+      "path": "benchmarks/loop-regression-2026-10-14.json",
+      "sha256": "ca16ab3813d957c56d1efbf4581389a82d26b2027b1ba6b2dc3390b1bf722ad1",
+      "commit": "8cb5e7dea5dab2e98e623838bf31369dd31d0a75"
+    }
+  ],
+  "owned_children": [],
+  "schedule": "Fixed original five-hour window, with no extension or recreation. Implementation ended before the reserved integration period. Heartbeat closure is recorded separately in local session state during the final ten minutes."
+}

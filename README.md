@@ -172,6 +172,8 @@ matter; Bash remains faster in some recorded workloads.
 boundaries, source hashes and known differences. Historical measurements describe
 their recorded versions. Browser virtual-applet timings do not measure native
 processes. No result establishes a universal speed advantage or full Bash parity.
+The [five-hour session summary](benchmarks/session-2026-10-14-summary.json)
+indexes the latest measured changes, security costs and remaining gaps.
 
 <a id="release-and-source-status"></a>
 

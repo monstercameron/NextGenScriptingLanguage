@@ -1,0 +1,5 @@
+#!/bin/sh
+# Check the index without rewriting or staging a contributor's working files.
+set -eu
+repo=$(git rev-parse --show-toplevel)
+exec "${PYTHON:-python3}" "$repo/tools/check_staged_rust.py"

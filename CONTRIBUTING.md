@@ -133,3 +133,40 @@ and the pull-request template prompt for reproduction and platform details.
 Run `git diff --check` and inspect the staged file list before committing. Do not
 use broad cleanup commands against unknown local files, installed releases or
 ignored directories that may contain a contributor's data.
+
+## Rust quality policy and staged checks
+
+Keep syntax, typed values and validation safe and independent of platform effects.
+Those pure modules forbid unsafe Rust. Put OS operations in the platform/runtime
+boundary, document the ownership and lifetime invariants at each unsafe boundary,
+and keep unsafe operations explicit even inside unsafe functions. Public unsafe
+APIs require `# Safety` documentation. Both Cargo packages deny debug macros;
+intentional fixture panics and profiling assertions remain valid. Prefer borrowed
+values and fallible typed conversion to repeated shape checks plus `unwrap`.
+Preserve bounded transport and existing diagnostic/serialization contracts when
+refactoring. Do not rewrite vendored dependencies or generated playground assets.
+
+Enable the tracked pre-commit hook after installing the prerequisites:
+
+```sh
+rustup component add rustfmt clippy
+rustup target add wasm32-unknown-unknown
+cargo fetch --locked
+cargo fetch --manifest-path browser/Cargo.toml --locked
+python3 tools/install_hooks.py
+```
+
+Installation sets repository-local `core.hooksPath=.githooks`, which also applies
+to its Git worktrees. The hook checks a temporary snapshot of **staged content**;
+partial staging is preserved, and an unstaged fix cannot hide a staged error.
+It runs native/browser Rustfmt, the shared `include!` file's Rustfmt check and
+native/browser warnings-denied Clippy, using only fixed tool commands. Clippy runs
+offline and reuses ignored `target/pre-commit` output. Missing tools, targets or
+locked dependencies fail clearly; the hook never installs tools, fetches network
+dependencies, formats files or changes the index. `CARGO`, `RUSTFMT`, `PYTHON`,
+`CARGO_HOME`, `RUSTUP_HOME` and `CARGO_TARGET_DIR` overrides are honored.
+
+Only changes to owned Rust sources, Cargo manifests/locks or Cargo/Rustfmt/Clippy configuration
+trigger these checks. Vendored/generated-only changes are excluded. CI remains
+the authoritative platform matrix; the local hook checks its host and WASM.
+Run `python3 tests/staged_rust.py` to verify staging isolation and hook behavior.

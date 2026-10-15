@@ -47,6 +47,7 @@ docs-check:
 
 # Keep this sequence shared by local development and macOS/Linux CI.
 check: rust-check docs-check
+	$(PYTHON) tests/staged_rust.py
 	$(PYTHON) tests/releases.py
 	$(PYTHON) -O tests/releases.py
 	$(PYTHON) tests/model_catalog.py

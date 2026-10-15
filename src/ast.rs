@@ -34,6 +34,10 @@ pub struct Invocation {
     /// Explicitly retain a native exit code, including ordinary nonzero exits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_binding: Option<String>,
+    /// Retain a successful structured execution result, including pipeline
+    /// stage metadata and explicitly captured output bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_binding: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {

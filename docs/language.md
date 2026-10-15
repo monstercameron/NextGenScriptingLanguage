@@ -58,6 +58,7 @@ to that component; they are separate from top-level CLI input declarations.
 | `pipe to wc with flags ["-l"]` | Connect adjacent applet stdout/stdin directly with OS pipes. |
 | `as name` | Name a finite UTF-8 stdout result, including its trailing newline. |
 | `and keep status as code` | Bind an external command's exit code as an integer. |
+| `and keep result as execution` | Bind an execution record with outcome, captured bytes and actual pipeline stage metadata. |
 | `and cache` | Reuse a declared deterministic finite transformation by content. |
 | `read "path"` | Builtin file input without launching a `cat` process. |
 | `read from stdin` | Read inherited stdin in a finite program; native stages consume it directly. |
@@ -71,7 +72,7 @@ to that component; they are separate from top-level CLI input declarations.
 Parameters use `with name value and name value`. Values are strings, integers,
 booleans, references, or lists such as `["-l", "-a"]`. Manifests define allowed
 parameters and types. There is no shell interpolation or command substitution.
-`true` and `false` are boolean literals and cannot name results. `as name` binds stdout text; `and keep status as name` binds an integer.
+`true` and `false` are boolean literals and cannot name results. `as name` binds stdout text; `and keep status as name` binds an integer; `and keep result as name` binds a JSON execution record.
 Text does not implicitly become an integer, boolean, or list parameter.
 Lists of string arguments may contain named text results. `as name` precedes
 `and cache` when both are used.
@@ -94,6 +95,24 @@ still stops execution. Timeout, cancellation, signal termination, missing tools,
 I/O failures and output-limit errors still stop execution; none becomes an
 ordinary status. Native stderr keeps the existing foreground/managed transport.
 
+The explicit `and keep result as name` suffix binds a JSON record after an
+applet invocation. On a pipeline, put it on the terminal `pipe to` call to
+retain one record for the whole group. The record includes the actual terminal
+status and outcome, combined effect certainty, per-stage statuses and capture
+flags, plus raw captured stdout and stderr byte arrays. A decoded contract value
+is included when the output is typed or separately named with `as`. If stdout
+was inherited or discarded, `stdout_captured` is false and the raw stdout array
+is empty. Stage metadata is bounded; `stages_dropped` reports any omitted
+stages. On its own, this suffix preserves fail-fast behavior: failures still
+stop execution and can be handled with `try`/`catch`. When combined with
+`and keep status as`, an ordinary non-success outcome is retained in both
+bindings and execution continues; its result record preserves the actual
+failure or absence outcome and does not include a typed value unless the
+contract's result envelope declares one. Infrastructure errors such as timeout,
+cancellation, signal termination, transport and decode failures still stop
+execution. Result capture cannot be combined with `and cache`, an intermediate
+pipeline stage, task entries, or reusable-program calls.
+
 `as output` may precede the status suffix to name stdout as well; the names must
 be distinct. Status capture is limited to a single external command outside a
 `pipe to` group and cannot be cached. Builtins, stream stages and listener
@@ -107,6 +126,10 @@ code, so tools such as `grep` need explicit treatment of error codes as well as
 The useful [search report](../examples/search-status.program) records both real
 `grep` status and matching lines. The suffix is available in 0.9.0-rc.4; the historical 0.8.0 binary does not
 recognize it.
+
+When retaining both status and execution result, place `and keep status as`
+before `and keep result as`; output, status and result bindings must all use
+distinct names.
 
 <a id="conditional-commands-pending-source-candidate"></a>
 

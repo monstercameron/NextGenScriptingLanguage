@@ -632,6 +632,7 @@ mod tests {
             binding: None,
             cache: false,
             status_binding: None,
+            result_binding: None,
         };
         let program = Program {
             definitions: Default::default(),

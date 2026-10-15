@@ -155,8 +155,12 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
                             &program.inputs.iter().map(|d| d.name.clone()).collect(),
                         )?;
                     }
-                    if call.cache || call.binding.is_some() || call.status_binding.is_some() {
-                        bail!("listener sources cannot be cached or bind output/status");
+                    if call.cache
+                        || call.binding.is_some()
+                        || call.status_binding.is_some()
+                        || call.result_binding.is_some()
+                    {
+                        bail!("listener sources cannot be cached or bind output/status/result");
                     }
                 }
                 if program.inputs.iter().any(|d| &d.name == binding) {
@@ -520,7 +524,9 @@ fn validate_range(
                     | StepKind::ReadStdin { binding }
                     | StepKind::ReadCallInput { binding } => binding.is_some(),
                     StepKind::Invoke { call, .. } => {
-                        call.binding.is_some() || call.status_binding.is_some()
+                        call.binding.is_some()
+                            || call.status_binding.is_some()
+                            || call.result_binding.is_some()
                     }
                     StepKind::ParseJson { .. }
                     | StepKind::TakeJson { .. }
@@ -741,8 +747,12 @@ fn validate_range(
                     }
                     let mut task_names = BTreeSet::new();
                     for task in tasks {
-                        if task.direct || task.cache || task.status_binding.is_some() {
-                            bail!("task groups require named, uncached applet calls without status bindings");
+                        if task.direct
+                            || task.cache
+                            || task.status_binding.is_some()
+                            || task.result_binding.is_some()
+                        {
+                            bail!("task groups require named, uncached applet calls without status or result bindings");
                         }
                         let task_name = task
                             .binding
@@ -889,6 +899,20 @@ fn validate_range(
                             bail!("output and status require distinct binding names");
                         }
                     }
+                    if let Some(name) = &call.result_binding {
+                        if manifest.builtin.is_some() {
+                            bail!("execution result capture requires an applet invocation");
+                        }
+                        if call.cache {
+                            bail!("execution result capture cannot use `and cache` because cached calls do not retain pipeline stages");
+                        }
+                        if pipe_in_steps(steps, index + 1) {
+                            bail!("execution result capture must name the terminal call in a pipe group");
+                        }
+                        if call.binding.as_ref() == Some(name) {
+                            bail!("output and execution result require distinct binding names");
+                        }
+                    }
                     if call.cache {
                         if manifest.execution_backend()
                             == crate::contracts::AppletBackend::JsonLinesWorker
@@ -916,7 +940,7 @@ fn validate_range(
                         && !terminal_stdout_captured
                         && (call.binding.is_some()
                             || call.cache
-                            || manifest.output_kind().is_some())
+                            || (manifest.output_kind().is_some() && call.result_binding.is_none()))
                     {
                         bail!("line {}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output", step.line);
                     }
@@ -944,6 +968,17 @@ fn validate_range(
                     )?;
                     if let Some(name) = &call.status_binding {
                         flow.bind_type(name, crate::ast::InputType::Integer)?;
+                    }
+                    binding(
+                        &call.result_binding,
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
+                    if let Some(name) = &call.result_binding {
+                        if call.status_binding.as_ref() == Some(name) {
+                            bail!("status and execution result require distinct binding names");
+                        }
+                        flow.bind_type(name, crate::ast::InputType::Json)?;
                     }
                     flow.has_data = manifest.builtin.is_none() && terminal_stdout_captured;
                     flow.stdout_unavailable = manifest.builtin.is_none()
@@ -1142,7 +1177,7 @@ pub fn explain_with_inputs(
                     ),
                 };
                 format!(
-                    "{connection:?}: {:?} argv={argv}{}{}{}{}",
+                    "{connection:?}: {:?} argv={argv}{}{}{}{}{}",
                     manifest.binary_for(call),
                     if manifest.builtin.is_some() {
                         " [interpreter builtin]"
@@ -1157,6 +1192,10 @@ pub fn explain_with_inputs(
                     call.status_binding
                         .as_ref()
                         .map(|name| format!(" and keep status as {name}"))
+                        .unwrap_or_default(),
+                    call.result_binding
+                        .as_ref()
+                        .map(|name| format!(" and keep result as {name}"))
                         .unwrap_or_default()
                 )
             }

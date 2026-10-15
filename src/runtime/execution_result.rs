@@ -520,6 +520,35 @@ impl ExecutionResult {
         );
         Value::Record(fields)
     }
+
+    /// Build a source-visible execution record. Unlike the bounded run
+    /// history and trace projection, this explicit binding includes captured
+    /// terminal bytes and a decoded value when one was requested. Stage
+    /// metadata remains bounded by `MAX_EXECUTION_STAGES`.
+    pub fn to_source_value(&self, line: usize, applet: impl Into<String>) -> Value {
+        let Value::Record(mut fields) = ExecutionRecord::from_result(line, applet, self).to_value()
+        else {
+            unreachable!("execution metadata projection is a record")
+        };
+        fields.insert(
+            "stdout".into(),
+            self.stdout
+                .as_deref()
+                .map(bytes_value)
+                .unwrap_or_else(|| Value::List(Vec::new())),
+        );
+        fields.insert("value".into(), self.value.clone().unwrap_or(Value::Null));
+        fields.insert("value_captured".into(), Value::Bool(self.value.is_some()));
+        fields.insert(
+            "stderr".into(),
+            self.stderr
+                .as_deref()
+                .map(bytes_value)
+                .unwrap_or_else(|| Value::List(Vec::new())),
+        );
+        fields.insert("message".into(), optional_text(self.message.as_deref()));
+        Value::Record(fields)
+    }
 }
 
 /// Typed error wrapper used by backend adapters that know why an invocation

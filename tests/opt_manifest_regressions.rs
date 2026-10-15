@@ -39,6 +39,7 @@ fn opt_manifest_list_type_errors_keep_precedence_over_nul_errors() {
         binding: None,
         cache: false,
         status_binding: None,
+        result_binding: None,
     };
 
     assert_eq!(
@@ -77,6 +78,7 @@ fn opt_manifest_unknown_and_required_errors_keep_their_order() {
         binding: None,
         cache: false,
         status_binding: None,
+        result_binding: None,
     };
     let expected_unknown = "applet \"check\" has no parameter \"unknown\"";
     assert_eq!(
@@ -99,6 +101,7 @@ fn opt_manifest_unknown_and_required_errors_keep_their_order() {
         binding: None,
         cache: false,
         status_binding: None,
+        result_binding: None,
     };
     let expected_required = "applet \"check\" requires parameter \"a\"";
     assert_eq!(

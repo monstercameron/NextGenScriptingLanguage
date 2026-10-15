@@ -88,9 +88,9 @@ pub(super) fn parse_group<'arena, 'source: 'arena>(
         if call.direct {
             bail!("line {}: task groups require named applets; direct quoted commands are unsupported", child.number);
         }
-        if call.cache || call.status_binding.is_some() {
+        if call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
             bail!(
-                "line {}: task group entries cannot use `and cache` or `and keep status`",
+                "line {}: task group entries cannot use `and cache`, `and keep status`, or `and keep result`",
                 child.number
             );
         }

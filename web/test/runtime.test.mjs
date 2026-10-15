@@ -53,6 +53,18 @@ test('write receipts distinguish this execution from retained artifacts, includi
   );
   assert.deepEqual(failed.written_files, []);
 });
+test('unsupported source result capture is rejected before an earlier virtual save', async () => {
+  const call = await session();
+  const response = bad(
+    run(
+      call,
+      'run printf with message "effect"\nthen save to "marker.txt"\nrun printf with message "result" and keep result as execution',
+    ),
+    /source-level execution result capture/,
+  );
+  assert.equal(response.files['/workspace/marker.txt'], undefined);
+  assert.deepEqual(response.written_files, []);
+});
 for (const example of examples) {
   test(`WASM example: ${example.id}`, async () => {
     const call = await seeded();

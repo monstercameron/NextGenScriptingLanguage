@@ -50,6 +50,7 @@ fn core_operations() {
         binding: None,
         cache: false,
         status_binding: None,
+        result_binding: None,
     };
     ls.validate(&invocation).unwrap();
     let cron = CronSchedule::parse("*/5 0-23/2 * * 0,7").unwrap();

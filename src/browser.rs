@@ -219,6 +219,9 @@ impl BrowserSession {
                 | StepKind::Finally
                 | StepKind::EndTry => Some("try/catch/finally"),
                 StepKind::TakeJsonDynamic { .. } => Some("dynamic JSON pointers"),
+                StepKind::Invoke { call, .. } if call.result_binding.is_some() => {
+                    Some("source-level execution result capture")
+                }
                 _ => None,
             };
             if let Some(feature) = unsupported {

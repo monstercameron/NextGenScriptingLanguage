@@ -84,6 +84,7 @@ execute preview.program --input 'path=server log.txt' --input lines=10
 | `read "file"` / `read from stdin` | Supply bytes to the pipeline. |
 | `as result` | Name finite UTF-8 output, preserving trailing newlines. |
 | `and keep status as code` | Capture an exit status for explicit branching. |
+| `and keep result as execution` | Bind an execution record with outcome, pipeline stage metadata and captured raw bytes. |
 | `if code is 0` / `otherwise` | Choose an indented body using typed scalar equality. |
 | `then parse json as data` | Parse JSON for typed field selection and encoding. |
 | `and cache` | Cache an explicitly cacheable named transformation. |

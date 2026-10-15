@@ -863,7 +863,8 @@ fn execute_group_with_sink(
     if !terminal_io.captures_terminal_stdout()
         && (terminal_call.binding.is_some()
             || calls.iter().any(|(call, _, _)| call.cache)
-            || terminal_manifest.output_kind().is_some())
+            || (terminal_manifest.output_kind().is_some()
+                && terminal_call.result_binding.is_none()))
     {
         bail!(
             "line {terminal_line}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output"
@@ -1528,8 +1529,31 @@ fn bind_call_output(
     stages: Vec<execution_result::StageResult>,
     bindings: &mut BTreeMap<String, Value>,
 ) -> Result<Value> {
+    let value = decode_call_output(
+        manifest,
+        line,
+        bytes,
+        status,
+        stdout_captured,
+        stderr,
+        stages,
+    )?;
+    bindings.insert(name.to_owned(), value.clone());
+    Ok(value)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_call_output(
+    manifest: &Manifest,
+    line: usize,
+    bytes: &[u8],
+    status: Option<i32>,
+    stdout_captured: bool,
+    stderr: Option<Vec<u8>>,
+    stages: Vec<execution_result::StageResult>,
+) -> Result<Value> {
     let decode_failure = |error: anyhow::Error, outcome: Option<crate::contracts::Outcome>| {
-        let error = error.context(format!("line {line}: decoding named applet output"));
+        let error = error.context(format!("line {line}: decoding applet output"));
         execution_result::output_decode_failure(
             &error,
             outcome,
@@ -1569,7 +1593,6 @@ fn bind_call_output(
             ),
         }
     };
-    bindings.insert(name.to_owned(), value.clone());
     Ok(value)
 }
 
@@ -2340,6 +2363,7 @@ pub fn invoke_applet(
         binding: None,
         cache: false,
         status_binding: Some("__flow_internal_status".to_owned()),
+        result_binding: None,
     };
     let module_session = Arc::new(crate::modules::ProgramModuleSession::preload_invocations(
         registry,
@@ -2375,6 +2399,7 @@ pub fn invoke_applet_with_module_session(
         binding: None,
         cache: false,
         status_binding: Some("__flow_internal_status".to_owned()),
+        result_binding: None,
     };
     let manifest = registry.resolve_call(&call)?;
     let sensitivities = invocation_sensitivities(&call, manifest, registry);
@@ -2413,6 +2438,7 @@ pub(crate) fn invoke_applet_with_module_session_and_sensitivity(
         binding: None,
         cache: false,
         status_binding: Some("__flow_internal_status".to_owned()),
+        result_binding: None,
     };
     let manifest = registry.resolve_call(&call)?;
     manifest.validate(&call)?;
@@ -3424,6 +3450,15 @@ fn run_finite_state(
                             let code = status.context("applet finished without an exit code")?;
                             bindings.insert(name.clone(), Value::Integer(i64::from(code)));
                         }
+                        if output_call.result_binding.is_some() && status.is_none() {
+                            let mut failure = execution_result::ExecutionResult::runtime_failure(
+                                execution_result::ExecutionKind::UnknownError,
+                                "applet completed without an exit status; cannot capture a successful execution result",
+                                execution_result::EffectCertainty::Uncertain,
+                            );
+                            failure.stages = stages;
+                            return Err(execution_result::ExecutionFailure::new(failure).into());
+                        }
                         let output_value = if let Some(name) = &output_call.binding {
                             Some(bind_call_output(
                                 name,
@@ -3435,6 +3470,24 @@ fn run_finite_state(
                                 stderr.clone(),
                                 stages.clone(),
                                 &mut bindings,
+                            )?)
+                        } else if output_call.result_binding.is_some()
+                            && stdout_captured
+                            && status.is_some_and(|status| {
+                                output_manifest.result_envelope()
+                                    || (output_manifest.outcome_for(status).kind
+                                        == OutcomeKind::Success
+                                        && output_manifest.output_kind().is_some())
+                            })
+                        {
+                            Some(decode_call_output(
+                                output_manifest,
+                                calls.last().expect("invocation group is nonempty").2,
+                                &bytes,
+                                status,
+                                stdout_captured,
+                                stderr.clone(),
+                                stages.clone(),
                             )?)
                         } else {
                             None
@@ -3448,6 +3501,13 @@ fn run_finite_state(
                                 output_value,
                                 stages,
                             );
+                            if let Some(name) = &output_call.result_binding {
+                                let record = execution.to_source_value(
+                                    calls.last().expect("invocation group is nonempty").2,
+                                    output_manifest.name_for(output_call),
+                                );
+                                bindings.insert(name.clone(), record);
+                            }
                             execution_history.push(
                                 calls.last().expect("invocation group is nonempty").2,
                                 output_manifest.name_for(output_call),
@@ -3820,6 +3880,7 @@ mod argv_construction_tests {
             binding: None,
             cache: false,
             status_binding: None,
+            result_binding: None,
         };
         match arguments_for_group_call(&literal, manifest, &bindings).unwrap() {
             GroupArguments::Borrowed(arguments) => {

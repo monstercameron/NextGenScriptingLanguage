@@ -48,8 +48,8 @@ pub(super) fn validate_arguments(
     inputs: &[InputDeclaration],
     flow: &control::FlowState,
 ) -> Result<()> {
-    if call.direct || call.cache || call.status_binding.is_some() {
-        bail!("program calls cannot be direct binaries, cached or capture native status");
+    if call.direct || call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
+        bail!("program calls cannot be direct binaries, cached or capture native status or execution results");
     }
     crate::inputs::validate(inputs)?;
     // Keep tiny schemas on a linear lookup, as inputs::validated_specs does.
@@ -186,6 +186,7 @@ pub(super) fn preflight(
                 binding: call.binding.clone(),
                 cache: call.cache,
                 status_binding: call.status_binding.clone(),
+                result_binding: call.result_binding.clone(),
             })
         } else {
             Cow::Borrowed(call)
@@ -314,6 +315,10 @@ pub(super) fn preflight(
                 if let Some(name) = &call.status_binding {
                     forget(&mut values, name);
                     types.insert(name.clone(), InputType::Integer);
+                }
+                if let Some(name) = &call.result_binding {
+                    forget(&mut values, name);
+                    types.insert(name.clone(), InputType::Json);
                 }
             }
             StepKind::Read { binding, .. }
@@ -575,6 +580,7 @@ mod tests {
                     binding: call.binding.clone(),
                     cache: call.cache,
                     status_binding: call.status_binding.clone(),
+                    result_binding: call.result_binding.clone(),
                 })
             } else {
                 Cow::Borrowed(call)
@@ -669,6 +675,10 @@ mod tests {
                     if let Some(name) = &call.status_binding {
                         values.remove(name);
                         types.insert(name.clone(), InputType::Integer);
+                    }
+                    if let Some(name) = &call.result_binding {
+                        values.remove(name);
+                        types.insert(name.clone(), InputType::Json);
                     }
                 }
                 StepKind::Read { binding, .. }

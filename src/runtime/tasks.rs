@@ -132,8 +132,14 @@ pub(super) fn preflight_group(
     let mut resolved_calls = Vec::with_capacity(tasks.len());
     let mut names_and_calls = Vec::with_capacity(tasks.len());
     for task in tasks {
-        if task.direct || task.cache || task.status_binding.is_some() {
-            bail!("task groups require named, uncached applet calls without status capture")
+        if task.direct
+            || task.cache
+            || task.status_binding.is_some()
+            || task.result_binding.is_some()
+        {
+            bail!(
+                "task groups require named, uncached applet calls without status or result capture"
+            )
         }
         let id = task
             .binding
@@ -157,6 +163,7 @@ pub(super) fn preflight_group(
             binding: None,
             cache: false,
             status_binding: None,
+            result_binding: None,
         };
         let manifest = registry
             .resolve_call(&resolved)

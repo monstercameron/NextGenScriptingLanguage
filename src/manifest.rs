@@ -1972,6 +1972,7 @@ mod tests {
             binding: None,
             cache: false,
             status_binding: None,
+            result_binding: None,
         };
         assert!(manifest.validate(&invocation).is_ok());
         let values = BTreeMap::from([
@@ -2027,6 +2028,7 @@ mod tests {
             binding: None,
             cache: false,
             status_binding: None,
+            result_binding: None,
         };
         assert!(manifest.validate(&missing).is_err());
         let wrong = Invocation {
@@ -2036,6 +2038,7 @@ mod tests {
             binding: None,
             cache: false,
             status_binding: None,
+            result_binding: None,
         };
         assert!(manifest.validate(&wrong).is_err());
     }
@@ -2063,6 +2066,7 @@ mod tests {
             binding: None,
             cache: false,
             status_binding: None,
+            result_binding: None,
         };
         assert!(manifest.validate(&invocation).is_ok());
         assert!(manifest
@@ -2099,6 +2103,7 @@ mod tests {
             binding: None,
             cache: false,
             status_binding: None,
+            result_binding: None,
         };
 
         assert!(manifest
@@ -2331,6 +2336,7 @@ mod tests {
                 binding: None,
                 cache: false,
                 status_binding: None,
+                result_binding: None,
             };
             assert!(manifest.validate(&invocation).is_err());
             assert!(manifest

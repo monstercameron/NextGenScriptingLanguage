@@ -39,3 +39,25 @@ pub unsafe extern "C" fn execute(pointer: *mut u8, length: usize) -> u64 {
     let pointer = Box::into_raw(result.into_boxed_slice()) as *mut u8;
     ((pointer as u64) << 32) | length as u64
 }
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests {
+    use flow::runtime::{BrowserSession, Request};
+
+    #[test]
+    fn result_binding_is_rejected_before_prior_virtual_file_writes() {
+        let mut session = BrowserSession::default();
+        let response = session.handle(Request {
+            action: "run".into(),
+            source: "run printf with message \"effect\"\nthen save to \"marker.txt\"\nrun printf with message \"result\" and keep result as execution\n".into(),
+            ..Request::default()
+        });
+
+        assert!(!response.ok);
+        assert!(response
+            .error
+            .contains("source-level execution result capture"));
+        assert!(!response.files.contains_key("/workspace/marker.txt"));
+        assert!(!response.written_files.contains("/workspace/marker.txt"));
+    }
+}

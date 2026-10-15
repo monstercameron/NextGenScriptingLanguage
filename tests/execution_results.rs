@@ -257,6 +257,216 @@ fn successful_native_pipeline_exposes_each_actual_stage_status() {
 
 #[cfg(unix)]
 #[test]
+fn source_result_binding_exposes_raw_output_and_all_pipeline_stages() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run \"sh\" with arguments [\"-c\", \"printf first\"]\npipe to \"sh\" with arguments [\"-c\", \"cat >/dev/null; printf terminal\"] and keep result as execution\nthen encode execution as json\n";
+    let result = runtime::run(
+        &parser::parse(source).unwrap(),
+        &Registry::default(),
+        &options(directory.path()),
+    )
+    .unwrap();
+    let record: JsonValue = serde_json::from_slice(&result.output).unwrap();
+
+    assert_eq!(record["kind"], "success");
+    assert_eq!(record["status"], 0);
+    assert_eq!(record["effect_certainty"], "known_response");
+    assert_eq!(record["stdout_captured"], true);
+    assert_eq!(record["stdout"], json!(b"terminal"));
+    assert_eq!(record["value_captured"], false);
+    assert_eq!(record["stages"].as_array().unwrap().len(), 2);
+    for stage in record["stages"].as_array().unwrap() {
+        assert_eq!(stage["state"], "exited");
+        assert_eq!(stage["status"], 0);
+        assert_eq!(stage["effect_certainty"], "known_response");
+        assert!(stage.get("stderr_captured").is_some());
+        assert!(stage.get("stderr").is_none());
+    }
+}
+
+#[test]
+fn source_result_binding_decodes_typed_output_without_an_output_binding() {
+    let directory = tempfile::tempdir().unwrap();
+    let catalog = registry(json!({
+        "name": "typed.fixture",
+        "binary": "printf",
+        "arguments": [{"literal": "{\"count\":5}"}],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "output": {
+                "type": "record",
+                "encoding": "json",
+                "fields": {"count": {"type": "integer"}},
+                "required": ["count"]
+            }
+        }
+    }));
+    let result = runtime::run(
+        &parser::parse(
+            "run typed.fixture and keep result as execution\nthen encode execution as json\n",
+        )
+        .unwrap(),
+        &catalog,
+        &options(directory.path()),
+    )
+    .unwrap();
+    let record: JsonValue = serde_json::from_slice(&result.output).unwrap();
+    assert_eq!(record["value_captured"], true);
+    assert_eq!(record["value"]["count"], 5);
+}
+
+#[cfg(unix)]
+#[test]
+fn source_result_binding_preserves_missing_stdout_capture_and_does_not_swallow_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let catalog = registry(json!({
+        "name": "discard.fixture",
+        "binary": "printf",
+        "arguments": [{"literal": "discarded"}],
+        "stdio": {"stdout": "discard", "stderr": "capture"}
+    }));
+    let source =
+        "run discard.fixture and keep result as execution\nthen encode execution as json\n";
+    let result = runtime::run(
+        &parser::parse(source).unwrap(),
+        &catalog,
+        &options(directory.path()),
+    )
+    .unwrap();
+    let execution: JsonValue = serde_json::from_slice(&result.output).unwrap();
+    assert_eq!(execution["stdout_captured"], false);
+    assert_eq!(execution["stdout_bytes"], 0);
+    assert_eq!(execution["stdout"], json!([]));
+    assert_eq!(execution["stderr_captured"], true);
+    assert_eq!(execution["stderr"], json!([]));
+
+    let failure = runtime::run(
+        &parser::parse(
+            "run \"sh\" with arguments [\"-c\", \"printf partial; exit 7\"] and keep result as execution\n",
+        )
+        .unwrap(),
+        &Registry::default(),
+        &options(directory.path()),
+    )
+    .err()
+    .expect("result capture must leave ordinary failures fail-fast");
+    let caught = record(runtime::execution_result::error_value(&failure));
+    assert_eq!(caught.get("status"), Some(&Value::Integer(7)));
+    assert_eq!(caught.get("kind"), Some(&Value::String("failure".into())));
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_status_and_result_capture_retains_a_non_success_without_faking_success() {
+    let directory = tempfile::tempdir().unwrap();
+    let result = runtime::run(
+        &parser::parse(
+            "run \"false\" and keep status as code and keep result as execution\nif code is 1\n  then encode execution as json\notherwise\n  run \"false\"\n",
+        )
+        .unwrap(),
+        &Registry::default(),
+        &options(directory.path()),
+    )
+    .unwrap();
+    let execution: JsonValue = serde_json::from_slice(&result.output).unwrap();
+
+    assert_eq!(execution["kind"], "failure");
+    assert_eq!(execution["outcome"], "exit_1");
+    assert_eq!(execution["status"], 1);
+    assert_eq!(execution["effect_certainty"], "uncertain");
+    assert_eq!(execution["value_captured"], false);
+    assert_eq!(execution["stages"].as_array().unwrap().len(), 1);
+    assert_eq!(execution["stages"][0]["state"], "exited");
+    assert_eq!(execution["stages"][0]["status"], 1);
+    assert_eq!(execution["stages"][0]["kind"], "failure");
+}
+
+#[cfg(unix)]
+#[test]
+fn captured_absence_decodes_only_the_contract_declared_result_envelope() {
+    let directory = tempfile::tempdir().unwrap();
+    let catalog = registry(json!({
+        "name": "absence.fixture",
+        "binary": "sh",
+        "arguments": [{"literal": "-c"}, {"literal": "exit 1"}],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "output": {
+                "type": "record",
+                "encoding": "json",
+                "fields": {"count": {"type": "integer"}},
+                "required": ["count"]
+            },
+            "result_envelope": true,
+            "outcomes": [
+                {"status": 0, "name": "success", "kind": "success"},
+                {"status": 1, "name": "absence", "kind": "absence"}
+            ]
+        }
+    }));
+    let result = runtime::run(
+        &parser::parse(
+            "run absence.fixture and keep status as code and keep result as execution\nif code is 1\n  then encode execution as json\notherwise\n  run \"false\"\n",
+        )
+        .unwrap(),
+        &catalog,
+        &options(directory.path()),
+    )
+    .unwrap();
+    let execution: JsonValue = serde_json::from_slice(&result.output).unwrap();
+
+    assert_eq!(execution["kind"], "absence");
+    assert_eq!(execution["status"], 1);
+    assert_eq!(execution["value_captured"], true);
+    assert_eq!(execution["value"]["kind"], "absence");
+    assert_eq!(execution["value"]["value"], JsonValue::Null);
+    assert_eq!(execution["stages"][0]["status"], 1);
+}
+
+#[test]
+fn result_suffix_round_trips_and_absent_field_keeps_legacy_ast_bytes() {
+    let program = parser::parse("run printf\n").unwrap();
+    let flow::ast::StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+        panic!("expected invocation");
+    };
+    assert_eq!(
+        serde_json::to_vec(call).unwrap(),
+        br#"{"operation":"printf","parameters":{},"binding":null,"cache":false}"#
+    );
+
+    let program =
+        parser::parse("run \"printf\" with arguments [\"payload\"] and keep result as execution\n")
+            .unwrap();
+    let flow::ast::StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+        panic!("expected invocation");
+    };
+    assert_eq!(call.result_binding.as_deref(), Some("execution"));
+    let encoded = serde_json::to_vec(call).unwrap();
+    let decoded: flow::ast::Invocation = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded, *call);
+}
+
+#[test]
+fn result_binding_rejects_cache_intermediate_stage_and_name_conflicts() {
+    let directory = tempfile::tempdir().unwrap();
+    let registry = Registry::default();
+    for source in [
+        "run \"printf\" with arguments [\"x\"] and keep result as execution and cache\n",
+        "run \"printf\" with arguments [\"x\"] and keep result as execution\npipe to \"cat\"\n",
+        "run \"printf\" with arguments [\"x\"] as same and keep result as same\n",
+    ] {
+        let program = parser::parse(source).unwrap();
+        assert!(
+            runtime::run(&program, &registry, &options(directory.path()),).is_err(),
+            "accepted invalid result capture: {source}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn trace_execution_event_omits_captured_payload_and_reports_metadata() {
     let directory = tempfile::tempdir().unwrap();
     let script_path = directory.path().join("trace.program");

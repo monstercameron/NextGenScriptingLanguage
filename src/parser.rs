@@ -669,9 +669,13 @@ fn parse_trigger_header<'source>(
         else {
             bail!("line {}: listener source must be an applet", header.number);
         };
-        if call.binding.is_some() || call.status_binding.is_some() || call.cache {
+        if call.binding.is_some()
+            || call.status_binding.is_some()
+            || call.result_binding.is_some()
+            || call.cache
+        {
             bail!(
-                "line {}: listener source cannot bind output/status or use `and cache`",
+                "line {}: listener source cannot bind output/status/result or use `and cache`",
                 header.number
             );
         }
@@ -847,8 +851,8 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
             bail!("program name must be an identifier");
         }
         call.operation = name.to_owned();
-        if call.cache || call.status_binding.is_some() {
-            bail!("program calls cannot cache or capture native status");
+        if call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
+            bail!("program calls cannot cache or capture native status or execution results");
         }
         return Ok(StepKind::CallProgram {
             call,
@@ -1030,6 +1034,12 @@ fn is_status_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
         && word_is(tokens.get(cursor + 2), "status")
 }
 
+fn is_result_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
+    word_is(tokens.get(cursor), "and")
+        && word_is(tokens.get(cursor + 1), "keep")
+        && word_is(tokens.get(cursor + 2), "result")
+}
+
 fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
     let (mut cursor, connection) = if word_is(tokens.first(), "run") {
         (1, Connection::Start)
@@ -1059,7 +1069,8 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
             if cursor > operation_start
                 && word_is(tokens.get(cursor), "and")
                 && ((word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
-                    || is_status_suffix(tokens, cursor))
+                    || is_status_suffix(tokens, cursor)
+                    || is_result_suffix(tokens, cursor))
             {
                 break;
             }
@@ -1116,6 +1127,7 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
             if word_is(tokens.get(cursor), "and")
                 && !(word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
                 && !is_status_suffix(tokens, cursor)
+                && !is_result_suffix(tokens, cursor)
             {
                 cursor += 1;
                 continue;
@@ -1143,6 +1155,17 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
     } else {
         None
     };
+    let result_binding = if is_result_suffix(tokens, cursor) {
+        if !word_is(tokens.get(cursor + 2), "result") || !word_is(tokens.get(cursor + 3), "as") {
+            bail!("expected `and keep result as <name>`");
+        }
+        cursor += 4;
+        let name = parse_binding_identifier(tokens.get(cursor), "execution result binding name")?;
+        cursor += 1;
+        Some(name)
+    } else {
+        None
+    };
     let cache = if word_is(tokens.get(cursor), "and")
         && word_is(tokens.get(cursor + 1), "cache")
         && cursor + 2 == tokens.len()
@@ -1162,6 +1185,7 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
             binding,
             cache,
             status_binding,
+            result_binding,
         },
         connection,
     })

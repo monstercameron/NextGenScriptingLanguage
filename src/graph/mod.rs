@@ -15,8 +15,9 @@ pub use plan::{
 };
 pub use syntax::{is_graph, parse};
 pub use transport::{
-    run, EventEnvelope, GraphContext, GraphExecutor, GraphRunOptions, GraphRunResult, GraphSession,
-    NodeIo, PortEmitReport, RuntimeGraphExecutor,
+    run, ChannelStdinSource, EventEnvelope, GraphContext, GraphExecutor, GraphRunOptions,
+    GraphRunResult, GraphSession, GraphStdinSource, NodeIo, PortEmitReport, RemoteEventMetadata,
+    RuntimeGraphExecutor,
 };
 
 use crate::ast::Invocation;

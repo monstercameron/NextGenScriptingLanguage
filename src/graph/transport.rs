@@ -11,6 +11,7 @@ use crate::runtime::{self, AppletInvocationResult, RunOptions};
 use crate::security::SensitivitySet;
 use crate::tasks::{CancellationToken, TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -29,7 +30,31 @@ pub struct EventEnvelope {
     pub revision: u64,
     pub sequence: u64,
     pub sensitivity: SensitivitySet,
+    /// Remote event source metadata. Cursors are available to an embedding
+    /// for deduplication/checkpointing but are redacted from Debug output.
+    pub remote: Option<RemoteEventMetadata>,
     pub payload: PortValue,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteEventMetadata {
+    pub event: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub duplicate_cursor: bool,
+}
+
+impl std::fmt::Debug for RemoteEventMetadata {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RemoteEventMetadata")
+            .field("event", &self.event)
+            .field("cursor", &self.cursor.as_ref().map(|_| "<redacted>"))
+            .field("duplicate_cursor", &self.duplicate_cursor)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +85,71 @@ impl GraphMetrics {
 /// every emitted message is checked against the plan before it is queued.
 pub trait GraphExecutor: Send + Sync + 'static {
     fn execute(&self, node: &GraphNode, io: &mut NodeIo, context: &GraphContext) -> Result<()>;
+}
+
+/// Injectable source for `listen to stdin`. Each call returns one typed graph
+/// record (normally a line without its delimiter), EOF, or an error. Sources
+/// must observe cancellation/deadlines while waiting so graph reconfiguration
+/// can reap the listener promptly.
+pub trait GraphStdinSource: Send + Sync + 'static {
+    fn next_record(
+        &self,
+        cancelled: &AtomicBool,
+        deadline: Option<Instant>,
+    ) -> Result<Option<Vec<u8>>>;
+}
+
+/// A bounded stdin adapter for embedding applications and tests. The sender
+/// side can push records into the graph without giving the executor ambient
+/// access to process stdin.
+pub struct ChannelStdinSource {
+    receiver: Mutex<std::sync::mpsc::Receiver<Vec<u8>>>,
+}
+
+impl ChannelStdinSource {
+    pub fn channel(capacity: usize) -> Result<(Arc<Self>, std::sync::mpsc::SyncSender<Vec<u8>>)> {
+        if capacity == 0 {
+            bail!("stdin channel capacity must be positive");
+        }
+        let (sender, receiver) = std::sync::mpsc::sync_channel(capacity);
+        Ok((
+            Arc::new(Self {
+                receiver: Mutex::new(receiver),
+            }),
+            sender,
+        ))
+    }
+}
+
+impl GraphStdinSource for ChannelStdinSource {
+    fn next_record(
+        &self,
+        cancelled: &AtomicBool,
+        deadline: Option<Instant>,
+    ) -> Result<Option<Vec<u8>>> {
+        loop {
+            if cancelled.load(Ordering::Acquire) {
+                bail!("stdin source cancelled");
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                bail!("stdin source deadline exceeded");
+            }
+            let timeout = deadline.map_or(QUEUE_POLL, |deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(QUEUE_POLL)
+            });
+            let receiver = self
+                .receiver
+                .lock()
+                .map_err(|_| anyhow!("stdin source lock poisoned"))?;
+            match receiver.recv_timeout(timeout) {
+                Ok(record) => return Ok(Some(record)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -301,6 +391,7 @@ impl NodeIo {
             revision: self.revision,
             sequence,
             sensitivity,
+            remote: None,
             payload,
         })))
     }
@@ -494,6 +585,26 @@ impl NodeIo {
     }
 
     pub fn emit(&mut self, port: &str, payload: PortValue) -> Result<PortEmitReport> {
+        self.emit_with_remote_metadata(port, payload, None)
+    }
+
+    /// Emit a validated remote event while preserving its source event name,
+    /// cursor and duplicate-cursor signal on the graph envelope.
+    pub fn emit_remote_event(
+        &mut self,
+        port: &str,
+        payload: PortValue,
+        metadata: RemoteEventMetadata,
+    ) -> Result<PortEmitReport> {
+        self.emit_with_remote_metadata(port, payload, Some(metadata))
+    }
+
+    fn emit_with_remote_metadata(
+        &mut self,
+        port: &str,
+        payload: PortValue,
+        remote: Option<RemoteEventMetadata>,
+    ) -> Result<PortEmitReport> {
         self.check_cancelled()?;
         let schema = self.schemas.get(port).ok_or_else(|| {
             anyhow!(
@@ -530,6 +641,7 @@ impl NodeIo {
                 }
                 labels
             },
+            remote,
             payload,
         };
         let mut report = PortEmitReport::default();
@@ -1136,6 +1248,7 @@ pub struct RuntimeGraphExecutor {
     registry: Registry,
     options: RunOptions,
     module_session: Option<Arc<crate::modules::ProgramModuleSession>>,
+    stdin_source: Option<Arc<dyn GraphStdinSource>>,
 }
 
 impl RuntimeGraphExecutor {
@@ -1144,6 +1257,7 @@ impl RuntimeGraphExecutor {
             registry,
             options,
             module_session: None,
+            stdin_source: None,
         }
     }
 
@@ -1156,7 +1270,13 @@ impl RuntimeGraphExecutor {
             registry,
             options,
             module_session: Some(module_session),
+            stdin_source: None,
         }
+    }
+
+    pub fn with_stdin_source(mut self, source: Arc<dyn GraphStdinSource>) -> Self {
+        self.stdin_source = Some(source);
+        self
     }
 
     fn run_applet(
@@ -1354,8 +1474,10 @@ impl RuntimeGraphExecutor {
         // A native stream is one graph node but may invoke several applets.
         // Preserve every declared stage label in graph events emitted from
         // the stream, including applet-scoped secret environment inputs.
+        let mut sensitivity_floor = SensitivitySet::empty();
         for call in node.invocations() {
             let (_, sensitivities) = self.invocation_sensitivity_sets(node, call, io)?;
+            sensitivity_floor.extend(&sensitivities);
             io.include_sensitivity_provenance(&sensitivities);
         }
         let final_call = stream
@@ -1372,18 +1494,39 @@ impl RuntimeGraphExecutor {
             .resolve_call(final_call)?
             .execution_contract()
             .and_then(|contract| contract.output.clone());
-        let stdout = node
-            .outputs
-            .get("stdout")
-            .ok_or_else(|| anyhow!("graph stream node {:?} has no stdout port", node.id))?;
+        let (sink_port, sink_schema, expected_delivery, raw_listener_records) = match &node.kind {
+            GraphNodeKind::Listener {
+                source: ListenSource::Applet(_),
+                binding,
+            } => (
+                binding.as_str(),
+                node.events.get(binding).ok_or_else(|| {
+                    anyhow!("graph listener {:?} has no line event port", node.id)
+                })?,
+                PortDelivery::Events,
+                true,
+            ),
+            _ => (
+                "stdout",
+                node.outputs
+                    .get("stdout")
+                    .ok_or_else(|| anyhow!("graph stream node {:?} has no stdout port", node.id))?,
+                PortDelivery::Records,
+                false,
+            ),
+        };
         let expected_schema = output_schema
             .as_ref()
             .map(super::plan::value_schema_from_output);
-        if stdout.delivery != PortDelivery::Records
-            || expected_schema
-                .as_ref()
-                .is_some_and(|schema| &stdout.schema != schema)
-            || (expected_schema.is_none() && stdout.schema.kind != OutputType::Bytes)
+        if sink_schema.delivery != expected_delivery
+            || (raw_listener_records && sink_schema.schema.kind != OutputType::Bytes)
+            || (!raw_listener_records
+                && expected_schema
+                    .as_ref()
+                    .is_some_and(|schema| &sink_schema.schema != schema))
+            || (!raw_listener_records
+                && expected_schema.is_none()
+                && sink_schema.schema.kind != OutputType::Bytes)
         {
             bail!(
                 "graph stream node {:?} stdout port does not match its final applet output contract",
@@ -1391,31 +1534,38 @@ impl RuntimeGraphExecutor {
             );
         }
         let cancelled = io.cancellation_flag();
-        let result = runtime::run_stream(
+        let mut stream_context = runtime::StreamExecutionContext::new(Arc::clone(&cancelled))
+            .with_deadline(context.deadline)
+            .with_sensitivity_floor(sensitivity_floor);
+        if let Some(module_session) = &self.module_session {
+            stream_context = stream_context.with_module_session(Arc::clone(module_session));
+        }
+        let options = self.invocation_options(context)?;
+        let result = runtime::run_stream_with_context(
             &stream,
             &self.registry,
-            &self.invocation_options(context)?,
+            &options,
             self.options.max_output_bytes,
-            |record, _, _| {
-                if cancelled.load(Ordering::Acquire) {
+            stream_context,
+            |record, run_cancelled, deadline| {
+                if run_cancelled.load(Ordering::Acquire) {
                     bail!("graph stream cancelled");
                 }
-                let port = if node.outputs.contains_key("stdout") {
-                    "stdout"
+                if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    bail!("graph execution deadline exceeded");
+                }
+                let payload = if raw_listener_records {
+                    PortValue::Bytes(record.to_vec())
                 } else {
-                    node.events
-                        .keys()
-                        .next()
-                        .ok_or_else(|| anyhow!("stream node has no output port"))?
+                    match output_schema.as_ref() {
+                        Some(schema) => match schema.decode(record)? {
+                            crate::contracts::AppletOutput::Bytes(bytes) => PortValue::Bytes(bytes),
+                            crate::contracts::AppletOutput::Value(value) => PortValue::Value(value),
+                        },
+                        None => PortValue::Bytes(record.to_vec()),
+                    }
                 };
-                let payload = match output_schema.as_ref() {
-                    Some(schema) => match schema.decode(record)? {
-                        crate::contracts::AppletOutput::Bytes(bytes) => PortValue::Bytes(bytes),
-                        crate::contracts::AppletOutput::Value(value) => PortValue::Value(value),
-                    },
-                    None => PortValue::Bytes(record.to_vec()),
-                };
-                io.emit(port, payload)?;
+                io.emit(sink_port, payload)?;
                 Ok(())
             },
         )?;
@@ -1425,6 +1575,354 @@ impl RuntimeGraphExecutor {
         }
         Ok(())
     }
+
+    fn run_stdin_listener(
+        &self,
+        node: &GraphNode,
+        binding: &str,
+        io: &mut NodeIo,
+        context: &GraphContext,
+    ) -> Result<()> {
+        let source = self
+            .stdin_source
+            .as_ref()
+            .ok_or_else(|| anyhow!("graph stdin listener has no injected GraphStdinSource"))?;
+        if !node.events.contains_key(binding) {
+            bail!("stdin listener {:?} has no event port {binding:?}", node.id);
+        }
+        let cancelled = io.cancellation_flag();
+        loop {
+            if context
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                bail!("graph execution deadline exceeded");
+            }
+            if io.is_cancelled() {
+                return Ok(());
+            }
+            let record = match source.next_record(&cancelled, context.deadline) {
+                Ok(record) => record,
+                Err(_) if io.is_cancelled() => return Ok(()),
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("reading stdin source for graph node {:?}", node.id)
+                    });
+                }
+            };
+            let Some(record) = record else { return Ok(()) };
+            io.emit(binding, PortValue::Bytes(record))?;
+        }
+    }
+
+    fn run_remote_listener(
+        &self,
+        node: &GraphNode,
+        call: &Invocation,
+        io: &mut NodeIo,
+        context: &GraphContext,
+    ) -> Result<()> {
+        use crate::contracts::{AppletBackend, RemoteAuthSource};
+        use crate::remote::RemoteClient;
+
+        if context
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            bail!("graph execution deadline exceeded");
+        }
+        if io.is_cancelled() {
+            return Ok(());
+        }
+        if !call.parameters.is_empty() {
+            bail!(
+                "remote event listener {:?} cannot pass applet parameters through the GET event protocol",
+                node.id
+            );
+        }
+        let manifest = self.registry.resolve_call(call)?;
+        let contract = manifest
+            .execution_contract()
+            .context("remote event listener requires an execution contract")?;
+        if contract.backend != AppletBackend::Remote {
+            bail!("listener source {:?} is not remote", manifest.name);
+        }
+        let endpoint = contract
+            .remote
+            .as_ref()
+            .context("remote event listener requires endpoint configuration")?;
+        crate::capabilities::authorize_network_endpoint(
+            &self.registry,
+            &manifest.name,
+            &endpoint.endpoint,
+        )?;
+        if let Some(RemoteAuthSource::BearerEnv { name }) = endpoint.auth.as_ref() {
+            crate::capabilities::authorize_environment_variable(
+                &self.registry,
+                &manifest.name,
+                name,
+            )?;
+        }
+        if endpoint.auth.is_some() {
+            let credential_sensitivity = SensitivitySet::from_label(Sensitivity::Secret);
+            crate::security::authorize_data_flow_set(
+                &self.registry,
+                &manifest.name,
+                &endpoint.endpoint,
+                &credential_sensitivity,
+            )
+            .map_err(|error| {
+                anyhow!(
+                    "runtime authentication data flow into remote listener {:?} was denied: {error}",
+                    node.id
+                )
+            })?;
+        }
+
+        let options = self.invocation_options(context)?;
+        let cwd = std::fs::canonicalize(&options.working_directory)?;
+        let credential_base = manifest
+            .origin()
+            .and_then(std::path::Path::parent)
+            .unwrap_or(&cwd)
+            .to_path_buf();
+        let mut config = endpoint.clone();
+        if let Some(timeout) = options.total_timeout {
+            let remaining_ms = timeout.as_millis().clamp(1, u128::from(u64::MAX)) as u64;
+            config.timeout_ms = config.timeout_ms.min(remaining_ms);
+        }
+        let cancelled = io.cancellation_flag();
+        let client = RemoteClient::new_with_credential_base(config, credential_base)?
+            .with_secret_redactor(crate::security::secret_redactor(&self.registry))
+            .with_resolver_helper(std::env::current_exe()?);
+        if let Some(path) = client.descriptor_cache_path() {
+            crate::capabilities::authorize_applet_host_path(
+                &self.registry,
+                &manifest.name,
+                &path,
+                false,
+                &cwd,
+            )?;
+        }
+        if let Some(path) = client.bearer_file_path() {
+            crate::capabilities::authorize_applet_host_path(
+                &self.registry,
+                &manifest.name,
+                &path,
+                false,
+                &cwd,
+            )?;
+        }
+        let descriptor = match client.load_configured_descriptor_cache()? {
+            Some(descriptor) => {
+                client.use_cached_descriptor(descriptor.clone())?;
+                descriptor
+            }
+            None if endpoint.allow_discovery => {
+                if context
+                    .deadline
+                    .is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    bail!("graph execution deadline exceeded");
+                }
+                if io.is_cancelled() {
+                    return Ok(());
+                }
+                client.discover_cancellable(&cancelled)?
+            }
+            None => bail!(
+                "remote event listener {:?} needs a pinned descriptor cache or allow_discovery:true",
+                manifest.name
+            ),
+        };
+        client.check_compatible(&manifest.name, contract)?;
+        for name in node.events.keys() {
+            if !descriptor.events.iter().any(|event| &event.port == name) {
+                bail!(
+                    "remote descriptor for {:?} does not expose declared event port {name:?}",
+                    manifest.name
+                );
+            }
+        }
+
+        let ports = node.events.keys().cloned().collect::<Vec<_>>();
+        if ports.is_empty() {
+            bail!("remote listener {:?} has no event ports", node.id);
+        }
+        if context
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            bail!("graph execution deadline exceeded");
+        }
+        if io.is_cancelled() {
+            return Ok(());
+        }
+        let port_count = ports.len();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(port_count);
+        let reader_cancelled = Arc::new(AtomicBool::new(false));
+        let mut scope = TaskScope::new_with_cancellation(
+            port_count,
+            context.deadline,
+            Arc::clone(&reader_cancelled),
+        )?;
+        for port in ports {
+            let client = client.clone();
+            let descriptor = descriptor.clone();
+            let sender = sender.clone();
+            let cancelled = Arc::clone(&reader_cancelled);
+            let deadline = context.deadline;
+            scope.spawn(move |_| {
+                let result = pump_remote_event_port(
+                    &client,
+                    &descriptor,
+                    &port,
+                    &sender,
+                    &cancelled,
+                    deadline,
+                );
+                let error = result.as_ref().err().map(|error| format!("{error:#}"));
+                let _ = send_remote_listener_message(
+                    &sender,
+                    RemoteListenerMessage::Finished {
+                        port: port.clone(),
+                        error,
+                    },
+                    &cancelled,
+                    deadline,
+                );
+                result
+            })?;
+        }
+        drop(sender);
+
+        let mut finished = 0usize;
+        while finished < port_count {
+            if context
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                bail!("graph execution deadline exceeded");
+            }
+            if io.is_cancelled() {
+                scope.cancel_and_join()?;
+                return Ok(());
+            }
+            match receiver.recv_timeout(QUEUE_POLL) {
+                Ok(RemoteListenerMessage::Event { port, event }) => {
+                    let payload = PortValue::Value(crate::structured::from_json(event.data));
+                    io.emit_remote_event(
+                        &port,
+                        payload,
+                        RemoteEventMetadata {
+                            event: event.event,
+                            cursor: event.cursor,
+                            duplicate_cursor: event.duplicate_cursor,
+                        },
+                    )?;
+                }
+                Ok(RemoteListenerMessage::Finished { port, error }) => {
+                    finished += 1;
+                    if let Some(error) = error {
+                        if !io.is_cancelled() {
+                            bail!("remote event port {port:?} failed: {error}");
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    bail!("remote event readers stopped before reporting completion");
+                }
+            }
+        }
+        scope.join_all()?;
+        Ok(())
+    }
+}
+
+enum RemoteListenerMessage {
+    Event {
+        port: String,
+        event: crate::remote::RemoteStreamEvent,
+    },
+    Finished {
+        port: String,
+        error: Option<String>,
+    },
+}
+
+fn pump_remote_event_port(
+    client: &crate::remote::RemoteClient,
+    descriptor: &crate::remote::RemoteAppletDescriptor,
+    port: &str,
+    sender: &std::sync::mpsc::SyncSender<RemoteListenerMessage>,
+    cancelled: &Arc<AtomicBool>,
+    deadline: Option<Instant>,
+) -> Result<()> {
+    let mut stream = client.open_events(descriptor, port, None, Arc::clone(cancelled))?;
+    loop {
+        if check_remote_listener_budget(cancelled, deadline).is_err() {
+            if cancelled.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            bail!("remote event listener deadline exceeded");
+        }
+        let next = match stream.next_event() {
+            Ok(next) => next,
+            Err(_) if cancelled.load(Ordering::Acquire) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        match next {
+            Some(event) => {
+                if let Err(error) = send_remote_listener_message(
+                    sender,
+                    RemoteListenerMessage::Event {
+                        port: port.to_owned(),
+                        event,
+                    },
+                    cancelled,
+                    deadline,
+                ) {
+                    if cancelled.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+            }
+            None => return Ok(()),
+        }
+    }
+}
+
+fn send_remote_listener_message(
+    sender: &std::sync::mpsc::SyncSender<RemoteListenerMessage>,
+    mut message: RemoteListenerMessage,
+    cancelled: &AtomicBool,
+    deadline: Option<Instant>,
+) -> Result<()> {
+    loop {
+        check_remote_listener_budget(cancelled, deadline)?;
+        match sender.try_send(message) {
+            Ok(()) => return Ok(()),
+            Err(std::sync::mpsc::TrySendError::Full(returned)) => {
+                message = returned;
+                thread::sleep(QUEUE_POLL.min(Duration::from_millis(2)));
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                bail!("remote listener event receiver closed");
+            }
+        }
+    }
+}
+
+fn check_remote_listener_budget(cancelled: &AtomicBool, deadline: Option<Instant>) -> Result<()> {
+    if cancelled.load(Ordering::Acquire) {
+        bail!("remote event listener cancelled");
+    }
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        bail!("remote event listener deadline exceeded");
+    }
+    Ok(())
 }
 
 struct GraphInvocationContext<'a> {
@@ -1508,17 +2006,24 @@ impl GraphExecutor for RuntimeGraphExecutor {
             }
             GraphNodeKind::Listener {
                 source: ListenSource::Applet(call),
-                ..
+                binding,
             } => {
-                let source = format!("stream from {}\nshow each line\n", format_invocation(call)?);
-                self.run_stream(node, &source, io, context, false)
+                let manifest = self.registry.resolve_call(call)?;
+                if manifest.execution_backend() == crate::contracts::AppletBackend::Remote {
+                    self.run_remote_listener(node, call, io, context)
+                } else {
+                    if !node.events.contains_key(binding) {
+                        bail!("listener node {:?} has no event port {binding:?}", node.id);
+                    }
+                    let source =
+                        format!("stream from {}\nshow each line\n", format_invocation(call)?);
+                    self.run_stream(node, &source, io, context, false)
+                }
             }
             GraphNodeKind::Listener {
                 source: ListenSource::Stdin,
-                ..
-            } => {
-                bail!("graph stdin listener requires an injected cancellable source adapter")
-            }
+                binding,
+            } => self.run_stdin_listener(node, binding, io, context),
             GraphNodeKind::Renderer { backend } => {
                 bail!("renderer backend {backend:?} is not installed in this executor")
             }

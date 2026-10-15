@@ -37,6 +37,16 @@ records` accepts native stream pipeline directives such as `pipe to ...` and
 `take ...` and must end with `show each line`; it exposes byte `stdout` records
 and a single integer `status` output.
 
+Remote listener applets use their manifest-declared `Events` ports and connect
+with ordinary `bind` edges. The remote adapter uses the declared endpoint's
+GET event protocol without graph caller parameters. Event frames retain the
+source event name, opaque resume cursor, and duplicate-cursor marker for
+at-least-once delivery. Hosts that accept stdin must inject a `GraphStdinSource`
+(for example, a bounded `ChannelStdinSource`); graphs never read ambient
+process stdin. Cancelling or reconfiguring a `GraphSession`, or reaching its
+total deadline, cancels and joins listener workers and closes their bounded
+queues.
+
 `render tui:text`, `render tui:button`, `render quickshell:text` and
 `render quickshell:button` describe the current generic renderer components.
 `text` has a typed text property. `button` has text and enabled properties and

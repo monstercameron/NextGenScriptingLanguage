@@ -492,68 +492,154 @@ impl GraphPlan {
                 manifest
                     .validate(&call)
                     .map_err(|error| anyhow!("node {:?}: {error:#}", node.id))?;
+
+                if let GraphNodeKind::Listener { source, .. } = &node.kind {
+                    if !node.inputs.is_empty() || !node.outputs.is_empty() {
+                        bail!("listener node {:?} may declare only event outputs", node.id);
+                    }
+                    let expected_events = match source {
+                        crate::ast::ListenSource::Stdin => BTreeMap::from([(
+                            "line".to_owned(),
+                            PortSchema::events(ValueSchema {
+                                kind: OutputType::Bytes,
+                                nullable: false,
+                                items: None,
+                                fields: BTreeMap::new(),
+                                required: Vec::new(),
+                            }),
+                        )]),
+                        crate::ast::ListenSource::Applet(_)
+                            if manifest.execution_backend()
+                                == crate::contracts::AppletBackend::Remote =>
+                        {
+                            if !call.parameters.is_empty() {
+                                bail!(
+                                    "remote event listener {:?} cannot pass parameters through the GET event protocol",
+                                    node.id
+                                );
+                            }
+                            manifest
+                                .ports()
+                                .map(|ports| {
+                                    ports
+                                        .events
+                                        .iter()
+                                        .map(|(name, port)| {
+                                            (name.clone(), PortSchema::from_applet(port, false))
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        }
+                        crate::ast::ListenSource::Applet(_) => BTreeMap::from([(
+                            "line".to_owned(),
+                            PortSchema::events(ValueSchema {
+                                kind: OutputType::Bytes,
+                                nullable: false,
+                                items: None,
+                                fields: BTreeMap::new(),
+                                required: Vec::new(),
+                            }),
+                        )]),
+                    };
+                    if node.events != expected_events {
+                        bail!(
+                            "listener node {:?} event ports do not match its source contract",
+                            node.id
+                        );
+                    }
+                }
             }
 
             for call in node.invocations() {
                 let manifest = registry
                     .resolve_call(call)
                     .map_err(|error| anyhow!("node {:?}: {error:#}", node.id))?;
+                let is_remote_event_source = matches!(
+                    &node.kind,
+                    GraphNodeKind::Listener {
+                        source: crate::ast::ListenSource::Applet(_),
+                        ..
+                    }
+                ) && manifest.execution_backend()
+                    == crate::contracts::AppletBackend::Remote;
                 if let Some(remote) = manifest
                     .execution_contract()
                     .and_then(|contract| contract.remote.as_ref())
                 {
-                    let mut incoming = None;
-                    for edge in self.edges.iter().filter(|edge| edge.to.node == node.id) {
-                        if let Some(labels) = sensitivity_labels
-                            .get(&(edge.from.node.clone(), edge.from.port.clone()))
+                    if is_remote_event_source {
+                        // Event GETs carry no caller parameters in this graph
+                        // protocol, but a configured bearer credential is
+                        // still secret data sent to the remote origin.
+                        if remote.auth.is_some() {
+                            let sensitivities = SensitivitySet::from_label(Sensitivity::Secret);
+                            crate::security::authorize_data_flow_set(
+                                registry,
+                                &manifest.name,
+                                &remote.endpoint,
+                                &sensitivities,
+                            )
+                            .map_err(|error| {
+                                anyhow!(
+                                    "graph authentication data flow into remote listener {:?} was denied: {error}",
+                                    node.id
+                                )
+                            })?;
+                        }
+                    } else {
+                        let mut incoming = None;
+                        for edge in self.edges.iter().filter(|edge| edge.to.node == node.id) {
+                            if let Some(labels) = sensitivity_labels
+                                .get(&(edge.from.node.clone(), edge.from.port.clone()))
+                            {
+                                extend_sensitivity_set(&mut incoming, labels);
+                            }
+                            if let Some(port) = node.inputs.get(&edge.to.port) {
+                                insert_sensitivity(&mut incoming, port.sensitivity);
+                            }
+                        }
+                        // Literal parameters can carry contract labels too. They
+                        // are data entering the remote invocation just as an edge
+                        // is; omitting them would let a public edge mask an
+                        // unknown or secret literal parameter.
+                        for name in call.parameters.keys() {
+                            if let Some(port) = node.inputs.get(name) {
+                                insert_sensitivity(&mut incoming, port.sensitivity);
+                            }
+                        }
+                        for name in self
+                            .initial_inputs
+                            .get(&node.id)
+                            .into_iter()
+                            .flat_map(|values| values.keys())
                         {
-                            extend_sensitivity_set(&mut incoming, labels);
+                            if let Some(port) = node.inputs.get(name) {
+                                insert_sensitivity(&mut incoming, port.sensitivity);
+                            }
                         }
-                        if let Some(port) = node.inputs.get(&edge.to.port) {
-                            insert_sensitivity(&mut incoming, port.sensitivity);
+                        if crate::security::applet_has_declared_secret_environment(
+                            registry,
+                            &manifest.name,
+                        ) {
+                            // A remote applet may itself read a declared secret
+                            // environment variable and include it in the request,
+                            // even when its graph ports are public.
+                            insert_sensitivity(&mut incoming, Sensitivity::Secret);
                         }
-                    }
-                    // Literal parameters can carry contract labels too. They
-                    // are data entering the remote invocation just as an edge
-                    // is; omitting them would let a public edge mask an
-                    // unknown or secret literal parameter.
-                    for name in call.parameters.keys() {
-                        if let Some(port) = node.inputs.get(name) {
-                            insert_sensitivity(&mut incoming, port.sensitivity);
-                        }
-                    }
-                    for name in self
-                        .initial_inputs
-                        .get(&node.id)
-                        .into_iter()
-                        .flat_map(|values| values.keys())
-                    {
-                        if let Some(port) = node.inputs.get(name) {
-                            insert_sensitivity(&mut incoming, port.sensitivity);
-                        }
-                    }
-                    if crate::security::applet_has_declared_secret_environment(
-                        registry,
-                        &manifest.name,
-                    ) {
-                        // A remote applet may itself read a declared secret
-                        // environment variable and include it in the request,
-                        // even when its graph ports are public.
-                        insert_sensitivity(&mut incoming, Sensitivity::Secret);
-                    }
-                    let sensitivities = incoming.unwrap_or_default();
-                    crate::security::authorize_data_flow_set(
-                        registry,
-                        &manifest.name,
-                        &remote.endpoint,
-                        &sensitivities,
-                    )
-                    .map_err(|error| {
-                        anyhow!(
-                            "graph data flow into remote node {:?} was denied: {error}",
-                            node.id
+                        let sensitivities = incoming.unwrap_or_default();
+                        crate::security::authorize_data_flow_set(
+                            registry,
+                            &manifest.name,
+                            &remote.endpoint,
+                            &sensitivities,
                         )
-                    })?;
+                        .map_err(|error| {
+                            anyhow!(
+                                "graph data flow into remote node {:?} was denied: {error}",
+                                node.id
+                            )
+                        })?;
+                    }
                 }
             }
 

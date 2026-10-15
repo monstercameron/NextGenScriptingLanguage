@@ -81,8 +81,8 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
                 .binding
                 .take()
                 .ok_or_else(|| anyhow!("line {line_number}: graph applet needs `as <node>`"))?;
-            if call.cache || call.status_binding.is_some() {
-                bail!("line {line_number}: graph nodes do not accept finite cache/status suffixes");
+            if call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
+                bail!("line {line_number}: graph nodes do not accept finite cache/status/result suffixes");
             }
             let manifest = registry
                 .resolve_call(&call)
@@ -129,9 +129,13 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
                 else {
                     bail!("line {line_number}: listener source must be one applet invocation");
                 };
-                if call.binding.is_some() || call.status_binding.is_some() || call.cache {
+                if call.binding.is_some()
+                    || call.status_binding.is_some()
+                    || call.result_binding.is_some()
+                    || call.cache
+                {
                     bail!(
-                        "line {line_number}: listener source cannot bind output/status or use cache"
+                        "line {line_number}: listener source cannot bind output/status/result or use cache"
                     );
                 }
                 registry
@@ -139,7 +143,7 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
                     .with_context(|| format!("line {line_number}: resolving listener source"))?;
                 crate::ast::ListenSource::Applet(call)
             };
-            let node = listener_node(id, source, line_number);
+            let node = listener_node(id, source, registry, line_number)?;
             graph
                 .as_mut()
                 .expect("graph header was parsed")
@@ -305,8 +309,43 @@ fn timer_node(id: String, interval_ms: u64, line: usize) -> GraphNode {
     }
 }
 
-fn listener_node(id: String, source: crate::ast::ListenSource, line: usize) -> GraphNode {
-    GraphNode {
+fn listener_node(
+    id: String,
+    source: crate::ast::ListenSource,
+    registry: &Registry,
+    line: usize,
+) -> Result<GraphNode> {
+    let events = match &source {
+        crate::ast::ListenSource::Stdin => BTreeMap::from([(
+            "line".into(),
+            PortSchema::events(leaf_schema(OutputType::Bytes)),
+        )]),
+        crate::ast::ListenSource::Applet(call) => {
+            let manifest = registry.resolve_call(call)?;
+            if manifest.execution_backend() == crate::contracts::AppletBackend::Remote {
+                let ports = manifest
+                    .ports()
+                    .context("remote listener requires declared event ports")?;
+                if ports.events.is_empty() {
+                    bail!(
+                        "line {line}: remote listener applet {:?} declares no event ports",
+                        manifest.name
+                    );
+                }
+                ports
+                    .events
+                    .iter()
+                    .map(|(name, port)| (name.clone(), PortSchema::from_applet(port, false)))
+                    .collect()
+            } else {
+                BTreeMap::from([(
+                    "line".into(),
+                    PortSchema::events(leaf_schema(OutputType::Bytes)),
+                )])
+            }
+        }
+    };
+    Ok(GraphNode {
         id,
         kind: GraphNodeKind::Listener {
             source,
@@ -314,12 +353,9 @@ fn listener_node(id: String, source: crate::ast::ListenSource, line: usize) -> G
         },
         inputs: BTreeMap::new(),
         outputs: BTreeMap::new(),
-        events: BTreeMap::from([(
-            "line".into(),
-            PortSchema::events(leaf_schema(OutputType::Bytes)),
-        )]),
+        events,
         line: Some(line),
-    }
+    })
 }
 
 fn native_stream_node(

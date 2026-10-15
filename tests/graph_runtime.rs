@@ -2,8 +2,9 @@ use anyhow::{anyhow, Result};
 use flow::ast::Value;
 use flow::contracts::{OutputType, ValueSchema};
 use flow::graph::{
-    self, BufferPolicy, EdgeSpec, GraphContext, GraphExecutor, GraphNode, GraphNodeKind, GraphPlan,
-    GraphRunOptions, GraphSession, NodeIo, PortRef, PortSchema, PortValue,
+    self, BufferPolicy, ChannelStdinSource, EdgeSpec, GraphContext, GraphExecutor, GraphNode,
+    GraphNodeKind, GraphPlan, GraphRunOptions, GraphSession, NodeIo, PortRef, PortSchema,
+    PortValue, RuntimeGraphExecutor,
 };
 use flow::manifest::Registry;
 use flow::runtime::RunOptions;
@@ -299,6 +300,49 @@ fn graph_logic_is_reused_when_backend_adapter_changes() {
         .outputs
         .iter()
         .any(|event| event.payload == PortValue::Bytes(b"remote".to_vec())));
+}
+
+#[test]
+fn injected_stdin_listener_is_supervised_and_reconfigure_drops_old_generation() {
+    let registry = Registry::from_sources(&[] as &[&str]).unwrap();
+    let plan = graph::parse(
+        "graph stdin_feed\nlisten to stdin as source\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+
+    let (old_source, old_sender) = ChannelStdinSource::channel(1).unwrap();
+    let old_executor = Arc::new(
+        RuntimeGraphExecutor::new(registry.clone(), options(Path::new(".")))
+            .with_stdin_source(old_source),
+    );
+    let session =
+        GraphSession::start(plan.clone(), old_executor, GraphRunOptions::default()).unwrap();
+    let (new_source, new_sender) = ChannelStdinSource::channel(1).unwrap();
+    let new_executor = Arc::new(
+        RuntimeGraphExecutor::new(registry, options(Path::new("."))).with_stdin_source(new_source),
+    );
+    let next = session
+        .reconfigure(plan, new_executor, GraphRunOptions::default())
+        .unwrap();
+
+    // The prior generation has been cancelled and joined before new workers
+    // start. A late record on its now-unobserved source cannot appear in the
+    // replacement session.
+    assert!(old_sender.send(b"stale".to_vec()).is_err());
+    new_sender.send(b"current".to_vec()).unwrap();
+    drop(new_sender);
+    let output = next.run_to_completion().unwrap();
+    assert_eq!(output.generation, 2);
+    assert_eq!(output.revision, 2);
+    assert_eq!(output.outputs.len(), 1);
+    assert_eq!(output.outputs[0].generation, 2);
+    assert_eq!(output.outputs[0].revision, 2);
+    assert_eq!(output.outputs[0].port.node, "source");
+    assert_eq!(
+        output.outputs[0].payload,
+        PortValue::Bytes(b"current".to_vec())
+    );
 }
 
 struct SecretFlowExecutor;

@@ -173,10 +173,17 @@ fn add_idle_closed_stdout_child(dir: &TempDir) {
 fn wait_for_child_pid(path: &Path) -> libc::pid_t {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        if let Ok(pid) = fs::read_to_string(path) {
-            return pid.parse().expect("fixture child pid");
+        if let Ok(contents) = fs::read_to_string(path) {
+            // The fixture creates the file before writing its contents, so
+            // existence alone does not mean the PID is ready to parse.
+            if let Ok(pid) = contents.trim().parse() {
+                return pid;
+            }
         }
-        assert!(Instant::now() < deadline, "idle fixture did not start");
+        assert!(
+            Instant::now() < deadline,
+            "idle fixture did not publish a valid PID"
+        );
         thread::sleep(Duration::from_millis(5));
     }
 }

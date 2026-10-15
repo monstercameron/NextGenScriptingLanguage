@@ -45,6 +45,25 @@ fn parser_builds_typed_graph_and_preserves_explicit_queue_policy() {
 }
 
 #[test]
+fn graph_preflight_rejects_finite_result_capture_on_run_and_listener_sources() {
+    let registry = registry();
+    for (source, expected) in [
+        (
+            "graph result_run\nrun text.source as source and keep result as execution\nend graph\n",
+            "do not accept",
+        ),
+        (
+            "graph result_listener\nlisten to text.source and keep result as execution as source\nend graph\n",
+            "cannot bind",
+        ),
+    ] {
+        let error = graph::parse(source, &registry).unwrap_err().to_string();
+        assert!(error.contains("result"), "{error}");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn schema_mismatch_is_reported_before_any_node_can_start() {
     let mut plan = GraphPlan::new("bad_types");
     let mut source = GraphNode {
@@ -540,4 +559,54 @@ fn unknown_label_cannot_mask_secret_before_remote_preflight() {
         serde_json::to_value(&labels).unwrap(),
         serde_json::json!(["public", "secret", "unknown"])
     );
+}
+
+#[test]
+fn authenticated_remote_event_listener_requires_secret_egress_grant() {
+    use flow::security::DataFlowPolicy;
+
+    let remote = r#"{
+      "name":"remote.feed",
+      "binary":"@remote-applet",
+      "parameters":{},
+      "arguments":[],
+      "contract":{
+        "version":1,
+        "backend":"remote",
+        "remote":{
+          "endpoint":"https://events.example.test",
+          "auth":{"kind":"bearer_env","name":"EVENTS_TOKEN"},
+          "allow_discovery":true
+        },
+        "ports":{"events":{"updates":{"schema":{"type":"text"},"delivery":"events"}}}
+      }
+    }"#;
+    let registry = Registry::from_sources(&[remote]).unwrap();
+    let plan = graph::parse(
+        "graph authenticated_events\nlisten to remote.feed as source\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+
+    registry.set_host_state(
+        DataFlowPolicy::from_json(
+            br#"{"version":1,"remote_sinks":{"https://events.example.test":{"allow":["public","unknown"]}}}"#,
+        )
+        .unwrap(),
+    );
+    let error = plan.validate_with_registry(&registry).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("authentication data flow into remote listener"),
+        "{error:#}"
+    );
+
+    // The denial above is specific to the bearer secret. Explicitly allowing
+    // Secret at this origin permits the listener's authenticated GET.
+    registry.set_host_state(
+        DataFlowPolicy::from_json(
+            br#"{"version":1,"remote_sinks":{"https://events.example.test":{"allow":["secret"]}}}"#,
+        )
+        .unwrap(),
+    );
+    plan.validate_with_registry(&registry).unwrap();
 }

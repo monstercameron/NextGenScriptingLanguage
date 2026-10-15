@@ -162,7 +162,7 @@ class SourcePairHarnessTests(unittest.TestCase):
                 return {"revision": revision, "combined_sha256": "fixture"}
 
             def bad_candidate(command, _cwd, _environment, _timeout):
-                if command[0] == str(binary_paths[1]):
+                if command[0] == str(binary_paths[1].resolve(strict=True)):
                     return harness.Completed(0, b"unexpected output", b"", 20)
                 return harness.Completed(0, b"", b"", 10)
 
@@ -174,6 +174,7 @@ class SourcePairHarnessTests(unittest.TestCase):
 
             self.assertEqual(status, 1)
             self.assertIn("stdout differs from its exact byte oracle", error_output.getvalue())
+            self.assertIn("side=candidate phase=preflight", error_output.getvalue())
             self.assertFalse(report.exists(), "a failed oracle must stop before report creation")
 
     def test_raw_samples_keep_alternation_warmups_and_summaries(self):
@@ -301,6 +302,126 @@ class SourcePairHarnessTests(unittest.TestCase):
         invalid_identity["outputs"][0]["revision"] = 2
         with self.assertRaisesRegex(AssertionError, "identity must match"):
             harness._graph_oracle(harness.json.dumps(invalid_identity).encode())
+
+    def test_relative_manifest_paths_resolve_before_a_different_workload_cwd(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            original_cwd = Path.cwd()
+            root = Path(temporary)
+            runtime_cwd = root / "isolated-runtime-cwd"
+            runtime_cwd.mkdir()
+            for name in ("baseline-manifests", "candidate-manifests", "shared-manifests"):
+                directory = root / name
+                directory.mkdir()
+                (directory / "fixture.json").write_text("{}\n")
+            program = root / "fixture.program"
+            program.write_text('run "true"\n')
+
+            normal_workload = harness.Workload(
+                "relative_catalog_program",
+                program,
+                [],
+                b"ok\n",
+                b"",
+                lambda: {"effects": "unchanged"},
+            )
+            direct_workload = harness.Workload(
+                "relative_catalog_direct_cli",
+                None,
+                [],
+                b"ok\n",
+                b"",
+                lambda: {"effects": "unchanged"},
+                direct_argv=["applets", "match", "--json", "{}"],
+                manifest_directory=Path("shared-manifests"),
+            )
+            commands_by_workload = {}
+            os.chdir(root)
+            try:
+                commands_by_workload[normal_workload.name] = {
+                    "baseline": harness._cli_command(
+                        Path("/fixture/baseline"), Path("baseline-manifests"), normal_workload, 500
+                    ),
+                    "candidate": harness._cli_command(
+                        Path("/fixture/candidate"), Path("candidate-manifests"), normal_workload, 500
+                    ),
+                }
+                commands_by_workload[direct_workload.name] = {
+                    "baseline": harness._cli_command(
+                        Path("/fixture/baseline"), Path("baseline-manifests"), direct_workload, 500
+                    ),
+                    "candidate": harness._cli_command(
+                        Path("/fixture/candidate"), Path("candidate-manifests"), direct_workload, 500
+                    ),
+                }
+
+                seen_paths = []
+
+                def inspecting_runner(command, cwd, _environment, _timeout):
+                    self.assertEqual(cwd, runtime_cwd)
+                    manifest_path = Path(command[command.index("--manifest-dir") + 1])
+                    self.assertTrue(manifest_path.is_absolute())
+                    self.assertTrue(manifest_path.is_dir())
+                    seen_paths.append(manifest_path)
+                    return harness.Completed(0, b"ok\n", b"", 100)
+
+                for workload in (normal_workload, direct_workload):
+                    harness.run_paired_workload(
+                        workload,
+                        commands_by_workload[workload.name],
+                        runtime_cwd,
+                        {"LC_ALL": "C"},
+                        samples=1,
+                        warmups=0,
+                        timeout_seconds=1,
+                        process_runner=inspecting_runner,
+                    )
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(
+                seen_paths[:4],
+                [
+                    (root / "baseline-manifests").resolve(),
+                    (root / "candidate-manifests").resolve(),
+                ] * 2,
+            )
+            self.assertEqual(
+                seen_paths[4:],
+                [(root / "shared-manifests").resolve()] * 4,
+            )
+
+    def test_failure_diagnostic_has_side_phase_and_bounded_sanitized_stderr(self):
+        workload = harness.Workload(
+            "fixture_failure",
+            None,
+            [],
+            b"ok\n",
+            b"",
+            lambda: {"effects": "unchanged"},
+            direct_argv=["applets", "match", "--json", "{}"],
+        )
+
+        def failing_runner(_command, _cwd, _environment, _timeout):
+            return harness.Completed(1, b"", (b"failure\x1b[31m\n" * 1000), 10)
+
+        with self.assertRaises(harness.BenchmarkError) as raised:
+            harness.run_paired_workload(
+                workload,
+                {"baseline": ["baseline"], "candidate": ["candidate"]},
+                Path("."),
+                {"LC_ALL": "C"},
+                samples=1,
+                warmups=0,
+                timeout_seconds=1,
+                process_runner=failing_runner,
+            )
+        diagnostic = str(raised.exception)
+        self.assertIn("fixture_failure side=baseline phase=preflight", diagnostic)
+        self.assertIn("exited with status 1", diagnostic)
+        self.assertIn("stderr excerpt=", diagnostic)
+        self.assertIn("[truncated]", diagnostic)
+        self.assertNotIn("\x1b", diagnostic)
+        self.assertLess(len(diagnostic), 4 * harness.MAX_STDERR_DIAGNOSTIC_BYTES + 256)
 
     def test_generated_match_workload_uses_exact_shared_metadata_catalog_and_top_k_oracle(self):
         with tempfile.TemporaryDirectory() as temporary:

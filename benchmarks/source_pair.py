@@ -32,6 +32,7 @@ MAX_ARGV_COUNT = 4096
 MAX_TRANSFORM_LINES = 65536
 MATCH_CATALOG_SIZE = 1000
 MATCH_RESULT_LIMIT = 100
+MAX_STDERR_DIAGNOSTIC_BYTES = 512
 MAX_OUTER_TIMEOUT_SECONDS = 120
 SOURCE_ROOTS = ("src",)
 SOURCE_FILES = (
@@ -374,18 +375,27 @@ def _signature(observation: Mapping[str, Any]) -> Tuple[Any, ...]:
     )
 
 
+def _stderr_excerpt(stderr: bytes) -> str:
+    if not stderr:
+        return ""
+    sample = stderr[:MAX_STDERR_DIAGNOSTIC_BYTES].decode("utf-8", errors="replace")
+    printable = "".join(character if character.isprintable() else " " for character in sample)
+    suffix = " [truncated]" if len(stderr) > MAX_STDERR_DIAGNOSTIC_BYTES else ""
+    return "; stderr excerpt=" + repr(printable) + suffix
+
+
 def _check_output(workload: Workload, result: Completed) -> Any:
     if result.status != 0:
-        raise BenchmarkError(workload.name + " exited with status " + str(result.status))
+        raise BenchmarkError("exited with status " + str(result.status) + _stderr_excerpt(result.stderr))
     if result.stderr != workload.expected_stderr:
-        raise BenchmarkError(workload.name + " stderr differs from its exact oracle")
+        raise BenchmarkError("stderr differs from its exact oracle" + _stderr_excerpt(result.stderr))
     if workload.expected_stdout is not None and result.stdout != workload.expected_stdout:
-        raise BenchmarkError(workload.name + " stdout differs from its exact byte oracle")
+        raise BenchmarkError("stdout differs from its exact byte oracle" + _stderr_excerpt(result.stderr))
     if workload.semantic_check is not None:
         try:
             return workload.semantic_check(result.stdout)
         except Exception as error:
-            raise BenchmarkError(workload.name + " output failed its typed oracle: " + str(error)) from error
+            raise BenchmarkError("output failed its typed oracle: " + str(error)) from error
     return None
 
 
@@ -395,14 +405,22 @@ def _capture_observation(
     cwd: Path,
     environment: Mapping[str, str],
     timeout_seconds: float,
+    context: str,
     expected_effects: Optional[Mapping[str, Any]] = None,
     process_runner: Callable[[Sequence[str], Path, Mapping[str, str], float], Completed] = run_process,
 ) -> Dict[str, Any]:
-    result = process_runner(command, cwd, environment, timeout_seconds)
-    normalized_output = _check_output(workload, result)
-    effects = _observed_effects(workload)
-    if expected_effects is not None and effects != dict(expected_effects):
-        raise BenchmarkError(workload.name + " observed effects changed during an invocation")
+    try:
+        result = process_runner(command, cwd, environment, timeout_seconds)
+        normalized_output = _check_output(workload, result)
+        effects = _observed_effects(workload)
+        if expected_effects is not None and effects != dict(expected_effects):
+            raise BenchmarkError("observed effects changed during an invocation")
+    except Exception as error:
+        if isinstance(error, BenchmarkError):
+            detail = str(error)
+        else:
+            detail = "subprocess invocation failed: " + str(error)
+        raise BenchmarkError(context + ": " + detail) from error
     observation = {
         "status": result.status,
         "stdout_bytes": len(result.stdout),
@@ -443,7 +461,8 @@ def run_paired_workload(
             cwd,
             environment,
             timeout_seconds,
-            initial_effects,
+            context=workload.name + " side=" + side + " phase=preflight",
+            expected_effects=initial_effects,
             process_runner=process_runner,
         )
         preflight[side].pop("elapsed_ns", None)
@@ -460,11 +479,15 @@ def run_paired_workload(
                 cwd,
                 environment,
                 timeout_seconds,
-                expected_effects,
-                process_runner,
+                context=workload.name + " side=" + side + " phase=warmup round=" + str(round_index + 1),
+                expected_effects=expected_effects,
+                process_runner=process_runner,
             )
             if _signature(observation) != _signature(preflight[side]):
-                raise BenchmarkError(workload.name + " warmup differs from its preflight oracle")
+                raise BenchmarkError(
+                    workload.name + " side=" + side + " phase=warmup round=" + str(round_index + 1)
+                    + " differs from its preflight oracle"
+                )
             warmup_rows.append(
                 {"round": round_index + 1, "order_position": position + 1, "side": side, **observation}
             )
@@ -478,11 +501,15 @@ def run_paired_workload(
                 cwd,
                 environment,
                 timeout_seconds,
-                expected_effects,
-                process_runner,
+                context=workload.name + " side=" + side + " phase=sample pair=" + str(round_index + 1),
+                expected_effects=expected_effects,
+                process_runner=process_runner,
             )
             if _signature(observation) != _signature(preflight[side]):
-                raise BenchmarkError(workload.name + " measured sample differs from its preflight oracle")
+                raise BenchmarkError(
+                    workload.name + " side=" + side + " phase=sample pair=" + str(round_index + 1)
+                    + " differs from its preflight oracle"
+                )
             sample_rows.append(
                 {"pair": round_index + 1, "order_position": position + 1, "side": side, **observation}
             )
@@ -934,6 +961,7 @@ def _cli_command(
     command_timeout_ms: int,
 ) -> List[str]:
     selected_manifest_directory = workload.manifest_directory or manifest_directory
+    selected_manifest_directory = selected_manifest_directory.expanduser().resolve(strict=True)
     if workload.direct_argv is not None:
         if workload.program is not None:
             raise BenchmarkError("a direct CLI workload cannot also declare a .program input")
@@ -1046,12 +1074,16 @@ def build_report(
         "candidate": verify_executable(args.candidate_binary, "candidate interpreter"),
     }
     helpers = {side: helper_path(path) for side, path in binaries.items()}
-    for directory, label in (
-        (args.baseline_manifest_dir, "baseline manifest catalog"),
-        (args.candidate_manifest_dir, "candidate manifest catalog"),
+    for attribute, label in (
+        ("baseline_manifest_dir", "baseline manifest catalog"),
+        ("candidate_manifest_dir", "candidate manifest catalog"),
     ):
-        if not directory.expanduser().is_dir():
+        directory = getattr(args, attribute).expanduser().resolve(strict=True)
+        if not directory.is_dir():
             raise ValueError(label + " does not exist or is not a directory: " + str(directory))
+        # CLI commands run with a temporary cwd, so relative user paths must
+        # be made absolute here before their meaning can change.
+        setattr(args, attribute, directory)
 
     tools = _tool_paths()
     runner = process_runner or run_process

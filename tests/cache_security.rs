@@ -2,11 +2,16 @@
 //! Real CLI cache boundaries with private files and bounded owned processes.
 use std::{
     fs,
+    io::{self, Read},
     os::unix::fs::{symlink, PermissionsExt},
+    os::unix::io::AsRawFd,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     time::{Duration, Instant},
 };
+
+const MAX_CAPTURE_BYTES: usize = 64 * 1024;
+const MAX_DRAIN_BYTES_PER_POLL: usize = 64 * 1024;
 
 struct Fixture {
     directory: tempfile::TempDir,
@@ -63,14 +68,46 @@ impl Fixture {
             command.arg("--cache-dir").arg(path);
         }
         let mut child = command.spawn().unwrap();
+        // Drain both pipes while the child runs. Trace output can exceed the
+        // platform pipe capacity; polling for exit before reading either pipe
+        // would then block the CLI in its next trace write. Nonblocking reads
+        // keep the watchdog bounded even if an unexpected descendant inherits
+        // either pipe after the owned CLI child is killed.
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        set_nonblocking(&stdout).unwrap();
+        set_nonblocking(&stderr).unwrap();
+        let mut output = Vec::new();
+        let mut errors = Vec::new();
+        let mut output_truncated = false;
+        let mut errors_truncated = false;
         let deadline = Instant::now() + Duration::from_secs(4);
         loop {
-            if child.try_wait().unwrap().is_some() {
-                return child.wait_with_output().unwrap();
+            drain_pipe(&mut stdout, &mut output, &mut output_truncated).unwrap();
+            drain_pipe(&mut stderr, &mut errors, &mut errors_truncated).unwrap();
+            if let Some(status) = child.try_wait().unwrap() {
+                drain_pipe(&mut stdout, &mut output, &mut output_truncated).unwrap();
+                drain_pipe(&mut stderr, &mut errors, &mut errors_truncated).unwrap();
+                assert!(
+                    !output_truncated && !errors_truncated,
+                    "owned cache fixture exceeded its bounded output capture"
+                );
+                return Output {
+                    status,
+                    stdout: output,
+                    stderr: errors,
+                };
             }
             if Instant::now() >= deadline {
                 child.kill().unwrap();
-                let output = child.wait_with_output().unwrap();
+                let status = child.wait().unwrap();
+                drain_pipe(&mut stdout, &mut output, &mut output_truncated).unwrap();
+                drain_pipe(&mut stderr, &mut errors, &mut errors_truncated).unwrap();
+                let output = Output {
+                    status,
+                    stdout: output,
+                    stderr: errors,
+                };
                 panic!(
                     "owned cache fixture blocked: {}",
                     String::from_utf8_lossy(&output.stderr)
@@ -90,6 +127,40 @@ impl Fixture {
             "invalid cache launched a native stage: {error}"
         );
         assert!(!self.root().join("later-output").exists());
+    }
+}
+
+fn set_nonblocking(file: &impl AsRawFd) -> io::Result<()> {
+    let descriptor = file.as_raw_fd();
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn drain_pipe(reader: &mut impl Read, bytes: &mut Vec<u8>, truncated: &mut bool) -> io::Result<()> {
+    let mut chunk = [0; 4096];
+    let mut drained = 0;
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(()),
+            Ok(count) => {
+                let retained = count.min(MAX_CAPTURE_BYTES.saturating_sub(bytes.len()));
+                bytes.extend_from_slice(&chunk[..retained]);
+                *truncated |= retained != count;
+                drained += count;
+                if drained >= MAX_DRAIN_BYTES_PER_POLL {
+                    return Ok(());
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
     }
 }
 

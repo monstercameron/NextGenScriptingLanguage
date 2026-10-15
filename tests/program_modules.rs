@@ -103,6 +103,7 @@ fn package(source: &str, name: &str, version: &str) -> ProgramModulePackageManif
                 lifecycle: ModuleLifecycle::OneShot,
                 capabilities: Vec::new(),
                 effects: Vec::new(),
+                ports: None,
             },
         )]),
         dependencies: BTreeMap::new(),
@@ -131,7 +132,10 @@ fn versioned_module_exports_typed_record_and_resolves_source_from_manifest_origi
     let export = loaded.export("describe").unwrap();
     assert_eq!(export.package_name, "example.report");
     assert_eq!(export.package_version, "1.2.3");
-    assert_eq!(export.definition.inputs[0].kind, flow::ast::InputType::Json);
+    assert_eq!(
+        export.finite_definition().unwrap().inputs[0].kind,
+        flow::ast::InputType::Json
+    );
     assert_eq!(export.export.output.kind, OutputType::Record);
     assert_eq!(export.export.output.required, ["name", "count"]);
 
@@ -151,7 +155,10 @@ fn versioned_module_exports_typed_record_and_resolves_source_from_manifest_origi
     )
     .unwrap();
     assert_eq!(direct.source_sha256, digest(source.as_bytes()));
-    assert_eq!(direct.definition.inputs[0].name, "payload");
+    assert_eq!(
+        direct.finite_definition().unwrap().inputs[0].name,
+        "payload"
+    );
 }
 
 #[test]

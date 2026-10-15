@@ -1,6 +1,6 @@
 #![cfg(unix)]
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
@@ -21,9 +21,13 @@ fn invoke(directory: &Path, manifests: &Path, args: &[&str]) -> Output {
         .args(args)
         .arg("--manifest-dir")
         .arg(manifests);
+    // This helper waits before collecting output. Temporary files keep trace
+    // volume from filling a child pipe while preserving the bounded watchdog.
+    let mut stdout = tempfile::tempfile().unwrap();
+    let mut stderr = tempfile::tempfile().unwrap();
     let mut child = process
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(stdout.try_clone().unwrap()))
+        .stderr(Stdio::from(stderr.try_clone().unwrap()))
         .spawn()
         .unwrap();
     let status = wait_bounded(&mut child, Duration::from_secs(5)).unwrap_or_else(|| {
@@ -36,7 +40,17 @@ fn invoke(directory: &Path, manifests: &Path, args: &[&str]) -> Output {
         }
         panic!("workflow process exceeded five-second test deadline")
     });
-    collect_output(&mut child, status)
+    stdout.seek(SeekFrom::Start(0)).unwrap();
+    stderr.seek(SeekFrom::Start(0)).unwrap();
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    stdout.read_to_end(&mut stdout_bytes).unwrap();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    Output {
+        status,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
+    }
 }
 
 fn wait_bounded(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {

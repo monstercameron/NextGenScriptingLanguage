@@ -200,7 +200,8 @@ apply. These features are source-only until a new release is published; the
 retained 0.8.0 binary and published 0.9.0-rc.4 packages remain unchanged.
 
 Current source also includes [versioned external program modules](docs/program-modules.md),
-finite task and graph APIs, and native desktop protocol groundwork. These are
+scheduled module graph nodes, finite task and graph APIs, and native desktop
+protocol groundwork. These are
 source-candidate interfaces and do not complete the remaining jobs, richer
 redirection, or Omarchy desktop acceptance gates.
 

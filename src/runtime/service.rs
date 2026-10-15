@@ -16,6 +16,16 @@ pub struct ServiceLimits {
     pub max_record_bytes: usize,
 }
 
+/// Runtime-owned inputs that bind an imported scheduled program to its graph
+/// execution without creating a second scheduler or registry scope.
+pub(crate) struct ProgramServiceContext {
+    pub(crate) cancelled: Arc<AtomicBool>,
+    pub(crate) deadline: Option<Instant>,
+    pub(crate) module_session: Arc<crate::modules::ProgramModuleSession>,
+    pub(crate) additional_sensitivity: crate::security::SensitivitySet,
+    pub(crate) process_observer: ProcessObserver,
+}
+
 /// What to do when one or more scheduled ticks pass while a handler is busy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissedTickPolicy {
@@ -116,6 +126,8 @@ impl CalendarMinuteDedup {
 pub struct ServiceResult {
     pub runs: usize,
     pub cache_hits: usize,
+    /// Successful child/helper process spawns during completed handler runs.
+    /// Descendants spawned internally by those processes are not included.
     pub launched_processes: usize,
 }
 
@@ -148,6 +160,16 @@ pub(super) fn split_program(program: &Program) -> (Program, Program) {
 
 fn stopped(signals: &Signals) -> Result<()> {
     if signals.cancelled.load(Ordering::Relaxed) {
+        if signals.graph_service_cancellation {
+            return Err(execution_result::ExecutionFailure::new(
+                execution_result::ExecutionResult::runtime_failure(
+                    execution_result::ExecutionKind::Cancelled,
+                    "graph-owned program service cancelled",
+                    execution_result::EffectCertainty::Uncertain,
+                ),
+            )
+            .into());
+        }
         bail!("program cancelled by signal");
     }
     check_deadline(signals.deadline)?;
@@ -487,7 +509,7 @@ fn run_service_internal(
     limits: &ServiceLimits,
     checkpoint: Option<&CheckpointOptions>,
     schedule_options: ScheduleOptions,
-    mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
+    emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<ServiceResult> {
     schedule_options.validate()?;
     let service_started = Instant::now();
@@ -500,6 +522,93 @@ fn run_service_internal(
         })
         .transpose()?;
     let signals = Signals::register_with_deadline(workflow_deadline)?;
+    run_service_with_signals(
+        program,
+        registry,
+        options,
+        limits,
+        checkpoint,
+        schedule_options,
+        signals,
+        None,
+        emit,
+    )
+}
+
+/// Run one imported scheduled `.program` service inside its owning graph.
+/// The graph supplies cancellation, deadline, preloaded module sources and
+/// input provenance; handler execution and scheduling still use the ordinary
+/// service runtime and native process supervisor.
+pub(crate) fn run_program_module_service(
+    loaded: &crate::modules::LoadedProgramSource,
+    registry: &Registry,
+    options: &RunOptions,
+    context: ProgramServiceContext,
+    emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
+) -> Result<ServiceResult> {
+    if !loaded.is_program_service() {
+        bail!(
+            "program module {:?} is a finite export, not a scheduled service",
+            loaded.reference.entry
+        );
+    }
+    if !matches!(
+        loaded.program.trigger.as_ref(),
+        Some(Trigger::Every { .. } | Trigger::Cron { .. })
+    ) {
+        bail!("scheduled program service requires an `every` or `cron` trigger");
+    }
+    let deadline = context.deadline;
+    let mut signals = Signals::with_cancellation_and_deadline(context.cancelled, false, deadline)?;
+    signals.graph_service_cancellation = true;
+    let registry_pool = registry.host_state::<worker_backend::WorkerPool>();
+    signals.worker_pool = Some(Arc::new(registry_pool.isolated_like()));
+    let service_cancelled = Arc::clone(&signals.cancelled);
+    signals.set_program_module_session(context.module_session)?;
+    signals.set_process_observer(context.process_observer)?;
+    let limits = ServiceLimits {
+        max_runs: None,
+        max_record_bytes: options.max_output_bytes.max(1),
+    };
+    let result = run_service_with_signals(
+        &loaded.program,
+        registry,
+        options,
+        &limits,
+        None,
+        ScheduleOptions::default(),
+        signals,
+        Some(context.additional_sensitivity),
+        emit,
+    );
+    let cancelled_shutdown = result.as_ref().is_err_and(|error| {
+        service_cancelled.load(Ordering::Acquire)
+            && !deadline.is_some_and(|deadline| Instant::now() >= deadline)
+            && error
+                .downcast_ref::<execution_result::ExecutionFailure>()
+                .is_some_and(|failure| {
+                    failure.result.kind == execution_result::ExecutionKind::Cancelled
+                })
+    });
+    if cancelled_shutdown {
+        return Ok(ServiceResult::default());
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_service_with_signals(
+    program: &Program,
+    registry: &Registry,
+    options: &RunOptions,
+    limits: &ServiceLimits,
+    checkpoint: Option<&CheckpointOptions>,
+    schedule_options: ScheduleOptions,
+    signals: Signals,
+    additional_sensitivity: Option<crate::security::SensitivitySet>,
+    mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
+) -> Result<ServiceResult> {
+    schedule_options.validate()?;
     stopped(&signals)?;
     validate(program, registry)?;
     stopped(&signals)?;
@@ -514,12 +623,17 @@ fn run_service_internal(
     stopped(&signals)?;
     let module_session =
         super::preload_program_modules(program, registry, &signals, &capability_cwd)?;
-    signals.set_sensitivity_floor(super::workflow_sensitivity_floor(
+    let mut sensitivity_floor = super::workflow_sensitivity_floor(
         program,
         registry,
         &module_session,
         &capability_cwd,
-    )?);
+        signals.worker_pool.as_deref(),
+    )?;
+    if let Some(additional_sensitivity) = additional_sensitivity {
+        sensitivity_floor.extend(&additional_sensitivity);
+    }
+    signals.set_sensitivity_floor(sensitivity_floor);
     stopped(&signals)?;
     if checkpoint.is_some() {
         module_session.validate_checkpoint_identity()?;

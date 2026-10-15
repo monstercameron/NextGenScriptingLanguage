@@ -321,8 +321,19 @@ explicitly captured, and status-bound calls are excluded from caching.
 | `command` | Launches the manifest executable once per invocation with literal argv. It uses the native process supervisor and can join native `pipe to` groups. |
 | `in_process` | Calls a bundled generic operation in the interpreter process. It does not launch an applet process and cannot join a native pipe group. Selected bounded CPU loops cooperatively check workflow cancellation, the per-call `--command-timeout-ms` budget and the parent total deadline. A synchronous OS call or library routine without checkpoints can still return after the budget; an interrupted started applet has uncertain effect certainty. Since the operation runs with the host interpreter, it is not eligible for the OS command sandbox. |
 | `json_lines_worker` | Sends framed requests to a persistent helper process. It cannot join a native pipe group or use the applet cache. The worker is shared by registry clones, serializes requests per worker, and is reaped when its registry pool is dropped. Sensitivity labels are retained with each live worker and included in the preflight floor of workflows that invoke that applet; a concurrent request rechecks the retained labels after acquiring the worker slot. The history is discarded when the worker process is destroyed. The pool defaults to 16 identities and can be configured from 1 through 1024; a full pool rejects a new identity without spawning or evicting a healthy worker. This backend is supported on Unix; unsupported platforms return an error. |
-| `program_module` | Executes a prevalidated local `.program` package export in a private finite scope, with the caller's registry, policy, cancellation and runtime session. Package formats, dependency pins and limits are in the [program module guide](program-modules.md). |
+| `program_module` | Interface 1 executes a prevalidated finite export in a private scope. Interface 2 declares a scheduled `.program` service whose lifetime belongs to a graph node and whose handler emits one typed event. Both use preloaded local source, package dependencies, the caller's runtime and normal supervision; details are in the [program module guide](program-modules.md). |
 | `remote` | Calls a host-managed endpoint using the typed named ports. The remote request is not replayed after an uncertain transport failure; origins, credentials, descriptor pins, event framing and limits are in the [remote applet guide](../examples/remote/README.md). |
+
+`lifecycle: {"kind":"program_service"}` is valid only for
+`backend: "program_module"` with `program.interface_version: 2`. Interface 1
+continues to pair with `oneshot`; other backends keep their existing lifecycle
+contracts. Interface 2 is intentionally explicit so an older runtime rejects
+it instead of treating a persistent source as a finite entry. A service applet
+cannot be called as an ordinary finite result-producing applet: in a graph,
+the runtime starts it as a persistent node and binds its declared typed startup
+inputs once. It exposes one event port and no stdout output ports. Each
+completed handler's full decoded result becomes one event, with bounded graph
+queue and cancellation behavior described in the [graph guide](graph.md).
 
 The worker protocol uses one newline-delimited JSON object per request:
 

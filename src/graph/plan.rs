@@ -160,6 +160,10 @@ pub enum GraphNodeKind {
     Applet {
         call: Invocation,
     },
+    /// A scheduled `.program` module whose lifetime belongs to this graph.
+    ProgramService {
+        call: Invocation,
+    },
     Timer {
         interval_ms: u64,
     },
@@ -211,6 +215,7 @@ impl GraphNode {
     pub fn invocations(&self) -> Vec<&Invocation> {
         match &self.kind {
             GraphNodeKind::Applet { call } => vec![call],
+            GraphNodeKind::ProgramService { call } => vec![call],
             GraphNodeKind::Listener {
                 source: crate::ast::ListenSource::Applet(call),
                 ..
@@ -317,7 +322,9 @@ impl GraphPlan {
         let mut plan = self.clone();
         for node in &mut plan.nodes {
             match &mut node.kind {
-                GraphNodeKind::Applet { call } => resolve_call_inputs(call, &values),
+                GraphNodeKind::Applet { call } | GraphNodeKind::ProgramService { call } => {
+                    resolve_call_inputs(call, &values)
+                }
                 GraphNodeKind::Listener {
                     source: crate::ast::ListenSource::Applet(call),
                     ..
@@ -495,12 +502,46 @@ impl GraphPlan {
                     );
                 }
                 validate_input_references(&call, &input_types, &node.id)?;
-                if matches!(&node.kind, GraphNodeKind::Applet { .. }) {
-                    if !node.events.is_empty() {
+                if matches!(
+                    &node.kind,
+                    GraphNodeKind::Applet { .. } | GraphNodeKind::ProgramService { .. }
+                ) {
+                    let is_program_service =
+                        matches!(&node.kind, GraphNodeKind::ProgramService { .. });
+                    if !is_program_service && !node.events.is_empty() {
                         bail!(
                             "graph applet node {:?} declares event outputs, but generic one-shot applets cannot publish backend events",
                             node.id
                         );
+                    }
+                    if is_program_service {
+                        if !node.outputs.is_empty() {
+                            bail!(
+                                "graph program service node {:?} cannot declare finite output ports",
+                                node.id
+                            );
+                        }
+                        if node.events.len() != 1
+                            || node
+                                .events
+                                .values()
+                                .any(|port| port.delivery != PortDelivery::Events)
+                        {
+                            bail!(
+                                "graph program service node {:?} must declare exactly one events output port",
+                                node.id
+                            );
+                        }
+                        if node
+                            .inputs
+                            .values()
+                            .any(|port| port.delivery != PortDelivery::Single)
+                        {
+                            bail!(
+                                "graph program service node {:?} accepts only static single startup inputs",
+                                node.id
+                            );
+                        }
                     }
                     let stream_inputs = node
                         .inputs
@@ -556,6 +597,91 @@ impl GraphPlan {
                 manifest
                     .validate_with_types(&call, &input_types)
                     .map_err(|error| anyhow!("node {:?}: {error:#}", node.id))?;
+
+                match &node.kind {
+                    GraphNodeKind::ProgramService { .. } => {
+                        let contract = manifest.execution_contract().ok_or_else(|| {
+                            anyhow!(
+                                "graph program service node {:?} requires a versioned applet contract",
+                                node.id
+                            )
+                        })?;
+                        if manifest.execution_backend()
+                            != crate::contracts::AppletBackend::ProgramModule
+                            || contract.lifecycle != crate::contracts::Lifecycle::ProgramService
+                        {
+                            bail!(
+                                "graph node {:?} is declared as a program service, but its applet contract is not a scheduled `.program` service",
+                                node.id
+                            );
+                        }
+                        if !node.outputs.is_empty() {
+                            bail!(
+                                "graph program service node {:?} cannot declare finite output ports",
+                                node.id
+                            );
+                        }
+                        let ports = contract.ports.as_ref().ok_or_else(|| {
+                            anyhow!(
+                                "graph program service node {:?} has no declared typed event port",
+                                node.id
+                            )
+                        })?;
+                        let expected_events = ports
+                            .events
+                            .iter()
+                            .map(|(name, port)| {
+                                (name.clone(), PortSchema::from_applet(port, false))
+                            })
+                            .collect::<BTreeMap<_, _>>();
+                        if expected_events.len() != 1 || node.events != expected_events {
+                            bail!(
+                                "graph program service node {:?} event ports must match its single typed event contract",
+                                node.id
+                            );
+                        }
+                        let manifest_contract = manifest.contract();
+                        let required_inputs = manifest_contract["parameters_schema"]["required"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                            .collect::<BTreeSet<_>>();
+                        let expected_inputs = ports
+                            .inputs
+                            .iter()
+                            .map(|(name, port)| {
+                                (
+                                    name.clone(),
+                                    PortSchema::from_applet(port, required_inputs.contains(name)),
+                                )
+                            })
+                            .collect::<BTreeMap<_, _>>();
+                        if node.inputs != expected_inputs
+                            || node
+                                .inputs
+                                .values()
+                                .any(|port| port.delivery != PortDelivery::Single)
+                        {
+                            bail!(
+                                "graph program service node {:?} inputs must match its static single startup input contract",
+                                node.id
+                            );
+                        }
+                    }
+                    GraphNodeKind::Applet { .. }
+                        if manifest.execution_contract().is_some_and(|contract| {
+                            contract.lifecycle == crate::contracts::Lifecycle::ProgramService
+                        }) =>
+                    {
+                        bail!(
+                            "scheduled `.program` service {:?} must run as a graph program service node",
+                            manifest.name
+                        );
+                    }
+                    _ => {}
+                }
 
                 if let GraphNodeKind::Listener { source, .. } = &node.kind {
                     if !node.inputs.is_empty() || !node.outputs.is_empty() {
@@ -777,7 +903,9 @@ impl GraphPlan {
                     insert_sensitivity(&mut incoming, port.sensitivity);
                 }
             }
-            if let GraphNodeKind::Applet { call } = &node.kind {
+            if let GraphNodeKind::Applet { call } | GraphNodeKind::ProgramService { call } =
+                &node.kind
+            {
                 for name in call.parameters.keys() {
                     if !self
                         .edges
@@ -1111,6 +1239,7 @@ fn dot_escape(text: &str) -> String {
 fn node_kind_name(kind: &GraphNodeKind) -> &'static str {
     match kind {
         GraphNodeKind::Applet { .. } => "applet/oneshot",
+        GraphNodeKind::ProgramService { .. } => "program-service/persistent",
         GraphNodeKind::Timer { .. } => "timer/persistent",
         GraphNodeKind::Listener { .. } => "listener/persistent",
         GraphNodeKind::NativeStream { .. } => "native-stream/persistent",
@@ -1258,7 +1387,9 @@ fn delivery_compatible(
 
 fn node_has_literal_input(node: &GraphNode, name: &str) -> bool {
     match &node.kind {
-        GraphNodeKind::Applet { call } => call.parameters.contains_key(name),
+        GraphNodeKind::Applet { call } | GraphNodeKind::ProgramService { call } => {
+            call.parameters.contains_key(name)
+        }
         _ => false,
     }
 }

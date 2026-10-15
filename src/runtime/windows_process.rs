@@ -1,6 +1,6 @@
 // Included only on Windows; the parser, validation, cache, branches, JSON,
 // same-file calls and checkpoint state machine remain shared with Unix.
-use crate::platform::windows::{Job, available};
+use crate::platform::windows::{available, Job};
 use std::os::windows::io::AsRawHandle;
 
 struct ManagedChild {
@@ -141,8 +141,12 @@ fn execute_group_with_sink(
         cancelled: signals.cancelled.clone(),
         registrations: Vec::new(),
         capture_diagnostics: signals.capture_diagnostics,
+        graph_service_cancellation: signals.graph_service_cancellation,
         program_modules: Arc::clone(&signals.program_modules),
         sensitivity_floor: Arc::clone(&signals.sensitivity_floor),
+        process_launches: Arc::clone(&signals.process_launches),
+        process_observer: Arc::clone(&signals.process_observer),
+        worker_pool: signals.worker_pool.clone(),
         deadline: {
             let command_deadline = options
                 .command_timeout
@@ -283,6 +287,7 @@ fn execute_group_with_sink(
                 )
             })?;
             let pid = child.id();
+            signals.record_process_launch();
             if let Some(data) = bytes {
                 let mut target = child.stdin.take().expect("native stdin");
                 writer = Some(std::thread::spawn(move || -> std::io::Result<()> {

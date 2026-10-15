@@ -60,7 +60,7 @@ fn stream_sensitivity_floor(
     inherited: Option<&crate::security::SensitivitySet>,
 ) -> Result<crate::security::SensitivitySet> {
     let mut floor =
-        super::workflow_sensitivity_floor(&program.pipeline, registry, module_session, cwd)?;
+        super::workflow_sensitivity_floor(&program.pipeline, registry, module_session, cwd, None)?;
     if let Some(inherited) = inherited {
         // The enclosing graph/run context can add provenance, but it cannot
         // erase labels found in the stream's own source or module bodies.

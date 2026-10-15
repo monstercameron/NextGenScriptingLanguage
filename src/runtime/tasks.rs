@@ -206,6 +206,8 @@ pub(super) fn run_group(
     module_session: Arc<ProgramModuleSession>,
     sensitivity_floor: crate::security::SensitivitySet,
     outer_deadline: Option<Instant>,
+    worker_pool: Option<Arc<super::worker_backend::WorkerPool>>,
+    process_observer: Option<super::ProcessObserver>,
 ) -> Result<TaskGroupResult> {
     if cancelled.load(Ordering::Acquire) {
         bail!("task group was cancelled before preflight")
@@ -309,13 +311,15 @@ pub(super) fn run_group(
                 );
             }
             let sender = sender.clone();
+            let worker_pool = worker_pool.clone();
+            let process_observer = process_observer.clone();
             let handle = match scope.spawn(move |token| {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     token.check()?;
                     if parent_cancelled.load(Ordering::Acquire) {
                         bail!("task group was cancelled before task launch")
                     }
-                    super::invoke_applet_with_module_session_and_sensitivity(
+                    super::invoke_applet_with_module_session_and_worker_pool(
                         &registry,
                         &task.applet,
                         task.parameters,
@@ -324,6 +328,8 @@ pub(super) fn run_group(
                         token.cancellation_flag(),
                         module_session,
                         sensitivity_floor,
+                        worker_pool,
+                        process_observer,
                     )
                 }))
                 .unwrap_or_else(|payload| Err(task_panic(payload)));

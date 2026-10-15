@@ -7,6 +7,13 @@ original version labels.
 
 ## Unreleased
 
+- Interface-2 `.program` modules can export an `every` or cron service as a
+  typed graph node, with single startup inputs and one decoded event per
+  handler. Graph cancellation owns its worker pool and cleanup; finite exports
+  retain interface 1. Listener exports remain unsupported. See
+  [program modules](docs/program-modules.md).
+- Process counts retain launches from caught module failures and supervised
+  resolver helpers. Cleanup handlers preserve module and worker context.
 - Graphs accept ordinary typed `accept` declarations, named CLI inputs and
   positional arguments. Static checks and inspection describe unresolved
   inputs; runtime inputs resolve before graph effects. See [typed graphs](docs/graph.md).

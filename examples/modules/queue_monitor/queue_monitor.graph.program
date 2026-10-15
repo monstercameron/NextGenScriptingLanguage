@@ -1,0 +1,3 @@
+graph queue_monitor
+  run examples.queue_monitor.poll with input_path "examples/modules/queue_monitor/data/queue.json" and threshold "30" as monitor
+end graph

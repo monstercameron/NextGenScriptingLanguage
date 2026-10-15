@@ -13,7 +13,7 @@ use crate::tasks::{CancellationToken, TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -78,11 +78,14 @@ pub struct GraphMetrics {
 }
 
 impl GraphMetrics {
+    /// Successful child/helper process spawns observed in this graph session,
+    /// including supervised resolver helpers. Reused workers and descendants
+    /// started internally by an applet process are not counted.
     pub fn launched_processes(&self) -> usize {
         self.launched_processes.load(Ordering::Relaxed)
     }
 
-    fn add_processes(&self, count: usize) {
+    pub(crate) fn add_processes(&self, count: usize) {
         self.launched_processes.fetch_add(count, Ordering::Relaxed);
     }
 }
@@ -1295,8 +1298,9 @@ fn event_size(event: &EventEnvelope) -> Result<usize> {
 }
 
 fn initial_input_sensitivity(node: &GraphNode) -> Option<SensitivitySet> {
-    let GraphNodeKind::Applet { call } = &node.kind else {
-        return None;
+    let call = match &node.kind {
+        GraphNodeKind::Applet { call } | GraphNodeKind::ProgramService { call } => call,
+        _ => return None,
     };
     let labels = call
         .parameters
@@ -1304,6 +1308,17 @@ fn initial_input_sensitivity(node: &GraphNode) -> Option<SensitivitySet> {
         .filter_map(|name| node.inputs.get(name).map(|port| port.sensitivity))
         .collect::<Vec<_>>();
     (!labels.is_empty()).then(|| SensitivitySet::from_labels(labels))
+}
+
+fn service_cancellation_failure(message: &str) -> anyhow::Error {
+    crate::runtime::execution_result::ExecutionFailure::new(
+        crate::runtime::execution_result::ExecutionResult::runtime_failure(
+            crate::runtime::execution_result::ExecutionKind::Cancelled,
+            message,
+            crate::contracts::EffectCertainty::Uncertain,
+        ),
+    )
+    .into()
 }
 
 fn payload_size(payload: &PortValue) -> Result<usize> {
@@ -1335,6 +1350,7 @@ pub struct RuntimeGraphExecutor {
     options: RunOptions,
     module_session: Option<Arc<crate::modules::ProgramModuleSession>>,
     stdin_source: Option<Arc<dyn GraphStdinSource>>,
+    resolver_helper: Option<PathBuf>,
 }
 
 impl RuntimeGraphExecutor {
@@ -1344,6 +1360,7 @@ impl RuntimeGraphExecutor {
             options,
             module_session: None,
             stdin_source: None,
+            resolver_helper: None,
         }
     }
 
@@ -1357,11 +1374,20 @@ impl RuntimeGraphExecutor {
             options,
             module_session: Some(module_session),
             stdin_source: None,
+            resolver_helper: None,
         }
     }
 
     pub fn with_stdin_source(mut self, source: Arc<dyn GraphStdinSource>) -> Self {
         self.stdin_source = Some(source);
+        self
+    }
+
+    /// Select the executable used for cancellation-supervised DNS helper
+    /// processes. Embedders normally rely on the current executable; this is
+    /// useful when a graph executor is hosted by a test runner or wrapper.
+    pub fn with_resolver_helper(mut self, executable: impl Into<PathBuf>) -> Self {
+        self.resolver_helper = Some(executable.into());
         self
     }
 
@@ -1399,19 +1425,21 @@ impl RuntimeGraphExecutor {
                 self.invocation_sensitivity_sets(node, call, io)?;
             self.authorize_remote_input(call, &input_sensitivities)?;
             let options = self.invocation_options(context)?;
-            let result = invoke_for_graph(
-                &self.registry,
-                &call.operation,
-                parameters,
-                stdin,
-                GraphInvocationContext {
-                    options: &options,
-                    cancelled: io.cancellation_flag(),
-                    module_session: self.module_session.as_ref(),
-                    sensitivities: invocation_sensitivities,
-                },
+            let result = account_invocation_processes(
+                invoke_for_graph(
+                    &self.registry,
+                    &call.operation,
+                    parameters,
+                    stdin,
+                    GraphInvocationContext {
+                        options: &options,
+                        cancelled: io.cancellation_flag(),
+                        module_session: self.module_session.as_ref(),
+                        sensitivities: invocation_sensitivities,
+                    },
+                ),
+                &context.metrics,
             )?;
-            context.metrics.add_processes(result.launched_processes);
             emit_applet_result(node, &result, io)?;
             return Ok(());
         }
@@ -1434,19 +1462,21 @@ impl RuntimeGraphExecutor {
                 self.invocation_sensitivity_sets(node, call, io)?;
             self.authorize_remote_input(call, &input_sensitivities)?;
             let options = self.invocation_options(context)?;
-            let result = invoke_for_graph(
-                &self.registry,
-                &call.operation,
-                parameters.clone(),
-                std::mem::take(&mut stdin),
-                GraphInvocationContext {
-                    options: &options,
-                    cancelled: io.cancellation_flag(),
-                    module_session: self.module_session.as_ref(),
-                    sensitivities: invocation_sensitivities,
-                },
+            let result = account_invocation_processes(
+                invoke_for_graph(
+                    &self.registry,
+                    &call.operation,
+                    parameters.clone(),
+                    std::mem::take(&mut stdin),
+                    GraphInvocationContext {
+                        options: &options,
+                        cancelled: io.cancellation_flag(),
+                        module_session: self.module_session.as_ref(),
+                        sensitivities: invocation_sensitivities,
+                    },
+                ),
+                &context.metrics,
             )?;
-            context.metrics.add_processes(result.launched_processes);
             emit_applet_result_counted(node, &result, io, &mut emitted)?;
         }
         if received == 0 && streams.iter().any(|name| node.inputs[name].required) {
@@ -1455,6 +1485,167 @@ impl RuntimeGraphExecutor {
                 node.id
             );
         }
+        Ok(())
+    }
+
+    fn run_program_service(
+        &self,
+        node: &GraphNode,
+        call: &Invocation,
+        io: &mut NodeIo,
+        context: &GraphContext,
+    ) -> Result<()> {
+        let manifest = self.registry.resolve_call(call)?;
+        let session = self.module_session.as_ref().ok_or_else(|| {
+            anyhow!(
+                "graph program service node {:?} requires a preloaded program module session",
+                node.id
+            )
+        })?;
+        let loaded = session
+            .get_for_manifest(&self.registry, manifest)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "program module source for graph service {:?} was not preloaded before graph actors started",
+                    manifest.name
+                )
+            })?;
+        if !loaded.is_program_service() {
+            bail!(
+                "graph node {:?} resolves to a finite program module, not a scheduled service",
+                node.id
+            );
+        }
+        let service_registry = session
+            .registry_for(&self.registry, manifest)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "program module registry scope for graph service {:?} was not preloaded",
+                    manifest.name
+                )
+            })?;
+        if !node.outputs.is_empty() || node.events.len() != 1 {
+            bail!(
+                "graph program service node {:?} must expose exactly one event and no finite outputs",
+                node.id
+            );
+        }
+        let event_port = node
+            .events
+            .keys()
+            .next()
+            .expect("the service event count was checked above")
+            .clone();
+        let mut parameters = call.parameters.clone();
+        for (name, schema) in &node.inputs {
+            if !io.has_input(name) {
+                if schema.required && !parameters.contains_key(name) {
+                    bail!("required graph input {}.{} was not supplied", node.id, name);
+                }
+                continue;
+            }
+            match io.recv(name)? {
+                Some(event) => match event.payload {
+                    PortValue::Value(value) => {
+                        parameters.insert(name.clone(), value);
+                    }
+                    PortValue::Bytes(_) => {
+                        bail!(
+                            "scheduled program service startup input {}.{} must be a typed value",
+                            node.id,
+                            name
+                        )
+                    }
+                },
+                None if schema.required => {
+                    bail!(
+                        "required graph input {}.{} closed without a value",
+                        node.id,
+                        name
+                    )
+                }
+                None => {}
+            }
+        }
+
+        let (input_sensitivities, invocation_sensitivities) =
+            self.invocation_sensitivity_sets(node, call, io)?;
+        self.authorize_remote_input(call, &input_sensitivities)?;
+        let mut options = self.invocation_options(context)?;
+        options.inputs = parameters;
+        let output_status = manifest.success_status().unwrap_or(0);
+        let outcome = manifest.outcome_for(output_status);
+        let metrics = Arc::clone(&context.metrics);
+        let process_observer: runtime::ProcessObserver =
+            Arc::new(move |count| metrics.add_processes(count));
+        let cancelled = io.cancellation_flag();
+        let deadline = context.deadline;
+        crate::runtime::run_program_module_service(
+            &loaded,
+            &service_registry,
+            &options,
+            crate::runtime::ProgramServiceContext {
+                cancelled: Arc::clone(&cancelled),
+                deadline,
+                module_session: Arc::clone(session),
+                additional_sensitivity: invocation_sensitivities,
+                process_observer,
+            },
+            |bytes, run_cancelled, run_deadline| {
+                if run_cancelled.load(Ordering::Acquire) {
+                    return Err(service_cancellation_failure(
+                        "graph-owned program service cancelled before event emission",
+                    ));
+                }
+                if run_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    bail!("graph execution deadline exceeded before service event emission");
+                }
+                let decoded = manifest
+                    .decode_output(bytes, output_status)
+                    .map_err(|error| {
+                        crate::runtime::execution_result::contract_decode_failure(
+                            &error,
+                            outcome.clone(),
+                            Some(bytes.to_vec()),
+                            None,
+                            Vec::new(),
+                        )
+                    })?;
+                let payload = match decoded {
+                    crate::contracts::AppletOutput::Value(value) => PortValue::Value(value),
+                    crate::contracts::AppletOutput::Bytes(_) => {
+                        let error = anyhow!(
+                            "scheduled program service {:?} decoded output as raw bytes; its event port requires a typed value",
+                            manifest.name
+                        );
+                        return Err(crate::runtime::execution_result::contract_decode_failure(
+                            &error,
+                            outcome.clone(),
+                            Some(bytes.to_vec()),
+                            None,
+                            Vec::new(),
+                        )
+                        .into());
+                    }
+                };
+                if let Err(error) = io.emit(&event_port, payload) {
+                    if run_cancelled.load(Ordering::Acquire)
+                        && !run_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+                    {
+                        return Err(service_cancellation_failure(
+                            "graph-owned program service cancelled while emitting an event",
+                        ));
+                    }
+                    return Err(error).context(format!(
+                        "emitting scheduled event {}.{}",
+                        node.id, event_port
+                    ));
+                }
+                Ok(())
+            },
+        )?;
         Ok(())
     }
 
@@ -1792,9 +1983,17 @@ impl RuntimeGraphExecutor {
             config.timeout_ms = config.timeout_ms.min(remaining_ms);
         }
         let cancelled = io.cancellation_flag();
+        let metrics = Arc::clone(&context.metrics);
+        let process_observer: runtime::ProcessObserver =
+            Arc::new(move |count| metrics.add_processes(count));
+        let resolver_helper = match &self.resolver_helper {
+            Some(path) => path.clone(),
+            None => std::env::current_exe()?,
+        };
         let client = RemoteClient::new_with_credential_base(config, credential_base)?
             .with_secret_redactor(crate::security::secret_redactor(&self.registry))
-            .with_resolver_helper(std::env::current_exe()?);
+            .with_resolver_helper(resolver_helper)
+            .with_process_observer(process_observer);
         if let Some(path) = client.descriptor_cache_path() {
             crate::capabilities::authorize_applet_host_path(
                 &self.registry,
@@ -2032,6 +2231,24 @@ struct GraphInvocationContext<'a> {
     sensitivities: SensitivitySet,
 }
 
+fn account_invocation_processes(
+    result: Result<AppletInvocationResult>,
+    metrics: &GraphMetrics,
+) -> Result<AppletInvocationResult> {
+    match result {
+        Ok(result) => {
+            metrics.add_processes(result.launched_processes);
+            Ok(result)
+        }
+        Err(error) => {
+            if let Some(failure) = error.downcast_ref::<runtime::AppletInvocationError>() {
+                metrics.add_processes(failure.launched_processes());
+            }
+            Err(error)
+        }
+    }
+}
+
 fn invoke_for_graph(
     registry: &Registry,
     name: &str,
@@ -2071,6 +2288,9 @@ impl GraphExecutor for RuntimeGraphExecutor {
     fn execute(&self, node: &GraphNode, io: &mut NodeIo, context: &GraphContext) -> Result<()> {
         match &node.kind {
             GraphNodeKind::Applet { call } => self.run_applet(node, call, io, context),
+            GraphNodeKind::ProgramService { call } => {
+                self.run_program_service(node, call, io, context)
+            }
             GraphNodeKind::Timer { interval_ms } => {
                 let delay = Duration::from_millis(*interval_ms);
                 let mut due = Instant::now()

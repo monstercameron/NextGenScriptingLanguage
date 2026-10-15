@@ -308,7 +308,6 @@ struct PoolState {
 /// the same pool and dropping the last registry reference drops the pool,
 /// which kills and reaps all retained workers.
 pub struct WorkerPool {
-    #[cfg(unix)]
     capacity: usize,
     #[cfg(unix)]
     state: Mutex<PoolState>,
@@ -336,7 +335,6 @@ impl WorkerPool {
             bail!("worker pool capacity must be between 1 and {MAX_POOL_CAPACITY}");
         }
         Ok(Self {
-            #[cfg(unix)]
             capacity,
             #[cfg(unix)]
             state: Mutex::new(PoolState::default()),
@@ -344,6 +342,13 @@ impl WorkerPool {
             #[cfg(unix)]
             changed: Condvar::new(),
         })
+    }
+
+    /// Create an empty execution-scoped pool with this pool's validated
+    /// capacity. Service sessions use this to honor registry configuration
+    /// without retaining workers or sensitivity history beyond the service.
+    pub(crate) fn isolated_like(&self) -> Self {
+        Self::with_capacity(self.capacity).expect("existing worker pool capacity is valid")
     }
 
     pub(crate) const fn supported() -> bool {

@@ -316,6 +316,49 @@ fn pool_rejects_new_identities_at_capacity_without_evicting_state() {
 }
 
 #[test]
+fn isolated_pool_forks_capacity_but_not_retained_workers() {
+    let _guard = lock_worker_tests();
+    let directory = TempDir::new().expect("temporary worker directory");
+    let pool = WorkerPool::with_capacity(1).expect("valid worker capacity");
+    let worker_launch = launch(&directory, "sequence");
+    let first = pool
+        .invoke(worker_launch.clone(), request(&[], b"parent"))
+        .expect("parent pool worker starts");
+    assert!(first.spawned_process);
+
+    let isolated = pool.isolated_like();
+    let isolated_first = isolated
+        .invoke(worker_launch, request(&[], b"isolated"))
+        .expect("isolated pool starts a private copy of the worker");
+    assert!(
+        isolated_first.spawned_process,
+        "the source pool's retained worker must not be reused"
+    );
+    assert_eq!(isolated_first.output, b"1");
+
+    let rejected = isolated
+        .invoke(launch(&directory, "echo_input"), request(&[], b"capacity"))
+        .expect_err("the isolated pool retains the configured capacity of one");
+    assert_eq!(
+        worker_error(&rejected).kind,
+        worker_backend::WorkerErrorKind::CapacityError
+    );
+    assert!(rejected.to_string().contains("capacity 1 is full"));
+
+    let pids = std::fs::read_to_string(directory.path().join("launches"))
+        .expect("both pools should write worker launch markers")
+        .lines()
+        .map(|line| line.parse::<i32>().expect("numeric worker pid"))
+        .collect::<Vec<_>>();
+    assert_eq!(pids.len(), 2);
+    drop(isolated);
+    drop(pool);
+    for pid in pids {
+        assert_reaped(pid);
+    }
+}
+
+#[test]
 fn concurrent_calls_for_one_identity_are_serialized_on_one_worker() {
     let _guard = lock_worker_tests();
     let directory = TempDir::new().expect("temporary worker directory");

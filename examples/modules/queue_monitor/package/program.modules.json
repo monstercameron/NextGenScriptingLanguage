@@ -1,0 +1,54 @@
+{
+  "format_version": 1,
+  "name": "examples.queue_monitor",
+  "version": "1.0.0",
+  "interface_version": 2,
+  "source": "../src/queue_monitor.program",
+  "source_sha256": "72150bf85ba784870ff8355d6e5cb8cc3f40d98a0a814e8b3be98fbbab5fefba",
+  "exports": {
+    "poll": {
+      "entry": "main",
+      "interface_version": 2,
+      "inputs": [
+        { "name": "input_path", "type": "text", "required": true },
+        { "name": "threshold", "type": "text", "required": true }
+      ],
+      "output": {
+        "type": "record",
+        "encoding": "json",
+        "fields": {
+          "overdue": { "type": "integer" },
+          "threshold": { "type": "integer" }
+        },
+        "required": ["overdue", "threshold"]
+      },
+      "lifecycle": { "kind": "schedule" },
+      "ports": {
+        "inputs": {
+          "input_path": {
+            "schema": { "type": "text" },
+            "delivery": "single"
+          },
+          "threshold": {
+            "schema": { "type": "text" },
+            "delivery": "single"
+          }
+        },
+        "events": {
+          "updated": {
+            "schema": {
+              "type": "record",
+              "fields": {
+                "overdue": { "type": "integer" },
+                "threshold": { "type": "integer" }
+              },
+              "required": ["overdue", "threshold"]
+            },
+            "delivery": "events"
+          }
+        }
+      }
+    }
+  },
+  "dependencies": {}
+}

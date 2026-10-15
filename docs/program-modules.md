@@ -1,7 +1,8 @@
 # Importable `.program` modules
 
-A finite `.program` definition can be exposed as a named applet. Callers keep
-the ordinary applet syntax:
+A finite `.program` definition can be exposed as a named applet. A scheduled
+`.program` source can also be exposed as a lifecycle-owned graph service.
+Callers keep the ordinary applet syntax:
 
 ```program
 accept payload as json
@@ -38,11 +39,12 @@ interface version under its versioned execution contract:
 
 `source` is relative to the applet manifest that declares it, regardless of
 the caller's current directory. The runtime resolves and hashes source during
-preflight. The entry must be a top-level `define a program named ...` in a
-definitions-only file. The entry's `accept` declarations are checked against
-the exported input contract. Unknown entries, unsupported interface versions,
-invalid input/output schemas, recursive definitions and unsupported lifecycle
-declarations fail before the caller starts effects.
+preflight. For interface 1, the entry must be a top-level
+`define a program named ...` in a definitions-only file. Its `accept`
+declarations are checked against the exported input contract. Interface 2
+selects the scheduled source root `main`, as described below. Unknown entries,
+unsupported interface versions, invalid input/output schemas, recursive
+definitions and unsupported lifecycle declarations fail before effects begin.
 
 For a package export, also set both `package_manifest` and `package_lock` in
 `contract.program`. They use the same applet-manifest-relative path rule. The
@@ -102,6 +104,10 @@ package manifest fields are strict: unknown keys are errors.
 }
 ```
 
+An optional `ports` property may be included in a package export. Interface-2
+exports require it; interface-1 exports may omit it, and omission is preserved
+when the legacy metadata is serialized.
+
 Package versions use SemVer. Dependency `version` accepts an exact version
 (`=1.2.3`) or a caret range (`^1.2.0`). A dependency declares the relative
 package-manifest `manifest` path, `source_sha256` for that dependency's
@@ -140,22 +146,175 @@ making it available to a caller.
 Module-local inputs, bindings and current-directory changes stay in a child
 scope, and the caller's scope is restored when the export returns.
 
-Only one-shot finite exports are supported. Listener, scheduled, persistent
-worker, UI and other lifecycle-owned exports are rejected before execution.
-Declared package imports may call one another along the pinned dependency DAG;
-cycles and paths deeper than 16 packages are rejected before caller effects.
-An export cannot reach an ambient `program_module` applet, so task and graph
-workers do not gain a way around the statically bounded dependency graph.
-Independent one-shot module calls in the caller remain supported. A package
-dependency graph is limited to 16 levels, 128 packages and 16 MiB of source
-plus manifest data; all preloaded module graphs for one execution share a
-16 MiB bound. The existing reusable-program expansion limit also applies.
-Direct module source and every explicitly locked transitive package manifest
-and source are part of checkpoint identity, so a resumed run refuses to reuse
-completed work after module content changes.
+## Scheduled service interface 2
+
+Interface 2 opts into a scheduled service lifecycle. Interface 1 remains the
+finite, definitions-only format. Package format and lock format stay at
+version 1; `interface_version: 2` is the explicit compatibility boundary, and
+an older runtime that supports only interface 1 rejects it instead of treating
+it as a finite export.
+
+A direct service descriptor selects the reserved source root `main`:
+
+```json
+{
+  "contract": {
+    "version": 1,
+    "backend": "program_module",
+    "program": {
+      "source": "poller.program",
+      "entry": "main",
+      "interface_version": 2
+    },
+    "lifecycle": { "kind": "program_service" },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": { "count": { "type": "integer" } },
+      "required": ["count"]
+    },
+    "ports": {
+      "inputs": {
+        "threshold": {
+          "schema": { "type": "integer" },
+          "delivery": "single"
+        }
+      },
+      "events": {
+        "updated": {
+          "schema": {
+            "type": "record",
+            "fields": { "count": { "type": "integer" } },
+            "required": ["count"]
+          },
+          "delivery": "events"
+        }
+      }
+    }
+  }
+}
+```
+
+The source declares startup inputs and one periodic or cron trigger:
+
+```program
+accept threshold as integer
+every 5 seconds
+  run "printf" with arguments ["{\"count\":1}"]
+```
+
+The service root is not a reusable finite definition. It must declare exactly
+one `every` or `on schedule` trigger; `listen` sources are not part of this
+interface. Input declarations are bound once when the graph starts. Each must
+have a corresponding typed `Single` input port, and the graph rejects records
+or event inputs rather than inferring a join or changing startup values while
+the service is running. Defaults remain available for optional inputs.
+
+Each service declares exactly one typed event port and no stdout output ports.
+After a handler completes, its entire output is decoded through the declared
+applet output contract and emitted as one event. The event schema must exactly
+match that decoded value. When `result_envelope` is enabled, the event carries
+the canonical result-envelope record. Raw byte outputs are rejected because
+they do not provide a typed event schema. This keeps output meaning in the
+applet contract and does not infer channel names from fields in returned JSON.
+
+For a package, declare exactly one export with interface 2, `lifecycle:
+{"kind":"schedule"}` and `entry: "main"`. The applet descriptor's `entry`
+remains the public export name, such as `poll`; it does not select a private
+finite definition. The export declares the same input, output, outcome,
+result-envelope, capability, effect and port metadata as the applet contract.
+The loader requires exact equality, so a package update cannot silently change
+the applet's published interface. `ports` is optional package metadata for
+legacy interface-1 exports and is omitted from their serialized form when
+absent; it is required for interface 2.
+
+The package export contains that same contract metadata:
+
+```json
+{
+  "format_version": 1,
+  "name": "example.poller",
+  "version": "1.0.0",
+  "interface_version": 2,
+  "source": "src/poller.program",
+  "source_sha256": "64 hexadecimal characters",
+  "exports": {
+    "poll": {
+      "entry": "main",
+      "interface_version": 2,
+      "inputs": [
+        { "name": "threshold", "type": "integer", "required": true }
+      ],
+      "output": {
+        "type": "record",
+        "encoding": "json",
+        "fields": { "count": { "type": "integer" } },
+        "required": ["count"]
+      },
+      "lifecycle": { "kind": "schedule" },
+      "ports": {
+        "inputs": {
+          "threshold": {
+            "schema": { "type": "integer" },
+            "delivery": "single"
+          }
+        },
+        "events": {
+          "updated": {
+            "schema": {
+              "type": "record",
+              "fields": { "count": { "type": "integer" } },
+              "required": ["count"]
+            },
+            "delivery": "events"
+          }
+        }
+      }
+    }
+  },
+  "dependencies": {}
+}
+```
+
+In a graph, a call to a `program_service` applet becomes a persistent graph
+node automatically. The graph owns its lifetime: activation starts the
+existing `.program` scheduler, and graph cancellation, reconfiguration or a
+total timeout stops it. Handlers run serially, one at a time. The current
+scheduler skips missed timer ticks by default, retaining the interval phase.
+Each emitted event goes through the graph's bounded queue; a lossless edge can
+backpressure the handler, while a configured lossy edge follows its declared
+drop policy. A handler error, invalid decoded output or failed event emission
+fails the service node and the graph. There is no implicit retry or
+exactly-once acknowledgement between an external effect and downstream event
+processing. A new graph generation starts with fresh service inputs and
+handler scopes.
+
+Interface-2 services are graph nodes only. A finite program, reusable finite
+definition or another service handler cannot invoke one as an ordinary
+one-shot applet call; preflight rejects that nesting before effects. Service
+handlers can call finite applets through their preloaded package dependency
+scope. Imported source, manifests and dependencies are resolved and validated
+before graph effects begin. No wrapper or generated application source is
+created.
+
+Interface-1 modules retain their existing one-shot behavior and package JSON:
+unknown entries, unsupported lifecycle declarations, invalid input/output
+schemas, recursive definitions and unsupported interface versions fail before
+the caller starts effects. Declared package imports may call one another along
+the pinned dependency DAG; cycles and paths deeper than 16 packages are
+rejected before caller effects. An export cannot reach an ambient
+`program_module` applet, so task and graph workers do not gain a way around the
+statically bounded dependency graph. A package dependency graph is limited to
+16 levels, 128 packages and 16 MiB of source plus manifest data; all preloaded
+module graphs for one execution share a 16 MiB bound. The existing
+reusable-program expansion limit also applies. Direct module source and every
+explicitly locked transitive package manifest and source are part of checkpoint
+identity, so a resumed run refuses to reuse completed work after module
+content changes.
+
 Ordinary child applet manifests and executable contents are also fingerprinted
-before execution. Checkpointed calls fail closed when a module body changes its
-working directory and invokes an ordinary child applet, because that child’s
-relative executable identity cannot yet be pinned to its exact scoped cwd.
-Non-checkpointed module calls can still change cwd; the caller’s cwd remains
-isolated and is restored when the module returns.
+before execution. Checkpointed finite calls fail closed when a module body
+changes its working directory and invokes an ordinary child applet, because
+that child’s relative executable identity cannot yet be pinned to its exact
+scoped cwd. Non-checkpointed finite module calls can still change cwd; the
+caller’s cwd remains isolated and is restored when the module returns.

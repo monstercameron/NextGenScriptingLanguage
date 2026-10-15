@@ -30,12 +30,21 @@ pub(super) fn execute(
     launched: &mut usize,
     line: usize,
 ) -> Result<GroupOutput> {
-    if loaded.reference.interface_version != crate::modules::PROGRAM_MODULE_INTERFACE_VERSION {
+    if loaded.is_program_service() {
         bail!(
-            "unsupported program module interface version {}",
+            "scheduled .program services can run only as graph service nodes, not as finite applet calls"
+        );
+    }
+    if !crate::modules::supports_program_module_finite_interface(loaded.reference.interface_version)
+    {
+        bail!(
+            "finite applet calls do not support program module interface version {}",
             loaded.reference.interface_version
         );
     }
+    let definition = loaded
+        .finite_definition()
+        .ok_or_else(|| anyhow!("finite program module entry is missing"))?;
     let contract = manifest
         .execution_contract()
         .ok_or_else(|| anyhow!("program module applet requires a versioned execution contract"))?;
@@ -53,8 +62,8 @@ pub(super) fn execute(
         .collect::<Result<BTreeMap<_, _>>>()?;
     let child_program = Program {
         definitions: loaded.program.definitions.clone(),
-        inputs: loaded.definition.inputs.clone(),
-        steps: loaded.definition.steps.clone(),
+        inputs: definition.inputs.clone(),
+        steps: definition.steps.clone(),
         trigger: None,
     };
     let child_options = RunOptions {
@@ -73,6 +82,7 @@ pub(super) fn execute(
                 manifest.name_for(call)
             )
         })?;
+    let process_count_before = signals.process_launch_count();
     let child = run_finite_inner(
         &child_program,
         registry,
@@ -81,14 +91,29 @@ pub(super) fn execute(
         input,
         None,
         None,
-    )
-    .with_context(|| {
-        format!(
-            "line {line}: executing program module {:?} entry {:?}",
-            manifest.name_for(call),
-            loaded.reference.entry
-        )
-    })?;
+    );
+    let child = match child {
+        Ok(child) => child,
+        Err(error) => {
+            // Failed finite runs do not return their RunResult, but successful
+            // process spawns remain part of the caller's process accounting.
+            // The counter is scoped to this synchronous module run; task
+            // children use independent counters and are aggregated at join.
+            let spawned = signals
+                .process_launch_count()
+                .saturating_sub(process_count_before);
+            *launched = launched
+                .checked_add(spawned)
+                .ok_or_else(|| anyhow!("launched process count overflow"))?;
+            return Err(error).with_context(|| {
+                format!(
+                    "line {line}: executing program module {:?} entry {:?}",
+                    manifest.name_for(call),
+                    loaded.reference.entry
+                )
+            });
+        }
+    };
     *launched = launched
         .checked_add(child.launched_processes)
         .ok_or_else(|| anyhow!("launched process count overflow"))?;

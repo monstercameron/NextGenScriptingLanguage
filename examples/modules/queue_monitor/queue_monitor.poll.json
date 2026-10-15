@@ -1,0 +1,56 @@
+{
+  "name": "examples.queue_monitor.poll",
+  "binary": "@program-module",
+  "accepts_stdin": false,
+  "parameters": {
+    "input_path": { "type": "string", "required": true },
+    "threshold": { "type": "string", "required": true }
+  },
+  "arguments": [],
+  "contract": {
+    "version": 1,
+    "backend": "program_module",
+    "program": {
+      "source": "src/queue_monitor.program",
+      "entry": "poll",
+      "interface_version": 2,
+      "package_manifest": "package/program.modules.json",
+      "package_lock": "package/program.modules.lock.json"
+    },
+    "lifecycle": { "kind": "program_service" },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "overdue": { "type": "integer" },
+        "threshold": { "type": "integer" }
+      },
+      "required": ["overdue", "threshold"]
+    },
+    "ports": {
+      "inputs": {
+        "input_path": {
+          "schema": { "type": "text" },
+          "delivery": "single"
+        },
+        "threshold": {
+          "schema": { "type": "text" },
+          "delivery": "single"
+        }
+      },
+      "events": {
+        "updated": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "overdue": { "type": "integer" },
+              "threshold": { "type": "integer" }
+            },
+            "required": ["overdue", "threshold"]
+          },
+          "delivery": "events"
+        }
+      }
+    }
+  }
+}

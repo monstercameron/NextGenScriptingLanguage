@@ -980,6 +980,7 @@ mod process_group_tests {
         )
         .unwrap();
         let cache = directory.path().join("cache");
+        let trace_path = directory.path().join("trace.log");
         let child = Command::new(env!("CARGO_BIN_EXE_execute"))
             .current_dir(directory.path())
             .arg(&workflow)
@@ -992,7 +993,7 @@ mod process_group_tests {
             .arg("3")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::from(fs::File::create(&trace_path).unwrap()))
             .spawn()
             .unwrap();
         let mut cleanup = RunnerCleanup {
@@ -1017,7 +1018,6 @@ mod process_group_tests {
         );
         assert!(status.unwrap().success());
         let mut output = Vec::new();
-        let mut trace = Vec::new();
         cleanup
             .runner
             .as_mut()
@@ -1027,15 +1027,7 @@ mod process_group_tests {
             .unwrap()
             .read_to_end(&mut output)
             .unwrap();
-        cleanup
-            .runner
-            .as_mut()
-            .unwrap()
-            .stderr
-            .take()
-            .unwrap()
-            .read_to_end(&mut trace)
-            .unwrap();
+        let trace = fs::read(&trace_path).unwrap();
         assert_eq!(output, b"alpha\n\nbeta\n\nalpha\n\n");
         assert_eq!(
             String::from_utf8_lossy(&trace).matches("cache_hit").count(),

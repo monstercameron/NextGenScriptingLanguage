@@ -94,7 +94,9 @@ pub enum AppletBackend {
     InProcess,
     /// Keep a JSON-lines worker alive across calls.
     JsonLinesWorker,
-    /// Execute a finite program entry selected from a verified local module.
+    /// Execute a finite program entry selected from a verified local module,
+    /// or supervise a scheduled module service when paired with its v2
+    /// interface.
     ProgramModule,
     /// Invoke the versioned `execute.applet/1` HTTP protocol.
     Remote,
@@ -107,6 +109,9 @@ pub enum Lifecycle {
     #[serde(rename = "oneshot")]
     #[default]
     OneShot,
+    /// Run a scheduled `.program` module under the host's service supervisor.
+    /// This is valid only with a ProgramModule interface-version-2 descriptor.
+    ProgramService,
     #[serde(rename = "json_lines")]
     JsonLines {
         /// Arguments passed when the worker process starts.
@@ -179,9 +184,13 @@ impl Lifecycle {
     pub fn is_json_lines(&self) -> bool {
         matches!(self, Self::JsonLines { .. })
     }
+
+    pub fn is_program_service(&self) -> bool {
+        matches!(self, Self::ProgramService)
+    }
 }
 
-/// Reference to a finite program exported by a local `.program` module.
+/// Reference to a finite or scheduled program exported by a local `.program` module.
 /// Paths are resolved relative to the applet manifest and confined to the
 /// configured module root by the module loader.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,9 +215,9 @@ pub struct ProgramModule {
 
 impl ProgramModule {
     pub fn validate(&self) -> Result<()> {
-        if self.interface_version != 1 {
+        if !matches!(self.interface_version, 1 | 2) {
             bail!(
-                "unsupported program module interface version {}; supported version is 1",
+                "unsupported program module interface version {}; supported versions are 1 (finite) and 2 (scheduled service)",
                 self.interface_version
             );
         }
@@ -1579,6 +1588,9 @@ impl AppletContract {
         if let Some(environment) = &self.environment {
             environment.validate()?;
         }
+        if self.lifecycle.is_program_service() && self.backend != AppletBackend::ProgramModule {
+            bail!("program_service lifecycle requires program_module backend");
+        }
         match (self.backend, self.lifecycle.is_json_lines()) {
             (AppletBackend::JsonLinesWorker, true)
             | (
@@ -1595,10 +1607,20 @@ impl AppletContract {
         }
         match self.backend {
             AppletBackend::ProgramModule => {
-                self.program
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("program_module backend requires a program descriptor"))?
-                    .validate()?;
+                let program = self.program.as_ref().ok_or_else(|| {
+                    anyhow!("program_module backend requires a program descriptor")
+                })?;
+                program.validate()?;
+                match (program.interface_version, &self.lifecycle) {
+                    (1, Lifecycle::OneShot) | (2, Lifecycle::ProgramService) => {}
+                    (1, Lifecycle::ProgramService) => bail!(
+                        "program_service lifecycle requires program module interface version 2"
+                    ),
+                    (2, _) => bail!(
+                        "program module interface version 2 requires program_service lifecycle"
+                    ),
+                    _ => unreachable!("ProgramModule::validate checks supported interfaces"),
+                }
                 if self.remote.is_some() {
                     bail!("program_module backend cannot declare a remote endpoint");
                 }
@@ -1613,6 +1635,9 @@ impl AppletContract {
                 }
             }
             _ => {
+                if self.lifecycle.is_program_service() {
+                    bail!("program_service lifecycle requires program_module backend");
+                }
                 if self.program.is_some() || self.remote.is_some() {
                     bail!("program and remote descriptors require their matching backend");
                 }

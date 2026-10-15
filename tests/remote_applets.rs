@@ -417,6 +417,53 @@ fn discovery_rejects_unknown_protocol_before_any_applet_effect() {
     assert_eq!(seen.load(Ordering::SeqCst), 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn resolver_helper_process_observer_counts_spawns_before_request_completion() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let helper = directory.path().join("resolver-helper.sh");
+    std::fs::write(
+        &helper,
+        "#!/bin/sh\n[ \"$1\" = __remote_resolve ] || exit 2\nprintf '127.0.0.1:%s\\n' \"$3\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let body = serde_json::to_vec(&descriptor()).unwrap();
+    let (ip_url, _, _, server) = local_server(1, move |_, _| Reply::json(body.clone()));
+    let port = ip_url.rsplit(':').next().unwrap();
+    let launches = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&launches);
+    let client = RemoteClient::new(remote_config(format!("http://localhost:{port}")))
+        .unwrap()
+        .with_resolver_helper(&helper)
+        .with_process_observer(Arc::new(move |count| {
+            observed.fetch_add(count, Ordering::SeqCst);
+        }));
+
+    client.discover().unwrap();
+    server.join().unwrap();
+    assert_eq!(launches.load(Ordering::SeqCst), 1);
+
+    let (ip_url, _, _, server) = local_server(0, |_, _| unreachable!());
+    let port = ip_url.rsplit(':').next().unwrap();
+    let missing_helper = directory.path().join("does-not-exist");
+    let failed_launches = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&failed_launches);
+    let client = RemoteClient::new(remote_config(format!("http://localhost:{port}")))
+        .unwrap()
+        .with_resolver_helper(missing_helper)
+        .with_process_observer(Arc::new(move |count| {
+            observed.fetch_add(count, Ordering::SeqCst);
+        }));
+
+    assert!(client.discover().is_err());
+    server.join().unwrap();
+    assert_eq!(failed_launches.load(Ordering::SeqCst), 0);
+}
+
 #[test]
 fn bearer_file_auth_and_wire_bytes_are_explicit_and_debug_redacted() {
     let directory = tempfile::tempdir().unwrap();

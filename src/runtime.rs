@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(test, unix))]
 use std::process::Command;
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -48,12 +48,15 @@ pub use streaming::{
 #[cfg_attr(windows, path = "runtime/windows_stdio.rs")]
 mod stdio;
 pub(crate) use service::next_interval;
+pub(crate) use service::{run_program_module_service, ProgramServiceContext};
 pub use service::{
     run_service, run_service_checkpointed, run_service_checkpointed_with_schedule_options,
     run_service_with_cancellation, run_service_with_schedule_options, CalendarDedupPolicy,
     MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
 };
 pub use stdio::{write_cancellable, write_diagnostic, write_with_deadline};
+
+pub(crate) type ProcessObserver = Arc<dyn Fn(usize) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct RunOptions {
@@ -83,6 +86,9 @@ pub struct AppletInvocationError {
     launched_processes: usize,
 }
 impl AppletInvocationError {
+    /// Child/helper process spawns that succeeded before the invocation
+    /// failed. Processes are counted at spawn, even if later cancelled or
+    /// reaped; their own descendants are outside this count.
     pub fn launched_processes(&self) -> usize {
         self.launched_processes
     }
@@ -155,6 +161,8 @@ fn deadline_poll_timeout(deadline: Option<Instant>, maximum_ms: libc::c_int) -> 
 pub struct RunResult {
     pub output: Vec<u8>,
     pub cache_hits: usize,
+    /// Child/helper process spawns that succeeded during this run. This does
+    /// not include descendants started internally by those processes.
     pub launched_processes: usize,
     pub executions: Vec<execution_result::ExecutionRecord>,
     pub dropped_executions: usize,
@@ -173,7 +181,9 @@ pub struct AppletInvocationResult {
     pub value: Option<Value>,
     pub stderr: Vec<u8>,
     pub uncertain: bool,
-    /// Actual helper/native processes started by this single invocation.
+    /// Child/helper process spawns that succeeded during this invocation,
+    /// including a supervised DNS resolver helper but excluding descendants
+    /// started internally by those processes or workers reused from a pool.
     pub launched_processes: usize,
 }
 
@@ -263,8 +273,12 @@ pub(crate) struct Signals {
     registrations: Vec<signal_hook::SigId>,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
+    graph_service_cancellation: bool,
     program_modules: Arc<Mutex<Option<Arc<crate::modules::ProgramModuleSession>>>>,
     sensitivity_floor: Arc<OnceLock<crate::security::SensitivitySet>>,
+    process_launches: Arc<AtomicUsize>,
+    process_observer: Arc<OnceLock<ProcessObserver>>,
+    worker_pool: Option<Arc<worker_backend::WorkerPool>>,
 }
 impl Signals {
     pub(crate) fn register_with_deadline(deadline: Option<Instant>) -> Result<Self> {
@@ -273,8 +287,12 @@ impl Signals {
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
             deadline,
+            graph_service_cancellation: false,
             program_modules: Arc::new(Mutex::new(None)),
             sensitivity_floor: Arc::new(OnceLock::new()),
+            process_launches: Arc::new(AtomicUsize::new(0)),
+            process_observer: Arc::new(OnceLock::new()),
+            worker_pool: None,
         };
         guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
         Ok(guard)
@@ -304,17 +322,102 @@ impl Signals {
             registrations: Vec::new(),
             capture_diagnostics,
             deadline,
+            graph_service_cancellation: false,
             program_modules: Arc::new(Mutex::new(None)),
             sensitivity_floor: Arc::new(OnceLock::new()),
+            process_launches: Arc::new(AtomicUsize::new(0)),
+            process_observer: Arc::new(OnceLock::new()),
+            worker_pool: None,
         })
+    }
+
+    /// Fork the execution context for bounded finally cleanup. Cleanup gets
+    /// its own cancellation flag and no signal registrations, while preserving
+    /// the immutable module snapshot, worker-pool scope, provenance floor and
+    /// process accounting/observation of the parent execution.
+    fn cleanup_scope(&self, deadline: Option<Instant>) -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            registrations: Vec::new(),
+            capture_diagnostics: self.capture_diagnostics,
+            deadline,
+            graph_service_cancellation: self.graph_service_cancellation,
+            program_modules: Arc::clone(&self.program_modules),
+            sensitivity_floor: Arc::clone(&self.sensitivity_floor),
+            process_launches: Arc::clone(&self.process_launches),
+            process_observer: Arc::clone(&self.process_observer),
+            worker_pool: self.worker_pool.clone(),
+        }
     }
 
     fn set_sensitivity_floor(&self, sensitivity: crate::security::SensitivitySet) {
         let _ = self.sensitivity_floor.set(sensitivity);
     }
 
+    pub(crate) fn set_program_module_session(
+        &self,
+        session: Arc<crate::modules::ProgramModuleSession>,
+    ) -> Result<()> {
+        let mut slot = self
+            .program_modules
+            .lock()
+            .map_err(|_| anyhow!("program module session lock is poisoned"))?;
+        if let Some(existing) = slot.as_ref() {
+            if !Arc::ptr_eq(existing, &session) {
+                bail!("program module session was already initialized for this execution");
+            }
+            return Ok(());
+        }
+        *slot = Some(session);
+        Ok(())
+    }
+
     fn sensitivity_floor(&self) -> crate::security::SensitivitySet {
         self.sensitivity_floor.get().cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn set_process_observer(&self, observer: ProcessObserver) -> Result<()> {
+        self.process_observer
+            .set(observer)
+            .map_err(|_| anyhow!("process observer was already initialized for this execution"))
+    }
+
+    fn record_process_launch(&self) {
+        self.account_process_launches(1);
+    }
+
+    fn account_process_launches(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.process_launches.fetch_add(count, Ordering::Relaxed);
+        if let Some(observer) = self.process_observer.get() {
+            observer(count);
+        }
+    }
+
+    fn account_child_process_launches(&self, count: usize) {
+        if count > 0 {
+            self.process_launches.fetch_add(count, Ordering::Relaxed);
+        }
+    }
+
+    fn process_launch_count(&self) -> usize {
+        self.process_launches.load(Ordering::Relaxed)
+    }
+
+    fn process_launch_callback(&self) -> ProcessObserver {
+        let process_launches = Arc::clone(&self.process_launches);
+        let process_observer = Arc::clone(&self.process_observer);
+        Arc::new(move |count| {
+            if count == 0 {
+                return;
+            }
+            process_launches.fetch_add(count, Ordering::Relaxed);
+            if let Some(observer) = process_observer.get() {
+                observer(count);
+            }
+        })
     }
 }
 
@@ -812,8 +915,12 @@ fn execute_group_with_sink(
         cancelled: signals.cancelled.clone(),
         registrations: Vec::new(),
         capture_diagnostics: signals.capture_diagnostics,
+        graph_service_cancellation: signals.graph_service_cancellation,
         program_modules: Arc::clone(&signals.program_modules),
         sensitivity_floor: Arc::clone(&signals.sensitivity_floor),
+        process_launches: Arc::clone(&signals.process_launches),
+        process_observer: Arc::clone(&signals.process_observer),
+        worker_pool: signals.worker_pool.clone(),
         deadline: {
             let command_deadline = options
                 .command_timeout
@@ -977,6 +1084,7 @@ fn execute_group_with_sink(
         if observer_failed {
             child_observer = None;
         }
+        signals.record_process_launch();
         *launched += 1;
         let child_stdin = bytes
             .as_ref()
@@ -1872,16 +1980,19 @@ fn execute_json_lines_worker(
         cancelled: signals.cancelled.clone(),
         spawned: Arc::clone(&spawned),
     };
-    let response = registry
-        .host_state::<worker_backend::WorkerPool>()
-        .invoke(launch, request)
-        .with_context(|| {
-            format!(
-                "line {line}: running json_lines_worker applet {:?}",
-                manifest.name_for(call)
-            )
-        });
+    let worker_pool = signals
+        .worker_pool
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| registry.host_state::<worker_backend::WorkerPool>());
+    let response = worker_pool.invoke(launch, request).with_context(|| {
+        format!(
+            "line {line}: running json_lines_worker applet {:?}",
+            manifest.name_for(call)
+        )
+    });
     if spawned.load(Ordering::Acquire) {
+        signals.record_process_launch();
         *launched += 1;
     }
     let response = match response {
@@ -2032,9 +2143,16 @@ fn execute_call_group(
                 line,
             )
         }
-        AppletBackend::Remote => execute_remote_applet(
-            call, manifest, line, input, bindings, cwd, options, signals, registry,
-        ),
+        AppletBackend::Remote => {
+            let process_launches_before = signals.process_launch_count();
+            let result = execute_remote_applet(
+                call, manifest, line, input, bindings, cwd, options, signals, registry,
+            );
+            *launched += signals
+                .process_launch_count()
+                .saturating_sub(process_launches_before);
+            result
+        }
     }
 }
 
@@ -2091,7 +2209,8 @@ fn execute_remote_applet(
     }
     let client = RemoteClient::new_with_credential_base(client_config, credential_base)?
         .with_secret_redactor(crate::security::secret_redactor(registry))
-        .with_resolver_helper(std::env::current_exe()?);
+        .with_resolver_helper(std::env::current_exe()?)
+        .with_process_observer(signals.process_launch_callback());
     if let Some(path) = client.descriptor_cache_path() {
         crate::capabilities::authorize_applet_host_path(
             registry,
@@ -2280,13 +2399,26 @@ pub(crate) fn worker_sensitivity_history_for_call(
     registry: &Registry,
     cwd: &Path,
 ) -> Result<crate::security::SensitivitySet> {
+    worker_sensitivity_history_for_call_with_pool(call, manifest, registry, cwd, None)
+}
+
+fn worker_sensitivity_history_for_call_with_pool(
+    call: &Invocation,
+    manifest: &Manifest,
+    registry: &Registry,
+    cwd: &Path,
+    worker_pool: Option<&worker_backend::WorkerPool>,
+) -> Result<crate::security::SensitivitySet> {
     if manifest.execution_backend() != AppletBackend::JsonLinesWorker {
         return Ok(crate::security::SensitivitySet::empty());
     }
     let launch = worker_launch_for_call(call, manifest, registry, cwd)?;
-    registry
-        .host_state::<worker_backend::WorkerPool>()
-        .sensitivity_history_for_launch(&launch)
+    match worker_pool {
+        Some(worker_pool) => worker_pool.sensitivity_history_for_launch(&launch),
+        None => registry
+            .host_state::<worker_backend::WorkerPool>()
+            .sensitivity_history_for_launch(&launch),
+    }
 }
 
 fn append_invocation_sensitivities(
@@ -2294,9 +2426,10 @@ fn append_invocation_sensitivities(
     registry: &Registry,
     cwd: &Path,
     sensitivities: &mut crate::security::SensitivitySet,
+    worker_pool: Option<&worker_backend::WorkerPool>,
 ) -> Result<()> {
     let manifest = registry.resolve_call(call)?;
-    append_manifest_sensitivities(call, manifest, registry, cwd, sensitivities)
+    append_manifest_sensitivities(call, manifest, registry, cwd, sensitivities, worker_pool)
 }
 
 fn append_manifest_sensitivities(
@@ -2305,6 +2438,7 @@ fn append_manifest_sensitivities(
     registry: &Registry,
     cwd: &Path,
     sensitivities: &mut crate::security::SensitivitySet,
+    worker_pool: Option<&worker_backend::WorkerPool>,
 ) -> Result<()> {
     use crate::contracts::Sensitivity;
 
@@ -2345,7 +2479,7 @@ fn append_manifest_sensitivities(
     if crate::security::applet_has_declared_secret_environment(registry, &manifest.name) {
         sensitivities.insert(Sensitivity::Secret);
     }
-    append_worker_sensitivity_history(call, manifest, registry, cwd, sensitivities)
+    append_worker_sensitivity_history(call, manifest, registry, cwd, sensitivities, worker_pool)
 }
 
 fn append_worker_sensitivity_history(
@@ -2354,9 +2488,16 @@ fn append_worker_sensitivity_history(
     registry: &Registry,
     cwd: &Path,
     sensitivities: &mut crate::security::SensitivitySet,
+    worker_pool: Option<&worker_backend::WorkerPool>,
 ) -> Result<()> {
     if manifest.execution_backend() == AppletBackend::JsonLinesWorker {
-        let worker_history = worker_sensitivity_history_for_call(call, manifest, registry, cwd)?;
+        let worker_history = worker_sensitivity_history_for_call_with_pool(
+            call,
+            manifest,
+            registry,
+            cwd,
+            worker_pool,
+        )?;
         sensitivities.extend(&worker_history);
     }
     Ok(())
@@ -2369,7 +2510,7 @@ fn invocation_sensitivities(
     cwd: &Path,
 ) -> Result<crate::security::SensitivitySet> {
     let mut sensitivities = crate::security::SensitivitySet::empty();
-    append_manifest_sensitivities(call, manifest, registry, cwd, &mut sensitivities)?;
+    append_manifest_sensitivities(call, manifest, registry, cwd, &mut sensitivities, None)?;
     if sensitivities.is_empty() {
         sensitivities.insert(crate::contracts::Sensitivity::Unknown);
     }
@@ -2383,6 +2524,7 @@ pub(crate) fn workflow_sensitivity_floor(
     registry: &Registry,
     module_session: &crate::modules::ProgramModuleSession,
     cwd: &Path,
+    worker_pool: Option<&worker_backend::WorkerPool>,
 ) -> Result<crate::security::SensitivitySet> {
     let mut sensitivities = crate::security::SensitivitySet::empty();
     for step in &program.steps {
@@ -2396,12 +2538,19 @@ pub(crate) fn workflow_sensitivity_floor(
                         registry,
                         cwd,
                         &mut sensitivities,
+                        worker_pool,
                     )?;
                 }
             }
             StepKind::TaskGroup { tasks, .. } => {
                 for call in tasks {
-                    append_invocation_sensitivities(call, registry, cwd, &mut sensitivities)?;
+                    append_invocation_sensitivities(
+                        call,
+                        registry,
+                        cwd,
+                        &mut sensitivities,
+                        worker_pool,
+                    )?;
                 }
             }
             // Reusable calls are expanded into the step sequence before the
@@ -2436,7 +2585,7 @@ pub(crate) fn workflow_sensitivity_floor(
         ..
     }) = &program.trigger
     {
-        append_invocation_sensitivities(call, registry, cwd, &mut sensitivities)?;
+        append_invocation_sensitivities(call, registry, cwd, &mut sensitivities, worker_pool)?;
     }
     if matches!(
         program.trigger.as_ref(),
@@ -2453,7 +2602,7 @@ pub(crate) fn workflow_sensitivity_floor(
         sensitivities.insert(crate::contracts::Sensitivity::Unknown);
     }
     for (scope, call) in module_session.scoped_body_invocations() {
-        append_invocation_sensitivities(call, scope, cwd, &mut sensitivities)?;
+        append_invocation_sensitivities(call, scope, cwd, &mut sensitivities, worker_pool)?;
     }
     if sensitivities.is_empty() {
         sensitivities.insert(crate::contracts::Sensitivity::Unknown);
@@ -2548,6 +2697,33 @@ pub(crate) fn invoke_applet_with_module_session_and_sensitivity(
     module_session: Arc<crate::modules::ProgramModuleSession>,
     sensitivities: crate::security::SensitivitySet,
 ) -> Result<AppletInvocationResult> {
+    invoke_applet_with_module_session_and_worker_pool(
+        registry,
+        name,
+        parameters,
+        input,
+        options,
+        cancelled,
+        module_session,
+        sensitivities,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn invoke_applet_with_module_session_and_worker_pool(
+    registry: &Registry,
+    name: &str,
+    parameters: BTreeMap<String, Value>,
+    input: Vec<u8>,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    module_session: Arc<crate::modules::ProgramModuleSession>,
+    sensitivities: crate::security::SensitivitySet,
+    worker_pool: Option<Arc<worker_backend::WorkerPool>>,
+    process_observer: Option<ProcessObserver>,
+) -> Result<AppletInvocationResult> {
     let mut invocation_options = options.clone();
     invocation_options.working_directory = fs::canonicalize(&options.working_directory)?;
     let call = Invocation {
@@ -2579,11 +2755,15 @@ pub(crate) fn invoke_applet_with_module_session_and_sensitivity(
     {
         bail!("json_lines_worker backend is unsupported on this platform");
     }
-    let signals = Signals::with_cancellation_and_deadline(
+    let mut signals = Signals::with_cancellation_and_deadline(
         cancelled,
         true,
         deadline_after(invocation_options.total_timeout, "total timeout")?,
     )?;
+    signals.worker_pool = worker_pool;
+    if let Some(process_observer) = process_observer {
+        signals.set_process_observer(process_observer)?;
+    }
     signals.set_sensitivity_floor(sensitivities);
     preflight_module_session(
         &module_session,
@@ -2648,7 +2828,7 @@ pub(crate) fn invoke_applet_with_module_session_and_sensitivity(
     invoked.map_err(|source| {
         AppletInvocationError {
             source,
-            launched_processes: launched,
+            launched_processes: signals.process_launch_count(),
         }
         .into()
     })
@@ -2744,8 +2924,13 @@ fn run_finite_state(
 ) -> Result<RunResult> {
     let mut cwd = fs::canonicalize(&options.working_directory)?;
     let module_session = preload_program_modules(program, registry, signals, &cwd)?;
-    let mut sensitivity_floor =
-        workflow_sensitivity_floor(program, registry, &module_session, &cwd)?;
+    let mut sensitivity_floor = workflow_sensitivity_floor(
+        program,
+        registry,
+        &module_session,
+        &cwd,
+        signals.worker_pool.as_deref(),
+    )?;
     // Caller-provided initial bytes have no trusted provenance declaration.
     if !matches!(&initial_input, Input::Empty) {
         sensitivity_floor.insert(crate::contracts::Sensitivity::Unknown);
@@ -2851,17 +3036,10 @@ fn run_finite_state(
                 (Some(parent), None) | (None, Some(parent)) => Some(parent),
                 (None, None) => None,
             };
-            Some(Signals::with_cancellation_and_deadline(
-                Arc::new(AtomicBool::new(false)),
-                parent_signals.capture_diagnostics,
-                deadline,
-            )?)
+            Some(parent_signals.cleanup_scope(deadline))
         } else {
             None
         };
-        if let Some(cleanup_signals) = cleanup_signals.as_ref() {
-            cleanup_signals.set_sensitivity_floor(parent_signals.sensitivity_floor());
-        }
         let signals = cleanup_signals.as_ref().unwrap_or(parent_signals);
         let step = &program.steps[index];
         if let Some(journal) = journal.as_deref_mut().filter(|_| journal_end.is_none()) {
@@ -3250,18 +3428,22 @@ fn run_finite_state(
                         current_module_session(signals)?,
                         signals.sensitivity_floor(),
                         signals.deadline,
+                        signals.worker_pool.clone(),
+                        signals.process_observer.get().cloned(),
                     );
                     let group = match group {
                         Ok(group) => group,
                         Err(error) => {
                             if let Some(failure) = error.downcast_ref::<tasks::TaskGroupFailure>() {
                                 result.launched_processes += failure.launched_processes;
+                                signals.account_child_process_launches(failure.launched_processes);
                             }
                             return Err(error)
                                 .with_context(|| format!("line {}: task group", step.line));
                         }
                     };
                     result.launched_processes += group.launched_processes;
+                    signals.account_child_process_launches(group.launched_processes);
                     let value = group.value;
                     let bytes = crate::structured::encode(&value, options.max_output_bytes)
                         .with_context(|| format!("line {}: task group output", step.line))?;

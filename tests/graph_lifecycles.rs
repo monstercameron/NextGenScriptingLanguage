@@ -39,8 +39,17 @@ fn options() -> RunOptions {
 }
 
 fn fixture_server() -> (Registry, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    fixture_server_at_host("127.0.0.1")
+}
+
+fn fixture_server_at_host(
+    endpoint_host: &str,
+) -> (Registry, mpsc::Receiver<String>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let endpoint = format!(
+        "http://{endpoint_host}:{}",
+        listener.local_addr().unwrap().port()
+    );
     let contract = json!({
         "version": 1,
         "backend": "remote",
@@ -234,6 +243,39 @@ fn local_sse_listener_routes_typed_events_through_transform_and_sink() {
     assert_eq!(metadata[0].cursor.as_deref(), Some("cursor-1"));
     assert!(!metadata[0].duplicate_cursor);
     assert!(metadata[1].duplicate_cursor);
+}
+
+#[test]
+fn remote_listener_accounts_dns_helper_spawns_in_graph_result() {
+    let (registry, requests, server) = fixture_server_at_host("localhost");
+    let plan = graph::parse(
+        "graph remote_listener_dns_accounting\nlisten to remote.feed as source\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+    let executor = Arc::new(
+        RuntimeGraphExecutor::new(registry.clone(), options())
+            .with_resolver_helper(env!("CARGO_BIN_EXE_execute")),
+    );
+
+    let result = GraphSession::start(plan, executor, GraphRunOptions::default())
+        .unwrap()
+        .run_to_completion()
+        .unwrap();
+    assert_eq!(result.outputs.len(), 2);
+    assert!(
+        result.launched_processes >= 1,
+        "the actual execute resolver helper was spawned for localhost"
+    );
+    assert_eq!(
+        requests.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "GET /.well-known/execute-applet/v1 HTTP/1.1"
+    );
+    assert_eq!(
+        requests.recv_timeout(Duration::from_secs(1)).unwrap(),
+        "GET /events/updates HTTP/1.1"
+    );
+    server.join().unwrap();
 }
 
 #[test]

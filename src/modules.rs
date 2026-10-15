@@ -1,14 +1,18 @@
-//! Local, integrity-checked packages for finite `.program` applet modules.
+//! Local, integrity-checked packages for finite and scheduled `.program` applet modules.
 //!
 //! This module deliberately performs no installation or network access. A
 //! package is loaded from an explicit manifest path, all paths are resolved
 //! relative to the file that declares them, and optional lock data is verified
 //! against the complete local dependency graph.
 
-use crate::ast::{InputType, Invocation, Program, ReusableProgram, Step, StepKind, Trigger};
+use crate::ast::{
+    InputDeclaration, InputType, Invocation, Program, ReusableProgram, Step, StepKind, Trigger,
+};
 pub use crate::contracts::ProgramModule;
-use crate::contracts::{AppletBackend, AppletContract, Lifecycle};
-use crate::contracts::{OutcomeKind, OutcomeSpec, OutputSchema, OutputType};
+use crate::contracts::{
+    deserialize_present, AppletBackend, AppletContract, AppletPorts, Lifecycle, OutcomeKind,
+    OutcomeSpec, OutputSchema, OutputType, PortDelivery, ValueSchema,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,6 +22,11 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 pub const PROGRAM_MODULE_INTERFACE_VERSION: u32 = 1;
+/// Scheduled service exports use an explicit v2 boundary. V1 continues to
+/// describe finite reusable definitions and is never reinterpreted.
+pub const PROGRAM_MODULE_SERVICE_INTERFACE_VERSION: u32 = 2;
+/// Reserved root selector for a v2 scheduled source; it is not a definition.
+pub const PROGRAM_MODULE_SERVICE_ROOT_ENTRY: &str = "main";
 pub const PROGRAM_MODULE_PACKAGE_FORMAT: u32 = 1;
 pub const PROGRAM_MODULE_LOCK_FORMAT: u32 = 1;
 pub const MAX_PROGRAM_MODULE_DEPTH: usize = 16;
@@ -26,6 +35,19 @@ pub const MAX_PROGRAM_MODULES_PER_RUN: usize = 128;
 pub const MAX_PROGRAM_MODULE_GRAPH_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_PROGRAM_MODULE_RUN_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MODULE_MANIFEST_BYTES: usize = 1024 * 1024;
+
+pub const fn supports_program_module_finite_interface(version: u32) -> bool {
+    version == PROGRAM_MODULE_INTERFACE_VERSION
+}
+
+pub const fn supports_program_module_service_interface(version: u32) -> bool {
+    version == PROGRAM_MODULE_SERVICE_INTERFACE_VERSION
+}
+
+pub const fn supports_program_module_interface(version: u32) -> bool {
+    supports_program_module_finite_interface(version)
+        || supports_program_module_service_interface(version)
+}
 
 /// Strict JSON package manifest format. `source_sha256` pins the `.program`
 /// source bytes. Every dependency pins its manifest bytes, exact local path,
@@ -60,6 +82,15 @@ pub struct ProgramModuleExport {
     pub capabilities: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<String>,
+    /// Typed graph ports are optional for legacy finite exports. When present
+    /// on a scheduled service, inputs describe startup bindings and one event
+    /// port describes the value emitted by each handler run.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ports: Option<AppletPorts>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,7 +183,7 @@ pub struct LoadedProgramModule {
     pub source_sha256: String,
     pub manifest_sha256: String,
     pub program: Arc<Program>,
-    pub definition: ReusableProgram,
+    pub entry: LoadedProgramEntry,
     pub export: ProgramModuleExport,
     /// Bytes in this package and its verified transitive package graph.
     pub expanded_bytes: usize,
@@ -166,7 +197,7 @@ pub struct LoadedProgramSource {
     pub source_path: PathBuf,
     pub source_sha256: String,
     pub program: Arc<Program>,
-    pub definition: ReusableProgram,
+    pub entry: LoadedProgramEntry,
     /// The package export declaration, when this source came from a package.
     pub export: Option<ProgramModuleExport>,
     /// The source and every package manifest/source in the resolved graph.
@@ -181,6 +212,51 @@ pub struct LoadedProgramSource {
     pub checkpoint_fingerprint: String,
 }
 
+/// The selected executable unit in a loaded module. Scheduled services use
+/// the source's top-level `Program`; the `ProgramService` variant deliberately
+/// carries no copied/fabricated finite definition.
+#[derive(Debug, Clone)]
+pub enum LoadedProgramEntry {
+    Finite(ReusableProgram),
+    ProgramService,
+}
+
+impl LoadedProgramSource {
+    pub fn finite_definition(&self) -> Option<&ReusableProgram> {
+        match &self.entry {
+            LoadedProgramEntry::Finite(definition) => Some(definition),
+            LoadedProgramEntry::ProgramService => None,
+        }
+    }
+
+    pub fn is_program_service(&self) -> bool {
+        matches!(&self.entry, LoadedProgramEntry::ProgramService)
+    }
+
+    pub fn input_declarations(&self) -> &[InputDeclaration] {
+        match &self.entry {
+            LoadedProgramEntry::Finite(definition) => &definition.inputs,
+            LoadedProgramEntry::ProgramService => &self.program.inputs,
+        }
+    }
+
+    pub fn body_steps(&self) -> &[Step] {
+        match &self.entry {
+            LoadedProgramEntry::Finite(definition) => &definition.steps,
+            LoadedProgramEntry::ProgramService => &self.program.steps,
+        }
+    }
+}
+
+impl LoadedProgramModule {
+    pub fn finite_definition(&self) -> Option<&ReusableProgram> {
+        match &self.entry {
+            LoadedProgramEntry::Finite(definition) => Some(definition),
+            LoadedProgramEntry::ProgramService => None,
+        }
+    }
+}
+
 impl LoadedProgramSource {
     /// Ensure the applet manifest publishes the same stable interface as its
     /// selected package export. Direct modules rely on the outer applet
@@ -192,16 +268,38 @@ impl LoadedProgramSource {
         {
             bail!("program module descriptor does not match the applet contract");
         }
+        let expected_lifecycle = match self.reference.interface_version {
+            PROGRAM_MODULE_INTERFACE_VERSION => Lifecycle::OneShot,
+            PROGRAM_MODULE_SERVICE_INTERFACE_VERSION => Lifecycle::ProgramService,
+            version => bail!("unsupported program module interface version {version}"),
+        };
+        if contract.lifecycle != expected_lifecycle {
+            bail!("program module lifecycle does not match its interface version");
+        }
         if let Some(export) = &self.export {
-            if contract.lifecycle != Lifecycle::OneShot
-                || contract.output.as_ref() != Some(&export.output)
+            let ports_must_match = export.ports.is_some()
+                || export.interface_version == PROGRAM_MODULE_SERVICE_INTERFACE_VERSION;
+            if contract.output.as_ref() != Some(&export.output)
                 || contract.outcomes != export.outcomes
                 || contract.result_envelope != export.result_envelope
                 || contract.capabilities != export.capabilities
                 || contract.effects != export.effects
+                || (ports_must_match && contract.ports != export.ports)
             {
                 bail!("applet contract does not match package export interface metadata");
             }
+        }
+        if self.is_program_service() {
+            let output = contract.output.as_ref().ok_or_else(|| {
+                anyhow!("scheduled program module requires a typed output contract")
+            })?;
+            validate_service_ports(
+                "applet contract",
+                self.input_declarations(),
+                output,
+                contract.result_envelope,
+                contract.ports.as_ref(),
+            )?;
         }
         Ok(())
     }
@@ -215,8 +313,7 @@ impl LoadedProgramSource {
         })?;
         self.validate_contract(contract)?;
         let inputs = self
-            .definition
-            .inputs
+            .input_declarations()
             .iter()
             .map(|input| (input.name.clone(), input.kind, input.default.is_none()))
             .collect::<Vec<_>>();
@@ -292,6 +389,17 @@ impl ProgramModuleSession {
         registry: &crate::manifest::Registry,
     ) -> Result<Self> {
         let calls = program_invocations(program);
+        for call in &calls {
+            let manifest = registry
+                .resolve_call(call)
+                .with_context(|| format!("preflighting module call {:?}", call.operation))?;
+            if manifest_is_program_service(manifest) {
+                bail!(
+                    "scheduled `.program` service {:?} can run only as a graph service node, not as a finite program call",
+                    manifest.name
+                );
+            }
+        }
         Self::preload_invocations(registry, calls)
     }
 
@@ -406,16 +514,24 @@ impl ProgramModuleSession {
             );
         }
 
-        let child_program = Program {
-            definitions: loaded.program.definitions.clone(),
-            inputs: loaded.definition.inputs.clone(),
-            steps: loaded.definition.steps.clone(),
-            trigger: None,
-        };
-        crate::runtime::validate(&child_program, &child_registry)
-            .with_context(|| format!("validating module applet {:?}", manifest.name))?;
+        match &loaded.entry {
+            LoadedProgramEntry::Finite(definition) => {
+                let child_program = Program {
+                    definitions: loaded.program.definitions.clone(),
+                    inputs: definition.inputs.clone(),
+                    steps: definition.steps.clone(),
+                    trigger: None,
+                };
+                crate::runtime::validate(&child_program, &child_registry)
+                    .with_context(|| format!("validating module applet {:?}", manifest.name))?;
+            }
+            LoadedProgramEntry::ProgramService => {
+                crate::runtime::validate(&loaded.program, &child_registry)
+                    .with_context(|| format!("validating module service {:?}", manifest.name))?;
+            }
+        }
 
-        for call in program_invocations_for_source(&loaded.program, &loaded.definition) {
+        for call in program_invocations_for_source(&loaded.program, &loaded.entry) {
             if let (Some(package), Some((alias, export))) =
                 (&loaded.package, call.operation.rsplit_once('.'))
             {
@@ -436,6 +552,13 @@ impl ProgramModuleSession {
                     call.operation, manifest.name
                 )
             })?;
+            if manifest_is_program_service(child_manifest) {
+                bail!(
+                    "scheduled `.program` service {:?} can run only as a graph service node; module {:?} invokes it as a finite applet",
+                    child_manifest.name,
+                    manifest.name
+                );
+            }
             self.body_invocations
                 .push((manifest.name.clone(), call.clone()));
             self.scoped_body_invocations
@@ -518,7 +641,7 @@ impl ProgramModuleSession {
                     .iter()
                     .any(|step| matches!(&step.kind, StepKind::UseFolder { .. }))
             };
-            has_folder_step(&loaded.definition.steps)
+            has_folder_step(loaded.body_steps())
                 || loaded
                     .program
                     .definitions
@@ -608,6 +731,12 @@ fn build_dependency_scope(
     for (alias, dependency) in &package.dependencies {
         for export_name in dependency.manifest.exports.keys() {
             let exported = dependency.export(export_name)?;
+            let source_entry =
+                if supports_program_module_service_interface(exported.export.interface_version) {
+                    PROGRAM_MODULE_SERVICE_ROOT_ENTRY.to_owned()
+                } else {
+                    exported.export.entry.clone()
+                };
             let relative_source = dependency_source_from_parent(
                 &package.manifest,
                 alias,
@@ -615,7 +744,7 @@ fn build_dependency_scope(
             )?;
             let reference = ProgramModule {
                 source: relative_source,
-                entry: export_name.clone(),
+                entry: source_entry,
                 interface_version: exported.export.interface_version,
                 package_manifest: None,
                 package_lock: None,
@@ -637,7 +766,7 @@ fn build_dependency_scope(
                 source_path: exported.source_path,
                 source_sha256: exported.source_sha256,
                 program: Arc::clone(&exported.program),
-                definition: exported.definition,
+                entry: exported.entry,
                 export: Some(exported.export),
                 transitive_fingerprints: exported.transitive_fingerprints,
                 expanded_bytes: 0,
@@ -704,6 +833,27 @@ fn generated_export_manifest(
             (input.name.clone(), serde_json::Value::Object(schema))
         })
         .collect::<serde_json::Map<_, _>>();
+    let mut contract = serde_json::json!({
+        "version": 1,
+        "backend": "program_module",
+        "program": reference,
+        "lifecycle": if export.lifecycle == ModuleLifecycle::Schedule {
+            serde_json::json!({ "kind": "program_service" })
+        } else {
+            serde_json::json!({ "kind": "oneshot" })
+        },
+        "output": export.output,
+        "outcomes": export.outcomes,
+        "result_envelope": export.result_envelope,
+        "capabilities": export.capabilities,
+        "effects": export.effects
+    });
+    if let Some(ports) = &export.ports {
+        contract
+            .as_object_mut()
+            .expect("contract is an object")
+            .insert("ports".into(), serde_json::to_value(ports)?);
+    }
     Ok(serde_json::to_string(&serde_json::json!({
         "name": name,
         "phrases": [],
@@ -711,17 +861,7 @@ fn generated_export_manifest(
         "accepts_stdin": false,
         "parameters": parameters,
         "arguments": [],
-        "contract": {
-            "version": 1,
-            "backend": "program_module",
-            "program": reference,
-            "lifecycle": { "kind": "oneshot" },
-            "output": export.output,
-            "outcomes": export.outcomes,
-            "result_envelope": export.result_envelope,
-            "capabilities": export.capabilities,
-            "effects": export.effects
-        }
+        "contract": contract
     }))?)
 }
 
@@ -741,12 +881,26 @@ fn program_invocations(program: &Program) -> Vec<&Invocation> {
     calls
 }
 
+fn manifest_is_program_service(manifest: &crate::manifest::Manifest) -> bool {
+    manifest.execution_backend() == AppletBackend::ProgramModule
+        && manifest
+            .execution_contract()
+            .is_some_and(|contract| contract.lifecycle.is_program_service())
+}
+
 fn program_invocations_for_source(
     program: &Program,
-    selected: &ReusableProgram,
+    selected: &LoadedProgramEntry,
 ) -> Vec<Invocation> {
     let mut calls = Vec::new();
-    collect_step_invocations_owned(&selected.steps, &mut calls);
+    match selected {
+        LoadedProgramEntry::Finite(definition) => {
+            collect_step_invocations_owned(&definition.steps, &mut calls)
+        }
+        LoadedProgramEntry::ProgramService => {
+            collect_step_invocations_owned(&program.steps, &mut calls)
+        }
+    }
     // Include any local helper that the parser retained as a definition. The
     // selected body is expanded for ordinary calls, while scanning retained
     // helpers closes over definitions reachable only through a helper call.
@@ -815,33 +969,64 @@ impl LoadedProgramModulePackage {
                 self.manifest.interface_version
             );
         }
-        if export.interface_version != PROGRAM_MODULE_INTERFACE_VERSION {
+        if !supports_program_module_interface(export.interface_version) {
             bail!(
-                "unsupported program module interface version {}; supported version is {}",
+                "unsupported program module interface version {}; supported versions are {} and {}",
                 export.interface_version,
-                PROGRAM_MODULE_INTERFACE_VERSION
-            );
-        }
-        if export.lifecycle != ModuleLifecycle::OneShot {
-            bail!(
-                "program module export {name:?} uses unsupported {:?} lifecycle; finite callers require one_shot",
-                export.lifecycle
+                PROGRAM_MODULE_INTERFACE_VERSION,
+                PROGRAM_MODULE_SERVICE_INTERFACE_VERSION
             );
         }
         validate_output_schema(&export.output)?;
-        let definition = self
-            .program
-            .definitions
-            .get(&export.entry)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow!(
-                    "program module {:?} has no entry {:?}",
-                    self.manifest.name,
-                    export.entry
+        let entry = match (export.interface_version, export.lifecycle) {
+            (PROGRAM_MODULE_INTERFACE_VERSION, ModuleLifecycle::OneShot) => {
+                let definition = self
+                    .program
+                    .definitions
+                    .get(&export.entry)
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "program module {:?} has no entry {:?}",
+                            self.manifest.name,
+                            export.entry
+                        )
+                    })?;
+                validate_export_inputs(name, &export.inputs, &definition.inputs)?;
+                LoadedProgramEntry::Finite(definition)
+            }
+            (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, ModuleLifecycle::Schedule) => {
+                validate_service_source(&self.program, name)?;
+                if export.entry != PROGRAM_MODULE_SERVICE_ROOT_ENTRY {
+                    bail!(
+                        "scheduled program module export {name:?} must select reserved root entry {:?}",
+                        PROGRAM_MODULE_SERVICE_ROOT_ENTRY
+                    );
+                }
+                validate_export_inputs(name, &export.inputs, &self.program.inputs)?;
+                validate_service_ports(
+                    name,
+                    &self.program.inputs,
+                    &export.output,
+                    export.result_envelope,
+                    export.ports.as_ref(),
+                )?;
+                LoadedProgramEntry::ProgramService
+            }
+            (PROGRAM_MODULE_INTERFACE_VERSION, lifecycle) => {
+                bail!(
+                    "program module export {name:?} uses unsupported {:?} lifecycle for finite interface version 1",
+                    lifecycle
                 )
-            })?;
-        validate_export_inputs(name, &export.inputs, &definition)?;
+            }
+            (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, lifecycle) => {
+                bail!(
+                    "program module export {name:?} uses unsupported {:?} lifecycle for scheduled interface version 2",
+                    lifecycle
+                )
+            }
+            (version, _) => bail!("unsupported program module interface version {version}"),
+        };
         Ok(LoadedProgramModule {
             reference: ProgramModule {
                 source: self.manifest.source.clone(),
@@ -859,7 +1044,7 @@ impl LoadedProgramModulePackage {
             source_sha256: self.source_sha256.clone(),
             manifest_sha256: self.manifest_sha256.clone(),
             program: Arc::clone(&self.program),
-            definition,
+            entry,
             export: export.clone(),
             expanded_bytes: self.expanded_bytes,
             transitive_fingerprints: self.fingerprints.clone(),
@@ -953,95 +1138,107 @@ pub fn load_program_module(
         &root,
         "program module source",
     )?;
-    let (
-        program,
-        definition,
-        source_sha256,
-        transitive_fingerprints,
-        export,
-        expanded_bytes,
-        package,
-    ) = match (&reference.package_manifest, &reference.package_lock) {
-        (None, None) => {
-            let source_bytes = read_limited(
-                &source_path,
-                MAX_PROGRAM_MODULE_GRAPH_BYTES,
-                "program module source",
-            )?;
-            let source_sha256 = sha256_hex(&source_bytes);
-            let source = std::str::from_utf8(&source_bytes).with_context(|| {
-                format!(
-                    "program module source {} is not UTF-8",
-                    source_path.display()
-                )
-            })?;
-            let program = parse_module_source(source, &source_path)?;
-            let definition = program
-                .definitions
-                .get(&reference.entry)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow!(
-                        "program module source does not export entry {:?}",
-                        reference.entry
+    let (program, entry, source_sha256, transitive_fingerprints, export, expanded_bytes, package) =
+        match (&reference.package_manifest, &reference.package_lock) {
+            (None, None) => {
+                let source_bytes = read_limited(
+                    &source_path,
+                    MAX_PROGRAM_MODULE_GRAPH_BYTES,
+                    "program module source",
+                )?;
+                let source_sha256 = sha256_hex(&source_bytes);
+                let source = std::str::from_utf8(&source_bytes).with_context(|| {
+                    format!(
+                        "program module source {} is not UTF-8",
+                        source_path.display()
                     )
                 })?;
-            let expanded_bytes = source_bytes.len();
-            (
-                Arc::new(program),
-                definition,
-                source_sha256,
-                Vec::new(),
-                None,
-                expanded_bytes,
-                None,
-            )
-        }
-        (Some(package_manifest), Some(package_lock)) => {
-            let package_manifest_path = resolve_relative_file(
-                &applet_manifest_path,
-                package_manifest,
-                &root,
-                "program module package manifest",
-            )?;
-            let package_lock_path = resolve_relative_file(
-                &applet_manifest_path,
-                package_lock,
-                &root,
-                "program module package lock",
-            )?;
-            let package = load_program_module_package(
-                &package_manifest_path,
-                &root,
-                Some(&package_lock_path),
-            )?;
-            let export = package.export(&reference.entry)?;
-            if export.source_path != source_path {
-                bail!(
-                    "program module source {} does not match package export source {}",
-                    source_path.display(),
-                    export.source_path.display()
-                );
+                let (program, entry) = match reference.interface_version {
+                    PROGRAM_MODULE_INTERFACE_VERSION => {
+                        let program = parse_module_source(source, &source_path)?;
+                        let definition = program
+                            .definitions
+                            .get(&reference.entry)
+                            .cloned()
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "program module source does not export entry {:?}",
+                                    reference.entry
+                                )
+                            })?;
+                        (program, LoadedProgramEntry::Finite(definition))
+                    }
+                    PROGRAM_MODULE_SERVICE_INTERFACE_VERSION => {
+                        if reference.entry != PROGRAM_MODULE_SERVICE_ROOT_ENTRY {
+                            bail!(
+                            "scheduled program module source must select reserved root entry {:?}",
+                            PROGRAM_MODULE_SERVICE_ROOT_ENTRY
+                        );
+                        }
+                        let program = crate::parser::parse(source).with_context(|| {
+                            format!("parsing program module source {}", source_path.display())
+                        })?;
+                        validate_service_source(&program, "direct source")?;
+                        (program, LoadedProgramEntry::ProgramService)
+                    }
+                    version => bail!("unsupported program module interface version {version}"),
+                };
+                let expanded_bytes = source_bytes.len();
+                (
+                    Arc::new(program),
+                    entry,
+                    source_sha256,
+                    Vec::new(),
+                    None,
+                    expanded_bytes,
+                    None,
+                )
             }
-            if export.reference.interface_version != reference.interface_version {
-                bail!(
+            (Some(package_manifest), Some(package_lock)) => {
+                let package_manifest_path = resolve_relative_file(
+                    &applet_manifest_path,
+                    package_manifest,
+                    &root,
+                    "program module package manifest",
+                )?;
+                let package_lock_path = resolve_relative_file(
+                    &applet_manifest_path,
+                    package_lock,
+                    &root,
+                    "program module package lock",
+                )?;
+                let package = load_program_module_package(
+                    &package_manifest_path,
+                    &root,
+                    Some(&package_lock_path),
+                )?;
+                let export = package.export(&reference.entry)?;
+                if export.source_path != source_path {
+                    bail!(
+                        "program module source {} does not match package export source {}",
+                        source_path.display(),
+                        export.source_path.display()
+                    );
+                }
+                if export.reference.interface_version != reference.interface_version {
+                    bail!(
                     "program module descriptor interface version {} does not match package export version {}",
                     reference.interface_version,
                     export.reference.interface_version
                 );
+                }
+                (
+                    export.program,
+                    export.entry,
+                    export.source_sha256,
+                    export.transitive_fingerprints,
+                    Some(export.export),
+                    export.expanded_bytes,
+                    Some(Arc::new(package)),
+                )
             }
-            (
-                export.program,
-                export.definition,
-                export.source_sha256,
-                export.transitive_fingerprints,
-                Some(export.export),
-                export.expanded_bytes,
-                Some(Arc::new(package)),
-            )
-        }
-        _ => unreachable!("ProgramModule::validate checks paired package paths"),
-    };
+            _ => unreachable!("ProgramModule::validate checks paired package paths"),
+        };
     let checkpoint_fingerprint = checkpoint_fingerprint(
         reference,
         &source_path,
@@ -1053,7 +1250,7 @@ pub fn load_program_module(
         source_path,
         source_sha256,
         program,
-        definition,
+        entry,
         export,
         transitive_fingerprints,
         expanded_bytes,
@@ -1175,25 +1372,57 @@ fn load_package_inner(
             .with_context(|| format!("program source {} is not UTF-8", source_path.display()))?;
         let program = crate::parser::parse(source)
             .with_context(|| format!("parsing program module source {}", source_path.display()))?;
-        if program.trigger.is_some() {
-            bail!("program module source cannot define a service trigger");
-        }
-        if !program.steps.is_empty() {
-            bail!(
-                "program module source may contain definitions only; top-level executable statements are not allowed"
-            );
+        match manifest.interface_version {
+            PROGRAM_MODULE_INTERFACE_VERSION => {
+                if program.trigger.is_some() {
+                    bail!("finite program module source cannot define a service trigger");
+                }
+                if !program.steps.is_empty() {
+                    bail!(
+                        "finite program module source may contain definitions only; top-level executable statements are not allowed"
+                    );
+                }
+            }
+            PROGRAM_MODULE_SERVICE_INTERFACE_VERSION => {
+                validate_service_source(&program, &source_path.display().to_string())?;
+            }
+            version => bail!("unsupported program module interface version {version}"),
         }
         for (export_name, export) in &manifest.exports {
             validate_export_declaration(export_name, export, &manifest)?;
-            let definition = program.definitions.get(&export.entry).ok_or_else(|| {
-                anyhow!(
-                    "program module {:?} does not define exported entry {:?}",
-                    manifest.name,
-                    export.entry
-                )
-            })?;
-            validate_export_inputs(export_name, &export.inputs, definition)?;
             validate_output_schema(&export.output)?;
+            match (manifest.interface_version, export.lifecycle) {
+                (PROGRAM_MODULE_INTERFACE_VERSION, ModuleLifecycle::OneShot) => {
+                    let definition = program.definitions.get(&export.entry).ok_or_else(|| {
+                        anyhow!(
+                            "program module {:?} does not define exported entry {:?}",
+                            manifest.name,
+                            export.entry
+                        )
+                    })?;
+                    validate_export_inputs(export_name, &export.inputs, &definition.inputs)?;
+                }
+                (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, ModuleLifecycle::Schedule) => {
+                    if export.entry != PROGRAM_MODULE_SERVICE_ROOT_ENTRY {
+                        bail!(
+                            "scheduled program module export {export_name:?} must select reserved root entry {:?}",
+                            PROGRAM_MODULE_SERVICE_ROOT_ENTRY
+                        );
+                    }
+                    validate_export_inputs(export_name, &export.inputs, &program.inputs)?;
+                    validate_service_ports(
+                        export_name,
+                        &program.inputs,
+                        &export.output,
+                        export.result_envelope,
+                        export.ports.as_ref(),
+                    )?;
+                }
+                _ => bail!(
+                    "program module export {export_name:?} lifecycle does not match package interface version {}",
+                    manifest.interface_version
+                ),
+            }
         }
 
         let mut dependencies = BTreeMap::new();
@@ -1291,11 +1520,12 @@ fn validate_package_manifest(manifest: &ProgramModulePackageManifest) -> Result<
         bail!("invalid program module package name {:?}", manifest.name);
     }
     parse_semver(&manifest.version)?;
-    if manifest.interface_version != PROGRAM_MODULE_INTERFACE_VERSION {
+    if !supports_program_module_interface(manifest.interface_version) {
         bail!(
-            "unsupported program module interface version {}; supported version is {}",
+            "unsupported program module interface version {}; supported versions are {} and {}",
             manifest.interface_version,
-            PROGRAM_MODULE_INTERFACE_VERSION
+            PROGRAM_MODULE_INTERFACE_VERSION,
+            PROGRAM_MODULE_SERVICE_INTERFACE_VERSION
         );
     }
     if !is_manifest_relative_path(&manifest.source) {
@@ -1304,6 +1534,11 @@ fn validate_package_manifest(manifest: &ProgramModulePackageManifest) -> Result<
     validate_sha256(&manifest.source_sha256, "source_sha256")?;
     if manifest.exports.is_empty() {
         bail!("program module package must declare at least one export");
+    }
+    if supports_program_module_service_interface(manifest.interface_version)
+        && manifest.exports.len() != 1
+    {
+        bail!("scheduled program module package must declare exactly one root export");
     }
     Ok(())
 }
@@ -1323,11 +1558,23 @@ fn validate_export_declaration(
             package.interface_version
         );
     }
-    if export.lifecycle != ModuleLifecycle::OneShot {
-        bail!(
-            "program module export {name:?} uses unsupported {:?} lifecycle; finite callers require one_shot",
-            export.lifecycle
-        );
+    match (package.interface_version, export.lifecycle) {
+        (PROGRAM_MODULE_INTERFACE_VERSION, ModuleLifecycle::OneShot)
+        | (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, ModuleLifecycle::Schedule) => {}
+        (PROGRAM_MODULE_INTERFACE_VERSION, lifecycle) => bail!(
+            "program module export {name:?} uses unsupported {:?} lifecycle for finite interface version 1",
+            lifecycle
+        ),
+        (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, lifecycle) => bail!(
+            "program module export {name:?} uses unsupported {:?} lifecycle for scheduled interface version 2",
+            lifecycle
+        ),
+        (version, _) => bail!("unsupported program module interface version {version}"),
+    }
+    if let Some(ports) = &export.ports {
+        ports
+            .validate()
+            .context("invalid program module export ports")?;
     }
     let mut input_names = BTreeSet::new();
     for input in &export.inputs {
@@ -1381,21 +1628,21 @@ fn validate_export_declaration(
 fn validate_export_inputs(
     export_name: &str,
     expected: &[ProgramModuleInput],
-    definition: &ReusableProgram,
+    source_inputs: &[InputDeclaration],
 ) -> Result<()> {
-    if expected.len() != definition.inputs.len() {
+    if expected.len() != source_inputs.len() {
         bail!(
             "program module export {export_name:?} declares {} inputs, source entry declares {}",
             expected.len(),
-            definition.inputs.len()
+            source_inputs.len()
         );
     }
-    let source_inputs = definition
-        .inputs
+    let source_input_count = source_inputs.len();
+    let source_inputs = source_inputs
         .iter()
         .map(|input| (input.name.as_str(), input))
         .collect::<BTreeMap<_, _>>();
-    if source_inputs.len() != definition.inputs.len() {
+    if source_inputs.len() != source_input_count {
         bail!("program module entry {export_name:?} declares duplicate source inputs");
     }
     for contract in expected {
@@ -1415,6 +1662,165 @@ fn validate_export_inputs(
         }
     }
     Ok(())
+}
+
+fn validate_service_source(program: &Program, label: &str) -> Result<()> {
+    crate::inputs::validate(&program.inputs)
+        .with_context(|| format!("validating scheduled program module inputs in {label}"))?;
+    match &program.trigger {
+        Some(Trigger::Every { interval_ms, .. }) if *interval_ms > 0 => {}
+        Some(Trigger::Every { .. }) => bail!("scheduled program module interval must be positive"),
+        Some(Trigger::Cron { expression, line }) => {
+            crate::schedule::CronSchedule::parse(expression)
+                .with_context(|| format!("scheduled program module trigger at line {line}"))?;
+        }
+        Some(Trigger::Listen { .. }) => {
+            bail!(
+                "scheduled program module interface version 2 supports only every or cron triggers"
+            )
+        }
+        None => bail!("scheduled program module requires an every or cron trigger"),
+    }
+    Ok(())
+}
+
+fn validate_service_ports(
+    name: &str,
+    inputs: &[InputDeclaration],
+    output: &OutputSchema,
+    result_envelope: bool,
+    ports: Option<&AppletPorts>,
+) -> Result<()> {
+    let ports = ports.ok_or_else(|| {
+        anyhow!("scheduled program module {name:?} requires typed input and event ports")
+    })?;
+    if !ports.outputs.is_empty() {
+        bail!("scheduled program module {name:?} does not support stdout output ports");
+    }
+    if ports.events.len() != 1 {
+        bail!("scheduled program module {name:?} must declare exactly one event port");
+    }
+    if ports.inputs.len() != inputs.len() {
+        bail!(
+            "scheduled program module {name:?} must declare one Single input port for each of its {} startup inputs",
+            inputs.len()
+        );
+    }
+    for declaration in inputs {
+        if declaration.source.is_some() {
+            bail!(
+                "scheduled program module {name:?} input {:?} must be supplied as a startup port value",
+                declaration.name
+            );
+        }
+        let port = ports.inputs.get(&declaration.name).ok_or_else(|| {
+            anyhow!(
+                "scheduled program module {name:?} has no input port for {:?}",
+                declaration.name
+            )
+        })?;
+        if port.delivery != PortDelivery::Single {
+            bail!(
+                "scheduled program module {name:?} startup input {:?} must use single delivery",
+                declaration.name
+            );
+        }
+        if !port_schema_accepts_input(&port.schema, declaration.kind) {
+            bail!(
+                "scheduled program module {name:?} input port {:?} is incompatible with its source declaration",
+                declaration.name
+            );
+        }
+    }
+    let (event_name, event) = ports
+        .events
+        .iter()
+        .next()
+        .expect("exactly one event checked");
+    let expected = decoded_event_schema(output, result_envelope)?;
+    if event.schema != expected {
+        bail!(
+            "scheduled program module {name:?} event port {event_name:?} schema must match its decoded handler output"
+        );
+    }
+    Ok(())
+}
+
+fn port_schema_accepts_input(schema: &ValueSchema, input: InputType) -> bool {
+    if schema.nullable {
+        return input == InputType::Json && schema.kind != OutputType::Bytes;
+    }
+    match input {
+        InputType::Text => matches!(schema.kind, OutputType::Text | OutputType::Path),
+        InputType::Integer => schema.kind == OutputType::Integer,
+        InputType::Boolean => schema.kind == OutputType::Boolean,
+        InputType::TextList => {
+            schema.kind == OutputType::List
+                && schema.items.as_deref().is_some_and(|item| {
+                    !item.nullable && matches!(item.kind, OutputType::Text | OutputType::Path)
+                })
+        }
+        InputType::Json => schema.kind != OutputType::Bytes,
+    }
+}
+
+fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<ValueSchema> {
+    if output.kind == OutputType::Bytes {
+        bail!("scheduled program module event output cannot contain raw bytes");
+    }
+    let value_schema = ValueSchema {
+        kind: output.kind,
+        nullable: false,
+        items: output.items.clone(),
+        fields: output.fields.clone(),
+        required: output.required.clone(),
+        enum_values: output.enum_values.clone(),
+    };
+    if !result_envelope {
+        return Ok(value_schema);
+    }
+    let text_schema = || ValueSchema {
+        kind: OutputType::Text,
+        nullable: false,
+        items: None,
+        fields: BTreeMap::new(),
+        required: Vec::new(),
+        enum_values: None,
+    };
+    let integer_schema = ValueSchema {
+        kind: OutputType::Integer,
+        nullable: false,
+        items: None,
+        fields: BTreeMap::new(),
+        required: Vec::new(),
+        enum_values: None,
+    };
+    Ok(ValueSchema {
+        kind: OutputType::Record,
+        nullable: false,
+        items: None,
+        fields: BTreeMap::from([
+            (
+                "value".into(),
+                ValueSchema {
+                    nullable: true,
+                    ..value_schema
+                },
+            ),
+            ("outcome".into(), text_schema()),
+            ("kind".into(), text_schema()),
+            ("effect_certainty".into(), text_schema()),
+            ("status".into(), integer_schema),
+        ]),
+        required: vec![
+            "value".into(),
+            "outcome".into(),
+            "kind".into(),
+            "effect_certainty".into(),
+            "status".into(),
+        ],
+        enum_values: None,
+    })
 }
 
 fn validate_output_schema(output: &OutputSchema) -> Result<()> {
@@ -1890,6 +2296,7 @@ mod tests {
                     lifecycle: ModuleLifecycle::OneShot,
                     capabilities: Vec::new(),
                     effects: Vec::new(),
+                    ports: None,
                 },
             )]),
             dependencies: BTreeMap::new(),
@@ -1918,7 +2325,7 @@ mod tests {
             export.source_path,
             fs::canonicalize(package_dir.join("src/library.program")).unwrap()
         );
-        assert_eq!(export.definition.inputs[0].name, "text");
+        assert_eq!(export.finite_definition().unwrap().inputs[0].name, "text");
         assert_eq!(export.export.output.kind, OutputType::Record);
         assert_eq!(export.export.output.fields.len(), 2);
         assert_eq!(export.reference.interface_version, 1);
@@ -1955,7 +2362,7 @@ mod tests {
         );
         let mut package: ProgramModulePackageManifest =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-        package.interface_version = 2;
+        package.interface_version = 3;
         fs::write(&manifest_path, serde_json::to_vec(&package).unwrap()).unwrap();
         let error = load_program_module_package(&manifest_path, &root, None).unwrap_err();
         assert!(format!("{error:#}").contains("unsupported program module interface version"));
@@ -2111,8 +2518,17 @@ mod tests {
         .is_err());
         assert!(ProgramModule {
             source: PathBuf::from("clean.program"),
-            entry: "clean".into(),
+            entry: PROGRAM_MODULE_SERVICE_ROOT_ENTRY.into(),
             interface_version: 2,
+            package_manifest: None,
+            package_lock: None,
+        }
+        .validate()
+        .is_ok());
+        assert!(ProgramModule {
+            source: PathBuf::from("clean.program"),
+            entry: PROGRAM_MODULE_SERVICE_ROOT_ENTRY.into(),
+            interface_version: 3,
             package_manifest: None,
             package_lock: None,
         }
@@ -2142,7 +2558,7 @@ mod tests {
             &root,
         )
         .unwrap();
-        assert_eq!(loaded.definition.inputs[0].name, "text");
+        assert_eq!(loaded.finite_definition().unwrap().inputs[0].name, "text");
         assert_eq!(loaded.source_sha256, sha256_hex(source.as_bytes()));
         assert!(load_program_module(
             &ProgramModule {

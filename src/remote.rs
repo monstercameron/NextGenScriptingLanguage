@@ -831,6 +831,7 @@ pub struct RemoteClient {
     cached_descriptor: Arc<Mutex<Option<RemoteAppletDescriptor>>>,
     secret_redactor: Option<Arc<crate::security::SecretRedactor>>,
     resolver_helper: Option<Arc<PathBuf>>,
+    process_observer: Option<Arc<dyn Fn(usize) + Send + Sync>>,
 }
 
 impl fmt::Debug for RemoteClient {
@@ -893,6 +894,7 @@ impl RemoteClient {
             cached_descriptor: Arc::new(Mutex::new(None)),
             secret_redactor: None,
             resolver_helper: None,
+            process_observer: None,
         })
     }
 
@@ -907,6 +909,13 @@ impl RemoteClient {
     /// Library embeddings that omit this can still use literal-IP endpoints.
     pub fn with_resolver_helper(mut self, executable: impl Into<PathBuf>) -> Self {
         self.resolver_helper = Some(Arc::new(executable.into()));
+        self
+    }
+
+    /// Observe successful resolver-helper process spawns. The callback runs
+    /// immediately after spawn, before resolution can later fail or cancel.
+    pub fn with_process_observer(mut self, observer: Arc<dyn Fn(usize) + Send + Sync>) -> Self {
+        self.process_observer = Some(observer);
         self
     }
 
@@ -1299,6 +1308,7 @@ impl RemoteClient {
             InterruptibleSystemResolver {
                 helper: self.resolver_helper.as_deref().cloned(),
                 cancelled,
+                process_observer: self.process_observer.clone(),
             },
         )
     }
@@ -2033,10 +2043,20 @@ fn map_ureq_error(
 /// DNS resolver supervised by the execute CLI process. A child is killed and
 /// reaped when the caller cancels or its total request budget expires, so DNS
 /// cannot leave a detached worker behind or block cancellation indefinitely.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct InterruptibleSystemResolver {
     helper: Option<PathBuf>,
     cancelled: Arc<AtomicBool>,
+    process_observer: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+}
+
+impl std::fmt::Debug for InterruptibleSystemResolver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InterruptibleSystemResolver")
+            .field("helper", &self.helper)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Resolver for InterruptibleSystemResolver {
@@ -2066,7 +2086,14 @@ impl Resolver for InterruptibleSystemResolver {
             addrs.push(std::net::SocketAddr::new(ip, port));
         } else {
             let helper = self.helper.as_deref().ok_or(ureq::Error::HostNotFound)?;
-            addrs = resolve_with_helper(helper, host, port, timeout, &self.cancelled)?;
+            addrs = resolve_with_helper(
+                helper,
+                host,
+                port,
+                timeout,
+                &self.cancelled,
+                self.process_observer.as_deref(),
+            )?;
         }
         if addrs.is_empty() {
             Err(ureq::Error::HostNotFound)
@@ -2093,6 +2120,7 @@ fn resolve_with_helper(
     port: u16,
     timeout: ureq::unversioned::transport::NextTimeout,
     cancelled: &AtomicBool,
+    process_observer: Option<&(dyn Fn(usize) + Send + Sync)>,
 ) -> Result<ResolvedSocketAddrs, ureq::Error> {
     let started = Instant::now();
     let mut child = ResolverChild(
@@ -2107,6 +2135,9 @@ fn resolve_with_helper(
             .spawn()
             .map_err(ureq::Error::Io)?,
     );
+    if let Some(observer) = process_observer {
+        observer(1);
+    }
 
     loop {
         if cancelled.load(Ordering::Relaxed) {

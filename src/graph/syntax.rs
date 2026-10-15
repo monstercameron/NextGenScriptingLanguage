@@ -3,7 +3,9 @@ use super::plan::{
     PortSchema,
 };
 use crate::ast::{Connection, Invocation, StepKind};
-use crate::contracts::{OutputEncoding, OutputType, PortDelivery, Sensitivity, ValueSchema};
+use crate::contracts::{
+    Lifecycle, OutputEncoding, OutputType, PortDelivery, Sensitivity, ValueSchema,
+};
 use crate::manifest::{Manifest, Registry};
 use crate::parser;
 use anyhow::{anyhow, bail, Context, Result};
@@ -98,7 +100,9 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
                 .take()
                 .ok_or_else(|| anyhow!("line {line_number}: graph applet needs `as <node>`"))?;
             if call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
-                bail!("line {line_number}: graph nodes do not accept finite cache/status/result suffixes");
+                bail!(
+                    "line {line_number}: graph nodes do not accept finite cache/status/result suffixes"
+                );
             }
             let manifest = registry
                 .resolve_call(&call)
@@ -632,9 +636,16 @@ fn node_for_call(
     } else {
         PortDelivery::Single
     };
+    let is_program_service = manifest
+        .execution_contract()
+        .is_some_and(|contract| contract.lifecycle == Lifecycle::ProgramService);
     let node = GraphNode {
         id,
-        kind: GraphNodeKind::Applet { call },
+        kind: if is_program_service {
+            GraphNodeKind::ProgramService { call }
+        } else {
+            GraphNodeKind::Applet { call }
+        },
         inputs,
         outputs,
         events,
@@ -643,16 +654,18 @@ fn node_for_call(
     // `status` is a stable result port for all applets, including those with
     // explicit value ports. It is generated from the native invocation result.
     let mut node = node;
-    node.outputs
-        .entry("status".into())
-        .or_insert_with(|| PortSchema {
-            schema: leaf_schema(OutputType::Integer),
-            delivery: status_delivery,
-            sensitivity: Sensitivity::Unknown,
-            required: false,
-            pointer: None,
-            encoding: None,
-        });
+    if !is_program_service {
+        node.outputs
+            .entry("status".into())
+            .or_insert_with(|| PortSchema {
+                schema: leaf_schema(OutputType::Integer),
+                delivery: status_delivery,
+                sensitivity: Sensitivity::Unknown,
+                required: false,
+                pointer: None,
+                encoding: None,
+            });
+    }
     Ok(node)
 }
 

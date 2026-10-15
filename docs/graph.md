@@ -18,6 +18,14 @@ capabilities and data-flow policy before starting nodes. Graphs are finite
 plans, but timers and listeners can remain active until cancellation or a
 configured total timeout.
 
+`GraphSession::start` is the lower-level activation API. It checks graph
+topology and runtime admission limits, then starts the supplied executor; it
+does not resolve applets or perform capability, data-flow policy, or program
+module preflight. A host that starts a `RuntimeGraphExecutor` directly must run
+those checks and preload the matching `ProgramModuleSession` first. The
+`graph::run` convenience function performs registry, policy and module
+preflight before activating the graph.
+
 Hosts that reconfigure a live session can use `GraphSession::try_reconfigure`:
 static admission failures leave the current generation running. After
 admission succeeds, the current generation is stopped before replacement
@@ -115,6 +123,14 @@ An omitted capacity defaults to 16; the default policy is `lossless`. Available
 policies are `lossless`, `drop newest`, `drop oldest` and `latest`. Lossless
 queues backpressure their producer. The lossy policies discard new, oldest or
 all queued messages respectively when full. Every edge has a bounded queue.
+
+An interface-2 scheduled `.program` applet runs as a persistent graph node. Its
+handler output is decoded through the applet contract and published as one
+typed event per successful tick; its declared `Single` inputs are read when the
+graph starts. Cancellation, deadlines and reconfiguration stop and join the
+service through the graph's existing bounded queues. See the
+[scheduled queue monitor](../examples/modules/queue_monitor/README.md) for a
+package, graph source and typed event contract.
 
 Each port declares a canonical value schema and a delivery mode: `single`,
 `records` or `events`. Validation checks names, required inputs, schemas,

@@ -72,7 +72,7 @@ rust-check:
 	$(CARGO) fmt --check
 	$(RUSTFMT) --edition 2021 --check src/runtime/shared.rs
 	$(CARGO) clippy --locked --all-targets -- -D warnings
-	$(CARGO) test --locked --release -- --test-threads=1
+	$(CARGO) test --locked --release --no-fail-fast -- --test-threads=1
 	$(CARGO) build --locked --release
 
 build:

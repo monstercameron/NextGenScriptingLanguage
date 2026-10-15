@@ -422,8 +422,7 @@ impl BrowserSession {
                         let outcome = manifest.outcome_for(status);
                         if outcome.kind != OutcomeKind::Success && call.status_binding.is_none() {
                             bail!(
-                                "line {}: applet {:?} produced {:?} outcome ({status})",
-                                step.line,
+                                "applet {:?} produced {:?} outcome (status {status})",
                                 manifest.name_for(call),
                                 outcome.name
                             );

@@ -176,13 +176,19 @@ test('loops preserve zero input, update typed status and nest through calls', as
   assert.equal(batch.files['/workspace/tasks-two.txt'], 'bravo\ndelta\n');
 });
 
-test('loop bodies and known invalid counts fail before virtual file effects', async () => {
+test('for each iterates JSON array literals', async () => {
+  const call = await seeded();
+  const source = 'for each item in [1, null, {"nested": [2]}]\n  then encode item as json';
+  assert.equal(good(run(call, source)).stdout, '{"nested":[2]}');
+});
+
+test('loop bodies and invalid headers fail before virtual file effects', async () => {
   const call = await seeded();
   const prefix = 'run "printf" with arguments ["forbidden"]\nthen save to "forbidden.txt"\n';
   for (const body of [
     'repeat 0 times\n  run nonexistent_applet',
     'repeat -1 times\n  run "true"',
-    'for each file in [1]\n  run "true"',
+    'for each file in 1\n  run "true"',
   ]) {
     bad(run(call, prefix + body), /count|text|unknown/);
     assert.ok(!good(call({ action: 'inspect' })).files['/workspace/forbidden.txt']);
@@ -308,7 +314,7 @@ test('browser flag subsets are explicit and failed statuses are capturable', asy
     good(run(call, 'run "false" and keep status as code\nthen encode code as json')).stdout,
     '1',
   );
-  bad(run(call, 'run "false"'), /status 1/);
+  bad(run(call, 'run "false"'), /^line 1: applet "false" produced ".+" outcome \(status 1\)$/);
 });
 test('terminal quoting, malformed commands, paths and cd persistence', async () => {
   const call = await session();

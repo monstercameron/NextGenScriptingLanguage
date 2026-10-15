@@ -126,7 +126,41 @@ include fresh interpreter startup and the named workload. They compare two
 Execute revisions on the recorded host; cold-cache behavior, process-tree RSS,
 other operating systems and Bash/Nushell parity need separate measurements.
 `tests/source_pair_bench.py` checks the harness without collecting performance
-data. No source-pair result is recorded yet.
+data.
+
+### October 15 source comparison
+
+The [summary](source-pair-macos-arm64-1eabbfa-summary.json) and
+[compressed raw report](source-pair-macos-arm64-1eabbfa.json.xz) compare baseline
+`0c57e22` with runtime candidate `1eabbfa` using harness `91fbaae`. This is one
+paired run on macOS arm64 with 30 measured samples per side per workload and
+five excluded warmups. Every invocation passed independent output, status,
+stderr and effect checks; the recorded artifacts stayed unchanged.
+
+| Workload | Baseline median (ms) | Candidate median (ms) | Change |
+| --- | ---: | ---: | ---: |
+| Fresh direct `true` | 9.999 | 9.950 | -0.5% |
+| Literal argv, 8 values | 10.741 | 10.549 | -1.8% |
+| Literal argv, 64 values | 10.021 | 10.268 | +2.5% |
+| Literal argv, 256 values | 10.655 | 10.873 | +2.0% |
+| Literal argv, 1,024 values | 11.064 | 10.693 | -3.4% |
+| Native `cat` to `tr` pipe | 25.255 | 24.858 | -1.6% |
+| Two in-process graph nodes | 11.689 | 11.505 | -1.6% |
+| Existing Omarchy log success fixture | 13.671 | 13.000 | -4.9% |
+| Match 1,000 metadata manifests, top 100 | 1,055.144 | 118.672 | -88.8% |
+
+The discovery result supports the top-K storage optimization on this metadata
+workload. Ranking still compares the source/target cross product; this does not
+prove 1,000 concurrent applet instances or independently implemented providers.
+Other task medians are mixed, and some tails worsen: native-pipe p95 rises from
+29.860 to 38.633 ms, and 1,024-argument p95 rises from 12.918 to 14.733 ms.
+These measurements do not establish a broad runtime speedup or a production
+Bash/Omarchy replacement.
+
+The raw JSON contains repeated fixture snapshots and is retained losslessly as
+XZ instead of adding a 102 MB JSON file to Git. The summary records compressed
+and uncompressed hashes; decompression was checked against the original bytes.
+Use `xz -dc benchmarks/source-pair-macos-arm64-1eabbfa.json.xz` to inspect it.
 
 # Native stream framing
 

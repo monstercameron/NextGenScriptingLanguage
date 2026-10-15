@@ -1,0 +1,227 @@
+{
+  "schema": "execute.source-pair-summary/1",
+  "recorded_at_utc": "2026-10-15T21:33:12.916067+00:00",
+  "revisions": {
+    "baseline": "0c57e22ce7b5cc3028eedeeb6cd1db0f5e3990d6",
+    "candidate": "1eabbfa14018a6bc09fb89f6dda15542b5f30472"
+  },
+  "runtime_candidate_built_from": "1eabbfa14018a6bc09fb89f6dda15542b5f30472",
+  "harness_revision": "91fbaae",
+  "parameters": {
+    "argv_counts": [
+      8,
+      64,
+      256,
+      1024
+    ],
+    "command_timeout_ms": 10000,
+    "samples_per_side_per_workload": 30,
+    "timeout_seconds": 30.0,
+    "transform_lines": 8192,
+    "warmups_per_side_per_workload": 5
+  },
+  "compressed_raw_report": {
+    "path": "source-pair-macos-arm64-1eabbfa.json.xz",
+    "sha256": "775643460a0ef0df0d8d4045b37341f6f4b888b1a379207a20942a78251f6073",
+    "bytes": 92116,
+    "uncompressed_sha256": "e0126ef7f0ac68412c495f23e14fecf0b92ce96765d1d74407095ce474798b28",
+    "uncompressed_bytes": 102410857,
+    "decompression_verified": true
+  },
+  "artifact_fingerprints_unchanged": true,
+  "environment": {
+    "architecture": "arm64",
+    "environment": {
+      "LANG": "C",
+      "LC_ALL": "C",
+      "TZ": "UTC"
+    },
+    "logical_cpu_count": 10,
+    "os": "Darwin",
+    "os_release": "25.6.0",
+    "path_sha256": "3c73142456b28a169dd5917655debe89408657ee718b943cbead8035586283e3",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "processor": "arm",
+    "python": "3.9.6 (default, May 22 2026, 11:13:45) "
+  },
+  "workloads": {
+    "applet_match_1000_catalog_top_100": {
+      "baseline": {
+        "maximum_ns": 1941131208,
+        "median_ns": 1055143895.5,
+        "minimum_ns": 936870708,
+        "p95_nearest_rank_ns": 1299345834,
+        "sample_count": 30
+      },
+      "candidate": {
+        "maximum_ns": 145428500,
+        "median_ns": 118672104.5,
+        "minimum_ns": 112257416,
+        "p95_nearest_rank_ns": 133570875,
+        "sample_count": 30
+      },
+      "candidate_median_change_percent": -88.75299331151749,
+      "candidate_p95_change_percent": -89.72014443692748,
+      "measured_rows": 60
+    },
+    "existing_omarchy_update_log_success": {
+      "baseline": {
+        "maximum_ns": 20517167,
+        "median_ns": 13671395.5,
+        "minimum_ns": 11855583,
+        "p95_nearest_rank_ns": 20505416,
+        "sample_count": 30
+      },
+      "candidate": {
+        "maximum_ns": 17825000,
+        "median_ns": 12999624.5,
+        "minimum_ns": 11604042,
+        "p95_nearest_rank_ns": 17235375,
+        "sample_count": 30
+      },
+      "candidate_median_change_percent": -4.913697361765301,
+      "candidate_p95_change_percent": -15.947206338071851,
+      "measured_rows": 60
+    },
+    "fresh_noop_direct_true": {
+      "baseline": {
+        "maximum_ns": 17050291,
+        "median_ns": 9998979.5,
+        "minimum_ns": 9077792,
+        "p95_nearest_rank_ns": 14827667,
+        "sample_count": 30
+      },
+      "candidate": {
+        "maximum_ns": 12955208,
+        "median_ns": 9949563.0,
+        "minimum_ns": 8886667,
+        "p95_nearest_rank_ns": 12655667,
+        "sample_count": 30
+      },
+      "candidate_median_change_percent": -0.494215434685108,
+      "candidate_p95_change_percent": -14.64829227686324,
+      "measured_rows": 60
+    },
+    "legacy_typed_graph_two_inprocess_nodes": {
+      "baseline": {
+        "maximum_ns": 16187084,
+        "median_ns": 11689375.0,
+        "minimum_ns": 10925000,
+        "p95_nearest_rank_ns": 15567958,
+        "sample_count": 30
+      },
+      "candidate": {
+        "maximum_ns": 17854667,
+        "median_ns": 11504792.0,
+        "minimum_ns": 10594750,
+        "p95_nearest_rank_ns": 16378584,
+        "sample_count": 30
+      },
+      "candidate_median_change_percent": -1.579066459926215,
+      "candidate_p95_change_percent": 5.207015589327768,
+      "measured_rows": 60
+    },
+    "literal_argv_1024": {
+      "baseline": {
+        "maximum_ns": 15523500,
+        "median_ns": 11064333.0,
+        "minimum_ns": 10498292,
+        "p95_nearest_rank_ns": 12917791,
+        "sample_count": 30
+      },
+      "candidate": {
+        "maximum_ns": 14898041,
+        "median_ns": 10692500.0,
+        "minimum_ns": 9943917,
+        "p95_nearest_rank_ns": 14733041,
+        "sample_count": 30
+      },
+      "candidate_median_change_percent": -3.360645418029262,
+      "candidate_p95_change_percent": 14.052325200183224,
+      "measured_rows": 60
+    },
+    "literal_argv_256": {
+      "baseline": {
+        "maximum_ns": 17955250,
+        "median_ns": 10654729.0,
+        "minimum_ns": 9623916,
+        "p95_nearest_rank_ns": 16801542,
+        "sample_count": 30
+      },
+      "candidate": {
+        "maximum_ns": 20673583,
+        "median_ns": 10873125.0,
+        "minimum_ns": 9355917,
+        "p95_nearest_rank_ns": 17137041,
+        "sample_count": 30
+      },
+      "candidate_median_change_percent": 2.049756497795485,
+      "candidate_p95_change_percent": 1.9968345762549689,
+      "measured_rows": 60
+    },
+    "literal_argv_64": {
+      "baseline": {
+        "maximum_ns": 18470125,
+        "median_ns": 10020521.0,
+        "minimum_ns": 9019666,
+        "p95_nearest_rank_ns": 16093959,
+        "sample_count": 30
+      },
+      "candidate": {
+        "maximum_ns": 30851709,
+        "median_ns": 10268083.0,
+        "minimum_ns": 9219583,
+        "p95_nearest_rank_ns": 14825584,
+        "sample_count": 30
+      },
+      "candidate_median_change_percent": 2.4705501839674904,
+      "candidate_p95_change_percent": -7.881062701849806,
+      "measured_rows": 60
+    },
+    "literal_argv_8": {
+      "baseline": {
+        "maximum_ns": 61441000,
+        "median_ns": 10740791.5,
+        "minimum_ns": 9134625,
+        "p95_nearest_rank_ns": 17537375,
+        "sample_count": 30
+      },
+      "candidate": {
+        "maximum_ns": 23559250,
+        "median_ns": 10549146.0,
+        "minimum_ns": 9085292,
+        "p95_nearest_rank_ns": 19752042,
+        "sample_count": 30
+      },
+      "candidate_median_change_percent": -1.7842772574069632,
+      "candidate_p95_change_percent": 12.628269624159838,
+      "measured_rows": 60
+    },
+    "native_pipe_cat_to_tr": {
+      "baseline": {
+        "maximum_ns": 45492417,
+        "median_ns": 25255062.5,
+        "minimum_ns": 24406208,
+        "p95_nearest_rank_ns": 29860125,
+        "sample_count": 30
+      },
+      "candidate": {
+        "maximum_ns": 43499916,
+        "median_ns": 24858229.5,
+        "minimum_ns": 23693833,
+        "p95_nearest_rank_ns": 38633083,
+        "sample_count": 30
+      },
+      "candidate_median_change_percent": -1.5713008035517673,
+      "candidate_p95_change_percent": 29.38017841519418,
+      "measured_rows": 60
+    }
+  },
+  "limitations": [
+    "One paired run on macOS arm64 with warm caches; 30 samples per side per workload after five excluded warmups.",
+    "Only end-to-end CLI wall time; no CPU, RSS, cold-cache, native Linux or Windows result.",
+    "All invocation output, status, stderr, effects and declared artifact stability oracles passed.",
+    "The 1,000-manifest case is synthetic metadata matching, not 1,000 independent implementations or concurrent applet instances.",
+    "Ordinary task medians are mixed; some p95 tails worsen. No broad runtime speedup or Bash/Omarchy readiness claim."
+  ]
+}

@@ -1706,8 +1706,11 @@ mod tests {
         let error =
             apply_with_fault(&plan, temp.path(), None, Some(&interpose_target_drift)).unwrap_err();
 
+        let published_journal = fs::canonicalize(&journal).unwrap();
         assert_eq!(error.code, "conflict");
-        assert!(error.message.contains(journal.to_string_lossy().as_ref()));
+        assert!(error
+            .message
+            .contains(published_journal.to_string_lossy().as_ref()));
         assert!(error.message.contains("remains for explicit recovery"));
         assert_eq!(fs::read(&target).unwrap(), b"third-party update");
         assert_eq!(

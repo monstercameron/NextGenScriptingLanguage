@@ -45,6 +45,13 @@ pub struct WorkflowServiceRequest<'a> {
 
 /// Render a service definition without installing or activating it.
 pub fn render_for_workflow(request: &WorkflowServiceRequest<'_>) -> Result<String> {
+    render_for_workflow_with_launchd_home(request, None)
+}
+
+fn render_for_workflow_with_launchd_home(
+    request: &WorkflowServiceRequest<'_>,
+    launchd_home: Option<&Path>,
+) -> Result<String> {
     let workflow = canonical_file(request.workflow_path, "workflow")?;
     let executable = canonical_file(request.executable, "execute binary")?;
     let working_directory = canonical_directory(request.working_directory, "working directory")?;
@@ -126,7 +133,7 @@ pub fn render_for_workflow(request: &WorkflowServiceRequest<'_>) -> Result<Strin
 
     match request.format {
         ServiceFormat::Systemd => render_systemd(&label, &working_directory, &argv),
-        ServiceFormat::Launchd => render_launchd(&label, &working_directory, &argv),
+        ServiceFormat::Launchd => render_launchd(&label, &working_directory, &argv, launchd_home),
     }
 }
 
@@ -288,9 +295,15 @@ WantedBy=default.target\n"
     ))
 }
 
-fn render_launchd(label: &str, working_directory: &Path, argv: &[String]) -> Result<String> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
+fn render_launchd(
+    label: &str,
+    working_directory: &Path,
+    argv: &[String],
+    home_override: Option<&Path>,
+) -> Result<String> {
+    let home = home_override
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| anyhow!("HOME is required to choose launchd log paths"))?;
     let log_directory = home.join("Library").join("Logs");
     let stdout_path = log_directory.join(format!("{label}.stdout.log"));
@@ -434,23 +447,30 @@ mod tests {
         let executable = std::env::current_exe().unwrap();
         let inputs = BTreeMap::new();
         let arguments = Vec::new();
-        let rendered = render_for_workflow(&WorkflowServiceRequest {
-            format: ServiceFormat::Launchd,
-            workflow_path: &workflow,
-            executable: &executable,
-            working_directory: directory.path(),
-            manifest_directory: None,
-            capability_policy: None,
-            data_flow_policy: None,
-            label: Some("com.example.scheduled"),
-            inputs: &inputs,
-            program_arguments: &arguments,
-        })
+        let rendered = render_for_workflow_with_launchd_home(
+            &WorkflowServiceRequest {
+                format: ServiceFormat::Launchd,
+                workflow_path: &workflow,
+                executable: &executable,
+                working_directory: directory.path(),
+                manifest_directory: None,
+                capability_policy: None,
+                data_flow_policy: None,
+                label: Some("com.example.scheduled"),
+                inputs: &inputs,
+                program_arguments: &arguments,
+            },
+            Some(directory.path()),
+        )
         .unwrap();
         assert!(rendered.contains("<key>RunAtLoad</key>\n<true/>"));
         assert!(
             rendered.contains("<key>KeepAlive</key>\n<dict>\n<key>SuccessfulExit</key>\n<false/>")
         );
+        let expected_log = directory
+            .path()
+            .join("Library/Logs/com.example.scheduled.stdout.log");
+        assert!(rendered.contains(expected_log.to_string_lossy().as_ref()));
     }
 
     #[test]

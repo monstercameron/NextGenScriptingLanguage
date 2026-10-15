@@ -1298,7 +1298,7 @@ fn validate_package_manifest(manifest: &ProgramModulePackageManifest) -> Result<
             PROGRAM_MODULE_INTERFACE_VERSION
         );
     }
-    if manifest.source.as_os_str().is_empty() || manifest.source.is_absolute() {
+    if !is_manifest_relative_path(&manifest.source) {
         bail!("program module source must be a nonempty relative path");
     }
     validate_sha256(&manifest.source_sha256, "source_sha256")?;
@@ -1432,7 +1432,7 @@ fn validate_dependency(alias: &str, dependency: &ProgramModuleDependency) -> Res
     if !valid_identifier(alias) {
         bail!("program module dependency alias {alias:?} must be an identifier");
     }
-    if dependency.manifest.as_os_str().is_empty() || dependency.manifest.is_absolute() {
+    if !is_manifest_relative_path(&dependency.manifest) {
         bail!("program module dependency manifest must be a nonempty relative path");
     }
     validate_sha256(&dependency.source_sha256, "dependency source_sha256")?;
@@ -1480,7 +1480,7 @@ fn resolve_relative_file(
     root: &Path,
     what: &str,
 ) -> Result<PathBuf> {
-    if relative.is_absolute() {
+    if !is_manifest_relative_path(relative) {
         bail!("{what} path must be relative to its declaring manifest");
     }
     let parent = manifest_path
@@ -1490,12 +1490,6 @@ fn resolve_relative_file(
 }
 
 fn resolve_inside_root(path: &Path, root: &Path, what: &str) -> Result<PathBuf> {
-    if path
-        .components()
-        .any(|component| matches!(component, Component::Prefix(_)))
-    {
-        bail!("{what} path has an unsupported prefix");
-    }
     let canonical =
         fs::canonicalize(path).with_context(|| format!("resolving {what} {}", path.display()))?;
     if !canonical.starts_with(root) {
@@ -1510,6 +1504,14 @@ fn resolve_inside_root(path: &Path, root: &Path, what: &str) -> Result<PathBuf> 
         bail!("{what} {} is not a regular file", canonical.display());
     }
     Ok(canonical)
+}
+
+fn is_manifest_relative_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && !path
+            .components()
+            .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
 }
 
 fn canonical_directory(path: &Path, what: &str) -> Result<PathBuf> {
@@ -2156,6 +2158,34 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("does not export entry"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn canonical_drive_paths_are_confined_but_drive_relative_paths_are_rejected() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("modules");
+        fs::create_dir_all(&root).unwrap();
+        let inside = root.join("inside.program");
+        let outside = temp.path().join("outside.program");
+        fs::write(&inside, "inside").unwrap();
+        fs::write(&outside, "outside").unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let inside = fs::canonicalize(inside).unwrap();
+        let outside = fs::canonicalize(outside).unwrap();
+
+        assert_eq!(
+            resolve_inside_root(&inside, &root, "module source").unwrap(),
+            inside
+        );
+        assert!(resolve_inside_root(&outside, &root, "module source")
+            .unwrap_err()
+            .to_string()
+            .contains("outside allowed module root"));
+
+        let drive_relative = PathBuf::from(r"C:outside.program");
+        assert!(!drive_relative.is_absolute());
+        assert!(!is_manifest_relative_path(&drive_relative));
     }
 
     #[test]

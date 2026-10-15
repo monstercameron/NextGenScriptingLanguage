@@ -525,7 +525,6 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn site(step_index: usize, seed: &str) -> SiteIdentity {
         SiteIdentity {
@@ -555,7 +554,7 @@ mod tests {
                 outer_binding_names: BTreeSet::from(["theme".to_owned()]),
                 state: LoopIterationState::Repeat { remaining: 1 },
             })],
-            cwd: EncodedPath::from_path(Path::new("/tmp/checkpoint-cursor")),
+            cwd: EncodedPath::from_path(&std::env::temp_dir().join("execute-checkpoint-cursor")),
             bindings: BTreeMap::from([("theme".to_owned(), Value::String("dark".to_owned()))]),
             pipeline_bytes: b"input to next leaf".to_vec(),
         }
@@ -586,7 +585,7 @@ mod tests {
             return_step: 7,
             result_binding: Some("hex".to_owned()),
             caller: ScopeSnapshot {
-                cwd: EncodedPath::from_path(Path::new("/tmp/caller")),
+                cwd: EncodedPath::from_path(&std::env::temp_dir().join("execute-caller")),
                 bindings: BTreeMap::from([("old".to_owned(), Value::Bool(true))]),
                 pipeline_bytes: b"caller pipeline".to_vec(),
             },

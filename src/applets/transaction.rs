@@ -1039,8 +1039,13 @@ fn write_private_new(path: &Path, bytes: &[u8]) -> Result<(), AppletError> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        use windows_sys::Win32::{
+            Foundation::GENERIC_WRITE,
+            Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, READ_CONTROL, WRITE_DAC},
+        };
+        options
+            .access_mode(GENERIC_WRITE | WRITE_DAC | READ_CONTROL)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = options.open(path).map_err(|error| {
         super::io_error(error, format!("creating private state {}", path.display()))
@@ -1422,6 +1427,17 @@ mod tests {
             })).collect::<Vec<_>>(),
         }))
         .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn newly_created_journal_file_can_receive_its_private_dacl() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("journal.json");
+
+        write_private_new(&path, b"private journal").unwrap();
+
+        assert_eq!(fs::read(path).unwrap(), b"private journal");
     }
 
     fn remove_args(journal: &Path, path: &Path, old: &[u8]) -> Map<String, Value> {

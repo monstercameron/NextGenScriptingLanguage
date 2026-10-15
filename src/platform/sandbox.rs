@@ -6,7 +6,7 @@
 //! command when a required sandbox cannot be established.
 
 use crate::capabilities::AppletGrant;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use anyhow::anyhow;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use anyhow::Context;

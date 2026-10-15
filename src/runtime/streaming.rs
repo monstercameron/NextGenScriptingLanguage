@@ -56,9 +56,11 @@ fn stream_sensitivity_floor(
     program: &crate::stream::StreamProgram,
     registry: &Registry,
     module_session: &crate::modules::ProgramModuleSession,
+    cwd: &Path,
     inherited: Option<&crate::security::SensitivitySet>,
 ) -> Result<crate::security::SensitivitySet> {
-    let mut floor = super::workflow_sensitivity_floor(&program.pipeline, registry, module_session)?;
+    let mut floor =
+        super::workflow_sensitivity_floor(&program.pipeline, registry, module_session, cwd)?;
     if let Some(inherited) = inherited {
         // The enclosing graph/run context can add provenance, but it cannot
         // erase labels found in the stream's own source or module bodies.
@@ -241,6 +243,7 @@ pub fn run_stream_with_context(
         program,
         registry,
         &module_session,
+        &capability_cwd,
         context.sensitivity_floor.as_ref(),
     )?;
     signals.set_sensitivity_floor(sensitivity_floor);
@@ -329,6 +332,7 @@ mod tests {
             &program,
             &registry,
             &crate::modules::ProgramModuleSession::default(),
+            Path::new("."),
             Some(&inherited),
         )
         .unwrap();

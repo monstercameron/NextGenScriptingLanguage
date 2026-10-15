@@ -455,7 +455,7 @@ pub fn run_checkpointed(
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     let module_session = preload_program_modules(program, registry, &signals, &cwd)?;
     module_session.validate_checkpoint_identity()?;
-    let sensitivity_floor = workflow_sensitivity_floor(program, registry, &module_session)?;
+    let sensitivity_floor = workflow_sensitivity_floor(program, registry, &module_session, &cwd)?;
     signals.set_sensitivity_floor(sensitivity_floor.clone());
     authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
     let mut checkpoint = checkpoint.clone();

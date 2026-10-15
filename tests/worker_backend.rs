@@ -122,6 +122,7 @@ fn request(arguments: &[&str], input: &[u8]) -> WorkerRequest {
             .collect(),
         input: input.to_vec(),
         max_output_bytes: MAX_FRAME,
+        sensitivity: security::SensitivitySet::from_label(flow::contracts::Sensitivity::Unknown),
         deadline: None,
         cancelled: Arc::new(AtomicBool::new(false)),
         spawned: Arc::new(AtomicBool::new(false)),
@@ -358,6 +359,66 @@ fn concurrent_calls_for_one_identity_are_serialized_on_one_worker() {
     let pid = *pids.iter().next().expect("one worker PID");
     drop(pool);
     assert_reaped(pid);
+}
+
+#[test]
+fn serialized_reuse_rechecks_worker_history_before_sending_a_request() {
+    let _guard = lock_worker_tests();
+    let directory = TempDir::new().expect("temporary worker directory");
+    let pool = Arc::new(WorkerPool::default());
+    let worker_launch = launch(&directory, "remember_first_pause");
+    let mut secret = request(&[], b"TOP-SECRET-MARKER");
+    secret.sensitivity = security::SensitivitySet::from_label(flow::contracts::Sensitivity::Secret);
+    let secret_pool = Arc::clone(&pool);
+    let secret_launch = worker_launch.clone();
+    let secret_request = thread::spawn(move || secret_pool.invoke(secret_launch, secret));
+
+    let effects = directory.path().join("effects");
+    for _ in 0..200 {
+        if effects.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(effects.exists(), "secret request reached the worker");
+    assert!(pool
+        .sensitivity_history_for_launch(&worker_launch)
+        .unwrap()
+        .contains(&flow::contracts::Sensitivity::Secret));
+
+    let mut public = request(&[], b"public");
+    public.sensitivity = security::SensitivitySet::from_label(flow::contracts::Sensitivity::Public);
+    let public_error = pool
+        .invoke(worker_launch.clone(), public)
+        .expect_err("public floor must not reuse a worker with retained secret state");
+    assert!(public_error.to_string().contains("request was not started"));
+    assert!(!worker_error(&public_error).uncertain_effect);
+    assert_eq!(worker_error(&public_error).completed_status, None);
+    assert_eq!(
+        std::fs::read_to_string(&effects).expect("worker request marker"),
+        "received\n",
+        "the rejected request must not reach the worker"
+    );
+
+    let secret_response = secret_request
+        .join()
+        .expect("secret request thread did not panic")
+        .expect("secret worker response");
+    assert_eq!(secret_response.output, b"TOP-SECRET-MARKER");
+
+    let mut authorized = request(&[], &[]);
+    authorized.sensitivity = security::SensitivitySet::from_labels([
+        flow::contracts::Sensitivity::Public,
+        flow::contracts::Sensitivity::Secret,
+    ]);
+    let resumed = pool
+        .invoke(worker_launch, authorized)
+        .expect("a floor containing the retained labels can reuse the worker");
+    assert_eq!(resumed.output, b"TOP-SECRET-MARKER");
+    assert_eq!(
+        std::fs::read_to_string(&effects).unwrap().lines().count(),
+        2
+    );
 }
 
 #[test]

@@ -4,6 +4,10 @@ use flow::contracts::{
     AppletBackend, AppletContract, AppletPort, AppletPorts, Lifecycle, OutputType, PortDelivery,
     RemoteEndpointConfig, Sensitivity, ValueSchema,
 };
+use flow::graph::{
+    EdgeSpec, GraphNode, GraphPlan, GraphRunOptions, GraphSession, PortRef, PortSchema,
+    RuntimeGraphExecutor,
+};
 use flow::manifest::Registry;
 use flow::remote::{RemoteAppletDescriptor, RemoteAppletIdentity, PROTOCOL_VERSION};
 use flow::{ast::Value, parser, runtime, security::DataFlowPolicy};
@@ -178,6 +182,60 @@ fn reply_to_one_remote_call(listener: TcpListener) -> std::thread::JoinHandle<()
     })
 }
 
+fn capture_one_remote_call(listener: TcpListener) -> std::thread::JoinHandle<Option<Vec<u8>>> {
+    std::thread::spawn(move || {
+        for _ in 0..200 {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut request_line = String::new();
+                    reader.read_line(&mut request_line).unwrap();
+                    let mut content_length = 0usize;
+                    loop {
+                        let mut header = String::new();
+                        reader.read_line(&mut header).unwrap();
+                        if header == "\r\n" || header.is_empty() {
+                            break;
+                        }
+                        if let Some((name, value)) = header.trim_end().split_once(':') {
+                            if name.eq_ignore_ascii_case("content-length") {
+                                content_length = value.trim().parse().unwrap();
+                            }
+                        }
+                    }
+                    let mut body = vec![0; content_length];
+                    reader.read_exact(&mut body).unwrap();
+                    let request: JsonValue = serde_json::from_slice(&body).unwrap();
+                    let response = serde_json::to_vec(&json!({
+                        "protocol_version": 1,
+                        "request_id": request["request_id"],
+                        "status": 0,
+                        "outputs": {"value": {"encoding": "json", "data": "ok"}},
+                        "error": null,
+                    }))
+                    .unwrap();
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.execute.applet+json;version=1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response.len()
+                    );
+                    stream.write_all(headers.as_bytes()).unwrap();
+                    stream.write_all(&response).unwrap();
+                    stream.flush().unwrap();
+                    return Some(body);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("checking remote fixture socket: {error}"),
+            }
+        }
+        None
+    })
+}
+
 fn endpoint_listener() -> (TcpListener, String) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = listener.local_addr().unwrap();
@@ -253,6 +311,163 @@ fn secret_producer(path: &Path) -> String {
         }
     })
     .to_string()
+}
+
+fn stateful_worker(directory: &Path) -> String {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/json_lines_worker.py");
+    json!({
+        "name": "fixture.worker",
+        "binary": "python3",
+        "arguments": [],
+        "accepts_stdin": true,
+        "contract": {
+            "version": 1,
+            "backend": "json_lines_worker",
+            "lifecycle": {
+                "kind": "json_lines",
+                "startup_arguments": [
+                    fixture.to_string_lossy(),
+                    "--worker",
+                    "remember_first",
+                    directory.join("worker-launches").to_string_lossy(),
+                    directory.join("worker-effects").to_string_lossy()
+                ]
+            },
+            "output": {"type": "text", "encoding": "raw"},
+            "ports": {
+                "inputs": {},
+                "outputs": {"value": {
+                    "schema": {"type": "text"},
+                    "delivery": "single",
+                    "sensitivity": "public"
+                }},
+                "events": {}
+            }
+        }
+    })
+    .to_string()
+}
+
+#[test]
+fn retained_worker_secret_is_included_in_the_next_run_egress_floor() {
+    let directory = tempfile::tempdir().unwrap();
+    let producer = directory.path().join("secret-producer");
+    let producer_manifest = secret_producer(&producer);
+    let worker_manifest = stateful_worker(directory.path());
+    let (listener, endpoint) = endpoint_listener();
+    listener.set_nonblocking(true).unwrap();
+    let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+    let registry = Registry::from_sources(&[producer_manifest, worker_manifest, remote]).unwrap();
+    registry.set_host_state(policy_for(&endpoint, &["public", "unknown"]));
+
+    let seed = parser::parse("run fixture.secret\nthen fixture.worker\n").unwrap();
+    runtime::run(&seed, &registry, &options(directory.path())).unwrap();
+
+    let read_and_send =
+        parser::parse("run fixture.worker as token\nthen fixture.remote with message token\n")
+            .unwrap();
+    let responder = capture_one_remote_call(listener);
+    let result = runtime::run(&read_and_send, &registry, &options(directory.path()));
+    let remote_request = responder.join().unwrap();
+    match result {
+        Err(error) => {
+            assert!(format!("{error:#}").contains("data flow"), "{error:#}");
+            assert!(remote_request.is_none());
+        }
+        Ok(_) => {
+            let body = remote_request.expect("remote applet received a request");
+            assert!(
+                body.windows(b"TOP-SECRET-MARKER".len())
+                    .any(|window| window == b"TOP-SECRET-MARKER"),
+                "remote request did not carry the retained secret: {}",
+                String::from_utf8_lossy(&body)
+            );
+            panic!("retained secret unexpectedly reached the remote applet");
+        }
+    }
+}
+
+#[test]
+fn retained_worker_secret_flows_through_a_later_graph_to_remote_authorization() {
+    use flow::ast::StepKind;
+
+    let directory = tempfile::tempdir().unwrap();
+    let producer = directory.path().join("secret-producer");
+    let producer_manifest = secret_producer(&producer);
+    let worker_manifest = stateful_worker(directory.path());
+    let (listener, endpoint) = endpoint_listener();
+    listener.set_nonblocking(true).unwrap();
+    let (remote, _) = remote_manifest(&endpoint, Sensitivity::Public, directory.path());
+    let registry = Registry::from_sources(&[producer_manifest, worker_manifest, remote]).unwrap();
+    registry.set_host_state(policy_for(&endpoint, &["public", "unknown"]));
+
+    let seed = parser::parse("run fixture.secret\nthen fixture.worker\n").unwrap();
+    runtime::run(&seed, &registry, &options(directory.path())).unwrap();
+
+    let worker_call = match parser::parse("run fixture.worker\n").unwrap().steps[0]
+        .kind
+        .clone()
+    {
+        StepKind::Invoke { call, .. } => call,
+        _ => panic!("worker invocation expected"),
+    };
+    let remote_call = match parser::parse("run fixture.remote\n").unwrap().steps[0]
+        .kind
+        .clone()
+    {
+        StepKind::Invoke { call, .. } => call,
+        _ => panic!("remote invocation expected"),
+    };
+
+    let mut worker_output = PortSchema::single(ValueSchema {
+        kind: OutputType::Text,
+        nullable: false,
+        enum_values: None,
+        fields: BTreeMap::new(),
+        required: Vec::new(),
+        items: None,
+    });
+    worker_output.sensitivity = Sensitivity::Public;
+    let mut remote_input = worker_output.clone();
+    remote_input.required = true;
+    let mut plan = GraphPlan::new("retained-worker-secret-egress");
+    plan.add_node(GraphNode::applet(
+        "worker",
+        worker_call,
+        BTreeMap::new(),
+        BTreeMap::from([("value".into(), worker_output)]),
+    ))
+    .unwrap();
+    plan.add_node(GraphNode::applet(
+        "remote",
+        remote_call,
+        BTreeMap::from([("message".into(), remote_input)]),
+        BTreeMap::new(),
+    ))
+    .unwrap();
+    plan.add_edge(EdgeSpec::lossless(
+        PortRef::new("worker", "value"),
+        PortRef::new("remote", "message"),
+        1,
+    ));
+    plan.validate_with_registry(&registry).unwrap();
+
+    let executor = Arc::new(RuntimeGraphExecutor::new(
+        registry,
+        options(directory.path()),
+    ));
+    let error = GraphSession::start(plan, executor, GraphRunOptions::default())
+        .unwrap()
+        .run_to_completion()
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("runtime data flow into remote applet"),
+        "{error:#}"
+    );
+    assert!(matches!(
+        listener.accept(),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
 }
 
 #[test]

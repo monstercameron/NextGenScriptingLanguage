@@ -17,6 +17,7 @@ with open(marker, "a", encoding="ascii") as record:
     record.write(f"{os.getpid()}\n")
 
 sequence = 0
+remembered = b""
 for line in sys.stdin.buffer:
     request = json.loads(line)
     response_id = request["id"]
@@ -31,6 +32,17 @@ for line in sys.stdin.buffer:
     elif mode == "sequence":
         sequence += 1
         output = list(str(sequence).encode("ascii"))
+    elif mode == "remember_first":
+        if input_bytes:
+            remembered = input_bytes
+        output = list(remembered)
+    elif mode == "remember_first_pause":
+        if input_bytes:
+            remembered = input_bytes
+        with open(effects, "a", encoding="ascii") as record:
+            record.write("received\n")
+        time.sleep(0.3)
+        output = list(remembered)
     elif mode == "large_output":
         output = list(b"x" * 256)
     elif mode == "large_stderr":

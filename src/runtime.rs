@@ -1788,29 +1788,7 @@ fn execute_json_lines_worker(
     launched: &mut usize,
 ) -> Result<GroupOutput> {
     let input = input.materialize(options.max_output_bytes, signals, options.command_timeout)?;
-    let contract = manifest
-        .execution_contract()
-        .context("json_lines_worker requires a versioned applet contract")?;
-    let Lifecycle::JsonLines {
-        startup_arguments,
-        timeout_ms,
-        max_frame_bytes,
-        max_stderr_bytes,
-    } = &contract.lifecycle
-    else {
-        bail!("json_lines_worker requires a json_lines lifecycle");
-    };
-    let binary = binary_path(manifest.binary_for(call), cwd)?;
-    let launch = worker_backend::WorkerLaunch::inherited(
-        registry.clone(),
-        manifest.name_for(call).to_owned(),
-        binary,
-        cwd.to_path_buf(),
-        startup_arguments.iter().map(OsString::from).collect(),
-        Duration::from_millis(*timeout_ms),
-        *max_frame_bytes,
-        *max_stderr_bytes,
-    )?;
+    let launch = worker_launch_for_call(call, manifest, registry, cwd)?;
     let command_deadline = options
         .command_timeout
         .map(|duration| {
@@ -1829,6 +1807,7 @@ fn execute_json_lines_worker(
         arguments: argv,
         input,
         max_output_bytes: options.max_output_bytes,
+        sensitivity: signals.sensitivity_floor(),
         deadline,
         cancelled: signals.cancelled.clone(),
         spawned: Arc::clone(&spawned),
@@ -2201,22 +2180,72 @@ fn value_contains_reference(value: &Value) -> bool {
     }
 }
 
+fn worker_launch_for_call(
+    call: &Invocation,
+    manifest: &Manifest,
+    registry: &Registry,
+    cwd: &Path,
+) -> Result<worker_backend::WorkerLaunch> {
+    let contract = manifest
+        .execution_contract()
+        .context("json_lines_worker requires a versioned applet contract")?;
+    let Lifecycle::JsonLines {
+        startup_arguments,
+        timeout_ms,
+        max_frame_bytes,
+        max_stderr_bytes,
+    } = &contract.lifecycle
+    else {
+        bail!("json_lines_worker requires a json_lines lifecycle");
+    };
+    worker_backend::WorkerLaunch::inherited(
+        registry.clone(),
+        manifest.name_for(call).to_owned(),
+        binary_path(manifest.binary_for(call), cwd)?,
+        cwd.to_path_buf(),
+        startup_arguments.iter().map(OsString::from).collect(),
+        Duration::from_millis(*timeout_ms),
+        *max_frame_bytes,
+        *max_stderr_bytes,
+    )
+}
+
+/// Read retained worker provenance for graph/runtime adapters that maintain
+/// their own event provenance. Preflight may conservatively include workers
+/// whose executable content changed at the same launch path; dispatch checks
+/// the exact content identity before sending a request.
+pub(crate) fn worker_sensitivity_history_for_call(
+    call: &Invocation,
+    manifest: &Manifest,
+    registry: &Registry,
+    cwd: &Path,
+) -> Result<crate::security::SensitivitySet> {
+    if manifest.execution_backend() != AppletBackend::JsonLinesWorker {
+        return Ok(crate::security::SensitivitySet::empty());
+    }
+    let launch = worker_launch_for_call(call, manifest, registry, cwd)?;
+    registry
+        .host_state::<worker_backend::WorkerPool>()
+        .sensitivity_history_for_launch(&launch)
+}
+
 fn append_invocation_sensitivities(
     call: &Invocation,
     registry: &Registry,
+    cwd: &Path,
     sensitivities: &mut crate::security::SensitivitySet,
 ) -> Result<()> {
     let manifest = registry.resolve_call(call)?;
-    append_manifest_sensitivities(call, manifest, registry, sensitivities);
-    Ok(())
+    append_manifest_sensitivities(call, manifest, registry, cwd, sensitivities)
 }
 
 fn append_manifest_sensitivities(
     call: &Invocation,
     manifest: &Manifest,
     registry: &Registry,
+    cwd: &Path,
     sensitivities: &mut crate::security::SensitivitySet,
-) {
+) -> Result<()> {
     use crate::contracts::Sensitivity;
 
     let contract = manifest.execution_contract();
@@ -2256,19 +2285,35 @@ fn append_manifest_sensitivities(
     if crate::security::applet_has_declared_secret_environment(registry, &manifest.name) {
         sensitivities.insert(Sensitivity::Secret);
     }
+    append_worker_sensitivity_history(call, manifest, registry, cwd, sensitivities)
+}
+
+fn append_worker_sensitivity_history(
+    call: &Invocation,
+    manifest: &Manifest,
+    registry: &Registry,
+    cwd: &Path,
+    sensitivities: &mut crate::security::SensitivitySet,
+) -> Result<()> {
+    if manifest.execution_backend() == AppletBackend::JsonLinesWorker {
+        let worker_history = worker_sensitivity_history_for_call(call, manifest, registry, cwd)?;
+        sensitivities.extend(&worker_history);
+    }
+    Ok(())
 }
 
 fn invocation_sensitivities(
     call: &Invocation,
     manifest: &Manifest,
     registry: &Registry,
-) -> crate::security::SensitivitySet {
+    cwd: &Path,
+) -> Result<crate::security::SensitivitySet> {
     let mut sensitivities = crate::security::SensitivitySet::empty();
-    append_manifest_sensitivities(call, manifest, registry, &mut sensitivities);
+    append_manifest_sensitivities(call, manifest, registry, cwd, &mut sensitivities)?;
     if sensitivities.is_empty() {
         sensitivities.insert(crate::contracts::Sensitivity::Unknown);
     }
-    sensitivities
+    Ok(sensitivities)
 }
 
 /// Resolve the finite program's actual applet references before effects and
@@ -2277,6 +2322,7 @@ pub(crate) fn workflow_sensitivity_floor(
     program: &Program,
     registry: &Registry,
     module_session: &crate::modules::ProgramModuleSession,
+    cwd: &Path,
 ) -> Result<crate::security::SensitivitySet> {
     let mut sensitivities = crate::security::SensitivitySet::empty();
     for step in &program.steps {
@@ -2284,12 +2330,18 @@ pub(crate) fn workflow_sensitivity_floor(
             StepKind::Invoke { call, .. } => {
                 let manifest = registry.resolve_call(call)?;
                 if manifest.builtin.is_none() {
-                    append_manifest_sensitivities(call, manifest, registry, &mut sensitivities);
+                    append_manifest_sensitivities(
+                        call,
+                        manifest,
+                        registry,
+                        cwd,
+                        &mut sensitivities,
+                    )?;
                 }
             }
             StepKind::TaskGroup { tasks, .. } => {
                 for call in tasks {
-                    append_invocation_sensitivities(call, registry, &mut sensitivities)?;
+                    append_invocation_sensitivities(call, registry, cwd, &mut sensitivities)?;
                 }
             }
             // Reusable calls are expanded into the step sequence before the
@@ -2324,7 +2376,7 @@ pub(crate) fn workflow_sensitivity_floor(
         ..
     }) = &program.trigger
     {
-        append_invocation_sensitivities(call, registry, &mut sensitivities)?;
+        append_invocation_sensitivities(call, registry, cwd, &mut sensitivities)?;
     }
     if matches!(
         program.trigger.as_ref(),
@@ -2341,7 +2393,7 @@ pub(crate) fn workflow_sensitivity_floor(
         sensitivities.insert(crate::contracts::Sensitivity::Unknown);
     }
     for (scope, call) in module_session.scoped_body_invocations() {
-        append_invocation_sensitivities(call, scope, &mut sensitivities)?;
+        append_invocation_sensitivities(call, scope, cwd, &mut sensitivities)?;
     }
     if sensitivities.is_empty() {
         sensitivities.insert(crate::contracts::Sensitivity::Unknown);
@@ -2408,7 +2460,8 @@ pub fn invoke_applet_with_module_session(
         result_binding: None,
     };
     let manifest = registry.resolve_call(&call)?;
-    let sensitivities = invocation_sensitivities(&call, manifest, registry);
+    let cwd = fs::canonicalize(&options.working_directory)?;
+    let sensitivities = invocation_sensitivities(&call, manifest, registry, &cwd)?;
     invoke_applet_with_module_session_and_sensitivity(
         registry,
         name,
@@ -2631,7 +2684,8 @@ fn run_finite_state(
 ) -> Result<RunResult> {
     let mut cwd = fs::canonicalize(&options.working_directory)?;
     let module_session = preload_program_modules(program, registry, signals, &cwd)?;
-    let mut sensitivity_floor = workflow_sensitivity_floor(program, registry, &module_session)?;
+    let mut sensitivity_floor =
+        workflow_sensitivity_floor(program, registry, &module_session, &cwd)?;
     // Caller-provided initial bytes have no trusted provenance declaration.
     if !matches!(&initial_input, Input::Empty) {
         sensitivity_floor.insert(crate::contracts::Sensitivity::Unknown);

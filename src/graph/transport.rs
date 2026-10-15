@@ -13,6 +13,7 @@ use crate::tasks::{CancellationToken, TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -1472,6 +1473,20 @@ impl RuntimeGraphExecutor {
             .cloned()
             .unwrap_or_else(SensitivitySet::empty);
 
+        // A pooled JSON-lines worker can return process-local state from an
+        // earlier runtime or graph session. Include matching launch
+        // metadata's retained labels in both the invocation floor and the
+        // NodeIo provenance before dispatch, so downstream graph edges and
+        // remote authorization see the same history as the worker request.
+        let cwd = std::fs::canonicalize(&self.options.working_directory)?;
+        let worker_history = crate::runtime::worker_sensitivity_history_for_call(
+            call,
+            manifest,
+            &self.registry,
+            &cwd,
+        )?;
+        sensitivities.extend(&worker_history);
+
         // Include literal parameters even for older applet contracts that do
         // not declare graph ports. Such values remain Unknown until labeled.
         for name in call.parameters.keys() {
@@ -2326,7 +2341,7 @@ pub fn run(
         registry,
         plan.invocations(),
     )?);
-    let graph_sensitivities = graph_module_sensitivity_floor(&plan, registry)?;
+    let graph_sensitivities = graph_module_sensitivity_floor(&plan, registry, &cwd)?;
     for (scope_registry, invocation) in module_session.scoped_body_invocations() {
         crate::capabilities::preflight_invocations(
             std::iter::once(invocation),
@@ -2397,7 +2412,11 @@ pub fn run(
     GraphSession::start(plan, executor, graph_options)?.run_to_completion()
 }
 
-fn graph_module_sensitivity_floor(plan: &GraphPlan, registry: &Registry) -> Result<SensitivitySet> {
+fn graph_module_sensitivity_floor(
+    plan: &GraphPlan,
+    registry: &Registry,
+    cwd: &Path,
+) -> Result<SensitivitySet> {
     let mut sensitivities = SensitivitySet::empty();
     for labels in plan.effective_sensitivity_labels(registry)?.into_values() {
         sensitivities.extend(&labels);
@@ -2413,6 +2432,9 @@ fn graph_module_sensitivity_floor(plan: &GraphPlan, registry: &Registry) -> Resu
         }
         for call in node.invocations() {
             let manifest = registry.resolve_call(call)?;
+            sensitivities.extend(&crate::runtime::worker_sensitivity_history_for_call(
+                call, manifest, registry, cwd,
+            )?);
             let ports = manifest
                 .execution_contract()
                 .and_then(|contract| contract.ports.as_ref());

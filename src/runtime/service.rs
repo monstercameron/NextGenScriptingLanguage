@@ -518,6 +518,7 @@ fn run_service_internal(
         program,
         registry,
         &module_session,
+        &capability_cwd,
     )?);
     stopped(&signals)?;
     if checkpoint.is_some() {

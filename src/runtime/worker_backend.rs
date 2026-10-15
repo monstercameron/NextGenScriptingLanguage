@@ -10,7 +10,7 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -88,6 +88,10 @@ pub(crate) struct WorkerRequest {
     pub arguments: Vec<String>,
     pub input: Vec<u8>,
     pub max_output_bytes: usize,
+    /// Immutable sensitivity floor for the enclosing runtime invocation.
+    /// The worker pool checks this against retained state before reusing a
+    /// process and records it before transmitting the request.
+    pub sensitivity: crate::security::SensitivitySet,
     pub deadline: Option<Instant>,
     pub cancelled: Arc<AtomicBool>,
     /// Set as soon as this invocation launches a worker, even if the
@@ -212,13 +216,26 @@ impl fmt::Debug for WorkerKey {
 }
 
 impl WorkerKey {
+    fn matches_launch_metadata(
+        &self,
+        launch: &WorkerLaunch,
+        environment: &[(OsString, OsString)],
+    ) -> bool {
+        self.applet_name == launch.applet_name
+            && self.binary == launch.binary
+            && self.policy_fingerprint == launch.policy_fingerprint
+            && self.cwd == launch.cwd
+            && self.environment == environment
+            && self.startup_arguments == launch.startup_arguments
+    }
+
     fn from_launch(
         launch: &WorkerLaunch,
-        request: &WorkerRequest,
         deadline: Option<Instant>,
+        cancelled: &AtomicBool,
     ) -> Result<Self> {
         validate_launch(launch)?;
-        let content_identity = binary_identity(&launch.binary, deadline, &request.cancelled)?;
+        let content_identity = binary_identity(&launch.binary, deadline, cancelled)?;
         let mut environment = launch.environment.clone();
         environment.sort_by(|left, right| left.0.cmp(&right.0));
         for pair in environment.windows(2) {
@@ -259,6 +276,7 @@ struct PoolState {
 pub struct WorkerPool {
     capacity: usize,
     state: Mutex<PoolState>,
+    sensitivity_history: Mutex<HashMap<WorkerKey, crate::security::SensitivitySet>>,
     changed: Condvar,
 }
 
@@ -283,12 +301,45 @@ impl WorkerPool {
         Ok(Self {
             capacity,
             state: Mutex::new(PoolState::default()),
+            sensitivity_history: Mutex::new(HashMap::new()),
             changed: Condvar::new(),
         })
     }
 
     pub(crate) const fn supported() -> bool {
         cfg!(unix)
+    }
+
+    /// Read retained labels for matching launch metadata without hashing the
+    /// executable. This metadata lock is independent of worker acquisition,
+    /// so workflow preflight never waits for a slow request to finish. The
+    /// dispatch path later narrows this conservative set to the exact key.
+    pub(crate) fn sensitivity_history_for_launch(
+        &self,
+        launch: &WorkerLaunch,
+    ) -> Result<crate::security::SensitivitySet> {
+        let mut environment = launch.environment.clone();
+        environment.sort_by(|left, right| left.0.cmp(&right.0));
+        let history = self
+            .sensitivity_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if history.is_empty() {
+            return Ok(crate::security::SensitivitySet::empty());
+        }
+
+        // Preflight has no invocation budget for hashing executable contents.
+        // Match every retained worker with the same bounded launch metadata
+        // and conservatively join histories across binary-content variants.
+        // Dispatch computes the full key under the request's deadline and
+        // checks that exact process history before transmission.
+        let mut sensitivities = crate::security::SensitivitySet::empty();
+        for (key, retained) in history.iter() {
+            if key.matches_launch_metadata(launch, &environment) {
+                sensitivities.extend(retained);
+            }
+        }
+        Ok(sensitivities)
     }
 
     /// Send one invocation to a persistent JSON-lines worker.
@@ -336,9 +387,9 @@ impl WorkerPool {
             ensure_policy_unchanged(&launch)
                 .map_err(|error| as_worker_error(error, WorkerErrorKind::UnknownError))?;
 
-            let key = WorkerKey::from_launch(&launch, &request, deadline)
+            let key = WorkerKey::from_launch(&launch, deadline, &request.cancelled)
                 .map_err(|error| as_worker_error(error, WorkerErrorKind::IoError))?;
-            let mut lease = self.acquire(key, &request.cancelled, deadline)?;
+            let mut lease = self.acquire(key.clone(), &request.cancelled, deadline)?;
             if let Err(error) = check_cancel_deadline(&request.cancelled, deadline) {
                 if lease.worker.is_none() {
                     lease.invalidate();
@@ -354,6 +405,7 @@ impl WorkerPool {
                         // before the current invocation began. Starting a new
                         // helper here is a new explicit request, not a replay.
                         drop(lease.worker.take());
+                        self.reset_sensitivity_history(&key);
                     }
                     Err(error) => {
                         lease.invalidate();
@@ -370,6 +422,23 @@ impl WorkerPool {
                         .into());
                     }
                 }
+            }
+
+            let retained_sensitivities = self.sensitivity_history_for_key(&key);
+            if retained_sensitivities
+                .iter()
+                .any(|label| !request.sensitivity.contains(&label))
+            {
+                return Err(WorkerError::new(
+                    WorkerErrorKind::UnknownError,
+                    false,
+                    None,
+                    format!(
+                        "persistent applet worker retains sensitivities {:?} that are absent from the current workflow floor; request was not started",
+                        retained_sensitivities.iter().collect::<Vec<_>>()
+                    ),
+                )
+                .into());
             }
 
             let mut spawned_process = false;
@@ -399,6 +468,11 @@ impl WorkerPool {
                 lease.invalidate();
                 return Err(as_worker_error(error, WorkerErrorKind::UnknownError));
             }
+
+            // Publish labels while this request owns the serialized slot so
+            // concurrent workflow preflight can account for state about to be
+            // sent to the worker.
+            self.extend_sensitivity_history(&key, &request.sensitivity);
 
             let worker = lease
                 .worker
@@ -517,24 +591,72 @@ impl WorkerPool {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn sensitivity_history_for_key(&self, key: &WorkerKey) -> crate::security::SensitivitySet {
+        self.sensitivity_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .cloned()
+            .unwrap_or_else(crate::security::SensitivitySet::empty)
+    }
+
+    fn extend_sensitivity_history(
+        &self,
+        key: &WorkerKey,
+        sensitivities: &crate::security::SensitivitySet,
+    ) {
+        let mut history = self
+            .sensitivity_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        history
+            .entry(key.clone())
+            .or_insert_with(crate::security::SensitivitySet::empty)
+            .extend(sensitivities);
+    }
+
+    fn reset_sensitivity_history(&self, key: &WorkerKey) {
+        self.sensitivity_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(key);
+    }
+
     fn release(&self, id: u64, worker: Option<WorkerProcess>, retain: bool) {
-        let mut retired = None;
-        {
-            let mut state = self.lock_state();
-            if let Some(index) = state.slots.iter().position(|slot| slot.id == id) {
-                if retain {
+        if retain {
+            let mut retired = None;
+            {
+                let mut state = self.lock_state();
+                if let Some(index) = state.slots.iter().position(|slot| slot.id == id) {
                     state.slots[index].worker = worker;
                     state.slots[index].busy = false;
                 } else {
                     retired = worker;
-                    state.slots.remove(index);
                 }
-            } else {
-                retired = worker;
+                self.changed.notify_one();
             }
-            self.changed.notify_one();
+            drop(retired);
+            return;
         }
-        drop(retired);
+
+        // Keep the slot busy until its process is destroyed and its history
+        // removed. A new identity-equivalent process must never inherit old
+        // labels, and preflight must never miss labels for a live process.
+        let key = self
+            .lock_state()
+            .slots
+            .iter()
+            .find(|slot| slot.id == id)
+            .map(|slot| slot.key.clone());
+        drop(worker);
+        if let Some(key) = key {
+            self.reset_sensitivity_history(&key);
+        }
+        let mut state = self.lock_state();
+        if let Some(index) = state.slots.iter().position(|slot| slot.id == id) {
+            state.slots.remove(index);
+        }
+        self.changed.notify_one();
     }
 }
 

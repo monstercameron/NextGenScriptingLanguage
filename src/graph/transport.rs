@@ -19,6 +19,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const QUEUE_POLL: Duration = Duration::from_millis(10);
+/// Absolute ceiling for per-graph declared listener-port reader admission.
+pub const MAX_GRAPH_LISTENER_READERS: usize = 128;
+/// Maximum declared event ports on one applet listener. Remote listeners
+/// create one pump worker for each port and share a 64-worker scope.
+pub const MAX_LISTENER_PORTS_PER_SOURCE: usize = 64;
 
 /// A payload crossing one graph edge. `sequence` is allocated once before
 /// fanout so every subscriber observes the same event identity.
@@ -700,6 +705,10 @@ impl NodeIo {
 pub struct GraphRunOptions {
     pub max_parallel: usize,
     pub max_nodes: usize,
+    /// Aggregate declared event-port slots for applet listener sources.
+    /// Remote listeners use one additional pump worker per slot; local applet
+    /// listeners are conservatively charged for their synthetic `line` port.
+    pub max_listener_readers: usize,
     pub max_edges: usize,
     pub max_queue_slots: usize,
     pub max_message_bytes: usize,
@@ -717,6 +726,7 @@ impl Default for GraphRunOptions {
         Self {
             max_parallel: 64,
             max_nodes: 64,
+            max_listener_readers: 64,
             max_edges: 4096,
             max_queue_slots: 65_536,
             max_message_bytes: 8 * 1024 * 1024,
@@ -752,65 +762,110 @@ pub struct GraphSession {
     options: GraphRunOptions,
 }
 
+fn preflight_graph_admission(plan: &GraphPlan, options: &GraphRunOptions) -> Result<()> {
+    plan.validate()?;
+    if plan.nodes().is_empty() {
+        bail!("graph {:?} has no nodes", plan.name);
+    }
+    if options.max_nodes == 0 || plan.nodes().len() > options.max_nodes {
+        bail!(
+            "graph node count {} exceeds max_nodes {}",
+            plan.nodes().len(),
+            options.max_nodes
+        );
+    }
+    if options.max_edges == 0 || plan.edges().len() > options.max_edges {
+        bail!(
+            "graph edge count {} exceeds max_edges {}",
+            plan.edges().len(),
+            options.max_edges
+        );
+    }
+    if options.max_parallel == 0 || plan.nodes().len() > options.max_parallel {
+        bail!(
+            "graph node count {} exceeds max_parallel {}",
+            plan.nodes().len(),
+            options.max_parallel
+        );
+    }
+    if options.max_listener_readers == 0 {
+        bail!("graph max_listener_readers must be positive");
+    }
+    if options.max_listener_readers > MAX_GRAPH_LISTENER_READERS {
+        bail!(
+            "graph max_listener_readers {} exceeds absolute maximum {}",
+            options.max_listener_readers,
+            MAX_GRAPH_LISTENER_READERS
+        );
+    }
+    let listener_readers = plan.nodes().iter().try_fold(0usize, |total, node| {
+        let declared = match &node.kind {
+            GraphNodeKind::Listener {
+                source: ListenSource::Applet(_),
+                ..
+            } => {
+                if node.events.len() > MAX_LISTENER_PORTS_PER_SOURCE {
+                    bail!(
+                        "graph listener {:?} declares {} event ports; per-source limit is {}",
+                        node.id,
+                        node.events.len(),
+                        MAX_LISTENER_PORTS_PER_SOURCE
+                    );
+                }
+                node.events.len()
+            }
+            _ => 0,
+        };
+        total
+            .checked_add(declared)
+            .ok_or_else(|| anyhow!("graph listener reader count overflowed"))
+    })?;
+    if listener_readers > options.max_listener_readers {
+        bail!(
+            "graph listener reader slots {listener_readers} exceed max_listener_readers {}",
+            options.max_listener_readers
+        );
+    }
+    if options.terminal_capacity == 0 {
+        bail!("graph terminal capacity must be positive");
+    }
+    if options.max_message_bytes == 0 {
+        bail!("graph message byte limit must be positive");
+    }
+    if options.max_collected_events == 0 || options.max_collected_bytes == 0 {
+        bail!("graph collected-output limits must be positive");
+    }
+
+    let terminal_ports = plan.output_terminals();
+    let queue_slots = plan
+        .edges()
+        .iter()
+        .try_fold(0usize, |total, edge| total.checked_add(edge.capacity))
+        .and_then(|total| {
+            terminal_ports
+                .len()
+                .checked_mul(options.terminal_capacity)
+                .and_then(|terminal_slots| total.checked_add(terminal_slots))
+        })
+        .ok_or_else(|| anyhow!("graph queue capacity sum overflowed"))?;
+    if queue_slots > options.max_queue_slots {
+        bail!(
+            "graph queue slots {queue_slots} exceed max_queue_slots {}",
+            options.max_queue_slots
+        );
+    }
+    Ok(())
+}
+
 impl GraphSession {
     pub fn start(
         plan: GraphPlan,
         executor: Arc<dyn GraphExecutor>,
         options: GraphRunOptions,
     ) -> Result<Self> {
-        plan.validate()?;
-        if plan.nodes().is_empty() {
-            bail!("graph {:?} has no nodes", plan.name);
-        }
-        if options.max_nodes == 0 || plan.nodes().len() > options.max_nodes {
-            bail!(
-                "graph node count {} exceeds max_nodes {}",
-                plan.nodes().len(),
-                options.max_nodes
-            );
-        }
-        if options.max_edges == 0 || plan.edges().len() > options.max_edges {
-            bail!(
-                "graph edge count {} exceeds max_edges {}",
-                plan.edges().len(),
-                options.max_edges
-            );
-        }
-        if options.max_parallel == 0 || plan.nodes().len() > options.max_parallel {
-            bail!(
-                "graph node count {} exceeds max_parallel {}",
-                plan.nodes().len(),
-                options.max_parallel
-            );
-        }
-        if options.terminal_capacity == 0 {
-            bail!("graph terminal capacity must be positive");
-        }
-        if options.max_message_bytes == 0 {
-            bail!("graph message byte limit must be positive");
-        }
-        if options.max_collected_events == 0 || options.max_collected_bytes == 0 {
-            bail!("graph collected-output limits must be positive");
-        }
+        preflight_graph_admission(&plan, &options)?;
 
         let terminal_ports = plan.output_terminals();
-        let queue_slots = plan
-            .edges()
-            .iter()
-            .try_fold(0usize, |total, edge| total.checked_add(edge.capacity))
-            .and_then(|total| {
-                terminal_ports
-                    .len()
-                    .checked_mul(options.terminal_capacity)
-                    .and_then(|terminal_slots| total.checked_add(terminal_slots))
-            })
-            .ok_or_else(|| anyhow!("graph queue capacity sum overflowed"))?;
-        if queue_slots > options.max_queue_slots {
-            bail!(
-                "graph queue slots {queue_slots} exceed max_queue_slots {}",
-                options.max_queue_slots
-            );
-        }
 
         let mut incoming: BTreeMap<(String, String), Vec<Arc<BoundedQueue>>> = BTreeMap::new();
         let mut outgoing: BTreeMap<(String, String), Vec<QueueSink>> = BTreeMap::new();
@@ -988,7 +1043,10 @@ impl GraphSession {
         self.scope.cancel_and_join()
     }
 
-    /// Stop and reap this session before starting a new graph generation.
+    /// Consume, stop, and reap this session before starting a new generation.
+    /// Static admission errors are checked first; because this method consumes
+    /// the session, an error drops the old generation. Use `try_reconfigure`
+    /// when the caller needs it to remain live after a preflight rejection.
     pub fn reconfigure(
         mut self,
         plan: GraphPlan,
@@ -1005,10 +1063,37 @@ impl GraphSession {
             .revision
             .checked_add(1)
             .ok_or_else(|| anyhow!("graph revision exhausted"))?;
-        self.cancel_and_join()?;
         options.generation = generation;
         options.revision = revision;
+        preflight_graph_admission(&plan, &options)?;
+        self.cancel_and_join()?;
         Self::start(plan, executor, options)
+    }
+
+    /// Reconfigure this session in place. A static preflight error leaves the
+    /// current generation live. After admission succeeds, the current
+    /// generation is cancelled and reaped before replacement activation; an
+    /// activation failure after that point is not transactional.
+    pub fn try_reconfigure(
+        &mut self,
+        plan: GraphPlan,
+        executor: Arc<dyn GraphExecutor>,
+        mut options: GraphRunOptions,
+    ) -> Result<()> {
+        options.generation = self
+            .context
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("graph generation exhausted"))?;
+        options.revision = self
+            .context
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("graph revision exhausted"))?;
+        preflight_graph_admission(&plan, &options)?;
+        self.cancel_and_join()?;
+        *self = Self::start(plan, executor, options)?;
+        Ok(())
     }
 
     /// Drain terminal outputs while polling all workers, then join every task.

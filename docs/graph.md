@@ -17,6 +17,12 @@ capabilities and data-flow policy before starting nodes. Graphs are finite
 plans, but timers and listeners can remain active until cancellation or a
 configured total timeout.
 
+Hosts that reconfigure a live session can use `GraphSession::try_reconfigure`:
+static admission failures leave the current generation running. After
+admission succeeds, the current generation is stopped before replacement
+activation, so a later activation error does not restore it. The consuming
+`reconfigure` method drops its old session if it returns an error.
+
 ## Source form
 
 Every graph begins with a name and ends explicitly:
@@ -101,6 +107,19 @@ that effective label before graph execution; see the
 [data-flow policy](security-dataflow.md).
 
 ## Runtime limits
+
+`GraphRunOptions.max_listener_readers` defaults to 64 and cannot exceed the
+absolute limit of 128. Admission sums the declared event-port count for every
+applet listener before allocating graph queues or starting node workers.
+Each applet listener is also limited to 64 declared event ports, matching the
+per-source reader scope; this check runs before any listener starts. The
+aggregate limit can therefore admit two 64-port listeners when configured to
+128.
+Remote listeners use one additional pump worker per declared event port. A
+local applet listener is conservatively charged for its synthetic `line` port,
+although it reads through its graph node actor and creates no additional pump;
+`listen to stdin` is excluded. This budget is separate from graph node actor
+parallelism and the finite applet task scheduler.
 
 Default graph limits are 64 nodes and parallel tasks, 4,096 edges, 65,536 total
 edge and terminal queue slots, and 8 MiB per message. Terminal queues hold 64

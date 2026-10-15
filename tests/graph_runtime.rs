@@ -11,7 +11,7 @@ use flow::runtime::RunOptions;
 use flow::security::{DataFlowPolicy, SensitivitySet};
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -617,6 +617,201 @@ fn finite_collection_has_total_event_cap() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("collected output exceeded"), "{error}");
+}
+
+fn remote_listener_plan(port_count: usize, listener_count: usize) -> GraphPlan {
+    let events = (0..port_count)
+        .map(|index| {
+            format!("\"event{index}\":{{\"schema\":{{\"type\":\"text\"}},\"delivery\":\"events\"}}")
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let manifest = format!(
+        r#"{{
+          "name":"remote.feed",
+          "binary":"@remote-applet",
+          "parameters":{{}},
+          "arguments":[],
+          "contract":{{
+            "version":1,
+            "backend":"remote",
+            "remote":{{"endpoint":"https://events.example.test","allow_discovery":true}},
+            "ports":{{"events":{{{events}}}}}
+          }}
+        }}"#
+    );
+    let registry = Registry::from_sources(&[manifest.as_str()]).unwrap();
+    let listeners = (0..listener_count)
+        .map(|index| format!("listen to remote.feed as listener{index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!("graph reader_budget\n{listeners}\nend graph\n");
+    graph::parse(&source, &registry).unwrap()
+}
+
+fn two_remote_listener_plan() -> GraphPlan {
+    remote_listener_plan(2, 2)
+}
+
+struct ListenerCountExecutor(Arc<AtomicUsize>);
+
+impl GraphExecutor for ListenerCountExecutor {
+    fn execute(&self, node: &GraphNode, io: &mut NodeIo, _: &GraphContext) -> Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        for port in node.events.keys() {
+            io.emit(port, PortValue::Value(Value::String("event".into())))?;
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn listener_reader_budget_is_aggregate_bounded_and_preflighted() {
+    let plan = two_remote_listener_plan();
+    let executions = Arc::new(AtomicUsize::new(0));
+    let error = match GraphSession::start(
+        plan.clone(),
+        Arc::new(ListenerCountExecutor(Arc::clone(&executions))),
+        GraphRunOptions {
+            max_listener_readers: 3,
+            ..GraphRunOptions::default()
+        },
+    ) {
+        Ok(_) => panic!("aggregate listener reader budget was not enforced"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("listener reader slots 4"), "{error}");
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+
+    for (limit, expected) in [
+        (0, "must be positive"),
+        (
+            flow::graph::MAX_GRAPH_LISTENER_READERS + 1,
+            "absolute maximum",
+        ),
+    ] {
+        let error = match GraphSession::start(
+            plan.clone(),
+            Arc::new(ListenerCountExecutor(Arc::clone(&executions))),
+            GraphRunOptions {
+                max_listener_readers: limit,
+                ..GraphRunOptions::default()
+            },
+        ) {
+            Ok(_) => panic!("invalid listener reader limit {limit} was accepted"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+    }
+
+    let result = GraphSession::start(
+        plan,
+        Arc::new(ListenerCountExecutor(Arc::clone(&executions))),
+        GraphRunOptions {
+            max_listener_readers: 4,
+            ..GraphRunOptions::default()
+        },
+    )
+    .unwrap()
+    .run_to_completion()
+    .unwrap();
+    assert_eq!(executions.load(Ordering::SeqCst), 2);
+    assert_eq!(result.outputs.len(), 4);
+
+    let full_budget_result = GraphSession::start(
+        remote_listener_plan(flow::graph::MAX_LISTENER_PORTS_PER_SOURCE, 2),
+        Arc::new(ListenerCountExecutor(Arc::clone(&executions))),
+        GraphRunOptions {
+            max_listener_readers: flow::graph::MAX_GRAPH_LISTENER_READERS,
+            ..GraphRunOptions::default()
+        },
+    )
+    .unwrap()
+    .run_to_completion()
+    .unwrap();
+    assert_eq!(executions.load(Ordering::SeqCst), 4);
+    assert_eq!(full_budget_result.outputs.len(), 128);
+}
+
+#[test]
+fn listener_port_limit_is_checked_before_starting_the_source() {
+    let plan = remote_listener_plan(flow::graph::MAX_LISTENER_PORTS_PER_SOURCE + 1, 1);
+    let executions = Arc::new(AtomicUsize::new(0));
+    let error = match GraphSession::start(
+        plan,
+        Arc::new(ListenerCountExecutor(Arc::clone(&executions))),
+        GraphRunOptions {
+            max_listener_readers: flow::graph::MAX_GRAPH_LISTENER_READERS,
+            ..GraphRunOptions::default()
+        },
+    ) {
+        Ok(_) => panic!("per-source listener port limit was not enforced"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("per-source limit is 64"), "{error}");
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+}
+
+struct TickingExecutor;
+
+impl GraphExecutor for TickingExecutor {
+    fn execute(&self, _: &GraphNode, io: &mut NodeIo, _: &GraphContext) -> Result<()> {
+        while !io.is_cancelled() {
+            if let Err(error) = io.emit("tick", PortValue::Value(Value::Integer(1))) {
+                if io.is_cancelled() {
+                    return Ok(());
+                }
+                return Err(error);
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        Ok(())
+    }
+}
+
+fn ticking_plan() -> GraphPlan {
+    let mut plan = GraphPlan::new("live_generation");
+    plan.add_node(GraphNode {
+        id: "timer".into(),
+        kind: GraphNodeKind::Timer { interval_ms: 1 },
+        inputs: BTreeMap::new(),
+        outputs: BTreeMap::new(),
+        events: BTreeMap::from([("tick".into(), PortSchema::events(int()))]),
+        line: None,
+    })
+    .unwrap();
+    plan
+}
+
+#[test]
+fn overbudget_reconfigure_keeps_the_old_session_live() {
+    let mut session = GraphSession::start(
+        ticking_plan(),
+        Arc::new(TickingExecutor),
+        GraphRunOptions::default(),
+    )
+    .unwrap();
+    let before = session.recv_output().unwrap().unwrap();
+    assert_eq!(before.generation, 1);
+
+    let error = session
+        .try_reconfigure(
+            two_remote_listener_plan(),
+            Arc::new(ListenerCountExecutor(Arc::new(AtomicUsize::new(0)))),
+            GraphRunOptions {
+                max_listener_readers: 3,
+                ..GraphRunOptions::default()
+            },
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("listener reader slots 4"), "{error}");
+    assert_eq!(session.context().generation, 1);
+    let after = session.recv_output().unwrap().unwrap();
+    assert_eq!(after.port.node, "timer");
+    assert_eq!(after.generation, 1);
+    session.cancel_and_join().unwrap();
 }
 
 #[test]

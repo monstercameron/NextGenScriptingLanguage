@@ -17,7 +17,7 @@ pub use syntax::{is_graph, parse};
 pub use transport::{
     run, ChannelStdinSource, EventEnvelope, GraphContext, GraphExecutor, GraphRunOptions,
     GraphRunResult, GraphSession, GraphStdinSource, NodeIo, PortEmitReport, RemoteEventMetadata,
-    RuntimeGraphExecutor,
+    RuntimeGraphExecutor, MAX_GRAPH_LISTENER_READERS, MAX_LISTENER_PORTS_PER_SOURCE,
 };
 
 use crate::ast::Invocation;

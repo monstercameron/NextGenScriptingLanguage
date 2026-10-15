@@ -6,8 +6,17 @@ Edit a `.program`, press **Run program** (Cmd/Ctrl+Enter), and inspect the termi
 virtual files and execution trace. **Check** and **Explain** use the Rust validator.
 Nothing calls an LLM, logs into a server, or reads your computer's files.
 
-Seven workflows have fixtures and checked outputs: log triage, a typed release gate,
-a reusable shortlist, explicit caching, exit-status branching, stdin cleanup, and a batch file loop.
+Ten workflows have fixtures and checked stdout and generated files. Start with
+**Incident command**, **Launch control**, or **Support signal**: each combines
+several inputs, branches and reusable programs into reports and a dashboard.
+Edit a regional incident log, release candidate, or support queue and rerun to
+change the actual counts, decisions and generated artifacts. Dashboard cards
+render bounded JSON written by the current execution; retained files from an
+older run cannot masquerade as fresh results. Direction-control characters are
+shown as visible escapes, and markup stays literal text.
+
+The other seven workflows cover log triage, a typed release gate, a reusable
+shortlist, explicit caching, exit-status branching, stdin cleanup, and a batch file loop.
 Try changing `checks_passed` in `release.json`, or enter `{"limit":"2"}` in
 **Inputs & stdin**. Input values use the same CLI type parser as native Execute.
 Click any virtual file to edit it; `.program` files open in the main editor.

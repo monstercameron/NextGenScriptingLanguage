@@ -50,8 +50,22 @@ pub(super) fn validate_arguments(
         bail!("program calls cannot be direct binaries, cached or capture native status");
     }
     crate::inputs::validate(inputs)?;
+    // Keep tiny schemas on a linear lookup, as inputs::validated_specs does.
+    // If both sides are large, index declaration names once instead of
+    // rescanning the full schema for every supplied parameter. BTreeMap order
+    // still determines which unknown name is reported first.
+    let input_names = (inputs.len() > 8 && call.parameters.len() > 8).then(|| {
+        inputs
+            .iter()
+            .map(|input| input.name.as_str())
+            .collect::<BTreeSet<_>>()
+    });
     for name in call.parameters.keys() {
-        if !inputs.iter().any(|input| input.name == *name) {
+        let declared = input_names.as_ref().map_or_else(
+            || inputs.iter().any(|input| input.name == *name),
+            |names| names.contains(name.as_str()),
+        );
+        if !declared {
             bail!("program {:?} has no input {name:?}", call.operation);
         }
     }
@@ -324,6 +338,93 @@ pub(super) fn preflight(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn large_reusable_call_indexes_names_and_preserves_validation_errors() -> Result<()> {
+        let count = 2_048;
+        let names = (0..count)
+            .map(|index| format!("param{index:05}"))
+            .collect::<Vec<_>>();
+        let mut source = String::from("define a program named worker\n");
+        for (index, name) in names.iter().enumerate() {
+            source.push_str("  accept ");
+            source.push_str(name);
+            source.push_str(" as text");
+            if index + 1 == count {
+                source.push_str(" with default \"fallback\"");
+            }
+            source.push('\n');
+        }
+        source.push_str("  read from stdin\nrun program worker with ");
+        source.push_str(
+            &names[..count - 1]
+                .iter()
+                .map(|name| format!("{name} \"value\""))
+                .collect::<Vec<_>>()
+                .join(" and "),
+        );
+        source.push('\n');
+
+        let registry = Registry::default();
+        let program = crate::parser::parse(&source)?;
+        // The last declaration is intentionally omitted at the call site and
+        // supplied by its default.
+        super::super::validate(&program, &registry)?;
+
+        let mut unknown = program.clone();
+        let StepKind::CallProgram { call, .. } = &mut unknown.steps[0].kind else {
+            panic!("expanded workflow should begin with a reusable call");
+        };
+        call.parameters
+            .insert("z_unknown".into(), Value::String("value".into()));
+        call.parameters
+            .insert("a_unknown".into(), Value::String("value".into()));
+        let StepKind::CallProgram { call, inputs, .. } = &unknown.steps[0].kind else {
+            panic!("expanded workflow should begin with a reusable call");
+        };
+        // Differential oracle for the old linear lookup: unknown names are
+        // still selected in the BTreeMap's deterministic key order.
+        let expected_unknown = call
+            .parameters
+            .keys()
+            .find(|name| {
+                !inputs
+                    .iter()
+                    .any(|input| input.name.as_str() == name.as_str())
+            })
+            .expect("the test call contains unknown names");
+        assert_eq!(expected_unknown.as_str(), "a_unknown");
+        let error = super::super::validate(&unknown, &registry).unwrap_err();
+        let error = format!("{error:#}");
+        assert!(
+            error.contains(&format!("has no input {expected_unknown:?}")),
+            "{error}"
+        );
+        assert!(!error.contains("z_unknown"), "{error}");
+
+        let mut missing_required = program.clone();
+        let StepKind::CallProgram { call, .. } = &mut missing_required.steps[0].kind else {
+            panic!("expanded workflow should begin with a reusable call");
+        };
+        call.parameters.remove(&names[1]);
+        let error = super::super::validate(&missing_required, &registry).unwrap_err();
+        assert!(
+            format!("{error:#}").contains(&format!("requires input {:?}", names[1])),
+            "{error:#}"
+        );
+
+        let mut wrong_type = program;
+        let StepKind::CallProgram { call, .. } = &mut wrong_type.steps[0].kind else {
+            panic!("expanded workflow should begin with a reusable call");
+        };
+        call.parameters.insert(names[0].clone(), Value::Bool(true));
+        let error = super::super::validate(&wrong_type, &registry).unwrap_err();
+        assert!(
+            format!("{error:#}").contains(&format!("input {:?} expects text", names[0])),
+            "{error:#}"
+        );
+        Ok(())
+    }
 
     #[test]
     #[ignore = "explicit release preflight state timing; no processes or effects"]

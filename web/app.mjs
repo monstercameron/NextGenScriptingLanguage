@@ -2,6 +2,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import examples from './examples.json';
 import fixtures from './fixtures.json';
+import { decodePreview } from './preview.mjs';
 
 const $ = (id) => document.getElementById(id);
 const terminal = new Terminal({
@@ -132,7 +133,8 @@ async function initialize(files = seed, directories = [], cwd = '/workspace') {
       await request({ action: 'command', command: `mkdir -p ${quoted(directory)}` });
   for (const [path, content] of Object.entries(files)) {
     // Restore nested directories before restoring a stopped worker's snapshot.
-    const parent = path.slice(0, path.lastIndexOf('/'));
+    const separator = path.lastIndexOf('/');
+    const parent = separator > 0 ? path.slice(0, separator) : '';
     if (parent && parent !== '/workspace')
       await request({
         action: 'command',
@@ -184,7 +186,9 @@ function renderFiles() {
     button.onclick = () => {
       if (busy || !ready) return;
       if (path.endsWith('.program')) {
-        active = { file: path, title: name.textContent };
+        const known = examples.find((item) => '/workspace/' + item.file === path);
+        active = { ...known, file: path, title: name.textContent };
+        $('artifact-panel').hidden = true;
         $('filename').textContent = name.textContent;
         $('source').value = content;
         document
@@ -195,6 +199,52 @@ function renderFiles() {
     };
     $('files').append(button);
   }
+}
+function renderArtifact(response) {
+  const panel = $('artifact-panel');
+  panel.hidden = true;
+  $('artifact-metrics').replaceChildren();
+  $('artifact-notes').replaceChildren();
+  if (!active.previewFile) return;
+  const path = '/workspace/' + active.previewFile;
+  if (!response.written_files?.includes(path)) return;
+  const raw = snapshot[path];
+  if (raw === undefined) return;
+  try {
+    const model = decodePreview(raw);
+    $('artifact-title').textContent = model.title;
+    $('artifact-status').textContent = model.status;
+    $('artifact-source').textContent =
+      `Saved artifact: ${path}. Every value comes from the .program output.`;
+    const maximum = Math.max(1, ...model.metrics.map((item) => item.value));
+    for (const metric of model.metrics) {
+      const card = document.createElement('div');
+      card.className = 'artifact-metric';
+      const label = document.createElement('span');
+      label.textContent = metric.label;
+      const number = document.createElement('strong');
+      number.textContent = metric.value.toLocaleString();
+      const track = document.createElement('div');
+      track.className = 'artifact-track';
+      track.setAttribute('aria-hidden', 'true');
+      const fill = document.createElement('div');
+      fill.className = 'artifact-fill';
+      fill.style.width = `${(metric.value / maximum) * 100}%`;
+      track.append(fill);
+      card.append(label, number, track);
+      $('artifact-metrics').append(card);
+    }
+    for (const note of model.notes) {
+      const item = document.createElement('li');
+      item.textContent = note;
+      $('artifact-notes').append(item);
+    }
+  } catch (error) {
+    $('artifact-title').textContent = 'Preview unavailable';
+    $('artifact-status').textContent = 'Check the generated JSON';
+    $('artifact-source').textContent = error.message;
+  }
+  panel.hidden = false;
 }
 function renderTrace(response, elapsed) {
   $('metrics').textContent =
@@ -235,6 +285,7 @@ async function perform(action, command) {
   if (busy || !ready) return;
   busy = true;
   controls();
+  $('artifact-panel').hidden = true;
   let interrupted = false;
   try {
     // Save the open editor before both button runs and terminal execute commands.
@@ -259,6 +310,7 @@ async function perform(action, command) {
     print(result.stdout ?? '');
     if (!result.ok) print(`\r\nError: ${result.error}\r\n`);
     renderTrace(result, elapsed);
+    if (result.ok && action === 'run') renderArtifact(result);
     status(
       `${result.ok ? 'Completed' : 'Failed'} · ${timing(elapsed)} inside worker (not a Bash benchmark)`,
     );
@@ -276,6 +328,9 @@ async function perform(action, command) {
 function choose(example) {
   if (busy) return;
   active = example;
+  $('artifact-panel').hidden = true;
+  $('example-hint').textContent =
+    example.hint ?? 'Edit the source or a virtual file, then run again to see what changes.';
   $('filename').textContent = example.file;
   $('source').value = snapshot[`/workspace/${example.file}`] ?? example.source;
   $('stdin').value = example.stdin ?? '';
@@ -315,6 +370,7 @@ $('reset').onclick = async () => {
     for (const [path, content] of Object.entries(seed)) await write(path, content);
     busy = false;
     choose(examples[0]);
+    $('artifact-panel').hidden = true;
     status('Examples and files reset · cache cleared');
   } catch (error) {
     failure(error);

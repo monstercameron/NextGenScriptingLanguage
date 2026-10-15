@@ -133,7 +133,7 @@ h1 em {
 }
 .examples {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 22px;
 }
@@ -588,5 +588,105 @@ dialog h2 {
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;
+  }
+}
+
+.example-hint {
+  margin: -6px 0 24px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.artifact-panel {
+  margin-top: 28px;
+  border: 1px solid #33443f;
+  border-radius: 9px;
+  padding: 24px;
+  background: #e8ecdf;
+  box-shadow: 5px 6px 0 #dce2d3;
+}
+.artifact-panel[hidden] {
+  display: none;
+}
+.artifact-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.artifact-heading h2 {
+  margin: 4px 0;
+  font-size: 25px;
+  letter-spacing: -1px;
+  overflow-wrap: anywhere;
+}
+.artifact-heading .eyebrow {
+  margin: 0;
+}
+.artifact-status {
+  border: 1px solid #33443f;
+  border-radius: 20px;
+  padding: 6px 16px;
+  font: 12px var(--mono);
+  background: var(--lime);
+  overflow-wrap: anywhere;
+}
+.artifact-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin-top: 22px;
+}
+.artifact-metric {
+  background: #fdfcf7;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 16px;
+  min-width: 0;
+}
+.artifact-metric span {
+  display: block;
+  font: 11px var(--mono);
+  overflow-wrap: anywhere;
+}
+.artifact-metric strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+  font-size: 42px;
+  line-height: 1.3;
+  letter-spacing: -2px;
+}
+.artifact-track {
+  height: 7px;
+  border-radius: 4px;
+  background: #dce2d3;
+  overflow: hidden;
+  margin-top: 10px;
+}
+.artifact-fill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 4px;
+}
+.artifact-notes {
+  color: var(--muted);
+  margin-bottom: 0;
+  padding-left: 20px;
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .artifact-panel {
+    padding: 16px;
+  }
+  .artifact-heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .artifact-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .artifact-metric strong {
+    font-size: 32px;
   }
 }

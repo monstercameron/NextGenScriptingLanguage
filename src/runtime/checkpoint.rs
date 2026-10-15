@@ -1002,6 +1002,18 @@ fn load_blob(directory: &Path, reference: &BlobRef, limit: usize) -> Result<Vec<
 }
 
 fn atomic_write(directory: &Path, stem: &str, suffix: &str, bytes: &[u8]) -> Result<()> {
+    atomic_write_with(directory, stem, suffix, bytes, |file, bytes| {
+        file.write_all(bytes).and_then(|()| file.sync_all())
+    })
+}
+
+fn atomic_write_with(
+    directory: &Path,
+    stem: &str,
+    suffix: &str,
+    bytes: &[u8],
+    mut write_and_sync: impl FnMut(&mut File, &[u8]) -> io::Result<()>,
+) -> Result<()> {
     let target = if suffix == "json" {
         directory.join(format!("{stem}.{suffix}"))
     } else {
@@ -1017,9 +1029,14 @@ fn atomic_write(directory: &Path, stem: &str, suffix: &str, bytes: &[u8]) -> Res
             .open(&path)
         {
             Ok(mut file) => {
-                file.write_all(bytes)
-                    .and_then(|()| file.sync_all())
-                    .with_context(|| format!("writing checkpoint temporary {}", path.display()))?;
+                if let Err(error) = write_and_sync(&mut file, bytes) {
+                    // Close before unlinking so cleanup also works on Windows.
+                    drop(file);
+                    let _ = fs::remove_file(&path);
+                    return Err(error).with_context(|| {
+                        format!("writing checkpoint temporary {}", path.display())
+                    });
+                }
                 temporary = Some(path);
                 break;
             }
@@ -1580,4 +1597,52 @@ fn sync_directory(_directory: &Path) -> Result<()> {
     // Publication uses MOVEFILE_WRITE_THROUGH after flushing each file. Windows
     // does not provide the Unix directory-fsync contract through std::fs.
     Ok(())
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn checkpoint_atomic_write_removes_temporary_after_write_error() {
+        let temp = tempdir().unwrap();
+        let directory = temp.path();
+        let target = directory.join("journal.json");
+        fs::write(&target, b"previous journal").unwrap();
+
+        let error = atomic_write_with(directory, "journal", "json", b"replacement", |file, _| {
+            file.write_all(b"partial journal")?;
+            Err(io::Error::other("synthetic checkpoint write failure"))
+        })
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("writing checkpoint temporary"));
+        assert_eq!(fs::read(&target).unwrap(), b"previous journal");
+        assert_eq!(fs::read_dir(directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn checkpoint_atomic_write_removes_temporary_after_sync_error() {
+        let temp = tempdir().unwrap();
+        let directory = temp.path();
+        let target = directory.join("journal.json");
+        fs::write(&target, b"previous journal").unwrap();
+
+        let error = atomic_write_with(
+            directory,
+            "journal",
+            "json",
+            b"replacement",
+            |file, bytes| {
+                file.write_all(bytes)?;
+                Err(io::Error::other("synthetic checkpoint sync failure"))
+            },
+        )
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("writing checkpoint temporary"));
+        assert_eq!(fs::read(&target).unwrap(), b"previous journal");
+        assert_eq!(fs::read_dir(directory).unwrap().count(), 1);
+    }
 }

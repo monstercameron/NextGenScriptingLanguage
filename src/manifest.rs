@@ -212,6 +212,57 @@ impl Registry {
 }
 
 impl Manifest {
+    /// Describe the validated callable interface without executing or locating
+    /// its binary. This is deliberately separate from Serialize: checkpoint
+    /// identities retain their existing representation.
+    pub fn contract(&self) -> serde_json::Value {
+        let properties = self
+            .parameters
+            .iter()
+            .map(|(name, spec)| {
+                let mut schema = parameter_schema(spec.kind);
+                if let Some(items) = spec.item_type {
+                    schema["items"] = parameter_schema(items);
+                }
+                if let Some(minimum) = spec.min_items {
+                    schema["minItems"] = minimum.into();
+                }
+                (name.clone(), schema)
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let required = self
+            .parameters
+            .iter()
+            .filter_map(|(name, spec)| spec.required.then_some(name))
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "name": self.name,
+            "phrases": self.phrases,
+            "backend": if self.builtin.is_some() { "builtin" } else { "native_process" },
+            "binary": self.binary,
+            "builtin": self.builtin,
+            "parameters_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object", "properties": properties,
+                "required": required, "additionalProperties": false
+            },
+            "argv_template": self.arguments,
+            "io": {
+                "stdin": if self.accepts_stdin { "bytes" } else { "not_accepted" },
+                "stdout": if self.builtin.is_some() { "empty" } else { "bytes" },
+                "output_schema": null
+            },
+            "execution": {
+                "shell_expansion": false,
+                "availability": if self.builtin.is_some() { "runtime_builtin" } else { "not_checked" },
+                "sandbox": "not_enforced",
+                "cacheable": self.cacheable,
+                "uncertain_on_failure": self.uncertain_on_failure,
+                "effect": if self.builtin.is_some() { "working_directory" } else { "native_command" }
+            }
+        })
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn checkpoint_identity(&self, call: &Invocation) -> Result<Vec<u8>> {
         if call.direct {
@@ -377,6 +428,21 @@ impl Manifest {
             }
         }
         Ok(())
+    }
+}
+
+fn parameter_schema(kind: ParameterType) -> serde_json::Value {
+    match kind {
+        ParameterType::String => serde_json::json!({"type": "string", "pattern": "^[^\\u0000]*$"}),
+        ParameterType::Integer => serde_json::json!({
+            "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX
+        }),
+        ParameterType::Boolean => serde_json::json!({"type": "boolean"}),
+        ParameterType::List => serde_json::json!({"type": "array"}),
+        ParameterType::Scalar => serde_json::json!({
+            "anyOf": [parameter_schema(ParameterType::String),
+                parameter_schema(ParameterType::Integer), parameter_schema(ParameterType::Boolean)]
+        }),
     }
 }
 

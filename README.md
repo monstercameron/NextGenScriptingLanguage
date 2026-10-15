@@ -157,7 +157,7 @@ require explicit retry. See the [recovery contract](docs/language.md#recover-aft
 | [Native applet catalog](manifests) | Readable named parameters mapped directly to argv. Direct quoted calls need no adapter. |
 | [Model operations](docs/models.md) | TypeSafe Jev classification, judgment and scoring; OpenAI generation and JSON extraction. |
 | [VS Code extension](editors/vscode/README.md) | Syntax highlighting, snippets and grammar tests. |
-| [Browser playground](docs/playground.md) | Rust/WASM language core, terminal, virtual files and seven runnable workflows. |
+| [Browser playground](docs/playground.md) | Rust/WASM language core, terminal, virtual files and ten runnable workflows with checked outputs and generated reports. |
 
 The browser uses bounded Rust applet ports and buffered pipelines. Installed
 executables, native pipes, services, model calls and TUI screens use native Execute.

@@ -69,6 +69,9 @@ fn execute() -> Result<()> {
     if arguments.first().is_some_and(|a| a == "live") {
         return flow::live::cli(&arguments[1..], default_manifest_dir(), workflow_path);
     }
+    if arguments.first().is_some_and(|a| a == "applets") {
+        return applets_cli(&arguments[1..]);
+    }
     if arguments.first().is_some_and(|a| a == "model") {
         #[cfg(unix)]
         {
@@ -699,6 +702,62 @@ fn take_option_value(
     Ok(value.clone())
 }
 
+fn applets_cli(arguments: &[String]) -> Result<()> {
+    const HELP: &str = "Usage: execute applets list [--manifest-dir PATH]\n       execute applets inspect NAME_OR_PHRASE [--manifest-dir PATH]\n\nPrint validated manifest contracts as JSON without executing applets.\nAvailability and output semantics of native commands are not verified.\nUse -- before a name or phrase beginning with a hyphen.";
+    if arguments == ["--help"] || arguments == ["-h"] {
+        writeln!(std::io::stdout().lock(), "{HELP}")?;
+        return Ok(());
+    }
+    let command = arguments.first().context(HELP)?;
+    if !matches!(command.as_str(), "list" | "inspect") {
+        bail!("unknown applets command {command:?}\n{HELP}");
+    }
+    let mut manifest_dir = None;
+    let mut name = None;
+    let mut literal = false;
+    let mut index = 1;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if !literal && argument == "--" {
+            literal = true;
+        } else if !literal && argument == "--manifest-dir" {
+            if manifest_dir.is_some() {
+                bail!("--manifest-dir may be specified only once");
+            }
+            manifest_dir = Some(PathBuf::from(take_option_value(
+                arguments,
+                &mut index,
+                "--manifest-dir",
+                "a manifest path",
+            )?));
+        } else if !literal && argument.starts_with('-') {
+            bail!("unknown or unsupported applets option `{argument}`");
+        } else if command == "inspect" && name.is_none() {
+            name = Some(argument.as_str());
+        } else {
+            bail!("unexpected applets argument {argument:?}\n{HELP}");
+        }
+        index += 1;
+    }
+    if command == "inspect" && name.is_none() {
+        bail!("applets inspect requires a name or phrase\n{HELP}");
+    }
+    let registry = load_registry(manifest_dir)?;
+    if let Some(name) = name {
+        write_json(&serde_json::json!({
+            "protocol": "execute.applet/1", "validation": "manifest_static",
+            "applet": registry.resolve(name)?.contract()
+        }))
+    } else {
+        let mut manifests = registry.manifests().iter().collect::<Vec<_>>();
+        manifests.sort_by(|left, right| left.name.cmp(&right.name));
+        write_json(&serde_json::json!({
+            "protocol": "execute.applets/1", "validation": "manifest_static",
+            "applets": manifests.iter().map(|manifest| manifest.contract()).collect::<Vec<_>>()
+        }))
+    }
+}
+
 fn load_registry(explicit_path: Option<PathBuf>) -> Result<Registry> {
     match explicit_path {
         Some(path) => Registry::load(&path)
@@ -736,7 +795,7 @@ fn default_manifest_dir() -> PathBuf {
 }
 
 fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory containing applet manifests\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect NAME_OR_PHRASE> [--manifest-dir PATH]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory containing applet manifests\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

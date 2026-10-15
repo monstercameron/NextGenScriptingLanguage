@@ -47,6 +47,9 @@ pub struct Response {
     pub stdout: String,
     pub error: String,
     pub files: BTreeMap<String, String>,
+    /// Successful writes in this request, even when the bytes were unchanged.
+    /// The virtual filesystem's 128-file bound also bounds this receipt.
+    pub written_files: BTreeSet<String>,
     pub cwd: String,
     pub directories: Vec<String>,
     pub trace: Vec<serde_json::Value>,
@@ -149,6 +152,7 @@ impl BrowserSession {
             "write" => {
                 let path = absolute(&request.path, &self.cwd)?;
                 self.write(&path, request.content.into_bytes())?;
+                response.written_files.insert(path);
             }
             "reset" => *self = Self::default(),
             "inspect" => {}
@@ -333,10 +337,9 @@ impl BrowserSession {
                     }
                     StepKind::Save { path, .. } => {
                         let path = path_value(path, &bindings, &cwd)?;
-                        self.write(
-                            &absolute(&path.to_string_lossy(), &cwd.to_string_lossy())?,
-                            data.clone(),
-                        )?;
+                        let path = absolute(&path.to_string_lossy(), &cwd.to_string_lossy())?;
+                        self.write(&path, data.clone())?;
+                        response.written_files.insert(path);
                     }
                     StepKind::Invoke { call, connection } => {
                         let manifest = self.registry.resolve_call(call)?;

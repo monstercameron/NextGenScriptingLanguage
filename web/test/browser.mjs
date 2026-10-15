@@ -75,6 +75,21 @@ try {
     assert.ok(requests.some((url) => url.endsWith('/execute.wasm')));
   });
   const examples = JSON.parse(await readFile(new URL('../examples.json', import.meta.url)));
+  await check(
+    'initial file listing contains only seeded files, without phantom directories',
+    async () => {
+      const fixtures = JSON.parse(await readFile(new URL('../fixtures.json', import.meta.url)));
+      const expected = [...Object.keys(fixtures), ...examples.map((item) => item.file)].sort();
+      await page.locator('.xterm-helper-textarea').focus();
+      await page.keyboard.type('ls -1');
+      await page.keyboard.press('Enter');
+      await finished();
+      assert.equal(
+        await page.locator('#accessible-output').textContent(),
+        expected.join('\n') + '\n',
+      );
+    },
+  );
   for (const example of examples)
     await check(`interactive example ${example.id}`, async () => {
       await page.locator(`[data-id="${example.id}"]`).click();
@@ -82,7 +97,43 @@ try {
       await finished();
       assert.match(await page.locator('#run-status').textContent(), /^Completed/);
       assert.equal(await page.locator('#accessible-output').textContent(), example.expected);
+      if (example.previewFile) {
+        assert.equal(await page.locator('#artifact-panel').isVisible(), true);
+        const expected = JSON.parse(example.expectedFiles[example.previewFile]);
+        assert.equal(await page.locator('#artifact-title').textContent(), expected.title);
+        assert.equal(await page.locator('#artifact-status').textContent(), expected.status);
+        assert.deepEqual(
+          await page.locator('.artifact-metric strong').allTextContents(),
+          expected.metrics.map((item) => item.value.toLocaleString()),
+        );
+      }
+      for (const [file, content] of Object.entries(example.expectedFiles ?? {})) {
+        const literal = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        await page
+          .locator('.file span')
+          .filter({ hasText: new RegExp('^' + literal + '$') })
+          .click();
+        assert.equal(
+          await page.locator('#file-content').inputValue(),
+          content,
+          `${example.id}: ${file}`,
+        );
+        await page.getByRole('button', { name: 'Close file editor', exact: true }).click();
+      }
     });
+  await check('dashboard only presents artifacts written by the current execution', async () => {
+    await page.locator('[data-id="incident-command"]').click();
+    await page.locator('#run').click();
+    await finished();
+    assert.equal(await page.locator('#artifact-panel').isVisible(), true);
+    await page.locator('#run').click();
+    await finished();
+    assert.equal(await page.locator('#artifact-panel').isVisible(), true);
+    await page.locator('#source').fill('run "true"');
+    await page.locator('#run').click();
+    await finished();
+    assert.equal(await page.locator('#artifact-panel').isVisible(), false);
+  });
   await check('warm cache hit appears in trace', async () => {
     await page.locator('[data-id="cache"]').click();
     await page.locator('#run').click();

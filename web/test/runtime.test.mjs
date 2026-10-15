@@ -37,11 +37,29 @@ test('WASM is a real import-free executable module, with owned-buffer ABI', () =
   for (const name of ['allocate', 'execute', 'release', 'memory'])
     assert.ok(WebAssembly.Module.exports(module).some((item) => item.name === name));
 });
+test('write receipts distinguish this execution from retained artifacts, including identical rewrites', async () => {
+  const call = await session();
+  const source = 'run "printf" with arguments ["dashboard\\n"]\nthen save to "dashboard.json"';
+  const first = good(run(call, source));
+  assert.deepEqual(first.written_files, ['/workspace/dashboard.json']);
+  const second = good(run(call, source));
+  assert.deepEqual(second.written_files, ['/workspace/dashboard.json']);
+  const withoutWrite = good(run(call, 'run "true"'));
+  assert.equal(withoutWrite.files['/workspace/dashboard.json'], 'dashboard\n');
+  assert.deepEqual(withoutWrite.written_files, []);
+  const failed = bad(
+    run(call, 'run "printf" with arguments ["x"]\nthen save to "/missing/out"'),
+    /parent directory/,
+  );
+  assert.deepEqual(failed.written_files, []);
+});
 for (const example of examples) {
   test(`WASM example: ${example.id}`, async () => {
     const call = await seeded();
     const result = good(run(call, example.source, { stdin: example.stdin ?? '' }));
     assert.equal(result.stdout, example.expected);
+    for (const [file, content] of Object.entries(example.expectedFiles ?? {}))
+      assert.equal(result.files['/workspace/' + file], content, `${example.id}: ${file}`);
   });
   test(`native/WASM exact output parity: ${example.id}`, async () => {
     const binary = process.env.EXECUTE_TEST_BINARY ?? path.join(root, 'target/release/execute');
@@ -63,11 +81,74 @@ for (const example of examples) {
       );
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, example.expected);
+      for (const [file, content] of Object.entries(example.expectedFiles ?? {}))
+        assert.equal(
+          await readFile(path.join(folder, file), 'utf8'),
+          content,
+          `${example.id}: ${file}`,
+        );
     } finally {
       await rm(folder, { recursive: true, force: true });
     }
   });
 }
+test('incident dashboard responds to edited evidence with independently counted metrics', async () => {
+  const call = await seeded();
+  const example = examples.find((item) => item.id === 'incident-command');
+  const added = fixtures['incident-eu-west.log'] + 'ERROR eu-west cache synthetic outage\n';
+  good(call({ action: 'write', path: 'incident-eu-west.log', content: added }));
+  const result = good(run(call, example.source));
+  const all = [fixtures['incident-us-east.log'], added, fixtures['incident-ap-south.log']].join('');
+  const lines = all.trimEnd().split('\n');
+  const dashboard = JSON.parse(result.files['/workspace/' + example.previewFile]);
+  assert.deepEqual(
+    dashboard.metrics.map((item) => item.value),
+    [
+      lines.length,
+      lines.filter((line) => line.includes('ERROR')).length,
+      lines.filter((line) => line.includes('WARN')).length,
+    ],
+  );
+  assert.equal(result.files['/workspace/incident-region-eu-west.txt'], '11 | eu-west\n');
+});
+test('launch gate changes every regional checklist and the dashboard from hold to canary', async () => {
+  const call = await seeded();
+  const example = examples.find((item) => item.id === 'launch-control');
+  const candidate = JSON.parse(fixtures['launch-candidate.json']);
+  candidate.checks_passed = true;
+  candidate.tests_failed = 0;
+  good(
+    call({ action: 'write', path: 'launch-candidate.json', content: JSON.stringify(candidate) }),
+  );
+  const result = good(run(call, example.source));
+  const dashboard = JSON.parse(result.files['/workspace/' + example.previewFile]);
+  assert.equal(dashboard.status, 'READY FOR CANARY');
+  assert.equal(dashboard.metrics[1].value, 0);
+  for (const file of candidate.plan_files)
+    assert.match(result.files['/workspace/' + file], /Decision: READY FOR CANARY/);
+});
+test('removing priority requests updates support routing and leaves an empty urgent artifact', async () => {
+  const call = await seeded();
+  const example = examples.find((item) => item.id === 'support-signal');
+  const lines = fixtures['support-inbox.txt']
+    .trimEnd()
+    .split('\n')
+    .filter((line) => !line.includes('P1'));
+  good(call({ action: 'write', path: 'support-inbox.txt', content: lines.join('\n') + '\n' }));
+  const result = good(run(call, example.source));
+  const dashboard = JSON.parse(result.files['/workspace/' + example.previewFile]);
+  assert.equal(dashboard.status, 'ROUTINE');
+  assert.deepEqual(
+    dashboard.metrics.map((item) => item.value),
+    [
+      lines.length,
+      0,
+      lines.filter((line) => line.includes('SECURITY')).length,
+      lines.filter((line) => line.includes('BILLING')).length,
+    ],
+  );
+  assert.equal(result.files['/workspace/support-urgent.txt'], '');
+});
 test('typed CLI values control branch; invalid input fails before effects', async () => {
   const call = await seeded();
   const source =

@@ -190,7 +190,14 @@ enum CurrentState {
 /// successful result means every requested state was observed and the journal
 /// says `committed`.
 pub(super) fn apply(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
-    apply_with_fault(args, cwd, None)
+    #[cfg(test)]
+    {
+        apply_with_fault(args, cwd, None, None)
+    }
+    #[cfg(not(test))]
+    {
+        apply_with_fault(args, cwd, None)
+    }
 }
 
 fn apply_with_fault(
@@ -198,6 +205,7 @@ fn apply_with_fault(
     cwd: &Path,
     #[cfg(test)] crash_after_replace: Option<usize>,
     #[cfg(not(test))] _crash_after_replace: Option<usize>,
+    #[cfg(test)] before_windows_target_preflight: Option<&dyn Fn(&Path)>,
 ) -> Result<Value, AppletError> {
     let timeout = lock_timeout(args)?;
     let journal = journal_path(required_string(args, "journal")?, cwd)?;
@@ -209,7 +217,11 @@ fn apply_with_fault(
     }
 
     reject_path_collisions(&journal, &operations)?;
-    let _target_locks = lock_targets(&operations, timeout)?;
+    #[cfg(not(windows))]
+    let _target_locks = lock_targets(
+        operations.iter().map(|operation| operation.path.as_path()),
+        timeout,
+    )?;
 
     let mut loaded = Vec::with_capacity(operations.len());
     let mut total = 0usize;
@@ -260,25 +272,74 @@ fn apply_with_fault(
         )
     })?;
 
-    // Hold the journal lock across publication and execution. The descriptor
-    // remains attached to the same file when the prepared directory is renamed.
-    let _journal_lock = filesystem::acquire_path_lock(&stage.join("transaction.lock"), timeout)?;
-    fs::rename(&stage, &published).map_err(|error| {
-        super::io_error(
-            error,
-            format!("publishing transaction journal {}", published.display()),
-        )
-    })?;
-    cleanup.0 = None;
-    sync_directory(published.parent().unwrap_or_else(|| Path::new("."))).map_err(|error| {
-        failed(
-            "uncertain_effect",
-            format!(
-                "journal was published but its parent could not be synced: {}: {error}",
-                published.display()
-            ),
-        )
-    })?;
+    // Keep the lock attached to the journal across execution. Windows cannot
+    // publish a directory while a child lock file is open, so it claims the
+    // final name first and then verifies the prepared checksum under the lock.
+    #[cfg(windows)]
+    let _journal_lock = {
+        fs::rename(&stage, &published).map_err(|error| {
+            super::io_error(
+                error,
+                format!("publishing transaction journal {}", published.display()),
+            )
+        })?;
+        cleanup.0 = None;
+        let lock = lock_published_prepared_journal(&published, &data, timeout)?;
+        sync_directory(published.parent().unwrap_or_else(|| Path::new("."))).map_err(|error| {
+            failed(
+                "uncertain_effect",
+                format!(
+                    "journal was published but its parent could not be synced: {}: {error}",
+                    published.display()
+                ),
+            )
+        })?;
+        lock
+    };
+    #[cfg(not(windows))]
+    let _journal_lock = {
+        let lock = filesystem::acquire_path_lock(&stage.join("transaction.lock"), timeout)?;
+        fs::rename(&stage, &published).map_err(|error| {
+            super::io_error(
+                error,
+                format!("publishing transaction journal {}", published.display()),
+            )
+        })?;
+        cleanup.0 = None;
+        sync_directory(published.parent().unwrap_or_else(|| Path::new("."))).map_err(|error| {
+            failed(
+                "uncertain_effect",
+                format!(
+                    "journal was published but its parent could not be synced: {}: {error}",
+                    published.display()
+                ),
+            )
+        })?;
+        lock
+    };
+
+    #[cfg(all(test, windows))]
+    if let Some(before_preflight) = before_windows_target_preflight {
+        before_preflight(&published);
+    }
+    #[cfg(all(test, not(windows)))]
+    let _ = before_windows_target_preflight;
+
+    #[cfg(windows)]
+    let _target_locks = {
+        let locks = lock_targets(loaded.iter().map(|entry| entry.path.as_path()), timeout)
+            .map_err(|error| AppletError {
+                code: error.code,
+                kind: error.kind,
+                message: format!(
+                    "acquiring target locks for transaction journal {}; the published prepared journal remains for explicit recovery: {}",
+                    published.display(),
+                    error.message
+                ),
+            })?;
+        verify_loaded_targets_unchanged(&published, &loaded)?;
+        locks
+    };
 
     data.state = TransactionState::Applying;
     persist_journal(&published, &data)?;
@@ -383,7 +444,10 @@ pub(super) fn recover(args: &Map<String, Value>, cwd: &Path) -> Result<Value, Ap
             after_exists: loaded.after_exists,
         })
         .collect();
-    let _target_locks = lock_targets(&operations, timeout)?;
+    let _target_locks = lock_targets(
+        operations.iter().map(|operation| operation.path.as_path()),
+        timeout,
+    )?;
     drive_journal(&journal, &mut data, &loaded, decision)?;
     let status = match data.state {
         TransactionState::Committed => "committed",
@@ -701,13 +765,13 @@ fn parse_operations(
     Ok(parsed)
 }
 
-fn lock_targets(
-    operations: &[PlannedEntry],
+fn lock_targets<'a>(
+    paths: impl IntoIterator<Item = &'a Path>,
     timeout: Duration,
 ) -> Result<Vec<PathLock>, AppletError> {
-    let mut locks: Vec<_> = operations
-        .iter()
-        .map(|operation| filesystem::default_lock_path(&operation.path))
+    let mut locks: Vec<_> = paths
+        .into_iter()
+        .map(filesystem::default_lock_path)
         .collect::<Result<_, _>>()?;
     locks.sort();
     locks.dedup();
@@ -719,6 +783,49 @@ fn lock_targets(
             filesystem::acquire_path_lock(&path, remaining)
         })
         .collect()
+}
+
+#[cfg(windows)]
+fn verify_loaded_targets_unchanged(
+    journal: &Path,
+    loaded: &[LoadedEntry],
+) -> Result<(), AppletError> {
+    for entry in loaded {
+        let (current, mode) = read_existing_regular_with_mode(&entry.path).map_err(|error| {
+            if matches!(error.code, "not_found" | "invalid_request") {
+                failed(
+                    "conflict",
+                    format!(
+                        "transaction target {} changed while journal {} was being prepared; the prepared journal remains for explicit recovery",
+                        entry.path.display(),
+                        journal.display(),
+                    ),
+                )
+            } else {
+                AppletError {
+                    code: error.code,
+                    kind: error.kind,
+                    message: format!(
+                        "checking target {} before applying transaction journal {}; the published prepared journal remains for explicit recovery: {}",
+                        entry.path.display(),
+                        journal.display(),
+                        error.message
+                    ),
+                }
+            }
+        })?;
+        if current.as_slice() != entry.before.as_slice() || mode != entry.before_mode {
+            return Err(failed(
+                "conflict",
+                format!(
+                    "transaction target {} changed while journal {} was being prepared; the prepared journal remains for explicit recovery",
+                    entry.path.display(),
+                    journal.display(),
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn reject_path_collisions(journal: &Path, operations: &[PlannedEntry]) -> Result<(), AppletError> {
@@ -804,6 +911,38 @@ fn create_journal_stage(final_path: &Path) -> Result<(PathBuf, PathBuf), AppletE
         "temporary_path_exhausted",
         "could not allocate a transaction journal staging directory",
     ))
+}
+
+#[cfg(windows)]
+fn lock_published_prepared_journal(
+    journal: &Path,
+    prepared: &JournalData,
+    timeout: Duration,
+) -> Result<PathLock, AppletError> {
+    let lock = filesystem::acquire_path_lock(&journal.join("transaction.lock"), timeout).map_err(
+        |error| AppletError {
+            code: error.code,
+            kind: error.kind,
+            message: format!(
+                "acquiring lock for published transaction journal {}; inspect it after any active recovery completes: {}",
+                journal.display(),
+                error.message
+            ),
+        },
+    )?;
+    let current = read_journal(journal)?;
+    if current.state != TransactionState::Prepared
+        || serialized_digest(&current)? != serialized_digest(prepared)?
+    {
+        return Err(failed(
+            "conflict",
+            format!(
+                "transaction journal {} changed before its initial apply acquired the lock; leaving it untouched for explicit inspection or recovery",
+                journal.display()
+            ),
+        ));
+    }
+    Ok(lock)
 }
 
 struct DirectoryCleanup(Option<PathBuf>);
@@ -1431,13 +1570,150 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn newly_created_journal_file_can_receive_its_private_dacl() {
+    fn newly_created_private_journal_files_can_be_published_and_replaced() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("journal.json");
+        let published = temp.path().join("journal.json");
+        let first = temp.path().join(".journal.first.tmp");
+        let second = temp.path().join(".journal.second.tmp");
 
-        write_private_new(&path, b"private journal").unwrap();
+        write_private_new(&first, b"first private journal").unwrap();
+        crate::platform::replace_file(&first, &published).unwrap();
+        assert_eq!(fs::read(&published).unwrap(), b"first private journal");
 
-        assert_eq!(fs::read(path).unwrap(), b"private journal");
+        write_private_new(&second, b"replacement journal").unwrap();
+        crate::platform::replace_file(&second, &published).unwrap();
+        assert_eq!(fs::read(published).unwrap(), b"replacement journal");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn publisher_refuses_a_journal_recovered_during_the_lock_gap() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("config.json");
+        fs::write(&target, b"before").unwrap();
+        let loaded = vec![LoadedEntry {
+            path: target.clone(),
+            before: b"before".to_vec(),
+            before_mode: None,
+            after: b"after".to_vec(),
+            after_exists: true,
+        }];
+        let journal = temp.path().join("journal");
+        let (stage, published) = create_journal_stage(&journal).unwrap();
+        let entries = write_blobs_and_entries(&stage, &loaded).unwrap();
+        let prepared = JournalData {
+            version: VERSION,
+            state: TransactionState::Prepared,
+            entries,
+            error: None,
+        };
+        persist_journal(&stage, &prepared).unwrap();
+        fs::rename(&stage, &published).unwrap();
+
+        let recovery_lock = filesystem::acquire_path_lock(
+            &published.join("transaction.lock"),
+            Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+        )
+        .unwrap();
+        let recovery_entries = load_entries(&published, &prepared).unwrap();
+        let mut recovered = read_journal(&published).unwrap();
+        drive_journal(
+            &published,
+            &mut recovered,
+            &recovery_entries,
+            Decision::Complete,
+        )
+        .unwrap();
+        drop(recovery_lock);
+
+        let error = match lock_published_prepared_journal(
+            &published,
+            &prepared,
+            Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+        ) {
+            Ok(_) => panic!("publisher must not reapply a recovered journal"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "conflict");
+        assert!(error.message.contains(published.to_string_lossy().as_ref()));
+        assert_eq!(
+            read_journal(&published).unwrap().state,
+            TransactionState::Committed
+        );
+        assert_eq!(fs::read(target).unwrap(), b"after");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn target_preflight_conflict_names_preserved_prepared_journal() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("config.json");
+        fs::write(&target, b"before").unwrap();
+        let loaded = vec![LoadedEntry {
+            path: target.clone(),
+            before: b"before".to_vec(),
+            before_mode: None,
+            after: b"after".to_vec(),
+            after_exists: true,
+        }];
+        let journal = temp.path().join("journal");
+        let (stage, published) = create_journal_stage(&journal).unwrap();
+        let entries = write_blobs_and_entries(&stage, &loaded).unwrap();
+        let prepared = JournalData {
+            version: VERSION,
+            state: TransactionState::Prepared,
+            entries,
+            error: None,
+        };
+        persist_journal(&stage, &prepared).unwrap();
+        fs::rename(&stage, &published).unwrap();
+
+        let _journal_lock = filesystem::acquire_path_lock(
+            &published.join("transaction.lock"),
+            Duration::from_millis(DEFAULT_LOCK_TIMEOUT_MS),
+        )
+        .unwrap();
+        fs::write(&target, b"third-party update").unwrap();
+
+        let error = verify_loaded_targets_unchanged(&published, &loaded).unwrap_err();
+        assert_eq!(error.code, "conflict");
+        assert!(error.message.contains(published.to_string_lossy().as_ref()));
+        assert!(error.message.contains("remains for explicit recovery"));
+        assert_eq!(
+            read_journal(&published).unwrap().state,
+            TransactionState::Prepared
+        );
+        assert_eq!(fs::read(target).unwrap(), b"third-party update");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn apply_rejects_target_drift_after_publication_without_overwriting_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let journal = temp.path().join("journal");
+        let target = temp.path().join("config.json");
+        fs::write(&target, b"before").unwrap();
+        let plan = args(&journal, &[(&target, "before", "after")]);
+        let changed_target = target.clone();
+        let interpose_target_drift = move |published: &Path| {
+            assert_eq!(
+                read_journal(published).unwrap().state,
+                TransactionState::Prepared
+            );
+            fs::write(&changed_target, b"third-party update").unwrap();
+        };
+
+        let error =
+            apply_with_fault(&plan, temp.path(), None, Some(&interpose_target_drift)).unwrap_err();
+
+        assert_eq!(error.code, "conflict");
+        assert!(error.message.contains(journal.to_string_lossy().as_ref()));
+        assert!(error.message.contains("remains for explicit recovery"));
+        assert_eq!(fs::read(&target).unwrap(), b"third-party update");
+        assert_eq!(
+            read_journal(&journal).unwrap().state,
+            TransactionState::Prepared
+        );
     }
 
     fn remove_args(journal: &Path, path: &Path, old: &[u8]) -> Map<String, Value> {
@@ -1502,7 +1778,7 @@ mod tests {
             ],
         );
 
-        let crashed = apply_with_fault(&plan, temp.path(), Some(1));
+        let crashed = apply_with_fault(&plan, temp.path(), Some(1), None);
         assert!(crashed.is_err());
         assert_eq!(fs::read_to_string(&first).unwrap(), "after one");
         assert_eq!(fs::read_to_string(&second).unwrap(), "before two");
@@ -1529,7 +1805,7 @@ mod tests {
                 (second.as_path(), "before two", "after two"),
             ],
         );
-        assert!(apply_with_fault(&plan, temp.path(), Some(1)).is_err());
+        assert!(apply_with_fault(&plan, temp.path(), Some(1), None).is_err());
         fs::write(&first, "manual edit").unwrap();
 
         let rollback = serde_json::json!({"journal": journal, "decision": "rollback"});
@@ -1604,7 +1880,7 @@ mod tests {
         fs::write(&target, b"old contents").unwrap();
         let plan = remove_args(&journal, &target, b"old contents");
 
-        let crashed = apply_with_fault(&plan, temp.path(), Some(1));
+        let crashed = apply_with_fault(&plan, temp.path(), Some(1), None);
         assert!(crashed.is_err());
         assert!(!target.exists());
 

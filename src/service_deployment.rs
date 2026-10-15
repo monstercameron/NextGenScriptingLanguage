@@ -469,8 +469,11 @@ mod tests {
         );
         let expected_log = directory
             .path()
-            .join("Library/Logs/com.example.scheduled.stdout.log");
-        assert!(rendered.contains(expected_log.to_string_lossy().as_ref()));
+            .join("Library")
+            .join("Logs")
+            .join("com.example.scheduled.stdout.log");
+        let expected_log = xml_text(expected_log.to_string_lossy().as_ref());
+        assert!(rendered.contains(&expected_log));
     }
 
     #[test]

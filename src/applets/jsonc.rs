@@ -8,11 +8,15 @@ const MAX_NESTING_DEPTH: usize = 256;
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 
 use super::filesystem::write_jsonc_update;
-use super::{failed, invalid, required_string, AppletError};
+use super::{checkpoint_work, failed, invalid, required_string, AppletError, ExecutionContext};
 use serde_json::{Map, Value};
 use std::path::Path;
 
-pub(super) fn set(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn set(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
     let key = required_string(args, "key")?.to_owned();
     let value = args
         .get("value")
@@ -20,16 +24,27 @@ pub(super) fn set(args: &Map<String, Value>, cwd: &Path) -> Result<Value, Applet
     let replacement = serde_json::to_string(value)
         .map_err(|error| failed("serialization_error", error.to_string()))?;
     write_jsonc_update(args, cwd, move |source| {
-        Ok(Some(set_source(source, &key, &replacement)?))
+        Ok(Some(set_source(source, &key, &replacement, context)?))
     })
 }
 
-pub(super) fn remove(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {
+pub(super) fn remove(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
     let key = required_string(args, "key")?.to_owned();
-    write_jsonc_update(args, cwd, move |source| remove_source(source, &key))
+    write_jsonc_update(args, cwd, move |source| {
+        remove_source(source, &key, context)
+    })
 }
 
-pub(super) fn edit_content(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
+pub(super) fn edit_content(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let content = match args.get("content") {
         Some(Value::String(content)) => content.as_str(),
         Some(_) => return Err(invalid("args.content must be a string")),
@@ -49,9 +64,9 @@ pub(super) fn edit_content(args: &Map<String, Value>, input: &[u8]) -> Result<Va
                 .ok_or_else(|| invalid("args.value is required for action 'set'"))?;
             let replacement = serde_json::to_string(value)
                 .map_err(|error| failed("serialization_error", error.to_string()))?;
-            set_source(content, key, &replacement)?
+            set_source(content, key, &replacement, context)?
         }
-        "remove" => remove_source(content, key)?.unwrap_or_else(|| content.to_owned()),
+        "remove" => remove_source(content, key, context)?.unwrap_or_else(|| content.to_owned()),
         action => {
             return Err(invalid(format!(
                 "args.action must be set or remove; received {action:?}"
@@ -63,33 +78,58 @@ pub(super) fn edit_content(args: &Map<String, Value>, input: &[u8]) -> Result<Va
             "updated JSONC content exceeds the {MAX_CONTENT_BYTES}-byte limit"
         )));
     }
+    context.checkpoint()?;
     Ok(Value::String(updated))
 }
 
-fn set_source(source: &str, key: &str, replacement: &str) -> Result<String, AppletError> {
-    let document = Parser::new(source).parse()?;
+fn set_source(
+    source: &str,
+    key: &str,
+    replacement: &str,
+    context: &ExecutionContext<'_>,
+) -> Result<String, AppletError> {
+    context.checkpoint()?;
+    let document = Parser::new(source, context).parse()?;
     let members = root_members(&document)?;
-    if let Some(member) = members.iter().rev().find(|member| member.key == key) {
-        let mut updated = source.to_owned();
-        updated.replace_range(member.value.start..member.value.end, replacement);
-        return Ok(updated);
+    for (index, member) in members.iter().rev().enumerate() {
+        checkpoint_work(context, index)?;
+        if member.key == key {
+            let mut updated = source.to_owned();
+            updated.replace_range(member.value.start..member.value.end, replacement);
+            context.checkpoint()?;
+            return Ok(updated);
+        }
     }
-    insert_root_member(source, &document, key, replacement)
+    insert_root_member(source, &document, key, replacement, context)
 }
 
-fn remove_source(source: &str, key: &str) -> Result<Option<String>, AppletError> {
+fn remove_source(
+    source: &str,
+    key: &str,
+    context: &ExecutionContext<'_>,
+) -> Result<Option<String>, AppletError> {
     let mut updated = source.to_owned();
     let mut changed = false;
     loop {
-        let document = Parser::new(&updated).parse()?;
+        context.checkpoint()?;
+        let document = Parser::new(&updated, context).parse()?;
         let members = root_members(&document)?;
-        let Some(index) = members.iter().position(|member| member.key == key) else {
+        let mut found = None;
+        for (index, member) in members.iter().enumerate() {
+            checkpoint_work(context, index)?;
+            if member.key == key {
+                found = Some(index);
+                break;
+            }
+        }
+        let Some(index) = found else {
             break;
         };
         let range = removal_range(members, index);
         updated.replace_range(range, "");
         changed = true;
     }
+    context.checkpoint()?;
     Ok(changed.then_some(updated))
 }
 
@@ -137,7 +177,9 @@ fn insert_root_member(
     root: &Node,
     key: &str,
     value: &str,
+    context: &ExecutionContext<'_>,
 ) -> Result<String, AppletError> {
+    context.checkpoint()?;
     let members = root_members(root)?;
     let close = root.end - 1;
     let quoted_key = serde_json::to_string(key)
@@ -185,6 +227,7 @@ fn insert_root_member(
         // the insertion point and therefore still indexes the original text.
         result.insert(position, ',');
     }
+    context.checkpoint()?;
     Ok(result)
 }
 
@@ -197,24 +240,37 @@ fn indentation_at(source: &str, position: usize) -> Option<String> {
         .then(|| prefix.to_owned())
 }
 
-struct Parser<'a> {
-    source: &'a str,
-    bytes: &'a [u8],
+struct Parser<'source, 'context, 'budget> {
+    source: &'source str,
+    bytes: &'source [u8],
+    context: &'context ExecutionContext<'budget>,
     at: usize,
     depth: usize,
+    next_checkpoint: usize,
 }
 
-impl<'a> Parser<'a> {
-    fn new(source: &'a str) -> Self {
+impl<'source, 'context, 'budget> Parser<'source, 'context, 'budget> {
+    fn new(source: &'source str, context: &'context ExecutionContext<'budget>) -> Self {
         Self {
             source,
             bytes: source.as_bytes(),
+            context,
             at: 0,
             depth: 0,
+            next_checkpoint: 0,
         }
     }
 
+    fn checkpoint_progress(&mut self) -> Result<(), AppletError> {
+        if self.at >= self.next_checkpoint {
+            self.next_checkpoint = self.at.saturating_add(256);
+            self.context.checkpoint()?;
+        }
+        Ok(())
+    }
+
     fn parse(mut self) -> Result<Node, AppletError> {
+        self.context.checkpoint()?;
         self.skip_trivia()?;
         let root = self.value()?;
         self.skip_trivia()?;
@@ -269,6 +325,7 @@ impl<'a> Parser<'a> {
             });
         }
         loop {
+            self.checkpoint_progress()?;
             self.skip_trivia()?;
             let key_start = self.at;
             let key = self.string()?;
@@ -328,6 +385,7 @@ impl<'a> Parser<'a> {
             });
         }
         loop {
+            self.checkpoint_progress()?;
             self.value()?;
             self.skip_trivia()?;
             if self.consume(b']') {
@@ -353,6 +411,7 @@ impl<'a> Parser<'a> {
         let start = self.at;
         self.expect(b'"', "expected a quoted JSON string")?;
         while let Some(byte) = self.peek() {
+            self.checkpoint_progress()?;
             match byte {
                 b'"' => {
                     self.at += 1;
@@ -404,6 +463,7 @@ impl<'a> Parser<'a> {
         while self.peek().is_some_and(|byte| {
             !byte.is_ascii_whitespace() && !matches!(byte, b',' | b']' | b'}' | b'/' | b':')
         }) {
+            self.checkpoint_progress()?;
             self.at += 1;
         }
         let token = &self.source[start..self.at];
@@ -418,10 +478,12 @@ impl<'a> Parser<'a> {
 
     fn skip_trivia(&mut self) -> Result<(), AppletError> {
         loop {
+            self.checkpoint_progress()?;
             while self
                 .peek()
                 .is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
             {
+                self.checkpoint_progress()?;
                 self.at += 1;
             }
             match (self.peek(), self.bytes.get(self.at + 1).copied()) {
@@ -431,6 +493,7 @@ impl<'a> Parser<'a> {
                         .peek()
                         .is_some_and(|byte| byte != b'\n' && byte != b'\r')
                     {
+                        self.checkpoint_progress()?;
                         self.at += 1;
                     }
                 }
@@ -438,6 +501,7 @@ impl<'a> Parser<'a> {
                     self.at += 2;
                     let mut closed = false;
                     while self.at + 1 < self.bytes.len() {
+                        self.checkpoint_progress()?;
                         if self.bytes[self.at] == b'*' && self.bytes[self.at + 1] == b'/' {
                             self.at += 2;
                             closed = true;

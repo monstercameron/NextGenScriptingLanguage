@@ -1,4 +1,6 @@
-use flow::applets::{self, execute, AppletError, AppletErrorKind};
+use flow::applets::{
+    self, execute, AppletError, AppletErrorKind, ExecutionBudgetExceeded, ExecutionContext,
+};
 use flow::ast::{Invocation, Value as AstValue};
 use flow::contracts::OutputType;
 use flow::manifest::Registry;
@@ -7,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn run(operation: &str, args: Value, input: &[u8]) -> Result<Value, AppletError> {
     let args = args.as_object().cloned().unwrap_or_default();
@@ -859,4 +862,109 @@ fn helper_cli_and_worker_share_the_typed_json_and_error_protocol() {
     assert_eq!(responses[1]["status"], 2);
     assert_eq!(responses[1]["output"], json!([]));
     assert!(responses[1]["stderr"].as_str().unwrap().ends_with('\n'));
+}
+
+#[test]
+fn json_collection_transforms_stop_on_scoped_budget_checkpoints() {
+    for (operation, budget, expected_kind) in [
+        (
+            "json.map",
+            ExecutionBudgetExceeded::Cancelled,
+            AppletErrorKind::Cancelled,
+        ),
+        (
+            "json.filter",
+            ExecutionBudgetExceeded::Timeout,
+            AppletErrorKind::Timeout,
+        ),
+    ] {
+        let items = (0..1024).collect::<Vec<_>>();
+        let document =
+            json!({"items": items.iter().map(|value| json!({"value": value})).collect::<Vec<_>>()});
+        let arguments = if operation == "json.map" {
+            json!({"document": document, "pointer": "/items", "select": "/value"})
+        } else {
+            json!({
+                "document": document,
+                "pointer": "/items",
+                "where": [{"pointer": "/value", "exists": true}]
+            })
+        }
+        .as_object()
+        .unwrap()
+        .clone();
+        let checkpoints = AtomicUsize::new(0);
+        let check = || {
+            let current = checkpoints.fetch_add(1, Ordering::Relaxed) + 1;
+            // The document validation has finished by checkpoint 20 for this
+            // fixture, so this interrupts the collection work itself.
+            if current == 23 {
+                Err(budget)
+            } else {
+                Ok(())
+            }
+        };
+        let context = ExecutionContext::new(&check);
+        let error = applets::execute_with_context(
+            operation,
+            &arguments,
+            &[],
+            std::path::Path::new("."),
+            &context,
+        )
+        .expect_err("the controlled checkpoint should stop the transform");
+
+        assert_eq!(error.kind, expected_kind, "operation {operation}");
+        assert_eq!(checkpoints.load(Ordering::Relaxed), 23);
+    }
+}
+
+#[test]
+fn text_and_jsonc_loops_observe_scoped_cancellation() {
+    let text_checkpoints = AtomicUsize::new(0);
+    let text_check = || {
+        if text_checkpoints.fetch_add(1, Ordering::Relaxed) + 1 == 2 {
+            Err(ExecutionBudgetExceeded::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    let text_context = ExecutionContext::new(&text_check);
+    let text_error = applets::execute_with_context(
+        "text.matches",
+        &json!({"text": "a".repeat(1024), "needle": "b"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        &[],
+        std::path::Path::new("."),
+        &text_context,
+    )
+    .expect_err("text scanning should poll its scoped budget");
+    assert_eq!(text_error.kind, AppletErrorKind::Cancelled);
+    assert_eq!(text_checkpoints.load(Ordering::Relaxed), 2);
+
+    let jsonc_checkpoints = AtomicUsize::new(0);
+    let jsonc_check = || {
+        if jsonc_checkpoints.fetch_add(1, Ordering::Relaxed) + 1 == 6 {
+            Err(ExecutionBudgetExceeded::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    let jsonc_context = ExecutionContext::new(&jsonc_check);
+    let content = format!("/*{}*/{{\"keep\":true}}", "x".repeat(1024));
+    let jsonc_error = applets::execute_with_context(
+        "jsonc.edit_content",
+        &json!({"content": content, "key": "keep", "action": "remove"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        &[],
+        std::path::Path::new("."),
+        &jsonc_context,
+    )
+    .expect_err("JSONC scanning should poll its scoped budget");
+    assert_eq!(jsonc_error.kind, AppletErrorKind::Cancelled);
+    assert_eq!(jsonc_checkpoints.load(Ordering::Relaxed), 6);
 }

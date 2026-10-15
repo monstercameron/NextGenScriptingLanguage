@@ -385,12 +385,17 @@ operations. A listener can parse each incoming JSON line directly. Checkpoints
 persist structured values and completed nodes; live CRUD can edit object fields
 before the next selection. Live failures retain the existing explicit `retry`
 control. Parsing and encoding are finite bounded operations, not streaming JSON
-queries; native stream stages remain native commands. The byte bound is not an
-RSS limit, and native command timeouts do not establish a JSON CPU deadline.
-CSV, arbitrary `jq`-style transformations and streaming JSON queries remain
-future work. The bounded `json.map` and `json.filter` applets provide JSON
-Pointer projection across an array and declarative array predicates; they are
-finite operations, not general-purpose transformation programs. See
+queries; native stream stages remain native commands. Some bounded in-process
+loops, including `json.map`, `json.filter`, `text.concat`, `text.matches` and the
+JSONC scanner, cooperatively check cancellation, the per-call
+`--command-timeout-ms` budget and the parent total deadline. A single
+parser/serializer or synchronous filesystem call can still return after the
+budget because those library and OS calls do not expose checkpoints. The byte
+bound is not an RSS limit. CSV, arbitrary `jq`-style transformations and
+streaming JSON queries remain future work. The bounded `json.map` and
+`json.filter` applets provide JSON Pointer projection across an array and
+declarative array predicates; they are finite operations, not general-purpose
+transformation programs. See
 [github-repo-summary.program](../examples/github-repo-summary.program),
 [json-event-names.program](../examples/json-event-names.program) and
 [json-compact.program](../examples/json-compact.program).

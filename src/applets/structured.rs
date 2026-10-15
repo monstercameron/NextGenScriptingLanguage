@@ -3,7 +3,7 @@
 //! The predicates and paths accepted here are data, never executable source.
 //! JSON Pointer uses RFC 6901 escaping and indexes arrays by decimal position.
 
-use super::{absence, invalid, required_string, AppletError};
+use super::{absence, checkpoint_work, invalid, required_string, AppletError, ExecutionContext};
 use serde_json::{Map, Value};
 
 const MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
@@ -13,7 +13,12 @@ const MAX_FILTER_CLAUSES: usize = 32;
 const MAX_COLLECTION_ITEMS: usize = 100_000;
 const MAX_DEPTH: usize = 128;
 
-pub(super) fn parse(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
+pub(super) fn parse(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let text = match args.get("text") {
         Some(Value::String(text)) => text.as_bytes(),
         Some(_) => return Err(invalid("args.text must be a string")),
@@ -26,41 +31,56 @@ pub(super) fn parse(args: &Map<String, Value>, input: &[u8]) -> Result<Value, Ap
     }
     let value = serde_json::from_slice(text)
         .map_err(|error| invalid(format!("text is not valid JSON: {error}")))?;
-    check_size_and_depth(&value)?;
+    check_size_and_depth(&value, context)?;
     Ok(value)
 }
 
-pub(super) fn stringify(args: &Map<String, Value>) -> Result<Value, AppletError> {
+pub(super) fn stringify(
+    args: &Map<String, Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
     let value = args
         .get("value")
         .ok_or_else(|| invalid("args.value is required"))?;
-    check_size_and_depth(value)?;
+    check_size_and_depth(value, context)?;
     let text = serde_json::to_string(value)
         .map_err(|error| invalid(format!("JSON value cannot be serialized: {error}")))?;
     Ok(Value::String(text))
 }
 
-pub(super) fn get(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
-    let document = document(args, input)?;
+pub(super) fn get(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
     let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     lookup(&document, &pointer)?
         .cloned()
         .ok_or_else(|| absence("not_found", "JSON Pointer does not identify a value"))
 }
 
-pub(super) fn set(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
-    let mut document = document(args, input)?;
+pub(super) fn set(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let mut document = document(args, input, context)?;
     let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     let value = args
         .get("value")
         .ok_or_else(|| invalid("args.value is required"))?;
     set_at(&mut document, &pointer, value.clone())?;
-    check_size_and_depth(&document)?;
+    check_size_and_depth(&document, context)?;
     Ok(document)
 }
 
-pub(super) fn map(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
-    let document = document(args, input)?;
+pub(super) fn map(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
     let array_pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     let selection_pointer = parse_pointer(required_string(args, "select")?)?;
     let array = lookup(&document, &array_pointer)?
@@ -73,6 +93,7 @@ pub(super) fn map(args: &Map<String, Value>, input: &[u8]) -> Result<Value, Appl
     }
     let mut mapped = Vec::with_capacity(array.len());
     for (index, item) in array.iter().enumerate() {
+        checkpoint_work(context, index)?;
         let value = lookup(item, &selection_pointer)?.ok_or_else(|| {
             absence(
                 "not_found",
@@ -82,12 +103,16 @@ pub(super) fn map(args: &Map<String, Value>, input: &[u8]) -> Result<Value, Appl
         mapped.push(value.clone());
     }
     let result = Value::Array(mapped);
-    check_size_and_depth(&result)?;
+    check_size_and_depth(&result, context)?;
     Ok(result)
 }
 
-pub(super) fn filter(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
-    let document = document(args, input)?;
+pub(super) fn filter(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
     let array_pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     let array = lookup(&document, &array_pointer)?
         .and_then(Value::as_array)
@@ -106,15 +131,20 @@ pub(super) fn filter(args: &Map<String, Value>, input: &[u8]) -> Result<Value, A
             "args.where exceeds the {MAX_FILTER_CLAUSES}-predicate limit"
         )));
     }
-    let predicates = clauses
-        .iter()
-        .enumerate()
-        .map(|(index, clause)| parse_predicate(clause, index))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut predicates = Vec::with_capacity(clauses.len());
+    for (index, clause) in clauses.iter().enumerate() {
+        context.checkpoint()?;
+        predicates.push(parse_predicate(clause, index)?);
+    }
     let mut selected = Vec::new();
+    let mut work = 0usize;
     for item in array {
+        checkpoint_work(context, work)?;
+        work += 1;
         let mut matches = true;
         for predicate in &predicates {
+            checkpoint_work(context, work)?;
+            work += 1;
             if !predicate.matches(item)? {
                 matches = false;
                 break;
@@ -125,11 +155,16 @@ pub(super) fn filter(args: &Map<String, Value>, input: &[u8]) -> Result<Value, A
         }
     }
     let result = Value::Array(selected);
-    check_size_and_depth(&result)?;
+    check_size_and_depth(&result, context)?;
     Ok(result)
 }
 
-fn document(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
+fn document(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    context.checkpoint()?;
     let value = if let Some(value) = args.get("document") {
         value.clone()
     } else {
@@ -141,13 +176,16 @@ fn document(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletErro
         serde_json::from_slice(input)
             .map_err(|error| invalid(format!("stdin is not valid JSON: {error}")))?
     };
-    check_size_and_depth(&value)?;
+    check_size_and_depth(&value, context)?;
     Ok(value)
 }
 
-fn check_size_and_depth(value: &Value) -> Result<(), AppletError> {
+fn check_size_and_depth(value: &Value, context: &ExecutionContext<'_>) -> Result<(), AppletError> {
     let mut pending = vec![(value, 0usize)];
+    let mut work = 0usize;
     while let Some((value, depth)) = pending.pop() {
+        checkpoint_work(context, work)?;
+        work += 1;
         if depth > MAX_DEPTH {
             return Err(invalid(format!(
                 "JSON value exceeds the {MAX_DEPTH}-level depth limit"
@@ -155,16 +193,26 @@ fn check_size_and_depth(value: &Value) -> Result<(), AppletError> {
         }
         match value {
             Value::Array(items) => {
-                pending.extend(items.iter().map(|item| (item, depth + 1)));
+                for item in items {
+                    checkpoint_work(context, work)?;
+                    work += 1;
+                    pending.push((item, depth + 1));
+                }
             }
             Value::Object(fields) => {
-                pending.extend(fields.values().map(|item| (item, depth + 1)));
+                for item in fields.values() {
+                    checkpoint_work(context, work)?;
+                    work += 1;
+                    pending.push((item, depth + 1));
+                }
             }
             _ => {}
         }
     }
+    context.checkpoint()?;
     let encoded = serde_json::to_vec(value)
         .map_err(|error| invalid(format!("JSON value cannot be serialized: {error}")))?;
+    context.checkpoint()?;
     if encoded.len() > MAX_JSON_BYTES {
         return Err(invalid(format!(
             "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"

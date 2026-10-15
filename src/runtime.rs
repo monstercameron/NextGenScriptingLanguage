@@ -62,7 +62,9 @@ pub struct RunOptions {
     pub cache_directory: Option<PathBuf>,
     pub trace: bool,
     pub max_output_bytes: usize,
-    /// Maximum lifetime of each native pipeline group or finite stdin capture, not file I/O.
+    /// Budget for each native pipeline group, finite stdin capture and
+    /// cooperative checkpoints in an in-process applet. It cannot interrupt a
+    /// synchronous OS or library call.
     pub command_timeout: Option<Duration>,
     /// Maximum lifetime of the full runtime operation, including scheduler waits.
     pub total_timeout: Option<Duration>,
@@ -1675,9 +1677,42 @@ fn execute_in_process(
             ));
         return Err(execution_result::ExecutionFailure::new(failure).into());
     }
-    let input = input.materialize(options.max_output_bytes, signals, options.command_timeout)?;
+    let call_started = Instant::now();
+    let command_deadline = options
+        .command_timeout
+        .map(|timeout| {
+            call_started
+                .checked_add(timeout)
+                .context("command timeout is too large")
+        })
+        .transpose()?;
+    let deadline = match (signals.deadline, command_deadline) {
+        (Some(total), Some(command)) => Some(total.min(command)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    };
+    check_deadline(deadline)?;
+    let input_timeout = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+    let input = input.materialize(options.max_output_bytes, signals, input_timeout)?;
     let arguments = resolved_json_arguments(call, manifest, bindings)?;
-    let result = crate::applets::execute_in_cwd(manifest.name_for(call), &arguments, &input, cwd);
+    check_deadline(deadline)?;
+    let checkpoint = || {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            Err(crate::applets::ExecutionBudgetExceeded::Timeout)
+        } else if signals.cancelled.load(Ordering::Relaxed) {
+            Err(crate::applets::ExecutionBudgetExceeded::Cancelled)
+        } else {
+            Ok(())
+        }
+    };
+    let context = crate::applets::ExecutionContext::new(&checkpoint);
+    let result = crate::applets::execute_with_context(
+        manifest.name_for(call),
+        &arguments,
+        &input,
+        cwd,
+        &context,
+    );
     match result {
         Ok(value) => {
             let mut bytes = serde_json::to_vec(&value)?;
@@ -1690,7 +1725,7 @@ fn execute_in_process(
                 outcome.clone(),
                 None,
             );
-            if let Err(error) = check_deadline(signals.deadline) {
+            if let Err(error) = check_deadline(deadline) {
                 let mut failure = execution_result::ExecutionResult::from_outcome(
                     outcome,
                     Some(bytes.clone()),
@@ -1744,6 +1779,10 @@ fn execute_in_process(
             })
         }
         Err(error) => {
+            if let Some(failure) = in_process_budget_failure(&error, line, manifest.name_for(call))
+            {
+                return Err(execution_result::ExecutionFailure::new(failure).into());
+            }
             let status = error.exit_status();
             let diagnostic = format!("execute-applet: {error}\n");
             let diagnostic_bytes = diagnostic.as_bytes().to_vec();
@@ -1772,6 +1811,27 @@ fn execute_in_process(
             })
         }
     }
+}
+
+fn in_process_budget_failure(
+    error: &crate::applets::AppletError,
+    line: usize,
+    applet: &str,
+) -> Option<execution_result::ExecutionResult> {
+    let kind = match error.kind {
+        crate::applets::AppletErrorKind::Timeout => execution_result::ExecutionKind::Timeout,
+        crate::applets::AppletErrorKind::Cancelled => execution_result::ExecutionKind::Cancelled,
+        _ => return None,
+    };
+    let mut failure = execution_result::ExecutionResult::runtime_failure(
+        kind,
+        error.to_string(),
+        execution_result::EffectCertainty::Uncertain,
+    );
+    failure
+        .stages
+        .push(execution_result::StageResult::unknown(line, applet));
+    Some(failure)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4703,5 +4763,93 @@ mod input_writer_drop_tests {
                 assert!(error.is::<super::CommandTimedOut>());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod in_process_budget_tests {
+    use super::*;
+
+    #[test]
+    fn cooperative_budget_errors_are_typed_with_uncertain_effects() {
+        for (operation, budget, applet_kind, expected_kind) in [
+            (
+                "json.map",
+                crate::applets::ExecutionBudgetExceeded::Timeout,
+                crate::applets::AppletErrorKind::Timeout,
+                execution_result::ExecutionKind::Timeout,
+            ),
+            (
+                "json.filter",
+                crate::applets::ExecutionBudgetExceeded::Cancelled,
+                crate::applets::AppletErrorKind::Cancelled,
+                execution_result::ExecutionKind::Cancelled,
+            ),
+        ] {
+            let items = (0..1024).collect::<Vec<_>>();
+            let document = serde_json::json!({
+                "items": items
+                    .iter()
+                    .map(|value| serde_json::json!({"value": value}))
+                    .collect::<Vec<_>>()
+            });
+            let arguments = if operation == "json.map" {
+                serde_json::json!({"document": document, "pointer": "/items", "select": "/value"})
+            } else {
+                serde_json::json!({
+                    "document": document,
+                    "pointer": "/items",
+                    "where": [{"pointer": "/value", "exists": true}]
+                })
+            }
+            .as_object()
+            .unwrap()
+            .clone();
+            let checkpoints = std::sync::atomic::AtomicUsize::new(0);
+            let checkpoint = || {
+                if checkpoints.fetch_add(1, Ordering::Relaxed) + 1 == 23 {
+                    Err(budget)
+                } else {
+                    Ok(())
+                }
+            };
+            let context = crate::applets::ExecutionContext::new(&checkpoint);
+            let error = crate::applets::execute_with_context(
+                operation,
+                &arguments,
+                &[],
+                Path::new("."),
+                &context,
+            )
+            .expect_err("the controlled in-loop checkpoint should stop the applet");
+            assert_eq!(error.kind, applet_kind);
+            let result = in_process_budget_failure(&error, 17, "fixture.transform")
+                .expect("budget failures have a runtime classification");
+
+            assert_eq!(result.kind, expected_kind);
+            assert_eq!(
+                result.effect_certainty,
+                execution_result::EffectCertainty::Uncertain
+            );
+            assert_eq!(result.stages.len(), 1);
+            assert_eq!(result.stages[0].line, 17);
+            assert_eq!(result.stages[0].applet, "fixture.transform");
+            assert_eq!(
+                result.stages[0].state,
+                execution_result::StageState::Unknown
+            );
+            assert_eq!(
+                result.stages[0].effect_certainty,
+                execution_result::EffectCertainty::Uncertain
+            );
+            assert_eq!(checkpoints.load(Ordering::Relaxed), 23);
+        }
+
+        let ordinary = crate::applets::AppletError {
+            code: "invalid_request",
+            kind: crate::applets::AppletErrorKind::Permanent,
+            message: "ordinary applet failure".into(),
+        };
+        assert!(in_process_budget_failure(&ordinary, 17, "fixture.transform").is_none());
     }
 }

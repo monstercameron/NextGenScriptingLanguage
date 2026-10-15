@@ -319,7 +319,7 @@ explicitly captured, and status-bound calls are excluded from caching.
 | Backend | Behavior and limits |
 | --- | --- |
 | `command` | Launches the manifest executable once per invocation with literal argv. It uses the native process supervisor and can join native `pipe to` groups. |
-| `in_process` | Calls a bundled generic operation in the interpreter process. It does not launch an applet process and cannot join a native pipe group. Since the operation runs with the host interpreter, it is not eligible for the OS command sandbox. |
+| `in_process` | Calls a bundled generic operation in the interpreter process. It does not launch an applet process and cannot join a native pipe group. Selected bounded CPU loops cooperatively check workflow cancellation, the per-call `--command-timeout-ms` budget and the parent total deadline. A synchronous OS call or library routine without checkpoints can still return after the budget; an interrupted started applet has uncertain effect certainty. Since the operation runs with the host interpreter, it is not eligible for the OS command sandbox. |
 | `json_lines_worker` | Sends framed requests to a persistent helper process. It cannot join a native pipe group or use the applet cache. The worker is shared by registry clones, serializes requests per worker, and is reaped when its registry pool is dropped. Sensitivity labels are retained with each live worker and included in the preflight floor of workflows that invoke that applet; a concurrent request rechecks the retained labels after acquiring the worker slot. The history is discarded when the worker process is destroyed. The pool defaults to 16 identities and can be configured from 1 through 1024; a full pool rejects a new identity without spawning or evicting a healthy worker. This backend is supported on Unix; unsupported platforms return an error. |
 | `program_module` | Executes a prevalidated local `.program` package export in a private finite scope, with the caller's registry, policy, cancellation and runtime session. Package formats, dependency pins and limits are in the [program module guide](program-modules.md). |
 | `remote` | Calls a host-managed endpoint using the typed named ports. The remote request is not replayed after an uncertain transport failure; origins, credentials, descriptor pins, event framing and limits are in the [remote applet guide](../examples/remote/README.md). |
@@ -350,6 +350,10 @@ resolve as named applets but use their package or port descriptors. A native
 pipeline uses direct OS pipes, so preflight rejects a buffered in-process,
 worker, module or remote applet anywhere in that pipeline before earlier
 effects can run. Worker framing is separate from the native `stdio` contract.
+The in-process call budget begins at applet dispatch and uses the earlier of
+`--command-timeout-ms` and the absolute parent total deadline. Input capture
+from stdin uses the remaining call budget; the same deadline is passed to
+cooperative CPU checkpoints.
 
 An optional manifest-level `stdio` object sets `stdout` and/or `stderr` to
 `capture`, `discard` or `inherit`. Omitted streams keep the host's previous
@@ -363,8 +367,10 @@ result binding, save, downstream consumer or stream listener.
 
 These contracts do not make multi-applet or multi-file updates transactional.
 The generic filesystem helpers atomically replace one file at a time. Native
-command timeouts are not deadlines for arbitrary filesystem calls, and the
-interpreter's output limits are not universal bounds on a command's reads,
+command timeouts are not deadlines for arbitrary filesystem calls, and
+cooperative in-process checks do not interrupt a synchronous filesystem call,
+JSON parser/serializer routine, or other library operation between checkpoints.
+The interpreter's output limits are not universal bounds on a command's reads,
 writes, memory, filesystem effects or data sent through inherited descriptors.
 
 ## Bundled generic operations

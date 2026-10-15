@@ -7,6 +7,11 @@ original version labels.
 
 ## Unreleased
 
+- In-process applets now cooperatively check cancellation, the per-call command
+  timeout and the parent total deadline during bounded JSON transforms, text
+  transforms and JSONC scanning. Synchronous OS calls and parser/serializer
+  library calls remain non-interruptible; started applet interruption reports
+  uncertain effects. See [applet contracts](docs/applet-contracts.md).
 - Versioned applet contracts add typed inputs and outputs, explicit outcome
   routing, result envelopes, named typed ports, per-applet environment changes,
   and `capture`/`discard`/`inherit` stdio policies.

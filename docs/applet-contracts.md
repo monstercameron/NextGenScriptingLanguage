@@ -97,6 +97,9 @@ Native pipes carry the producer's stdout bytes directly. Preflight checks both
 the declared value schemas and wire encodings: raw text cannot feed JSON stdin,
 while JSON-encoded text can feed a JSON stdin port. Semantic widening such as
 Number to JSON applies to typed values and does not rewrite raw pipe bytes.
+Output normalization such as `trim_final_lf` also runs only during decoding.
+Bind that value before passing it as a typed parameter; direct pipes into typed
+stdin reject this normalization mismatch. Bytes stdin still accepts the raw bytes.
 
 ## Input and output types
 

@@ -817,3 +817,101 @@ fn native_pipes_validate_wire_encoding_before_launching_and_accept_json_text() {
     assert_eq!(result.output, br#""hello""#);
     assert_eq!(result.launched_processes, 2);
 }
+
+#[cfg(unix)]
+#[test]
+fn native_pipe_rejects_decode_only_path_normalization_but_keeps_raw_bytes() {
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
+    use tempfile::tempdir;
+
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+    fn write_script(path: &Path, body: &str) {
+        fs::write(path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    fn options(cwd: &Path) -> flow::runtime::RunOptions {
+        flow::runtime::RunOptions {
+            inputs: BTreeMap::new(),
+            working_directory: cwd.to_path_buf(),
+            cache_directory: None,
+            trace: false,
+            max_output_bytes: 1024,
+            command_timeout: Some(Duration::from_secs(3)),
+            total_timeout: Some(Duration::from_secs(5)),
+        }
+    }
+
+    let directory = tempdir().unwrap();
+    let path_producer = directory.path().join("path-producer");
+    let marker = directory.path().join("path-producer-ran");
+    write_script(
+        &path_producer,
+        &format!(
+            ": > {}\nprintf '%s\\n' '/tmp/result'",
+            shell_quote(&marker.to_string_lossy())
+        ),
+    );
+    let producer = json!({
+        "name":"fixture.trimmed_path",
+        "binary":path_producer,
+        "parameters":{},
+        "arguments":[],
+        "contract":{"version":1,"output":{
+            "type":"path","encoding":"raw","trim_final_lf":true
+        }}
+    });
+    let path_consumer = json!({
+        "name":"fixture.path_sink",
+        "binary":"/bin/cat",
+        "accepts_stdin":true,
+        "parameters":{},
+        "arguments":[],
+        "contract":{"version":1,"ports":{"inputs":{
+            "stdin":{"schema":{"type":"path"},"delivery":"single","encoding":"raw"}
+        }}}
+    });
+    let bytes_consumer = json!({
+        "name":"fixture.bytes_sink",
+        "binary":"/bin/cat",
+        "accepts_stdin":true,
+        "parameters":{},
+        "arguments":[],
+        "contract":{"version":1,"ports":{"inputs":{
+            "stdin":{"schema":{"type":"bytes"},"delivery":"single","encoding":"raw"}
+        }}}
+    });
+    let registry = Registry::from_sources(&[
+        producer.to_string(),
+        path_consumer.to_string(),
+        bytes_consumer.to_string(),
+    ])
+    .unwrap();
+
+    let typed_pipe = "run fixture.trimmed_path\npipe to fixture.path_sink\n";
+    let diagnostic = flow::diagnostics::analyze_source(typed_pipe, &registry)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code == "applet.pipeline.incompatible")
+        .expect("typed path stdin cannot apply the producer's binding-only trim");
+    assert!(diagnostic.message.contains("trim_final_lf"));
+    let typed_program = flow::parser::parse(typed_pipe).unwrap();
+    let error = match flow::runtime::run(&typed_program, &registry, &options(directory.path())) {
+        Ok(_) => panic!("typed path stdin unexpectedly received unnormalized raw bytes"),
+        Err(error) => error,
+    };
+    assert!(format!("{error:#}").contains("trim_final_lf"), "{error:#}");
+    assert!(
+        !marker.exists(),
+        "pipe validation must reject before producer effects"
+    );
+
+    let bytes_pipe =
+        flow::parser::parse("run fixture.trimmed_path\npipe to fixture.bytes_sink\n").unwrap();
+    let result = flow::runtime::run(&bytes_pipe, &registry, &options(directory.path())).unwrap();
+    assert_eq!(result.output, b"/tmp/result\n");
+    assert_eq!(result.launched_processes, 2);
+    assert!(marker.exists());
+}

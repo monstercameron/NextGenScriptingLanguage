@@ -550,6 +550,15 @@ impl Manifest {
             |output| (output_value_schema(output), output.encoding),
         );
         let mut issues = Vec::new();
+        if producer_contract
+            .output
+            .as_ref()
+            .is_some_and(|output| output.trim_final_lf)
+        {
+            issues.push(
+                "trim_final_lf applies only to typed output decoding; native pipes preserve the final LF".into(),
+            );
+        }
         if !output_schema.is_assignable_to(&input.schema) {
             issues.push(format!(
                 "stdout schema is {}, expected {}",

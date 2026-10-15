@@ -50,7 +50,7 @@ fn listen(
     options: &RunOptions,
     limits: &ServiceLimits,
     signals: &Signals,
-    emit: &mut impl FnMut(&[u8], &AtomicBool) -> Result<()>,
+    emit: &mut impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
     result: &mut ServiceResult,
     mut journal: Option<&mut Journal>,
 ) -> Result<()> {
@@ -61,8 +61,15 @@ fn listen(
             let manifest = registry.resolve_call(call)?;
             let binary = binary_path(manifest.binary_for(call), &options.working_directory)?;
             let argv = arguments_for_call(call, manifest, &options.inputs)?;
-            let mut child = Command::new(&binary)
-                .args(argv)
+            stopped(signals)?;
+            let mut command = crate::capabilities::command_for(
+                &binary,
+                argv,
+                registry,
+                &manifest.name,
+                &options.working_directory,
+            )?;
+            let mut child = command
                 .current_dir(&options.working_directory)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
@@ -71,7 +78,6 @@ fn listen(
                 .spawn()
                 .with_context(|| format!("starting listener {:?}", manifest.name))?;
             let pid = child.id();
-            result.launched_processes += 1;
             let reader = Reader::Applet(child.stdout.take().expect("listener stdout"));
             children.0.push(ManagedChild {
                 child,
@@ -79,6 +85,8 @@ fn listen(
                 stderr: None,
                 diagnostic: Vec::new(),
             });
+            stopped(signals)?;
+            result.launched_processes += 1;
             trace_event(
                 options.trace,
                 signals,

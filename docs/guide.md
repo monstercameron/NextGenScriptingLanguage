@@ -157,10 +157,64 @@ on schedule "0 9 * * 1-5"
   run ls with flags ["-la"] and path "."
 ```
 
-Intervals first run after one full interval and skip missed ticks. Calendar apps
-match five-field cron expressions in the local timezone. Both run in the
-foreground; Ctrl-C stops them. Use launchd or systemd for startup and restart
-policies. Execute does not install operating-system scheduler entries.
+Intervals first run after one full interval. Calendar apps match five-field cron
+expressions in the local timezone. Both run in the foreground; Ctrl-C stops
+them. Missed ticks default to `skip`: overdue work is dropped while an interval
+keeps its original phase. `--missed-ticks coalesce` reduces overdue work to the
+latest due run. `--missed-ticks catch-up --max-catch-up N` allows at most 1 to
+64 pending runs; older interval work and cron matches beyond the seven-day cron
+lookback are discarded. Calendar matching counts each absolute minute by
+default, including both instances of a repeated daylight-saving-time minute.
+`--calendar-dedup local` treats the same local wall-clock minute as one event,
+using a bounded two-day duplicate-key cache. These options apply to triggered
+`run` and `resume` commands; see `execute --help` for the flags.
+
+### Generate a reviewable service definition
+
+Current source can print a per-user systemd unit or launchd plist for a
+validated triggered workflow:
+
+```sh
+execute service generate systemd examples/heartbeat.program \
+  --name com.example.nightly-report \
+  --working-dir "$PWD" \
+  --manifest-dir "$PWD/manifests"
+```
+
+The command writes the rendered definition to stdout only. It does not create a
+file, install or enable a unit, load a launchd job, or start the workflow.
+Review the output and move it into the service manager's user configuration
+yourself when ready. Arguments are literal argv entries; generation uses no
+shell. Paths are resolved and validated. Any required input sourced from the
+caller environment must be supplied explicitly with `--input NAME=VALUE`, so
+the service does not depend on an interactive login environment. A stdin
+listener is rejected because the service manager does not supply a durable
+event producer.
+
+The generated systemd unit uses `Type=simple`, an explicit working directory,
+`Restart=on-failure` with a five-second delay, `KillMode=control-group`, and
+journal stdout/stderr. The launchd plist sets `ProgramArguments`,
+`WorkingDirectory`, `RunAtLoad`, and `KeepAlive` with `SuccessfulExit=false`, so
+it restarts failed runs but leaves successful completion stopped. It routes
+stdout/stderr to per-user files under `~/Library/Logs`. It does not configure an OS-level timer;
+the workflow's own interval or calendar trigger runs inside the foreground
+Execute process. The upstream [systemd.service(5)](https://github.com/systemd/systemd/blob/main/man/systemd.service.xml)
+and [systemd.kill(5)](https://github.com/systemd/systemd/blob/main/man/systemd.kill.xml)
+manuals describe those unit settings; Apple's archived
+[launchd job guide](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
+documents `ProgramArguments`, `KeepAlive`, standard-output paths and foreground
+process expectations. Apple’s upstream [`launchd.plist(5)` manual](https://github.com/apple-oss-distributions/launchd/blob/main/man/launchd.plist.5)
+defines `SuccessfulExit=false` as restarting when the process does not exit
+successfully.
+
+These definitions do not allocate a TTY or implement terminal handoff; use
+noninteractive applets. The generated systemd cgroup and the runtime's process
+supervision handle ordinary child processes, but a deliberately daemonized or
+escaped descendant is not guaranteed to stop with the service. Apple's guide
+requires launchd-managed programs to remain in the foreground; `KeepAlive`
+supervises the job's main process and does not promise cleanup of detached
+children. This is service startup/restart integration, not interactive-session
+or universal descendant management.
 
 ## Terminal apps with control flow you can read
 

@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/omacom/omarchy",
+  "revision": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+  "files": {
+    "bin/omarchy-theme-set-browser": {
+      "sha256": "fe364314149eb2c86681d671f1f4fb77953c9d47eb5c8708fde20f2ff9a246a7",
+      "url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin/omarchy-theme-set-browser"
+    },
+    "install/helpers/browser-policy.sh": {
+      "sha256": "ee6742bbfbbf1a68f00352bf23dbca9a2e1c221b2743378e6b54f4c98dbe6174",
+      "url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/install/helpers/browser-policy.sh"
+    },
+    "install/helpers/as-root.sh": {
+      "sha256": "e88619fdf902443e1f11ccbffe36bf9eca1ed0ddd5e43c5e3344aab371805fb3",
+      "url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/install/helpers/as-root.sh"
+    }
+  }
+}

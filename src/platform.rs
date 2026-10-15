@@ -4,6 +4,7 @@ use std::fs::{Metadata, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicBool, Arc};
 
+pub(crate) mod sandbox;
 #[cfg(windows)]
 pub(crate) mod windows;
 

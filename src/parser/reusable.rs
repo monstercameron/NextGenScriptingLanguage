@@ -96,7 +96,7 @@ pub(super) fn parse_definition<'arena, 'source: 'arena>(
             );
             *cursor += 1;
         } else {
-            parse_statement(line_at, cursor, 2, &mut steps, 0)?;
+            super::parse_reusable_statement(line_at, cursor, 2, &mut steps, 0)?;
         }
     }
     if steps.is_empty() {
@@ -292,6 +292,25 @@ fn expand<'a>(
             }
             (StepKind::Otherwise { end }, StepKind::Otherwise { end: new_end }) => {
                 *new_end = positions[index + end] - positions[index]
+            }
+            (
+                StepKind::Try {
+                    catch,
+                    finally,
+                    end,
+                },
+                StepKind::Try {
+                    catch: new_catch,
+                    finally: new_finally,
+                    end: new_end,
+                },
+            ) => {
+                *new_catch = catch.map(|offset| positions[index + offset] - positions[index]);
+                *new_finally = finally.map(|offset| positions[index + offset] - positions[index]);
+                *new_end = positions[index + end] - positions[index];
+            }
+            (StepKind::Catch { end, .. }, StepKind::Catch { end: new_end, .. }) => {
+                *new_end = positions[index + end] - positions[index];
             }
             _ => {}
         }

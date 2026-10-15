@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/omacom/omarchy",
+  "commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+  "upstream_path": "bin/omarchy-audio-output-volume",
+  "source_url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin/omarchy-audio-output-volume",
+  "source_sha256": "08611ec849c020625b784b360a84aed0bc43b93ba82c7f02616bf5e1917d8c80",
+  "license": "MIT",
+  "license_copy": "examples/omarchy-rewrites/UPSTREAM-LICENSE",
+  "oracle": "Unmodified upstream.sh executed by host /bin/bash; only command endpoints and owned HOME/PATH/XDG_RUNTIME_DIR vary."
+}

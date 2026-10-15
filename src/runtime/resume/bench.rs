@@ -18,7 +18,10 @@ fn checkpoint_fingerprints() -> Result<()> {
         ("reusable_256", true, 256),
     ] {
         let mut source = if calls {
-            format!("define a program named worker\n  accept payload as text with default \"{}\"\n  then encode payload as json\n", "x".repeat(1024))
+            format!(
+                "define a program named worker\n  accept payload as text with default \"{}\"\n  then encode payload as json\n",
+                "x".repeat(1024)
+            )
         } else {
             String::new()
         };

@@ -1,0 +1,70 @@
+#!/usr/bin/env -S execute --
+# Omarchy c668141e9c42b13c80c9ca4ea108e11708c5e8a5, bin/omarchy-theme-set-browser.
+# Provenance, untouched oracle, and limits: tests/fixtures/omarchy-rewrites/05-theme-set-browser/.
+# The native policy utility owns privileged writes. This program never writes /etc itself.
+# The refresh wrapper discards browser streams at its process boundary. Native
+# policy failures still use the runtime's available status-reporting route.
+define a program named refresh_browser
+  accept process as text
+  accept command as text
+  accept match_flag as text with default "-x"
+  run "omarchy-cmd-present" with arguments [command] and keep status as present
+  if present is 0
+    run "pgrep" with arguments [match_flag, process] and keep status as running
+    if running is 0
+      # The fixed wrapper discards both child streams at the process boundary;
+      # browser output never becomes a bounded captured value.
+      run omarchy.browser-refresh with command command and keep status as refresh_status
+      run "printf" with arguments ["%s", refresh_status]
+    otherwise
+      run "printf" with arguments ["0"]
+  otherwise
+    run "printf" with arguments ["0"]
+
+accept home as text from environment "HOME"
+accept ignored_arguments as list of text from arguments
+# Optional explicit path mapping; empty means HOME/.local/state/omarchy/current/theme/chromium.theme.
+accept theme_file as text with default ""
+if theme_file is ""
+  run "printf" with arguments ["%s/.local/state/omarchy/current/theme/chromium.theme", home] as theme_path
+otherwise
+  run "printf" with arguments ["%s", theme_file] as theme_path
+run "test" with arguments ["-f", theme_path] and keep status as theme_exists
+if theme_exists is 0
+  run fs.snapshot with path theme_path as theme_snapshot and keep status as theme_read_status
+  if theme_read_status is 0
+    take text at "/value/content" from theme_snapshot as theme_text
+    # The named default makes malformed RGB a successful value-level fallback,
+    # matching the source's silent default-color policy.
+    run color.parse_rgb with text theme_text and default_hex "1c2027" as color_data and keep status as color_status
+    if color_status is 0
+      take text at "/hex" from color_data as color
+    otherwise
+      run "printf" with arguments ["Could not parse browser theme color; using 1c2027.\n"]
+      then "awk" with arguments ["{ print > \"/dev/stderr\" }"]
+      run "printf" with arguments ["1c2027"] as color
+  otherwise
+    take text at "/outcome" from theme_snapshot as read_outcome
+    if read_outcome is "absence"
+      run "printf" with arguments ["1c2027"] as color
+    otherwise
+      run "printf" with arguments ["Could not read browser theme file (status %s); using 1c2027.\n", theme_read_status]
+      then "awk" with arguments ["{ print > \"/dev/stderr\" }"]
+      run "printf" with arguments ["1c2027"] as color
+otherwise
+  run "printf" with arguments ["1c2027"] as color
+run "omarchy-theme-set-browser-policy" with arguments [color] as policy_output and keep status as policy_status
+run program refresh_browser with process "chromium" and command "chromium" as chromium_status
+run program refresh_browser with process "chrome" and command "google-chrome-stable" as chrome_status
+# The Bash helper succeeds for absent/stopped Chrome, so fallback occurs only after an actual failed refresh.
+if chrome_status is not "0"
+  run program refresh_browser with process "chrome" and command "google-chrome" as chrome_fallback_status
+run program refresh_browser with process "msedge" and command "microsoft-edge-stable" as edge_status
+run program refresh_browser with process "brave" and command "brave" as brave_status
+run program refresh_browser with process "/opt/brave-origin-bin/" and command "brave-origin" and match_flag "-f" as brave_origin_status
+if policy_status is 0
+  run "printf" with arguments ["%s", policy_output]
+otherwise
+  # Normalize every policy error to 1 after all refreshes, matching Bash's failed=1.
+  # Execute adds a native-failure diagnostic and discards policy stdout on this path.
+  run "false"

@@ -49,6 +49,9 @@ native runtime. The browser host in `src/browser.rs` supplies a separate finite
 execution loop, virtual files, memory caching, and Rust applet implementations.
 Application branching, finite loops and program calls execute in Rust from the parsed script.
 JavaScript supplies xterm.js, the editor, worker transport, and UI rendering.
+The browser currently rejects `break`, `continue`, reusable-program `return`,
+`try/catch/finally`, and dynamic JSON pointers during pre-effect validation;
+those constructs execute only on the native host.
 
 The browser cannot spawn your installed executables. Its applets are deliberately
 small Rust ports, **not native binaries, BusyBox, a Linux VM, or full coreutils**.

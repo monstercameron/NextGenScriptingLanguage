@@ -188,6 +188,31 @@ class Releases(unittest.TestCase):
                 else:
                     package.check_binary(binary, "x86_64-pc-windows-msvc")
 
+    def test_populate_bundles_applet_helper_with_primary_and_model_binaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            binaries = work / "release"
+            binaries.mkdir()
+            for name in ["execute", "execute-model", "execute-applet"]:
+                (binaries / name).write_bytes(name.encode())
+            root = work / "archive"
+            with mock.patch.object(package, "check_binary"):
+                package.populate(root, binaries, "x86_64-apple-darwin")
+            for name in ["execute", "execute-model", "execute-applet"]:
+                self.assertEqual((root / "bin" / name).read_bytes(), name.encode())
+            system_root = work / "system"
+            with mock.patch.object(package, "check_binary"):
+                package.populate(
+                    system_root,
+                    binaries,
+                    "x86_64-unknown-linux-musl",
+                    system=True,
+                )
+            self.assertEqual(
+                (system_root / "usr/bin/execute-applet").read_bytes(),
+                b"execute-applet",
+            )
+
     def test_archive_bytes_reproducible_despite_input_mtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
@@ -298,6 +323,10 @@ class Publication(unittest.TestCase):
                 self.assertIn("--paginate", listing.call_args.args[0])
                 self.assertTrue(by_id.call_args.args[0][-1].endswith("/releases/1"))
                 self.assertEqual(gh.call_args_list[0].args[:2], ("release", "create"))
+                if value == "0.9.0-rc.4":
+                    notes = Path("target/release-notes.md").read_text()
+                    self.assertIn("keep execute and execute-model together", notes)
+                    self.assertNotIn("execute-applet", notes)
                 self.assertEqual(
                     gh.call_args_list[-1].args[:3], ("api", "--method", "PATCH")
                 )

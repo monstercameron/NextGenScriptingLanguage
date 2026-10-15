@@ -46,6 +46,7 @@ fn supplied_json_input_setup() {
             trace: false,
             max_output_bytes: 32,
             command_timeout: Some(Duration::from_secs(5)),
+            total_timeout: None,
         };
         let check = runtime::run(&program, &registry, &options).unwrap();
         assert_eq!(check.output, b"42");

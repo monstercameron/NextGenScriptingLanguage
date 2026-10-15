@@ -1,12 +1,20 @@
 use crate::ast::{InputType, Invocation, Value};
+pub use crate::contracts::{
+    AppletBackend, AppletContract, AppletEnvironment, AppletOutput, AppletPort, AppletPorts,
+    Capability, Effect, EffectCertainty, Lifecycle, Outcome, OutcomeKind, OutcomeSpec,
+    OutputEncoding, OutputSchema, OutputType, PortDelivery, ProgramModule, RemoteAuthSource,
+    RemoteEndpointConfig, Sensitivity, StdioContract, StdioDisposition, ValueSchema,
+};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::any::{Any, TypeId};
 #[cfg(not(target_arch = "wasm32"))]
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// A declarative description of an applet. Argument nodes produce argv elements
 /// directly; no shell is involved in expanding a manifest.
@@ -17,9 +25,21 @@ pub struct Manifest {
     pub builtin: Option<Builtin>,
     pub accepts_stdin: bool,
     pub cacheable: bool,
+    /// Relative dependency paths whose contents participate in cache identity.
+    /// The runtime resolves these against the invocation working directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    cache_dependencies: Vec<String>,
     /// A failed attempt may already have caused an external effect, such as billing.
     #[serde(skip_serializing_if = "is_false")]
     pub uncertain_on_failure: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    contract: Option<AppletContract>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stdio: Option<StdioContract>,
+    /// Canonical source path for file-loaded manifests; embedded manifests
+    /// have no origin. This runtime identity is excluded from serialization.
+    #[serde(skip)]
+    origin: Option<PathBuf>,
     pub phrases: Vec<String>,
     parameters: BTreeMap<String, ParameterSpec>,
     arguments: Vec<ArgumentNode>,
@@ -44,6 +64,8 @@ struct ParameterSpec {
     required: bool,
     #[serde(default)]
     min_items: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fields: Option<BTreeMap<String, ParameterFieldSpec>>,
 }
 
 impl From<RawParameter> for ParameterSpec {
@@ -53,6 +75,26 @@ impl From<RawParameter> for ParameterSpec {
             item_type: raw.items,
             required: raw.required,
             min_items: raw.min_items,
+            fields: raw.fields,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "RawParameterField")]
+struct ParameterFieldSpec {
+    kind: ParameterType,
+    required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fields: Option<BTreeMap<String, ParameterFieldSpec>>,
+}
+
+impl From<RawParameterField> for ParameterFieldSpec {
+    fn from(raw: RawParameterField) -> Self {
+        Self {
+            kind: raw.kind,
+            required: raw.required,
+            fields: raw.fields,
         }
     }
 }
@@ -61,9 +103,12 @@ impl From<RawParameter> for ParameterSpec {
 #[serde(rename_all = "lowercase")]
 enum ParameterType {
     String,
+    Path,
     Integer,
     Boolean,
     List,
+    Json,
+    Record,
     #[serde(skip_deserializing)]
     Scalar,
 }
@@ -80,6 +125,10 @@ enum ArgumentNode {
     Spread {
         spread: String,
     },
+    JsonParameter {
+        json_parameter: String,
+    },
+    JsonArguments,
     WhenPresent {
         when_present: String,
         append: Vec<ArgumentNode>,
@@ -87,15 +136,18 @@ enum ArgumentNode {
 }
 
 /// Loaded manifest catalog. `resolve` accepts either a canonical name or phrase.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Registry {
     data: Arc<RegistryData>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct RegistryData {
     manifests: Vec<Manifest>,
     names: BTreeMap<String, usize>,
+    module_root: Option<PathBuf>,
+    scope_identity: Option<String>,
+    host_state: Arc<Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
 }
 
 impl Registry {
@@ -125,7 +177,11 @@ impl Registry {
             builtin: None,
             accepts_stdin: true,
             cacheable: false,
+            cache_dependencies: Vec::new(),
             uncertain_on_failure: false,
+            contract: None,
+            stdio: None,
+            origin: None,
             phrases: Vec::new(),
             parameters: BTreeMap::from([(
                 "arguments".into(),
@@ -134,6 +190,7 @@ impl Registry {
                     item_type: Some(ParameterType::Scalar),
                     required: false,
                     min_items: None,
+                    fields: None,
                 },
             )]),
             arguments: vec![ArgumentNode::WhenPresent {
@@ -162,11 +219,26 @@ impl Registry {
             bail!("no JSON manifests found in {}", path.display());
         }
 
-        let mut data = RegistryData::default();
+        let module_root = Some(if path.is_dir() {
+            fs::canonicalize(path)
+                .with_context(|| format!("canonicalizing manifest root {}", path.display()))?
+        } else {
+            fs::canonicalize(path)
+                .with_context(|| format!("canonicalizing manifest {}", path.display()))?
+                .parent()
+                .ok_or_else(|| anyhow!("manifest path has no parent directory"))?
+                .to_path_buf()
+        });
+        let mut data = RegistryData {
+            module_root,
+            ..RegistryData::default()
+        };
         for path in paths {
             let raw = fs::read_to_string(&path)
                 .with_context(|| format!("reading manifest {}", path.display()))?;
-            Self::insert_source(&mut data, &raw)
+            let origin = fs::canonicalize(&path)
+                .with_context(|| format!("canonicalizing manifest {}", path.display()))?;
+            Self::insert_source(&mut data, &raw, Some(origin))
                 .with_context(|| format!("invalid manifest {}", path.display()))?;
         }
         Ok(Self {
@@ -178,20 +250,88 @@ impl Registry {
     pub fn from_sources(sources: &[impl AsRef<str>]) -> Result<Self> {
         let mut data = RegistryData::default();
         for raw in sources {
-            Self::insert_source(&mut data, raw.as_ref()).context("invalid embedded manifest")?;
+            Self::insert_source(&mut data, raw.as_ref(), None)
+                .context("invalid embedded manifest")?;
         }
         Ok(Self {
             data: Arc::new(data),
         })
     }
 
-    fn insert_source(data: &mut RegistryData, raw: &str) -> Result<()> {
-        let manifest = parse_manifest(raw)?;
+    /// Create a registry scope for manifests generated from one declaring
+    /// package manifest. Canonical applet names in the scope can shadow
+    /// ambient catalog entries; phrase collisions remain errors.
+    pub fn with_scoped_manifest_sources(&self, sources: &[String], origin: &Path) -> Result<Self> {
+        if sources.is_empty() {
+            return Ok(self.clone());
+        }
+        let origin = fs::canonicalize(origin).with_context(|| {
+            format!("canonicalizing scoped manifest origin {}", origin.display())
+        })?;
+        let mut data = RegistryData {
+            manifests: self.data.manifests.clone(),
+            names: self.data.names.clone(),
+            module_root: self.data.module_root.clone(),
+            scope_identity: None,
+            host_state: Arc::clone(&self.data.host_state),
+        };
+        let mut scoped_keys = BTreeSet::new();
+        for source in sources {
+            let mut manifest = parse_manifest(source)?;
+            if manifest.execution_backend() == AppletBackend::ProgramModule
+                && data.module_root.is_none()
+            {
+                bail!("program_module manifests require a registry module root");
+            }
+            manifest.origin = Some(origin.clone());
+            let canonical_name = manifest.name.clone();
+            let keys = std::iter::once(manifest.name.clone())
+                .chain(manifest.phrases.iter().cloned())
+                .collect::<Vec<_>>();
+            for key in &keys {
+                if !scoped_keys.insert(key.clone()) {
+                    bail!("duplicate scoped manifest name or phrase {key:?}");
+                }
+                if key != &canonical_name && data.names.contains_key(key) {
+                    bail!(
+                        "scoped manifest phrase {key:?} conflicts with an existing name or phrase"
+                    );
+                }
+            }
+            let index = data.manifests.len();
+            for key in keys {
+                data.names.insert(key, index);
+            }
+            data.manifests.push(manifest);
+        }
+        data.scope_identity = Some(scoped_registry_identity(
+            &data.manifests[..self.data.manifests.len()],
+            self.data.module_root.as_deref(),
+            self.data.scope_identity.as_deref(),
+            &origin,
+            sources,
+        )?);
+        Ok(Self {
+            data: Arc::new(data),
+        })
+    }
+
+    fn insert_source(data: &mut RegistryData, raw: &str, origin: Option<PathBuf>) -> Result<()> {
+        let mut manifest = parse_manifest(raw)?;
+        if manifest.execution_backend() == AppletBackend::ProgramModule
+            && (origin.is_none() || data.module_root.is_none())
+        {
+            bail!("program_module manifests require a file-loaded registry with a module root");
+        }
+        manifest.origin = origin;
         let index = data.manifests.len();
         for key in std::iter::once(&manifest.name).chain(manifest.phrases.iter()) {
             if let Some(previous) = data.names.insert(key.clone(), index) {
                 let previous_name = &data.manifests[previous].name;
-                bail!("duplicate manifest name or phrase {key:?} (used by {previous_name:?} and {:?})", manifest.name);
+                bail!(
+                    "duplicate manifest name or phrase {key:?} (used by {previous_name:?} and {:?})",
+                    manifest.name
+                );
             }
         }
         data.manifests.push(manifest);
@@ -209,9 +349,229 @@ impl Registry {
     pub fn manifests(&self) -> &[Manifest] {
         &self.data.manifests
     }
+
+    /// Canonical filesystem root used to confine file-loaded program modules.
+    /// Embedded manifests do not carry filesystem authority.
+    pub fn module_root(&self) -> Option<&Path> {
+        self.data.module_root.as_deref()
+    }
+
+    /// Stable identity for this generated applet scope, including its parent
+    /// catalog, source manifests, origin, and module root.
+    pub fn scope_identity(&self) -> Option<&str> {
+        self.data.scope_identity.as_deref()
+    }
+
+    /// Access a host-owned value scoped to this registry and all of its clones.
+    /// The state is dropped when the last registry clone is released.
+    pub fn host_state<T>(&self) -> Arc<T>
+    where
+        T: Default + Any + Send + Sync + 'static,
+    {
+        let mut states = self
+            .data
+            .host_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(state) = states.get(&TypeId::of::<T>()) {
+            if let Ok(state) = Arc::clone(state).downcast::<T>() {
+                return state;
+            }
+        }
+        let state = Arc::new(T::default());
+        states.insert(TypeId::of::<T>(), state.clone());
+        state
+    }
+
+    /// Install or replace a host-owned value before execution. Registry clones
+    /// see the same immutable configuration through [`Registry::host_state`].
+    pub fn set_host_state<T>(&self, value: T) -> Arc<T>
+    where
+        T: Any + Send + Sync + 'static,
+    {
+        let state = Arc::new(value);
+        self.data
+            .host_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(TypeId::of::<T>(), state.clone());
+        state
+    }
+}
+
+fn scoped_registry_identity(
+    catalog: &[Manifest],
+    module_root: Option<&Path>,
+    parent_scope: Option<&str>,
+    origin: &Path,
+    sources: &[String],
+) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"execute-manifest-scope-v1\0");
+    if let Some(module_root) = module_root {
+        update_identity_component(&mut hasher, module_root.to_string_lossy().as_bytes());
+    } else {
+        update_identity_component(&mut hasher, &[]);
+    }
+    update_identity_component(&mut hasher, parent_scope.unwrap_or_default().as_bytes());
+    update_identity_component(&mut hasher, origin.to_string_lossy().as_bytes());
+    for manifest in catalog {
+        update_identity_component(&mut hasher, &serde_json::to_vec(manifest)?);
+    }
+    let mut sorted_sources = sources.iter().map(String::as_str).collect::<Vec<_>>();
+    sorted_sources.sort_unstable();
+    for source in sorted_sources {
+        update_identity_component(&mut hasher, source.as_bytes());
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn update_identity_component(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
 }
 
 impl Manifest {
+    /// The parsed, versioned execution contract, when one was declared.
+    pub fn execution_contract(&self) -> Option<&AppletContract> {
+        self.contract.as_ref()
+    }
+
+    /// The backend selected by a versioned contract. Legacy applets remain
+    /// native commands; runtime builtins are still exposed separately.
+    pub fn execution_backend(&self) -> AppletBackend {
+        self.contract
+            .as_ref()
+            .map_or(AppletBackend::Command, |contract| contract.backend)
+    }
+
+    pub fn stdio(&self) -> Option<&StdioContract> {
+        self.stdio.as_ref()
+    }
+
+    pub fn environment(&self) -> Option<&AppletEnvironment> {
+        self.contract
+            .as_ref()
+            .and_then(|contract| contract.environment.as_ref())
+    }
+
+    pub fn origin(&self) -> Option<&Path> {
+        self.origin.as_deref()
+    }
+
+    pub fn cache_dependencies(&self) -> &[String] {
+        &self.cache_dependencies
+    }
+
+    /// Validate the applet parameter interface against a finite module export.
+    /// The tuple order is `(name, type, required)`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn validate_program_module_inputs(
+        &self,
+        inputs: &[(String, InputType, bool)],
+    ) -> Result<()> {
+        if inputs.len() != self.parameters.len() {
+            bail!(
+                "program module declares {} inputs but applet manifest declares {} parameters",
+                inputs.len(),
+                self.parameters.len()
+            );
+        }
+        let mut seen = BTreeSet::new();
+        for (name, input_type, required) in inputs {
+            if !seen.insert(name) {
+                bail!("program module has duplicate input {name:?}");
+            }
+            let Some(spec) = self.parameters.get(name) else {
+                bail!("program module input {name:?} is not an applet parameter");
+            };
+            let expected = parameter_input_kind(spec)?;
+            if expected != *input_type {
+                bail!(
+                    "program module input {name:?} has type {input_type}, applet parameter expects {}",
+                    spec.kind
+                );
+            }
+            if spec.required != *required {
+                bail!(
+                    "program module input {name:?} required flag does not match applet parameter"
+                );
+            }
+        }
+        for name in self.parameters.keys() {
+            if !seen.contains(name) {
+                bail!("program module does not declare applet parameter {name:?}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Named typed input/output/event metadata for graph-capable consumers.
+    pub fn ports(&self) -> Option<&AppletPorts> {
+        self.contract
+            .as_ref()
+            .and_then(|contract| contract.ports.as_ref())
+    }
+
+    pub fn result_envelope(&self) -> bool {
+        self.contract
+            .as_ref()
+            .is_some_and(|contract| contract.result_envelope)
+    }
+
+    /// Output type for binding validation. Raw bytes have no typed binding;
+    /// paths intentionally use existing text bindings while retaining their
+    /// distinct schema metadata in the applet contract.
+    pub fn output_kind(&self) -> Option<InputType> {
+        self.contract.as_ref().and_then(AppletContract::output_kind)
+    }
+
+    pub fn success_status(&self) -> Option<i32> {
+        self.contract
+            .as_ref()
+            .map_or(Some(0), AppletContract::success_status)
+    }
+
+    pub fn outcome_for(&self, status: i32) -> Outcome {
+        self.contract.as_ref().map_or_else(
+            || Outcome {
+                status,
+                name: if status == 0 {
+                    "success".into()
+                } else {
+                    format!("exit_{status}")
+                },
+                kind: if status == 0 {
+                    OutcomeKind::Success
+                } else {
+                    OutcomeKind::Failure
+                },
+                effect_certainty: if status == 0 {
+                    EffectCertainty::KnownResponse
+                } else {
+                    EffectCertainty::Uncertain
+                },
+            },
+            |contract| contract.outcome_for(status),
+        )
+    }
+
+    /// Decode output only at the explicit contract boundary. Legacy output is
+    /// always preserved as bytes; status acceptance is a separate runtime
+    /// decision. For a typed contract, non-success is an error unless a
+    /// declared result envelope preserves it as structured outcome data.
+    pub fn decode_output(&self, bytes: &[u8], status: i32) -> Result<AppletOutput> {
+        if let Some(contract) = &self.contract {
+            contract.decode_output(bytes, status)
+        } else {
+            Ok(AppletOutput::Bytes(bytes.to_vec()))
+        }
+    }
+
     /// Describe the validated callable interface without executing or locating
     /// its binary. This is deliberately separate from Serialize: checkpoint
     /// identities retain their existing representation.
@@ -220,9 +580,9 @@ impl Manifest {
             .parameters
             .iter()
             .map(|(name, spec)| {
-                let mut schema = parameter_schema(spec.kind);
+                let mut schema = parameter_schema(spec.kind, spec.fields.as_ref());
                 if let Some(items) = spec.item_type {
-                    schema["items"] = parameter_schema(items);
+                    schema["items"] = parameter_schema(items, None);
                 }
                 if let Some(minimum) = spec.min_items {
                     schema["minItems"] = minimum.into();
@@ -235,7 +595,7 @@ impl Manifest {
             .iter()
             .filter_map(|(name, spec)| spec.required.then_some(name))
             .collect::<Vec<_>>();
-        serde_json::json!({
+        let mut projection = serde_json::json!({
             "name": self.name,
             "phrases": self.phrases,
             "backend": if self.builtin.is_some() { "builtin" } else { "native_process" },
@@ -260,7 +620,58 @@ impl Manifest {
                 "uncertain_on_failure": self.uncertain_on_failure,
                 "effect": if self.builtin.is_some() { "working_directory" } else { "native_command" }
             }
-        })
+        });
+        if let Some(contract) = &self.contract {
+            projection["contract_version"] = contract.version.into();
+            projection["io"]["output_schema"] = contract
+                .output
+                .as_ref()
+                .map(OutputSchema::json_schema)
+                .unwrap_or(serde_json::Value::Null);
+            projection["execution"]["contract_backend"] =
+                serde_json::to_value(contract.backend).expect("backend serializes");
+            projection["execution"]["capabilities"] =
+                serde_json::to_value(&contract.capabilities).expect("capabilities serialize");
+            projection["execution"]["effects"] =
+                serde_json::to_value(&contract.effects).expect("effects serialize");
+            projection["execution"]["outcomes"] =
+                serde_json::to_value(&contract.outcomes).expect("outcomes serialize");
+            projection["execution"]["lifecycle"] =
+                serde_json::to_value(&contract.lifecycle).expect("lifecycle serializes");
+            projection["execution"]["result_envelope"] = contract.result_envelope.into();
+            if let Some(schema) = contract.result_envelope_schema() {
+                projection["execution"]["result_envelope_schema"] = schema.json_schema();
+            }
+            if let Some(program) = &contract.program {
+                projection["execution"]["program_module"] =
+                    serde_json::to_value(program).expect("program module serializes");
+            }
+            if let Some(remote) = &contract.remote {
+                projection["execution"]["remote"] = serde_json::json!({
+                    "configured": true,
+                    "allow_discovery": remote.allow_discovery,
+                    "pinned_descriptor": remote.descriptor_cache.is_some()
+                });
+            }
+            if let Some(environment) = &contract.environment {
+                projection["execution"]["environment"] = serde_json::json!({
+                    "set": environment.set.keys().collect::<Vec<_>>(),
+                    "unset": environment.unset.iter().collect::<Vec<_>>()
+                });
+            }
+            if let Some(ports) = &contract.ports {
+                projection["ports"] = serde_json::to_value(ports).expect("ports serialize");
+            }
+        }
+        if !self.cache_dependencies.is_empty() {
+            projection["execution"]["cache_dependencies"] =
+                serde_json::to_value(&self.cache_dependencies)
+                    .expect("cache dependencies serialize");
+        }
+        if let Some(stdio) = &self.stdio {
+            projection["io"]["stdio"] = serde_json::to_value(stdio).expect("stdio serializes");
+        }
+        projection
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -308,6 +719,14 @@ impl Manifest {
         invocation: &Invocation,
         bindings: &BTreeMap<String, InputType>,
     ) -> Result<()> {
+        if invocation.binding.is_some()
+            && self
+                .contract
+                .as_ref()
+                .is_some_and(|contract| contract.output_kind().is_none())
+        {
+            bail!("raw bytes output cannot be bound to a typed applet value");
+        }
         for name in invocation.parameters.keys() {
             if !self.parameters.contains_key(name) {
                 bail!("applet {:?} has no parameter {name:?}", self.name);
@@ -325,13 +744,15 @@ impl Manifest {
                 let compatible = matches!(
                     (spec.kind, kind),
                     (ParameterType::String, InputType::Text)
+                        | (ParameterType::Path, InputType::Text)
                         | (ParameterType::Integer, InputType::Integer)
                         | (ParameterType::Boolean, InputType::Boolean)
+                        | (ParameterType::Json | ParameterType::Record, InputType::Json)
                 ) || (spec.kind == ParameterType::List
                     && kind == InputType::TextList
                     && matches!(
                         spec.item_type,
-                        Some(ParameterType::String | ParameterType::Scalar)
+                        Some(ParameterType::String | ParameterType::Path | ParameterType::Scalar)
                     ));
                 if !compatible {
                     bail!(
@@ -345,11 +766,16 @@ impl Manifest {
                 for item in items {
                     if let Value::Reference(reference) = item {
                         if bindings.get(reference).is_some_and(|kind| {
-                            (spec.item_type == Some(ParameterType::String)
-                                && *kind != InputType::Text)
+                            (matches!(
+                                spec.item_type,
+                                Some(ParameterType::String | ParameterType::Path)
+                            ) && *kind != InputType::Text)
                                 || matches!(kind, InputType::TextList | InputType::Json)
                         }) {
-                            bail!("parameter {name:?} requires text list items, but {reference:?} contains {}", bindings[reference]);
+                            bail!(
+                                "parameter {name:?} requires text list items, but {reference:?} contains {}",
+                                bindings[reference]
+                            );
                         }
                     }
                 }
@@ -367,6 +793,19 @@ impl Manifest {
             append_arguments(node, values, &mut argv)?;
         }
         Ok(argv)
+    }
+
+    /// Return the supplied, already-resolved parameters as a JSON object for
+    /// in-process applet dispatch. Optional parameters remain omitted.
+    pub fn parameters_json(
+        &self,
+        values: &BTreeMap<String, Value>,
+    ) -> Result<serde_json::Map<String, serde_json::Value>> {
+        self.validate_argument_values(values)?;
+        values
+            .iter()
+            .map(|(name, value)| Ok((name.clone(), crate::structured::to_json(value)?)))
+            .collect()
     }
 
     /// Build argv for immediate Command construction without cloning borrowed text.
@@ -431,19 +870,45 @@ impl Manifest {
     }
 }
 
-fn parameter_schema(kind: ParameterType) -> serde_json::Value {
+fn parameter_schema(
+    kind: ParameterType,
+    fields: Option<&BTreeMap<String, ParameterFieldSpec>>,
+) -> serde_json::Value {
     match kind {
         ParameterType::String => serde_json::json!({"type": "string", "pattern": "^[^\\u0000]*$"}),
+        ParameterType::Path => {
+            serde_json::json!({"type": "string", "format":"path", "minLength":1, "pattern": "^[^\\u0000]+$"})
+        }
         ParameterType::Integer => serde_json::json!({
             "type": "integer", "minimum": i64::MIN, "maximum": i64::MAX
         }),
         ParameterType::Boolean => serde_json::json!({"type": "boolean"}),
         ParameterType::List => serde_json::json!({"type": "array"}),
+        ParameterType::Json => serde_json::json!({}),
+        ParameterType::Record => {
+            let fields = fields.expect("record parameter fields validated");
+            let properties = fields
+                .iter()
+                .map(|(name, field)| (name.clone(), parameter_field_schema(field)))
+                .collect::<serde_json::Map<_, _>>();
+            let required = fields
+                .iter()
+                .filter_map(|(name, field)| field.required.then_some(name))
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "type":"object", "properties":properties,
+                "required":required, "additionalProperties":false
+            })
+        }
         ParameterType::Scalar => serde_json::json!({
-            "anyOf": [parameter_schema(ParameterType::String),
-                parameter_schema(ParameterType::Integer), parameter_schema(ParameterType::Boolean)]
+            "anyOf": [parameter_schema(ParameterType::String, None),
+                parameter_schema(ParameterType::Integer, None), parameter_schema(ParameterType::Boolean, None)]
         }),
     }
+}
+
+fn parameter_field_schema(field: &ParameterFieldSpec) -> serde_json::Value {
+    parameter_schema(field.kind, field.fields.as_ref())
 }
 
 fn validate_value(
@@ -454,10 +919,23 @@ fn validate_value(
 ) -> Result<()> {
     let valid = matches!(
         (spec.kind, value),
-        (ParameterType::String, Value::String(_))
-            | (ParameterType::Integer, Value::Integer(_))
+        (
+            ParameterType::String | ParameterType::Path,
+            Value::String(_)
+        ) | (ParameterType::Integer, Value::Integer(_))
             | (ParameterType::Boolean, Value::Bool(_))
             | (ParameterType::List, Value::List(_))
+            | (
+                ParameterType::Json,
+                Value::String(_)
+                    | Value::Integer(_)
+                    | Value::Number(_)
+                    | Value::Bool(_)
+                    | Value::List(_)
+                    | Value::Record(_)
+                    | Value::Null
+            )
+            | (ParameterType::Record, Value::Record(_))
     );
     if !valid {
         bail!(
@@ -470,6 +948,16 @@ fn validate_value(
         if string.contains('\0') {
             bail!("parameter {name:?} contains a NUL byte, which cannot be passed in argv");
         }
+        if spec.kind == ParameterType::Path && string.is_empty() {
+            bail!("path parameter {name:?} must be nonempty");
+        }
+    }
+    if let (ParameterType::Record, Value::Record(values)) = (spec.kind, value) {
+        validate_record_parameter(
+            name,
+            values,
+            spec.fields.as_ref().expect("record schema validated"),
+        )?;
     }
     if let (ParameterType::List, Value::List(items)) = (spec.kind, value) {
         let item_type = spec.item_type.expect("list schema validated");
@@ -477,7 +965,10 @@ fn validate_value(
         for item in items {
             if !is_scalar_type(item, item_type)
                 && !(allow_reference_items
-                    && matches!(item_type, ParameterType::String | ParameterType::Scalar)
+                    && matches!(
+                        item_type,
+                        ParameterType::String | ParameterType::Path | ParameterType::Scalar
+                    )
                     && matches!(item, Value::Reference(_)))
             {
                 bail!(
@@ -486,6 +977,11 @@ fn validate_value(
                 );
             }
             contains_nul |= matches!(item, Value::String(string) if string.contains('\0'));
+            if item_type == ParameterType::Path
+                && matches!(item, Value::String(string) if string.is_empty())
+            {
+                bail!("parameter {name:?} contains an empty path item");
+            }
         }
         if contains_nul {
             bail!("parameter {name:?} contains a NUL byte, which cannot be passed in argv");
@@ -499,10 +995,82 @@ fn validate_value(
     Ok(())
 }
 
+fn validate_record_parameter(
+    name: &str,
+    values: &BTreeMap<String, Value>,
+    fields: &BTreeMap<String, ParameterFieldSpec>,
+) -> Result<()> {
+    for (field_name, field) in fields {
+        match values.get(field_name) {
+            None if field.required => {
+                bail!("parameter {name:?} is missing required field {field_name:?}")
+            }
+            None => {}
+            Some(value) => validate_parameter_field(&format!("{name}.{field_name}"), value, field)?,
+        }
+    }
+    for field_name in values.keys() {
+        if !fields.contains_key(field_name) {
+            bail!("parameter {name:?} has undeclared field {field_name:?}");
+        }
+    }
+    Ok(())
+}
+
+fn validate_parameter_field(name: &str, value: &Value, field: &ParameterFieldSpec) -> Result<()> {
+    let valid = match field.kind {
+        ParameterType::String | ParameterType::Path => matches!(value, Value::String(_)),
+        ParameterType::Integer => matches!(value, Value::Integer(_)),
+        ParameterType::Boolean => matches!(value, Value::Bool(_)),
+        ParameterType::Json => matches!(
+            value,
+            Value::String(_)
+                | Value::Integer(_)
+                | Value::Number(_)
+                | Value::Bool(_)
+                | Value::List(_)
+                | Value::Record(_)
+                | Value::Null
+        ),
+        ParameterType::Record => matches!(value, Value::Record(_)),
+        ParameterType::List | ParameterType::Scalar => false,
+    };
+    if !valid {
+        bail!(
+            "record field {name:?} expects {}, got {}",
+            field.kind,
+            value_kind(value)
+        );
+    }
+    if let Value::String(string) = value {
+        if string.contains('\0') {
+            bail!("record field {name:?} contains a NUL byte");
+        }
+        if field.kind == ParameterType::Path && string.is_empty() {
+            bail!("path field {name:?} must be nonempty");
+        }
+    }
+    if field.kind == ParameterType::Record {
+        let Value::Record(values) = value else {
+            unreachable!("type checked above")
+        };
+        validate_record_parameter(
+            name,
+            values,
+            field
+                .fields
+                .as_ref()
+                .expect("record field schema validated"),
+        )?;
+    }
+    Ok(())
+}
+
 fn is_scalar_type(value: &Value, expected: ParameterType) -> bool {
     matches!(
         (expected, value),
         (ParameterType::String, Value::String(_))
+            | (ParameterType::Path, Value::String(_))
             | (ParameterType::Integer, Value::Integer(_))
             | (ParameterType::Boolean, Value::Bool(_))
             | (
@@ -548,6 +1116,13 @@ fn append_arguments(
                 out.push(value_to_string(item)?);
             }
         }
+        ArgumentNode::JsonParameter { json_parameter } => {
+            let value = values
+                .get(json_parameter)
+                .ok_or_else(|| anyhow!("missing parameter {json_parameter:?}"))?;
+            out.push(json_value_to_string(value)?);
+        }
+        ArgumentNode::JsonArguments => out.push(json_arguments_to_string(values)?),
         ArgumentNode::WhenPresent {
             when_present,
             append,
@@ -587,6 +1162,15 @@ fn append_arguments_borrowed<'a>(
             for item in items {
                 out.push(value_to_cow(item)?);
             }
+        }
+        ArgumentNode::JsonParameter { json_parameter } => {
+            let value = values
+                .get(json_parameter)
+                .ok_or_else(|| anyhow!("missing parameter {json_parameter:?}"))?;
+            out.push(Cow::Owned(json_value_to_string(value)?));
+        }
+        ArgumentNode::JsonArguments => {
+            out.push(Cow::Owned(json_arguments_to_string(values)?));
         }
         ArgumentNode::WhenPresent {
             when_present,
@@ -629,6 +1213,19 @@ fn value_to_string(value: &Value) -> Result<String> {
     }
 }
 
+fn json_value_to_string(value: &Value) -> Result<String> {
+    let json = crate::structured::to_json(value)?;
+    Ok(serde_json::to_string(&json)?)
+}
+
+fn json_arguments_to_string(values: &BTreeMap<String, Value>) -> Result<String> {
+    let object = values
+        .iter()
+        .map(|(name, value)| Ok((name.clone(), crate::structured::to_json(value)?)))
+        .collect::<Result<serde_json::Map<_, _>>>()?;
+    Ok(serde_json::to_string(&serde_json::Value::Object(object))?)
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawManifest {
@@ -643,7 +1240,13 @@ struct RawManifest {
     #[serde(default)]
     cacheable: bool,
     #[serde(default)]
+    cache_dependencies: Vec<String>,
+    #[serde(default)]
     uncertain_on_failure: bool,
+    #[serde(default, deserialize_with = "crate::contracts::deserialize_present")]
+    contract: Option<AppletContract>,
+    #[serde(default, deserialize_with = "crate::contracts::deserialize_present")]
+    stdio: Option<StdioContract>,
     #[serde(default)]
     parameters: BTreeMap<String, ParameterSpec>,
     arguments: Vec<RawArgument>,
@@ -660,6 +1263,19 @@ struct RawParameter {
     items: Option<ParameterType>,
     #[serde(default)]
     min_items: Option<usize>,
+    #[serde(default)]
+    fields: Option<BTreeMap<String, ParameterFieldSpec>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawParameterField {
+    #[serde(rename = "type")]
+    kind: ParameterType,
+    #[serde(default)]
+    required: bool,
+    #[serde(default)]
+    fields: Option<BTreeMap<String, ParameterFieldSpec>>,
 }
 
 #[derive(Debug)]
@@ -673,6 +1289,10 @@ enum RawArgument {
     Spread {
         spread: String,
     },
+    JsonParameter {
+        json_parameter: String,
+    },
+    JsonArguments,
     WhenPresent {
         when_present: String,
         append: Vec<RawArgument>,
@@ -698,6 +1318,10 @@ impl<'de> Deserialize<'de> for RawArgument {
             #[serde(default, deserialize_with = "present")]
             spread: Option<String>,
             #[serde(default, deserialize_with = "present")]
+            json_parameter: Option<String>,
+            #[serde(default, deserialize_with = "present")]
+            json_arguments: Option<bool>,
+            #[serde(default, deserialize_with = "present")]
             when_present: Option<String>,
             #[serde(default, deserialize_with = "present")]
             append: Option<Vec<RawArgument>>,
@@ -714,12 +1338,42 @@ impl<'de> Deserialize<'de> for RawArgument {
             ) -> Result<Self::Value, M::Error> {
                 let fields =
                     Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
-                match (fields.literal, fields.parameter, fields.spread, fields.when_present, fields.append) {
-                    (Some(literal), None, None, None, None) => Ok(RawArgument::Literal { literal }),
-                    (None, Some(parameter), None, None, None) => Ok(RawArgument::Parameter { parameter }),
-                    (None, None, Some(spread), None, None) => Ok(RawArgument::Spread { spread }),
-                    (None, None, None, Some(when_present), Some(append)) => Ok(RawArgument::WhenPresent { when_present, append }),
-                    _ => Err(serde::de::Error::custom("expected exactly one literal, parameter, spread, or when_present with append")),
+                match (
+                    fields.literal,
+                    fields.parameter,
+                    fields.spread,
+                    fields.json_parameter,
+                    fields.json_arguments,
+                    fields.when_present,
+                    fields.append,
+                ) {
+                    (Some(literal), None, None, None, None, None, None) => {
+                        Ok(RawArgument::Literal { literal })
+                    }
+                    (None, Some(parameter), None, None, None, None, None) => {
+                        Ok(RawArgument::Parameter { parameter })
+                    }
+                    (None, None, Some(spread), None, None, None, None) => {
+                        Ok(RawArgument::Spread { spread })
+                    }
+                    (None, None, None, Some(json_parameter), None, None, None) => {
+                        Ok(RawArgument::JsonParameter { json_parameter })
+                    }
+                    (None, None, None, None, Some(true), None, None) => {
+                        Ok(RawArgument::JsonArguments)
+                    }
+                    (None, None, None, None, Some(false), None, None) => {
+                        Err(serde::de::Error::custom("json_arguments must be true"))
+                    }
+                    (None, None, None, None, None, Some(when_present), Some(append)) => {
+                        Ok(RawArgument::WhenPresent {
+                            when_present,
+                            append,
+                        })
+                    }
+                    _ => Err(serde::de::Error::custom(
+                        "expected exactly one literal, parameter, spread, json_parameter, json_arguments:true, or when_present with append",
+                    )),
                 }
             }
         }
@@ -758,8 +1412,47 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         if spec.item_type == Some(ParameterType::List) {
             bail!("parameter {name:?}: nested lists are not supported");
         }
+        if spec
+            .item_type
+            .is_some_and(|item| matches!(item, ParameterType::Json | ParameterType::Record))
+        {
+            bail!(
+                "parameter {name:?}: json and record list items require json_arguments rather than spread"
+            );
+        }
         if !is_list && spec.min_items.is_some() {
             bail!("parameter {name:?}: min_items only applies to lists");
+        }
+        validate_parameter_fields(spec.kind, spec.fields.as_ref(), name)?;
+    }
+    if let Some(contract) = &raw.contract {
+        contract.validate()?;
+        if contract.backend == AppletBackend::InProcess && raw.binary != "@execute-applet" {
+            bail!("in_process backend requires binary \"@execute-applet\"");
+        }
+        if contract.backend == AppletBackend::ProgramModule && raw.binary != "@program-module" {
+            bail!("program_module backend requires binary \"@program-module\"");
+        }
+        if contract.backend == AppletBackend::Remote && raw.binary != "@remote-applet" {
+            bail!("remote backend requires binary \"@remote-applet\"");
+        }
+    }
+    validate_cache_dependencies(&raw.cache_dependencies, raw.cacheable)?;
+    if let Some(stdio) = &raw.stdio {
+        stdio.validate()?;
+        if raw.builtin.is_some() {
+            bail!("stdio defaults cannot be declared for a runtime builtin");
+        }
+        if raw.contract.as_ref().is_some_and(|contract| {
+            contract.backend != AppletBackend::Command
+                && (stdio
+                    .stdout
+                    .is_some_and(|mode| mode != StdioDisposition::Capture)
+                    || stdio
+                        .stderr
+                        .is_some_and(|mode| mode != StdioDisposition::Capture))
+        }) {
+            bail!("non-Capture stdio dispositions are only supported by the command backend");
         }
     }
     let arguments = raw
@@ -774,11 +1467,16 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         builtin: raw.builtin,
         accepts_stdin: raw.accepts_stdin,
         cacheable: raw.cacheable,
+        cache_dependencies: raw.cache_dependencies,
         uncertain_on_failure: raw.uncertain_on_failure,
+        contract: raw.contract,
+        stdio: raw.stdio,
+        origin: None,
         parameters,
         arguments,
     };
     validate_builtin(&manifest)?;
+    validate_manifest_ports(&manifest)?;
     if manifest.uncertain_on_failure && (manifest.cacheable || manifest.builtin.is_some()) {
         bail!("uncertain_on_failure requires a non-cacheable external applet");
     }
@@ -805,10 +1503,268 @@ fn validate_builtin(manifest: &Manifest) -> Result<()> {
                     [ArgumentNode::Parameter { parameter }] if parameter == "path"
                 )
             {
-                bail!("cd builtin must use binary cd, one required string path parameter, no stdin or caching, and map only path as its argument");
+                bail!(
+                    "cd builtin must use binary cd, one required string path parameter, no stdin or caching, and map only path as its argument"
+                );
             }
             Ok(())
         }
+    }
+}
+
+fn validate_parameter_fields(
+    kind: ParameterType,
+    fields: Option<&BTreeMap<String, ParameterFieldSpec>>,
+    name: &str,
+) -> Result<()> {
+    match (kind, fields) {
+        // A declared empty record is a valid zero-field value, such as a
+        // button's clicked signal. `None` still means the schema is missing.
+        (ParameterType::Record, Some(fields)) => {
+            for (field_name, field) in fields {
+                if field_name.trim().is_empty() {
+                    bail!("record parameter {name:?} has an empty field name");
+                }
+                if matches!(field.kind, ParameterType::List | ParameterType::Scalar) {
+                    bail!(
+                        "record field {field_name:?} in parameter {name:?} has unsupported type {}",
+                        field.kind
+                    );
+                }
+                validate_parameter_fields(
+                    field.kind,
+                    field.fields.as_ref(),
+                    &format!("{name}.{field_name}"),
+                )?;
+            }
+            Ok(())
+        }
+        (ParameterType::Record, None) => {
+            bail!("record parameter {name:?} requires fields")
+        }
+        (_, Some(_)) => bail!("fields only apply to record parameter {name:?}"),
+        (_, None) => Ok(()),
+    }
+}
+
+fn validate_cache_dependencies(dependencies: &[String], cacheable: bool) -> Result<()> {
+    const MAX_DEPENDENCIES: usize = 128;
+    const MAX_PATH_BYTES: usize = 4096;
+    const MAX_TOTAL_BYTES: usize = 64 * 1024;
+    if dependencies.len() > MAX_DEPENDENCIES {
+        bail!("cache_dependencies cannot contain more than {MAX_DEPENDENCIES} paths");
+    }
+    if !dependencies.is_empty() && !cacheable {
+        bail!("cache_dependencies require cacheable:true");
+    }
+    let mut unique = BTreeSet::new();
+    let mut total_bytes = 0usize;
+    for dependency in dependencies {
+        if dependency.is_empty() || dependency.len() > MAX_PATH_BYTES || dependency.contains('\0') {
+            bail!(
+                "cache dependency paths must be nonempty, NUL-free, and at most {MAX_PATH_BYTES} bytes"
+            );
+        }
+        let path = Path::new(dependency);
+        if path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir
+                        | std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            bail!("cache dependency {dependency:?} must be a normalized relative path");
+        }
+        if !unique.insert(dependency) {
+            bail!("cache_dependencies must not contain duplicate paths");
+        }
+        total_bytes = total_bytes
+            .checked_add(dependency.len())
+            .ok_or_else(|| anyhow!("cache dependency declaration size overflow"))?;
+    }
+    if total_bytes > MAX_TOTAL_BYTES {
+        bail!("cache_dependencies exceeds {MAX_TOTAL_BYTES} total bytes");
+    }
+    Ok(())
+}
+
+fn validate_manifest_ports(manifest: &Manifest) -> Result<()> {
+    let Some(contract) = manifest.execution_contract() else {
+        return Ok(());
+    };
+    let Some(ports) = contract.ports.as_ref() else {
+        return Ok(());
+    };
+
+    if manifest.accepts_stdin && manifest.parameters.contains_key("stdin") {
+        bail!("manifest parameter \"stdin\" conflicts with the special stdin port");
+    }
+    let has_stdin_port = ports.inputs.contains_key("stdin") && manifest.accepts_stdin;
+    if ports.inputs.contains_key("stdin") && !manifest.accepts_stdin {
+        bail!("contract stdin port requires accepts_stdin:true");
+    }
+    let declared_parameters = ports
+        .inputs
+        .iter()
+        .filter(|(name, _)| !(has_stdin_port && name.as_str() == "stdin"))
+        .map(|(name, _)| name)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let manifest_parameters = manifest.parameters.keys().cloned().collect::<BTreeSet<_>>();
+    if declared_parameters != manifest_parameters {
+        let missing = manifest_parameters
+            .difference(&declared_parameters)
+            .cloned()
+            .collect::<Vec<_>>();
+        let extra = declared_parameters
+            .difference(&manifest_parameters)
+            .cloned()
+            .collect::<Vec<_>>();
+        bail!(
+            "contract input ports must match manifest parameters exactly (missing: {missing:?}; unknown: {extra:?})"
+        );
+    }
+    for (name, spec) in &manifest.parameters {
+        let port = &ports.inputs[name];
+        if port.encoding.is_some() {
+            bail!("parameter input port {name:?} carries a typed value, not an encoded stream");
+        }
+        let expected = parameter_value_schema(spec)?;
+        if port.schema != expected {
+            bail!("input port {name:?} schema does not match the manifest parameter schema");
+        }
+    }
+    if let Some(stdin) = ports.inputs.get("stdin") {
+        crate::contracts::validate_stdin_port(stdin)?;
+    }
+
+    let output_root = contract
+        .result_envelope_schema()
+        .or_else(|| contract.output.as_ref().map(output_value_schema))
+        .unwrap_or_else(|| leaf_value_schema(OutputType::Bytes));
+    if ports.outputs.len() > 1 && ports.outputs.values().any(|port| port.pointer.is_none()) {
+        bail!("multiple output ports require an explicit JSON pointer for each output");
+    }
+    for (name, port) in &ports.outputs {
+        if port.delivery == PortDelivery::Events {
+            bail!(
+                "output port {name:?} must use single or records delivery; use events namespace for events"
+            );
+        }
+        let pointer = port.pointer.as_deref().unwrap_or("");
+        if let Some(actual) = crate::contracts::schema_at_pointer(&output_root, pointer)? {
+            let actual =
+                if port.delivery == PortDelivery::Records && actual.kind == OutputType::List {
+                    *actual
+                        .items
+                        .ok_or_else(|| anyhow!("list output schema is missing items"))?
+                } else {
+                    actual
+                };
+            if actual != port.schema {
+                bail!("output port {name:?} schema does not match its JSON pointer target");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
+    if spec.kind == ParameterType::List {
+        let item_type = spec.item_type.expect("list parameter validated");
+        let item = parameter_field_value_schema(item_type, None)?;
+        return Ok(ValueSchema {
+            kind: OutputType::List,
+            nullable: false,
+            items: Some(Box::new(item)),
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+        });
+    }
+    parameter_field_value_schema(spec.kind, spec.fields.as_ref())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parameter_input_kind(spec: &ParameterSpec) -> Result<InputType> {
+    Ok(match spec.kind {
+        ParameterType::String | ParameterType::Path => InputType::Text,
+        ParameterType::Integer => InputType::Integer,
+        ParameterType::Boolean => InputType::Boolean,
+        ParameterType::Json | ParameterType::Record => InputType::Json,
+        ParameterType::List
+            if matches!(
+                spec.item_type,
+                Some(ParameterType::String | ParameterType::Path | ParameterType::Scalar)
+            ) =>
+        {
+            InputType::TextList
+        }
+        ParameterType::List => {
+            bail!("program modules support only text-valued list parameters")
+        }
+        ParameterType::Scalar => bail!("scalar is only valid as a parameter-list item type"),
+    })
+}
+
+fn parameter_field_value_schema(
+    kind: ParameterType,
+    fields: Option<&BTreeMap<String, ParameterFieldSpec>>,
+) -> Result<ValueSchema> {
+    let kind = match kind {
+        ParameterType::String => OutputType::Text,
+        ParameterType::Path => OutputType::Path,
+        ParameterType::Integer => OutputType::Integer,
+        ParameterType::Boolean => OutputType::Boolean,
+        ParameterType::Json => OutputType::Json,
+        ParameterType::Record => OutputType::Record,
+        ParameterType::Scalar => bail!("mixed scalar parameter lists have no single port schema"),
+        ParameterType::List => bail!("nested parameter lists are not supported"),
+    };
+    let mut value_fields = BTreeMap::new();
+    let mut required = Vec::new();
+    if kind == OutputType::Record {
+        for (name, field) in
+            fields.ok_or_else(|| anyhow!("record parameter schema is missing fields"))?
+        {
+            value_fields.insert(
+                name.clone(),
+                parameter_field_value_schema(field.kind, field.fields.as_ref())?,
+            );
+            if field.required {
+                required.push(name.clone());
+            }
+        }
+    }
+    Ok(ValueSchema {
+        kind,
+        nullable: false,
+        items: None,
+        fields: value_fields,
+        required,
+    })
+}
+
+fn output_value_schema(output: &OutputSchema) -> ValueSchema {
+    ValueSchema {
+        kind: output.kind,
+        nullable: false,
+        items: output.items.clone(),
+        fields: output.fields.clone(),
+        required: output.required.clone(),
+    }
+}
+
+fn leaf_value_schema(kind: OutputType) -> ValueSchema {
+    ValueSchema {
+        kind,
+        nullable: false,
+        items: None,
+        fields: BTreeMap::new(),
+        required: Vec::new(),
     }
 }
 
@@ -830,6 +1786,11 @@ fn convert_argument(
             if spec.kind == ParameterType::List {
                 bail!("list parameter {parameter:?} must use spread");
             }
+            if matches!(spec.kind, ParameterType::Json | ParameterType::Record) {
+                bail!(
+                    "json or record parameter {parameter:?} must use json_parameter or json_arguments"
+                );
+            }
             ArgumentNode::Parameter { parameter }
         }
         RawArgument::Spread { spread } => {
@@ -841,6 +1802,19 @@ fn convert_argument(
             }
             ArgumentNode::Spread { spread }
         }
+        RawArgument::JsonParameter { json_parameter } => {
+            let spec = parameters.get(&json_parameter).ok_or_else(|| {
+                anyhow!("JSON argument mapping references undeclared parameter {json_parameter:?}")
+            })?;
+            if !matches!(spec.kind, ParameterType::Json | ParameterType::Record) {
+                bail!(
+                    "json_parameter requires a json or record parameter, got {}",
+                    spec.kind
+                );
+            }
+            ArgumentNode::JsonParameter { json_parameter }
+        }
+        RawArgument::JsonArguments => ArgumentNode::JsonArguments,
         RawArgument::WhenPresent {
             when_present,
             append,
@@ -867,13 +1841,18 @@ fn validate_argument_usage(manifest: &Manifest) -> Result<()> {
     ) -> Result<()> {
         for node in nodes {
             match node {
-                ArgumentNode::Literal { .. } => {}
+                ArgumentNode::Literal { .. } | ArgumentNode::JsonArguments => {}
                 ArgumentNode::Parameter { parameter }
-                | ArgumentNode::Spread { spread: parameter } => {
+                | ArgumentNode::Spread { spread: parameter }
+                | ArgumentNode::JsonParameter {
+                    json_parameter: parameter,
+                } => {
                     if !manifest.parameters[parameter].required
                         && !guards.contains(&parameter.as_str())
                     {
-                        bail!("optional parameter {parameter:?} must be emitted within its own when_present condition");
+                        bail!(
+                            "optional parameter {parameter:?} must be emitted within its own when_present condition"
+                        );
                     }
                 }
                 ArgumentNode::WhenPresent {
@@ -895,9 +1874,12 @@ impl std::fmt::Display for ParameterType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::String => "string",
+            Self::Path => "path",
             Self::Integer => "integer",
             Self::Boolean => "boolean",
             Self::List => "list",
+            Self::Json => "json",
+            Self::Record => "record",
             Self::Scalar => "string, integer, or boolean",
         })
     }
@@ -1416,8 +2398,8 @@ mod argument_decoder_compat {
     use super::*;
 
     // Retain the exact former decoder as an independent accept/reject and
-    // variant-selection oracle. The former deny_unknown_fields setting also
-    // rejects sequence-shaped nodes; do not accidentally broaden this schema.
+    // variant-selection oracle for legacy nodes. The former deny_unknown_fields
+    // setting also rejects sequence-shaped nodes; do not broaden legacy syntax.
     #[derive(Deserialize)]
     #[serde(untagged, deny_unknown_fields)]
     enum LegacyArgument {
@@ -1534,14 +2516,32 @@ mod argument_decoder_compat {
     }
     #[test]
     fn argument_decoder_matches_all_shipped_catalog_nodes() {
-        fn visit(value: &serde_json::Value) {
-            compare(&value.to_string());
+        fn visit(value: &serde_json::Value, extensions: &mut usize) {
+            if value.get("json_arguments").is_some() {
+                let source = value.to_string();
+                assert_eq!(
+                    value["json_arguments"], true,
+                    "invalid extension node: {source}"
+                );
+                assert!(
+                    serde_json::from_str::<LegacyArgument>(&source).is_err(),
+                    "new json_arguments node unexpectedly belongs to the legacy grammar: {source}"
+                );
+                assert!(matches!(
+                    serde_json::from_str::<RawArgument>(&source),
+                    Ok(RawArgument::JsonArguments)
+                ));
+                *extensions += 1;
+            } else {
+                compare(&value.to_string());
+            }
             if let Some(children) = value.get("append").and_then(|v| v.as_array()) {
                 for child in children {
-                    visit(child);
+                    visit(child, extensions);
                 }
             }
         }
+        let mut extensions = 0;
         for entry in
             std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap()
         {
@@ -1550,9 +2550,13 @@ mod argument_decoder_compat {
                 let source = std::fs::read_to_string(path).unwrap();
                 let manifest: serde_json::Value = serde_json::from_str(&source).unwrap();
                 for node in manifest["arguments"].as_array().unwrap() {
-                    visit(node);
+                    visit(node, &mut extensions);
                 }
             }
         }
+        assert!(
+            extensions > 0,
+            "catalog should exercise the new argument node"
+        );
     }
 }

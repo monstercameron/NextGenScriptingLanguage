@@ -1,0 +1,11 @@
+# Source: omacom/omarchy bin/omarchy-theme-current at c668141e9c42b13c80c9ca4ea108e11708c5e8a5.
+# HOME maps to home; upstream ignores positional arguments, which are accepted here.
+# Uses the host sed dialect, including upstream's GNU-specific \u replacement.
+accept home as text from environment "HOME" with default ""
+accept arguments as list of text from arguments
+run "printf" with arguments ["%s/.local/state/omarchy/current/theme.name", home] as theme_path
+run "test" with arguments ["-f", theme_path] and keep status as theme_status
+if theme_status is 0
+  run "sed" with arguments ["-E", "s/(^|-)([a-z])/\\1\\u\\2/g; s/-/ /g", theme_path]
+otherwise
+  run "printf" with arguments ["%s\n", "Unknown"]

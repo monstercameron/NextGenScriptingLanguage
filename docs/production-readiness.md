@@ -3,7 +3,8 @@
 **Status: source candidate, not a production Bash replacement.** The current
 work targets equivalent behavior in readable `.program` files. It does not
 parse existing Bash syntax or install itself as `/bin/bash` or a login shell.
-Packaged Execute 0.8.0 remains unchanged; current source is 0.9.0-dev.
+Published 0.9.0-rc.4 packages and the retained 0.8.0 binary remain unchanged;
+the current source contains untagged candidate work.
 
 ## Changes backed by tests
 
@@ -21,6 +22,25 @@ Packaged Execute 0.8.0 remains unchanged; current source is 0.9.0-dev.
 * A macOS test-harness cleanup race now keeps the launcher PID reserved until
   group termination, and verifies dead group members before accepting macOS
   `EPERM`. This changes failure cleanup, not normal runtime performance.
+* Versioned applet contracts add typed parameters/output, explicit outcome
+  routing, stream dispositions, and command, in-process and persistent-worker
+  backends. Generic operations include comment-preserving JSONC edits,
+  single-file compare-and-swap writes and a bounded journaled file-only
+  transaction with explicit recovery. A transaction has partial visibility
+  while files apply and does not cover external effects. These contracts do not
+  impose universal I/O limits.
+* An optional strict capability policy checks declared grants and filters the
+  child environment. `sandbox_required` separately opts into fail-closed
+  macOS/Linux OS confinement for command and worker processes; in-process
+  operations cannot use it. See [the security contract](../SECURITY.md#applet-contracts-and-optional-capability-policy).
+* An optional [data-flow policy](security-dataflow.md) separately governs
+  sensitivity labels at remote and persistence sinks. Source builds can also
+  `check`, `inspect`, `explain` and `run` bounded typed applet graphs; these do
+  not add a universal streaming, desktop or Bash-compatibility guarantee.
+* `execute service generate systemd|launchd` prints a validated foreground
+  service definition for review only. It does not save, install, enable, load
+  or start the service; TTY handoff and universal detached-descendant cleanup
+  are not provided. See [the practical guide](guide.md#generate-a-reviewable-service-definition).
 
 See [the input reference](language.md#process-input-sources) and
 [the isolated Omarchy ports](../examples/omarchy-ports/README.md).
@@ -44,15 +64,15 @@ Omarchy desktop.
 
 | Gate | Required behavior and proof | Current gap |
 | --- | --- | --- |
-| Command contracts | Exact argv, stdin, stdout/stderr, cwd, native status, missing tools and failure behavior on macOS and Linux | 110-case/46-tool Unix matrix; output and pipeline failure policy differences remain explicit |
+| Command contracts | Exact argv, stdin, stdout/stderr, cwd, native status, missing tools and failure behavior on macOS and Linux | 110-case/46-tool Unix matrix; applet contracts add typed/status/stdio coverage, while output and pipeline failure policy differences remain explicit |
 | Shell control | Compact loops, local bindings, command results, early return/status, environment overrides and unset, append/separate/merged redirection | Typed inputs, scalar conditions and bounded repeat/for-each/while loops exist in current source; the remaining control surface needs proof |
 | Jobs and terminal ownership | Spawn, await, cancel, `exec` identity or a documented alternative, signal propagation, traps/finally and terminal handoff | Supervised children and bounded services exist; Bash job/session parity is missing |
-| Reuse and data | External program modules, lists/records and structured streams without generated application helpers | Same-file finite reuse and finite JSON exist; modules, iteration and structured streams remain missing |
+| Reuse and data | External program modules, typed records and structured streams without generated application helpers | Same-file finite reuse, versioned external modules, bounded task groups, typed applet graphs, finite JSON and typed applet records exist; lifecycle-owned nested services and general structured streaming remain missing |
 | Real Omarchy ports | Port every in-scope command; add success, absent dependency, cancellation, failure and side-effect oracles per command | Pinned inventory plus ten isolated interface ports; no complete command or desktop certification |
 | Desktop acceptance | Disposable Arch/Omarchy sessions testing Hyprland, Wayland, D-Bus, terminals, services and clean teardown | No native Omarchy/Arch desktop runner available locally; Ubuntu CI cannot substitute for this |
 | Sourced shell integration | Define how environment/cwd changes reach a caller and which Bash startup hooks stay Bash | External programs cannot mutate their parent shell; no sourced Bash emulation |
-| Safety and recovery | Inspectable effect boundaries, fault injection, checkpoint uncertainty and cleanup under interruption | Commands inherit caller privileges; explicit capability boundaries and broader fault coverage remain open |
-| Distribution | Clean install/uninstall, paths with spaces, shebang portability, declared Bash-independent dependencies and immutable versioned packages | Source checks and existing packaging are useful; new source candidate is not packaged or installed |
+| Safety and recovery | Inspectable effect boundaries, fault injection, checkpoint uncertainty and cleanup under interruption | Strict applet policy and opt-in macOS/Linux sandboxes exist in current source; no-policy commands remain trusted, and broader adversarial/platform coverage remains open |
+| Distribution | Clean install/uninstall, paths with spaces, shebang portability, declared Bash-independent dependencies and immutable versioned packages | Candidate package scripts include `execute-applet`; no new release package or provenance receipt has been published and validated |
 | Performance | Identical behavior and workload on both runtimes, paired repeated release measurements, cold/warm startup, CPU, memory, streaming, idle and event latency on macOS and Linux | Existing focused measurements are not comprehensive; source optimizations need their own receipts |
 | Readability and generation | Held-out real scripts, fixed prompts, repair counts and blind human review | Example counts and passing tests do not establish this claim |
 
@@ -76,3 +96,11 @@ warmup exclusions and environment details. Do not time builds or stress suites
 concurrently. Native Ubuntu and macOS CI verify portability; neither proves
 performance on an Omarchy workstation. Production promotion requires the
 gates above, not a synthetic 10/10 score or a fixed number of examples.
+
+The [applet boundary harness](../benchmarks/applet_boundaries.py) is prepared to
+compare equivalent successful `text.matches` calls across all three native
+backends after correctness checks. It is not a result, and it cannot establish
+a general runtime or Bash speed advantage. Exact Omarchy success-path timings
+are covered by a separate [paired harness](../benchmarks/omarchy_success.py);
+they must remain separate from newly covered failures and side-effect
+correctness.

@@ -69,6 +69,15 @@ fn manifest_identity(
 ) -> Result<()> {
     let manifest = registry.resolve_call(call)?;
     hash_field(hash, &manifest.checkpoint_identity(call)?);
+    if manifest.execution_backend() == AppletBackend::ProgramModule {
+        // Module source and transitive package identities are preloaded as an
+        // immutable session and appended by node_fingerprint_with_modules.
+        // The manifest's @program-module sentinel is metadata, not an
+        // executable that should be resolved from PATH.
+        hash_field(hash, b"execute-program-module-preloaded-v1");
+        hash_field(hash, manifest.name.as_bytes());
+        return Ok(());
+    }
     if manifest.builtin.is_none() {
         let binary = match binary_path(manifest.binary_for(call), cwd) {
             Ok(binary) => binary,
@@ -124,6 +133,42 @@ fn manifest_identity(
     }
     Ok(())
 }
+
+/// Identity for an ordinary call made from a preloaded program-module body.
+/// Program-module imports are represented by the package graph itself. A
+/// remote call without a pinned descriptor cannot provide a stable checkpoint
+/// identity and therefore makes the containing module identity incomplete.
+pub(super) fn module_body_call_identity(
+    call: &Invocation,
+    registry: &Registry,
+    cwd: &Path,
+) -> Result<Option<String>> {
+    let manifest = registry.resolve_call(call)?;
+    if manifest.execution_backend() == AppletBackend::ProgramModule {
+        return Ok(None);
+    }
+
+    let mut hash = Sha256::new();
+    hash_field(&mut hash, b"execute-module-body-call-v1");
+    if manifest.execution_backend() == AppletBackend::Remote {
+        let Some(remote) = manifest
+            .execution_contract()
+            .and_then(|contract| contract.remote.as_ref())
+        else {
+            bail!(
+                "remote applet {:?} has no endpoint configuration",
+                manifest.name
+            );
+        };
+        if remote.descriptor_sha256.is_none() {
+            return Ok(None);
+        }
+        hash_field(&mut hash, &manifest.checkpoint_identity(call)?);
+    } else {
+        manifest_identity(&mut hash, call, registry, cwd, &mut HashMap::new(), false)?;
+    }
+    Ok(Some(format!("{:x}", hash.finalize())))
+}
 pub(super) fn node_fingerprint(
     program: &Program,
     start: usize,
@@ -132,6 +177,36 @@ pub(super) fn node_fingerprint(
     cwd: &Path,
 ) -> Result<String> {
     node_fingerprint_with_digests(program, start, end, registry, cwd, &mut HashMap::new())
+}
+
+pub(super) fn node_fingerprint_with_modules(
+    program: &Program,
+    start: usize,
+    end: usize,
+    registry: &Registry,
+    cwd: &Path,
+    module_fingerprints: &BTreeMap<String, String>,
+) -> Result<String> {
+    let base = node_fingerprint(program, start, end, registry, cwd)?;
+    Ok(with_module_fingerprints(base, module_fingerprints))
+}
+
+fn with_module_fingerprints(
+    base: String,
+    module_fingerprints: &BTreeMap<String, String>,
+) -> String {
+    if module_fingerprints.is_empty() {
+        return base;
+    }
+    let mut hash = Sha256::new();
+    hash_field(&mut hash, b"execute-node-module-snapshot-v1");
+    hash_field(&mut hash, base.as_bytes());
+    // BTreeMap iteration is canonical and the module session was completely
+    // loaded before any checkpoint or workflow effect.
+    if let Ok(bytes) = serde_json::to_vec(module_fingerprints) {
+        hash_field(&mut hash, &bytes);
+    }
+    format!("{:x}", hash.finalize())
 }
 fn node_fingerprint_with_digests(
     program: &Program,
@@ -187,6 +262,11 @@ fn node_fingerprint_with_digests(
                 ),
             )?;
         }
+        if let StepKind::TaskGroup { tasks, .. } = &step.kind {
+            for call in tasks {
+                manifest_identity(&mut hash, call, registry, cwd, binary_digests, false)?;
+            }
+        }
     }
     Ok(format!("{:x}", hash.finalize()))
 }
@@ -209,6 +289,14 @@ pub(super) fn retry_safe(
                 return Ok(false);
             }
         }
+        if let StepKind::TaskGroup { tasks, .. } = &step.kind {
+            for call in tasks {
+                let manifest = registry.resolve_call(call)?;
+                if manifest.builtin.is_none() && !manifest.cacheable {
+                    return Ok(false);
+                }
+            }
+        }
     }
     Ok(true)
 }
@@ -225,6 +313,13 @@ pub(super) fn uncertain_on_failure(
                 return Ok(true);
             }
         }
+        if let StepKind::TaskGroup { tasks, .. } = &step.kind {
+            for call in tasks {
+                if registry.resolve_call(call)?.uncertain_on_failure {
+                    return Ok(true);
+                }
+            }
+        }
     }
     Ok(false)
 }
@@ -237,12 +332,18 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
             }
             StepKind::EndIf | StepKind::EndCall | StepKind::EndLoop { .. } => depth -= 1,
             StepKind::UseFolder { .. } if depth > 0 => {
-                bail!("line {}: checkpointed conditionals cannot change directory; loops and reusable calls also require directory setup outside their bodies", step.line);
+                bail!(
+                    "line {}: checkpointed conditionals cannot change directory; loops and reusable calls also require directory setup outside their bodies",
+                    step.line
+                );
             }
             StepKind::Invoke { call, .. }
                 if depth > 0 && registry.resolve_call(call)?.builtin == Some(Builtin::Cd) =>
             {
-                bail!("line {}: checkpointed conditionals cannot change directory; loops and reusable calls also require cd outside their bodies", step.line);
+                bail!(
+                    "line {}: checkpointed conditionals cannot change directory; loops and reusable calls also require cd outside their bodies",
+                    step.line
+                );
             }
             _ => {}
         }
@@ -251,6 +352,15 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
 }
 
 pub(super) fn prepare(program: &Program, registry: &Registry, journal: &Journal) -> Result<()> {
+    prepare_with_modules(program, registry, journal, &BTreeMap::new())
+}
+
+pub(super) fn prepare_with_modules(
+    program: &Program,
+    registry: &Registry,
+    journal: &Journal,
+    module_fingerprints: &BTreeMap<String, String>,
+) -> Result<()> {
     let mut start = 0;
     // Reuse content digests only while selected path metadata still matches.
     // Never retain the memo across resume attempts or execution boundaries.
@@ -263,14 +373,17 @@ pub(super) fn prepare(program: &Program, registry: &Registry, journal: &Journal)
         if node.start != start
             || node.end != end
             || node.fingerprint
-                != node_fingerprint_with_digests(
-                    program,
-                    start,
-                    end,
-                    registry,
-                    &node.cwd_before,
-                    &mut binary_digests,
-                )?
+                != with_module_fingerprints(
+                    node_fingerprint_with_digests(
+                        program,
+                        start,
+                        end,
+                        registry,
+                        &node.cwd_before,
+                        &mut binary_digests,
+                    )?,
+                    module_fingerprints,
+                )
         {
             bail!(
                 "completed checkpoint node changed at line {}; use a fresh checkpoint",
@@ -319,16 +432,35 @@ pub fn run_checkpointed(
     options: &RunOptions,
     checkpoint: &CheckpointOptions,
 ) -> Result<RunResult> {
+    let signals =
+        Signals::register_with_deadline(deadline_after(options.total_timeout, "total timeout")?)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate_checkpoint_controls(program, registry)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     let configured = configured_inputs(program, registry, options)?;
     let options = configured.as_ref();
     if program.trigger.is_some() {
         bail!("triggered programs require run_service_checkpointed");
     }
     let cwd = fs::canonicalize(&options.working_directory)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    crate::capabilities::preflight_with_cache_directory(
+        program,
+        registry,
+        &cwd,
+        options.cache_directory.as_deref(),
+    )?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    let module_session = preload_program_modules(program, registry, &signals, &cwd)?;
+    module_session.validate_checkpoint_identity()?;
+    let sensitivity_floor = workflow_sensitivity_floor(program, registry, &module_session)?;
+    signals.set_sensitivity_floor(sensitivity_floor.clone());
+    authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
     let mut checkpoint = checkpoint.clone();
     checkpoint.directory = cwd.join(&checkpoint.directory);
+    crate::capabilities::authorize_host_path(registry, &checkpoint.directory, true, &cwd)?;
     let mut journal = Journal::open_with_inputs(
         &checkpoint,
         &cwd,
@@ -336,9 +468,8 @@ pub fn run_checkpointed(
         options.max_output_bytes,
         input_signature(program, &options.inputs)?,
     )?;
-    prepare(program, registry, &journal)?;
+    prepare_with_modules(program, registry, &journal, module_session.fingerprints())?;
     let already_finished = journal.is_finished();
-    let signals = Signals::register()?;
     let result = run_finite_inner(
         program,
         registry,
@@ -349,6 +480,7 @@ pub fn run_checkpointed(
         Some(&mut journal),
     )?;
     if !already_finished {
+        authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
         journal.finish()?;
     }
     Ok(result)

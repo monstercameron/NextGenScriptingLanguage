@@ -1,0 +1,42 @@
+{
+  "name": "examples.records.report",
+  "binary": "@program-module",
+  "accepts_stdin": false,
+  "parameters": {
+    "payload": {
+      "type": "json",
+      "required": true
+    }
+  },
+  "arguments": [],
+  "contract": {
+    "version": 1,
+    "backend": "program_module",
+    "program": {
+      "source": "records.program",
+      "entry": "report",
+      "interface_version": 1,
+      "package_manifest": "package/program.modules.json",
+      "package_lock": "package/program.modules.lock.json"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "name": {
+          "type": "text"
+        },
+        "count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "count"
+      ]
+    }
+  }
+}

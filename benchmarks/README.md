@@ -19,6 +19,63 @@ interpret private-helper gains as whole-application speedups. Timings are local
 macOS arm64 with warm filesystem caches; native Linux/Windows performance,
 true cold startup and peak memory remain unmeasured by this session.
 
+## Applet backend boundaries (harness; no result recorded)
+
+[`applet_boundaries.py`](applet_boundaries.py) invokes an already-built Rust
+benchmark test binary; it never runs Cargo or compiles while measuring. Wrapper
+unit tests run through `make applet-boundaries-harness-check` and do not measure.
+After the final release build is declared ready, build the ignored release test
+target separately, then pass that executable and its matching `execute-applet`
+helper to the wrapper with a fresh report name. It requires both
+`--final-release-build-confirmed` and `--measurement-window-idle` gates. The
+same parsed `.program`, manifest parameters, `execute-applet` operation and
+typed record output run through the one-shot command, `in_process` and
+`json_lines_worker` backends. Before any timing, the harness checks exact
+encoded output, the status binding, typed fields and the separate absence
+envelope path. It reuses a Registry so worker persistence is exercised, then
+interleaves backend samples after warmups. Per-call launch counts come from the
+runtime result. Worker frame encode/decode costs have their own samples and are
+not added to the end-to-end invocation timings.
+
+Each report retains raw nanosecond samples, nearest-rank p95 and median,
+successful-output hashes, helper/test-binary/source hashes, request/response
+frame sizes, measured worker/command launch counts and host/build environment.
+It requires a previously built release test binary and `execute-applet`, and a
+fresh, explicitly named `applet-boundaries-*.json` destination. Do not run it
+concurrently with builds or tests. The helper-backend case isolates the same
+operation boundary; it excludes interpreter process startup by measuring
+`runtime::run` in one process. It cannot establish a universal interpreter or
+Bash speed advantage.
+
+Exact successful Omarchy rewrite timings use a separate paired harness:
+
+```sh
+python3 benchmarks/omarchy_success.py \
+  --baseline-dir /path/to/preserved/contract-refinement-baseline \
+  --candidate-binary target/release/execute \
+  --report benchmarks/omarchy-success-<host>.json \
+  --samples 25 --warmups 6 \
+  --final-release-build-confirmed --measurement-window-idle
+```
+
+The harness verifies the saved baseline receipt and hashes, then runs one owned
+successful fixture per Omarchy program for both baseline and candidate. Each
+side must pass the existing pinned-Bash assertions for exact output/status and
+recorded effects; the two Execute results must also match before any timing.
+The baseline programs use direct quoted calls. Where an existing fixture
+adapter always supplies a manifest directory, the saved binary receives one
+inert legacy-shaped manifest instead of the candidate's new v1 catalog; its
+exact bytes are hashed into the report.
+Fixture creation and the Bash oracle are outside the timed boundary. The harness
+alternates baseline-first and candidate-first rounds and retains per-side raw
+samples, hashes, environment and summaries. New error, absence, transaction or
+side-effect correctness paths are separate evidence; intentionally corrected
+behavior is excluded from performance parity. This measures only the ten named
+happy paths on that host, not all Omarchy scripts or universal interpreter
+speed. The harness does not invoke Cargo. Run it after the final release build
+is ready and with builds, tests and other benchmarks stopped. No Omarchy
+performance result is recorded here.
+
 The session also added bounded `repeat`, `for each` and `while` loops and fixed
 cache filesystem and live socket availability defects. Security costs remain
 visible: cache checks add roughly 1–2% to the measured listener acknowledgement,

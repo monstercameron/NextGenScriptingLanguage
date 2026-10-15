@@ -1,0 +1,12 @@
+# Upstream: omacom/omarchy bin/omarchy-notification-time
+# Revision: c668141e9c42b13c80c9ca4ea108e11708c5e8a5
+# Inputs: upstream ignores every positional argument; preserve that interface.
+# Environment: no direct reads. date inherits locale/TZ; native commands inherit
+# PATH, HOME and OMARCHY_PATH exactly as in the original command environment.
+# Mapping: capture date even on ordinary failure, remove command-substitution
+# trailing LF bytes using jq, then pass the one literal summary argument.
+# jq performs only text normalization; notification control remains here.
+accept ignored_arguments as list of text from arguments
+run "date" with arguments ["+%A %H:%M  ·  %d %B %Y  ·  Week %V"] and keep status as date_status
+then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as summary
+run "omarchy-notification-send" with arguments ["-g", "", "-u", "low", summary]

@@ -1,0 +1,5 @@
+graph greeting
+  run text.concat with parts ["hello", "graph"] and separator " " as joined
+  run text.trim_final_lf as cleaned
+  bind joined.value to cleaned.text with capacity 1 lossless
+end graph

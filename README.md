@@ -105,9 +105,9 @@ every 30 seconds
 ```
 
 Listeners keep their producer alive and backpressure it while handlers run.
-Intervals skip missed ticks; cron uses the local calendar. Services run in the
-foreground and can be supervised by systemd or launchd.
-[Explore streams and services](docs/guide.md#one-file-several-lifetimes).
+Intervals default to skipping missed ticks; cron uses the local calendar.
+Current source can print review-only systemd/launchd service definitions for
+triggered workflows. [Explore streams and services](docs/guide.md#one-file-several-lifetimes).
 
 ## Terminal apps with control flow you can read
 
@@ -154,9 +154,13 @@ require explicit retry. See the [recovery contract](docs/language.md#recover-aft
 | --- | --- |
 | [150 utilities](examples/ladder/README.md) | Useful file, log, data, CI and release workflows with inputs, outputs and exact fixture oracles. |
 | [100 model workflows](examples/models/README.md) | Explicit Jev/LLM calls, typed results and script-owned routing; offline fixtures by default. |
-| [Native applet catalog](manifests) | Readable named parameters mapped directly to argv. Direct quoted calls need no adapter. |
+| [Native applet catalog](manifests) and [applet contracts](docs/applet-contracts.md) | Readable named parameters mapped directly to argv, with optional typed values, outcomes and execution backends. Direct quoted calls need no adapter. |
+| [Typed applet graphs](docs/graph.md) | Source-build graph files with preflighted typed ports, bounded event queues and `check`/`inspect`/`explain`/`run` commands. |
+| [Security and data-flow policies](SECURITY.md) and [data-flow guide](docs/security-dataflow.md) | Optional applet capability/sandbox policy and separate sensitivity, remote-origin, persistence and cache-purity policy. |
+| [External program modules](docs/program-modules.md) | Source-build, versioned local program packages with explicit dependency locks and bounded resolution. |
 | [Model operations](docs/models.md) | TypeSafe Jev classification, judgment and scoring; OpenAI generation and JSON extraction. |
 | [VS Code extension](editors/vscode/README.md) | Syntax highlighting, snippets and grammar tests. |
+| [Language server and discovery](docs/language-server.md) | Source-build stdio LSP diagnostics/completion, local reusable-program navigation and rename, safe applet discovery and typed port matching. |
 | [Browser playground](docs/playground.md) | Rust/WASM language core, terminal, virtual files and ten runnable workflows with checked outputs and generated reports. |
 
 The browser uses bounded Rust applet ports and buffered pipelines. Installed
@@ -171,7 +175,9 @@ matter; Bash remains faster in some recorded workloads.
 [Benchmark methods and raw results](benchmarks/README.md) document workloads,
 boundaries, source hashes and known differences. Historical measurements describe
 their recorded versions. Browser virtual-applet timings do not measure native
-processes. No result establishes a universal speed advantage or full Bash parity.
+processes. The [paired Omarchy success harness](benchmarks/omarchy_success.py)
+is prepared separately from correctness coverage and has no result yet. No result
+establishes a universal speed advantage or full Bash parity.
 The [five-hour session summary](benchmarks/session-2026-10-14-summary.json)
 indexes the latest measured changes, security costs and remaining gaps.
 
@@ -184,14 +190,41 @@ a native Windows port on x64 and ARM64. `0.9.0-rc.4` is the published multi-plat
 release candidate. Current `main` also includes the browser playground and
 [repeat, for each and while loops](docs/language.md#loops-current-source).
 
-Execute is still evolving toward the [Bash and Omarchy proof gates](docs/production-readiness.md).
-Jobs, external modules, richer redirection and full desktop acceptance remain
-open. Native commands run with the caller's permissions;
-they are not automatically sandboxed. Flatpak has a separate sandbox contract.
+The current source candidate also adds [versioned applet contracts](docs/applet-contracts.md),
+generic bundled operations through `execute-applet`, and optional capability
+policy with a separate, opt-in OS sandbox for supported command and worker
+applets. A bounded journaled `fs.transaction`
+supports recovery for file-only batches, with partial visibility while updates
+apply. These features are source-only until a new release is published; the
+retained 0.8.0 binary and published 0.9.0-rc.4 packages remain unchanged.
 
-The retained `bin/execute` is historical **0.8.0**. Use a release download or
-`target/release/execute` for current features. Published releases and historical
-evidence retain their original contents. See [version history](CHANGELOG.md),
+Current source also includes [versioned external program modules](docs/program-modules.md),
+finite task and graph APIs, and native desktop protocol groundwork. These are
+source-candidate interfaces and do not complete the remaining jobs, richer
+redirection, or Omarchy desktop acceptance gates.
+
+The [data-flow policy](docs/security-dataflow.md) is a separate opt-in boundary
+for remote egress, cache/checkpoint/save persistence and reviewed cache purity.
+It complements capability policy; neither interface infers sensitivity or
+proves arbitrary native code safe.
+
+The source also provides a stdio [Language Server Protocol server](docs/language-server.md)
+for diagnostics, completion, local reusable-program navigation and rename, plus
+manifest-based applet discovery and typed-port matching. These editor and
+discovery interfaces do not infer contracts from executable help output.
+
+Execute is still evolving toward the [Bash and Omarchy proof gates](docs/production-readiness.md).
+Native commands run with the caller's permissions;
+they are not automatically sandboxed. A configured capability policy checks
+declared applet grants, filters environment variables and can require an OS
+sandbox for supported command and worker backends. In-process operations do not
+run inside that sandbox. Flatpak has a separate application-wide sandbox contract; see
+[security boundaries](SECURITY.md) for details.
+
+The retained `bin/execute` is historical **0.8.0**. Published **0.9.0-rc.4**
+packages do not include the source-candidate features above; build the current
+source to try them. Published releases and historical evidence retain their
+original contents. See [version history](CHANGELOG.md),
 [platform contracts](docs/windows.md) and [release validation](docs/releases.md).
 
 ## Build and verify

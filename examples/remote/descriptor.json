@@ -1,0 +1,51 @@
+{
+  "protocol_version": 1,
+  "identity": {
+    "name": "demo.echo",
+    "version": "1.2.3"
+  },
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "outcomes": [
+      {"status": 0, "name": "success", "kind": "success"},
+      {"status": 7, "name": "absence", "kind": "absence"}
+    ],
+    "capabilities": [],
+    "effects": [],
+    "result_envelope": false,
+    "ports": {
+      "inputs": {
+        "name": {"schema": {"type": "text"}, "delivery": "single"},
+        "stdin": {
+          "schema": {"type": "bytes"},
+          "delivery": "single",
+          "encoding": "raw"
+        }
+      },
+      "outputs": {
+        "raw": {"schema": {"type": "bytes"}, "delivery": "single"},
+        "result": {"schema": {"type": "json"}, "delivery": "single"}
+      },
+      "events": {
+        "events": {"schema": {"type": "json"}, "delivery": "events"}
+      }
+    }
+  },
+  "events": [
+    {
+      "port": "events",
+      "format": "sse",
+      "max_event_bytes": 4096,
+      "resumable": true,
+      "reconnect": false,
+      "max_reconnects": 0,
+      "backpressure": "pull"
+    }
+  ],
+  "idempotency": {
+    "scope": "account:demo/operation:echo",
+    "operations": ["echo"],
+    "minimum_retention_seconds": 60
+  }
+}

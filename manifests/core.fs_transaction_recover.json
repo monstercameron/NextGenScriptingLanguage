@@ -1,0 +1,77 @@
+{
+  "name": "fs.transaction.recover",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "journal": {
+      "type": "path",
+      "required": true
+    },
+    "decision": {
+      "type": "string",
+      "required": true
+    },
+    "lock_timeout_ms": {
+      "type": "integer"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.transaction.recover"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 1,
+        "name": "absence",
+        "kind": "absence"
+      },
+      {
+        "status": 2,
+        "name": "failure",
+        "kind": "failure"
+      },
+      {
+        "status": 75,
+        "name": "retryable",
+        "kind": "retryable"
+      },
+      {
+        "status": 76,
+        "name": "uncertain_effect",
+        "kind": "failure"
+      }
+    ],
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "result_envelope": true
+  }
+}

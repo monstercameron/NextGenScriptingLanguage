@@ -34,6 +34,7 @@ fn options(cwd: &Path) -> runtime::RunOptions {
         trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
+        total_timeout: None,
     }
 }
 

@@ -45,6 +45,7 @@ fn run(
             trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: Some(timeout),
+            total_timeout: None,
         },
         BTreeMap::new(),
         Vec::new(),

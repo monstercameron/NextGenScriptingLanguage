@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/omacom/omarchy",
+  "commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+  "source_url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin/omarchy-webapp-remove",
+  "source_sha256": "5b63667ede801efcc834cfbcbaea6a7ef2fc8b1179d88916d1f8cda4c674ea4e",
+  "source_copy": "upstream.sh",
+  "assumptions": [
+    "Unix host has find, grep, basename, sort, tr, sed, printf, test, false, rm and jq. LC_ALL=C is used for deterministic menu ordering in tests.",
+    "Only UTF-8 launcher paths are representable by Execute named values. Native find retains recursive discovery order and first duplicate-name match.",
+    "Fixture-only BASH_ENV supplies the single mapfile -t use on macOS Bash 3; the upstream source copy is untouched.",
+    "Menu, notification, and database helpers are mocked. Every deletion is guarded to the disposable owned HOME.",
+    "The host sed dialect is preserved, including BSD sed treating upstream GNU BRE \\+ differently; exact expected normalized-icon argv is probed from the host sed. Case-insensitive filesystems may alias original and lowercase icon names, so full tree oracles use actual initial path keys."
+  ],
+  "known_gaps": [
+    "Execute has no explicit exit statement or nonzero final-output facility. No-app/empty-selection branches retain status 1 through native false but lose upstream stdout error message and gain an Execute failure diagnostic.",
+    "Execute has no stderr redirection. update-desktop-database stdout is discarded on success as upstream; its stderr would remain visible, and native failures add Execute diagnostics. find stderr cannot be suppressed for unreadable traversal errors.",
+    "find process-substitution errors are ignored by upstream; Execute pipeline failures are fatal. Missing desktop directories are handled explicitly.",
+    "Native failures preserve status and already-completed filesystem effects; failed finite stdout is discarded."
+  ]
+}

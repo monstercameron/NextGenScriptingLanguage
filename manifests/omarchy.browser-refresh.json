@@ -1,0 +1,57 @@
+{
+  "name": "omarchy.browser-refresh",
+  "binary": "/usr/bin/env",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {
+    "command": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "parameter": "command"
+    },
+    {
+      "literal": "--refresh-platform-policy"
+    },
+    {
+      "literal": "--no-startup-window"
+    }
+  ],
+  "stdio": {
+    "stdout": "discard",
+    "stderr": "discard"
+  },
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 1,
+        "name": "failure",
+        "kind": "failure"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "process.spawn"
+    ],
+    "effects": [
+      "process.spawn"
+    ]
+  }
+}

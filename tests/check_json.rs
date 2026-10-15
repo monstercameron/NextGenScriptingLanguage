@@ -53,20 +53,44 @@ fn valid_check_json_is_static_and_deterministic_with_missing_inputs_and_tools() 
 #[test]
 fn failures_in_all_execution_forms_are_structured_without_side_effects() {
     let root = tempfile::tempdir().unwrap();
-    for source in [
-        "run \"printf\" with arguments [\"before\"]\nthen save to \"forbidden\"\nread \"unterminated\n",
-        "every 0 seconds\n  run \"printf\"\n",
-        "stream from \"printf\"\nshow each line\npipe to \"cat\"\n",
-        "open a screen titled \"broken\"\nplace pane on the left\ndefine a program named pane\n  unknown widget\n",
+    for (source, expected_code, expected_line) in [
+        (
+            "run \"printf\" with arguments [\"before\"]\nthen save to \"forbidden\"\nread \"unterminated\n",
+            "parse.lexical",
+            Some(3),
+        ),
+        (
+            "every 0 seconds\n  run \"printf\"\n",
+            "parse.syntax",
+            Some(1),
+        ),
+        (
+            "stream from \"printf\"\nshow each line\npipe to \"cat\"\n",
+            "check_failed",
+            None,
+        ),
+        (
+            "open a screen titled \"broken\"\nplace pane on the left\ndefine a program named pane\n  unknown widget\n",
+            "check_failed",
+            None,
+        ),
     ] {
         fs::write(root.path().join("broken.program"), source).unwrap();
         let output = invoke(root.path(), &["check", "broken.program", "--json"]);
         let value = report(&output, false);
         assert_eq!(value["diagnostics"].as_array().unwrap().len(), 1);
-        assert_eq!(value["diagnostics"][0]["code"], "check_failed");
-        assert_eq!(value["diagnostics"][0]["severity"], "error");
-        assert!(!value["diagnostics"][0]["message"].as_str().unwrap().is_empty());
-        assert!(!value["diagnostics"][0]["causes"].as_array().unwrap().is_empty());
+        let diagnostic = &value["diagnostics"][0];
+        assert_eq!(diagnostic["code"], expected_code);
+        assert_eq!(diagnostic["severity"], "error");
+        assert!(!diagnostic["message"].as_str().unwrap().is_empty());
+        match expected_line {
+            Some(line) => {
+                assert_eq!(diagnostic["span"]["line"], line);
+                assert_eq!(diagnostic["span"]["precision"], "line");
+                assert!(diagnostic.get("causes").is_none());
+            }
+            None => assert!(!diagnostic["causes"].as_array().unwrap().is_empty()),
+        }
         assert!(!root.path().join("forbidden").exists());
     }
 }
@@ -161,12 +185,16 @@ fn human_errors_and_option_rejection_remain_unchanged() {
         &invoke(root.path(), &["check", "broken.program", "--json"]),
         false,
     );
+    // The human CLI retains the established contextual parser error. Structured
+    // static diagnostics intentionally use a concise message plus source span.
     assert_eq!(
         String::from_utf8(human.stderr).unwrap(),
-        format!(
-            "execute: {}\n",
-            structured["diagnostics"][0]["message"].as_str().unwrap()
-        )
+        "execute: could not parse workflow broken.program: line 1: unterminated quoted string\n"
+    );
+    assert_eq!(structured["diagnostics"][0]["code"], "parse.lexical");
+    assert_eq!(
+        structured["diagnostics"][0]["message"],
+        "unterminated quoted string"
     );
     for args in [
         vec!["run", "broken.program", "--json"],

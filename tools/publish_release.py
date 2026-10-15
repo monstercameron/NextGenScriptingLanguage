@@ -85,10 +85,19 @@ def main():
     if not existing:
         notes = Path("target/release-notes.md")
         notes.parent.mkdir(exist_ok=True)
+        # The published rc4 archives predate the generic applet helper. Keep a
+        # newly generated retry/draft for that historical version accurate.
+        bundled_helpers = (
+            "keep execute and execute-model together"
+            if value == "0.9.0-rc.4"
+            else "keep execute, execute-model and execute-applet together"
+        )
         notes.write_text(
             "Execute "
             + value
-            + "\n\nNative macOS, Linux and Windows builds, including x64 and ARM64. Linux also includes DEB, RPM and sandboxed Flatpak bundles.\n\nDownload the archive for your platform; keep execute and execute-model together. Verify SHA256SUMS and GitHub artifact provenance before installation.\n\n"
+            + "\n\nNative macOS, Linux and Windows builds, including x64 and ARM64. Linux also includes DEB, RPM and sandboxed Flatpak bundles.\n\nDownload the archive for your platform; "
+            + bundled_helpers
+            + ". Verify SHA256SUMS and GitHub artifact provenance before installation.\n\n"
             + ("This is a release candidate. " if "-" in value else "")
             + "Windows is native, without WSL. The Flatpak edition runs inside its sandbox; use native packages for full host automation. Binaries are not Apple-notarized or Authenticode-signed.\n\n[Installation and release policy](https://github.com/"
             + repo

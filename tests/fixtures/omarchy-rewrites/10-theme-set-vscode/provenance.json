@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/omacom/omarchy",
+  "revision": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+  "license": "MIT",
+  "files": {
+    "LICENSE": {
+      "sha256": "717ba1949502290f8e47688ae2e323acd06c8ca47aec9f7596b15f678c1af4a2",
+      "url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/LICENSE"
+    },
+    "bin/omarchy-theme-set-vscode": {
+      "sha256": "8a59aab3cd06f498be18434c442ddd7ea0be05ce2b24c1101dc961e14637fa26",
+      "url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin/omarchy-theme-set-vscode"
+    }
+  }
+}

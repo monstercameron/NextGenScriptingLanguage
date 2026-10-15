@@ -1,0 +1,4 @@
+race at most 2 as winner
+  run number.divide with left 20 and right 4 as quotient
+  run number.add with left 8 and right 9 as sum
+then encode winner as json

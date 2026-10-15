@@ -48,6 +48,7 @@ fn start_producer(shared: &Arc<Shared>, options: &RunOptions, epoch: u64) -> Res
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
+        total_timeout: options.total_timeout,
     };
     drop(state);
     let control = shared.clone();
@@ -434,6 +435,7 @@ fn run_stream(
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
+        total_timeout: options.total_timeout,
     };
     // Persistent streams retain their original native argv until cancellation/restart.
     runtime::live::stream(

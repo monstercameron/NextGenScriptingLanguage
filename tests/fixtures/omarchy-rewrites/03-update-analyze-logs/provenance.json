@@ -1,0 +1,40 @@
+{
+  "upstream_repository": "https://github.com/omacom/omarchy",
+  "revision": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+  "upstream_path": "bin/omarchy-update-analyze-logs",
+  "pinned_url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin/omarchy-update-analyze-logs",
+  "sha256": "d72930596e608ef47004fbf444b2088b5b9a3bf94e4fdfa26b2507eadcedad99",
+  "local_source": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/production-readiness-2026-10-14/omarchy/bin/omarchy-update-analyze-logs",
+  "upstream_modified": false,
+  "input_mapping": {
+    "update_log": {
+      "type": "text",
+      "default": "/tmp/omarchy-update.log",
+      "source": "named Execute input only; new override for isolated testing of upstream constant"
+    },
+    "ignored_arguments": {
+      "type": "list of text",
+      "source": "process arguments",
+      "behavior": "accepted and ignored, matching upstream"
+    },
+    "environment": "No environment variable is read by business logic; native commands inherit caller PATH and environment.",
+    "stdin": "unused"
+  },
+  "behavior": "Run the second native grep only when the first returns 0. Any nonzero second status prints the red warning and blank line. Every ordinary grep exit status is handled; final analyzer status is 0.",
+  "safety": "Exact upstream file runs under /bin/bash with owned temporary HOME and restricted PATH. Test-only grep transport shim maps the fixed /tmp operand to an owned log, records literal argv, runs native grep, or injects selected exit statuses. The real /tmp/omarchy-update.log is never accessed. No update, package, privileged or recovery commands occur in this source.",
+  "limits": [
+    "Host /bin/bash is Apple GNU Bash 3.2.57 and prints literal backslash-e for upstream echo -e. The rewrite prints intended ESC color bytes. Tests use exact separate stdout oracles for this declared host difference; statuses, stderr and native grep traces are compared exactly. BASH_TEST_BINARY may select a modern Bash, where exact warning stdout comparison is automatic.",
+    "Native grep is the host implementation (BSD on this macOS). These fixed substring patterns use compatible grep syntax; no target Arch Linux execution is claimed.",
+    "One native printf replaces two Bash built-in echo calls. Command count and spawn/signal/output-write failure details therefore differ; normal output includes precisely two trailing newlines.",
+    "Execute treats signal, spawn, I/O, timeout and output-limit failures as interpreter failures; captured ordinary grep exit statuses preserve upstream conditional semantics.",
+    "No new Execute grammar was needed."
+  ],
+  "fixtures": {
+    "global-success.log": "364bb0fa45efdc38bf0cbea7133ce1c0f530e0567ba3606795ad6be7fd0ffe71",
+    "success.log": "eb73a0fe20826097192223a5892227a21c6af7d903c32b2ba93905b3ae1a983e",
+    "empty.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "near-match.log": "598b7e3060438d89f12c990f8075521478a7ba72f39f4efc27115bc860da416d",
+    "unrelated.log": "969c2cf01de1c4c9cc922356ae8505b7bdf46bf60c72bc4aec548f780d41f659",
+    "failed.log": "b2c481ad17e7071c36be9f8beb035ccfca74239324cae38956299e5e3814a117"
+  }
+}

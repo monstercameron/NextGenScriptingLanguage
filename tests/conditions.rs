@@ -21,6 +21,7 @@ fn options(cwd: &Path) -> runtime::RunOptions {
         trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
+        total_timeout: None,
     }
 }
 fn run(cwd: &Path, source: &str) -> runtime::RunResult {
@@ -65,6 +66,25 @@ fn scalar_equality_negation_and_nested_branches_run_only_selected_native_command
 }
 
 #[test]
+fn json_arrays_objects_and_null_use_deep_equality() {
+    let dir = tempfile::tempdir().unwrap();
+    for (condition, wanted) in [
+        ("null is null", "yes"),
+        ("[\"a\"] is [\"a\"]", "yes"),
+        ("{\"items\": [1, null]} is {\"items\": [1, null]}", "yes"),
+        ("{\"items\": [1, null]} is {\"items\": [1, 2]}", "no"),
+        ("null is 1", "no"),
+    ] {
+        let source = format!(
+            "if {condition}\n  run \"printf\" with arguments [\"yes\"]\notherwise\n  run \"printf\" with arguments [\"no\"]\n"
+        );
+        let result = run(dir.path(), &source);
+        assert_eq!(result.output, wanted.as_bytes(), "{condition}");
+        assert_eq!(result.launched_processes, 1, "{condition}");
+    }
+}
+
+#[test]
 fn status_capture_controls_program_branches_and_common_result_bindings() {
     let dir = tempfile::tempdir().unwrap();
     let source="run \"false\" and keep status as code\nif code is 0\n  run \"printf\" with arguments [\"success\"] as message\notherwise\n  if code is 1\n    run \"printf\" with arguments [\"expected miss\"] as message\n  otherwise\n    run \"printf\" with arguments [\"other failure\"] as message\nthen \"printf\" with arguments [\"<%s>\", message]\n";
@@ -91,7 +111,6 @@ fn both_branches_are_statically_validated_before_any_effect() {
         "if true is true\n  run \"printf\" with arguments [\"x\"] as local\nthen \"printf\" with arguments [local]\n",
         "if true is true\n  run \"printf\" with arguments [\"x\"] as result\notherwise\n  run \"false\" and keep status as result\n",
         "if true is 1\n  run \"true\"\n",
-        "if [\"a\"] is [\"a\"]\n  run \"true\"\n",
         "if true is true\n  run \"false\" and keep status as code\n  then save to code\n",
         "run \"printf\" with arguments [\"x\"]\nif true is true\n  pipe to \"cat\"\n",
         "if true is true\n  run \"true\"\npipe to \"cat\"\n",
@@ -251,6 +270,41 @@ fn undeclared_host_values_require_matching_scalar_types_at_runtime() {
     .err()
     .unwrap();
     assert!(format!("{error:#}").contains("same type"));
+
+    let matching = parser::parse(
+        "if setting is \"1\"\n  run \"printf\" with arguments [\"same\"]\notherwise\n  run \"printf\" with arguments [\"different\"]\n",
+    )
+    .unwrap();
+    let result = runtime::run_with_context(
+        &matching,
+        &Registry::default(),
+        &options(dir.path()),
+        BTreeMap::from([(String::from("setting"), Value::String(String::from("1")))]),
+        Vec::new(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .unwrap();
+    assert_eq!(result.output, b"same");
+
+    // Structured host values remain eligible for deep JSON equality rather
+    // than being coerced into a scalar type.
+    let json = parser::parse(
+        "if setting is null\n  run \"printf\" with arguments [\"null\"]\notherwise\n  run \"printf\" with arguments [\"record\"]\n",
+    )
+    .unwrap();
+    let result = runtime::run_with_context(
+        &json,
+        &Registry::default(),
+        &options(dir.path()),
+        BTreeMap::from([(
+            String::from("setting"),
+            Value::Record(BTreeMap::from([(String::from("key"), Value::Bool(true))])),
+        )]),
+        Vec::new(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .unwrap();
+    assert_eq!(result.output, b"record");
 }
 
 #[test]

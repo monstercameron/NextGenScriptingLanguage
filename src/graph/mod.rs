@@ -1,0 +1,30 @@
+//! Typed applet graphs with bounded, revisioned event transport.
+//!
+//! Graph contracts reuse the canonical [`crate::contracts::ValueSchema`].
+//! A graph edge never changes a payload's representation: callers must declare
+//! a matching schema or insert an applet that performs an explicit conversion.
+
+mod plan;
+mod syntax;
+mod transport;
+
+pub use crate::contracts::{OutputType, PortDelivery, ValueSchema};
+pub use plan::{
+    BufferPolicy, EdgeSpec, GraphDiagnostic, GraphNode, GraphNodeKind, GraphPlan, PortDirection,
+    PortRef, PortSchema, PortValue,
+};
+pub use syntax::{is_graph, parse};
+pub use transport::{
+    run, EventEnvelope, GraphContext, GraphExecutor, GraphRunOptions, GraphRunResult, GraphSession,
+    NodeIo, PortEmitReport, RuntimeGraphExecutor,
+};
+
+use crate::ast::Invocation;
+
+/// Every applet invocation in the plan, in source order. CLI policy preflight
+/// uses this before starting any graph workers or external effects.
+impl GraphPlan {
+    pub fn invocations(&self) -> impl Iterator<Item = &Invocation> {
+        self.nodes().iter().flat_map(GraphNode::invocations)
+    }
+}

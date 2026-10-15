@@ -15,7 +15,11 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const JOURNAL_VERSION: u32 = 1;
+#[allow(dead_code)]
+mod leaf_cursor;
+
+const LEGACY_JOURNAL_VERSION: u32 = 1;
+const JOURNAL_VERSION: u32 = 2;
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Settings for one checkpoint directory. The directory holds an exclusive lock,
@@ -186,6 +190,22 @@ struct JournalData {
     in_flight: Option<InFlightNode>,
     snapshot: SnapshotRef,
     error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    listener_cursor: Option<ListenerEventCursor>,
+}
+
+/// A local cursor for listener records admitted to a checkpoint. It is not a
+/// producer offset or acknowledgement and cannot recover bytes read from an
+/// uncooperative stdin/pipe before the event snapshot is durably published.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ListenerEventCursor {
+    pub accepted_sequence: u64,
+    pub committed_sequence: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_committed_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,7 +330,7 @@ impl Journal {
         let journal_path = directory.join("journal.json");
         let blobs_directory = directory.join("blobs");
         if options.resume {
-            let data = read_journal(&journal_path)?;
+            let mut data = read_journal(&journal_path)?;
             let expected = Identity {
                 program_path: EncodedPath::from_path(&program_path),
                 initial_cwd: EncodedPath::from_path(&initial_cwd),
@@ -318,10 +338,16 @@ impl Journal {
                 input_signature: input_signature.clone(),
             };
             if data.identity != expected {
-                bail!("checkpoint belongs to a different program, directory, execution mode, or program inputs");
+                bail!(
+                    "checkpoint belongs to a different program, directory, execution mode, or program inputs"
+                );
             }
-            if data.version != JOURNAL_VERSION {
+            if data.version != JOURNAL_VERSION && data.version != LEGACY_JOURNAL_VERSION {
                 bail!("unsupported checkpoint version {}", data.version);
+            }
+            let migrate_legacy = data.version == LEGACY_JOURNAL_VERSION;
+            if migrate_legacy {
+                data.version = JOURNAL_VERSION;
             }
             real_directory(&blobs_directory, "checkpoint blob", false)?;
             restrict_directory(&blobs_directory)?;
@@ -343,6 +369,11 @@ impl Journal {
             // their previous snapshot before waiting for a new event.
             if journal.data.identity.mode == "finite" || journal.has_pending() {
                 journal.preloaded_state = Some(restored);
+            }
+            if migrate_legacy {
+                // The new optional cursor field is omitted when absent, so the
+                // old v1 checksum verifies before this atomic v2 rewrite.
+                journal.persist()?;
             }
             Ok(journal)
         } else {
@@ -376,6 +407,7 @@ impl Journal {
                 in_flight: None,
                 snapshot,
                 error: None,
+                listener_cursor: None,
             };
             let mut journal = Self {
                 directory,
@@ -466,10 +498,67 @@ impl Journal {
         output: &[u8],
         bindings: impl IntoIterator<Item = (&'a str, &'a Value)>,
     ) -> Result<()> {
+        self.begin_execution_parts_with_listener_event(cwd, output, bindings, None)
+    }
+
+    /// Durably admit one listener record and its handler snapshot under a
+    /// local monotonic sequence. This cursor does not acknowledge or seek the
+    /// upstream producer; bytes consumed before this call are outside it.
+    pub fn begin_listener_event_parts<'a>(
+        &mut self,
+        cwd: &Path,
+        output: &[u8],
+        bindings: impl IntoIterator<Item = (&'a str, &'a Value)>,
+    ) -> Result<()> {
+        if !self.data.identity.mode.starts_with("service:") {
+            bail!("listener event cursor is only valid for service checkpoints");
+        }
+        self.begin_execution_parts_with_listener_event(
+            cwd,
+            output,
+            bindings,
+            Some(hex_digest(output)),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn listener_event_cursor(&self) -> Option<ListenerEventCursor> {
+        self.data.listener_cursor.clone()
+    }
+
+    fn begin_execution_parts_with_listener_event<'a>(
+        &mut self,
+        cwd: &Path,
+        output: &[u8],
+        bindings: impl IntoIterator<Item = (&'a str, &'a Value)>,
+        listener_event_digest: Option<String>,
+    ) -> Result<()> {
         if self.data.identity.mode == "finite" {
             bail!("begin_execution is only valid for service checkpoints");
         }
         self.ensure_retry_allowed()?;
+        if self
+            .data
+            .listener_cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.pending_sha256.is_some())
+        {
+            bail!("a listener event is already pending in the checkpoint");
+        }
+        let next_listener_sequence = if listener_event_digest.is_some() {
+            let accepted = self
+                .data
+                .listener_cursor
+                .as_ref()
+                .map_or(0, |cursor| cursor.accepted_sequence);
+            Some(
+                accepted
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("listener event sequence is exhausted"))?,
+            )
+        } else {
+            None
+        };
         let snapshot = store_snapshot_parts(
             &self.blobs_directory,
             cwd,
@@ -482,6 +571,20 @@ impl Journal {
         let previous_in_flight = self.data.in_flight.take();
         let previous_snapshot = std::mem::replace(&mut self.data.snapshot, snapshot);
         let previous_error = self.data.error.take();
+        let previous_listener_cursor = self.data.listener_cursor.clone();
+        if let Some(event_digest) = listener_event_digest {
+            let cursor = self
+                .data
+                .listener_cursor
+                .get_or_insert(ListenerEventCursor {
+                    accepted_sequence: 0,
+                    committed_sequence: 0,
+                    pending_sha256: None,
+                    last_committed_sha256: None,
+                });
+            cursor.accepted_sequence = next_listener_sequence.expect("listener sequence prepared");
+            cursor.pending_sha256 = Some(event_digest);
+        }
         self.data.status = Status::Running;
         if let Err(error) = self.persist() {
             self.data.status = previous_status;
@@ -489,6 +592,7 @@ impl Journal {
             self.data.in_flight = previous_in_flight;
             self.data.snapshot = previous_snapshot;
             self.data.error = previous_error;
+            self.data.listener_cursor = previous_listener_cursor;
             return Err(error);
         }
         self.preloaded_state = None;
@@ -636,8 +740,32 @@ impl Journal {
         if self.data.in_flight.is_some() {
             bail!("cannot finish with a checkpoint node in flight");
         }
+        let listener_commit = match self.data.listener_cursor.as_ref() {
+            Some(cursor) if cursor.pending_sha256.is_some() => {
+                let sequence = cursor.accepted_sequence;
+                if sequence != cursor.committed_sequence.saturating_add(1) {
+                    bail!("listener event cursor sequence is inconsistent");
+                }
+                Some((
+                    sequence,
+                    cursor.pending_sha256.clone().expect("checked some"),
+                ))
+            }
+            Some(cursor) if cursor.accepted_sequence != cursor.committed_sequence => {
+                bail!("listener event cursor is missing a pending digest");
+            }
+            _ => None,
+        };
         let previous_status = self.data.status;
         let previous_error = self.data.error.take();
+        let previous_listener_cursor = self.data.listener_cursor.clone();
+        if let (Some((sequence, digest)), Some(cursor)) =
+            (listener_commit, self.data.listener_cursor.as_mut())
+        {
+            cursor.committed_sequence = sequence;
+            cursor.last_committed_sha256 = Some(digest);
+            cursor.pending_sha256 = None;
+        }
         self.data.status = if self.data.identity.mode == "finite" {
             Status::Completed
         } else {
@@ -646,6 +774,7 @@ impl Journal {
         if let Err(error) = self.persist() {
             self.data.status = previous_status;
             self.data.error = previous_error;
+            self.data.listener_cursor = previous_listener_cursor;
             return Err(error);
         }
         if self.data.identity.mode != "finite" {
@@ -711,7 +840,7 @@ fn real_directory(path: &Path, label: &str, create: bool) -> Result<fs::Metadata
         }
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("reading {label} directory {}", path.display()))
+                .with_context(|| format!("reading {label} directory {}", path.display()));
         }
     };
     #[cfg(windows)]
@@ -785,8 +914,34 @@ fn read_journal(path: &Path) -> Result<JournalData> {
     if serialized_digest(&envelope.data)? != envelope.checksum {
         bail!("checkpoint journal checksum mismatch");
     }
-    if envelope.data.version != JOURNAL_VERSION {
+    if envelope.data.version != JOURNAL_VERSION && envelope.data.version != LEGACY_JOURNAL_VERSION {
         bail!("unsupported checkpoint version {}", envelope.data.version);
+    }
+    if let Some(cursor) = &envelope.data.listener_cursor {
+        if !envelope.data.identity.mode.starts_with("service:") {
+            bail!("checkpoint journal contains a listener cursor outside service mode");
+        }
+        let pending = cursor.pending_sha256.as_deref();
+        let last = cursor.last_committed_sha256.as_deref();
+        let valid_hash = |hash: &str| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        };
+        let consistent = if cursor.accepted_sequence == cursor.committed_sequence {
+            pending.is_none()
+        } else {
+            cursor.accepted_sequence == cursor.committed_sequence.saturating_add(1)
+                && pending.is_some()
+        };
+        if !consistent
+            || pending.is_some_and(|hash| !valid_hash(hash))
+            || last.is_some_and(|hash| !valid_hash(hash))
+            || (cursor.committed_sequence == 0) != last.is_none()
+        {
+            bail!("checkpoint journal contains an invalid listener event cursor");
+        }
     }
     if envelope
         .data
@@ -1135,6 +1290,88 @@ mod tests {
         let mut bytes = Vec::new();
         regular.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"unchanged");
+    }
+
+    #[test]
+    fn listener_event_cursor_is_persisted_before_handler_and_committed_after_emit() {
+        let (_temp, mut options, cwd) = setup();
+        let trigger_hash = "0123456789abcdef";
+        let mut journal =
+            Journal::open(&options, &cwd, &format!("service:{trigger_hash}"), 1024).unwrap();
+        let event = b"event one\n";
+        let event_digest = hex_digest(event);
+        let binding = Value::String(String::from_utf8(event.to_vec()).unwrap());
+        journal
+            .begin_listener_event_parts(&cwd, event, [("event", &binding)])
+            .unwrap();
+        let cursor = journal.listener_event_cursor().unwrap();
+        assert_eq!(cursor.accepted_sequence, 1);
+        assert_eq!(cursor.committed_sequence, 0);
+        assert_eq!(
+            cursor.pending_sha256.as_deref(),
+            Some(event_digest.as_str())
+        );
+        assert!(journal
+            .begin_execution_parts(&cwd, b"wrong next run", std::iter::empty())
+            .is_err());
+        drop(journal);
+
+        // A crash after durable admission restores the exact pending event.
+        options.resume = true;
+        let mut resumed =
+            Journal::open(&options, &cwd, &format!("service:{trigger_hash}"), 1024).unwrap();
+        let restored = resumed.take_restored_state().unwrap();
+        assert_eq!(restored.output, event);
+        assert_eq!(restored.bindings.get("event"), Some(&binding));
+        let cursor = resumed.listener_event_cursor().unwrap();
+        assert_eq!(cursor.accepted_sequence, 1);
+        assert_eq!(cursor.committed_sequence, 0);
+
+        // The completed handler and successful sink delivery advance the
+        // local cursor together when finish persists the idle checkpoint.
+        resumed.begin_node("handler", 0, 1, 1, &cwd, true).unwrap();
+        resumed
+            .complete_node(&state(&cwd, b"handled", "handled"))
+            .unwrap();
+        resumed.finish().unwrap();
+        let cursor = resumed.listener_event_cursor().unwrap();
+        assert_eq!(cursor.accepted_sequence, 1);
+        assert_eq!(cursor.committed_sequence, 1);
+        assert!(cursor.pending_sha256.is_none());
+        assert_eq!(
+            cursor.last_committed_sha256.as_deref(),
+            Some(event_digest.as_str())
+        );
+    }
+
+    #[test]
+    fn checkpoint_v1_without_cursor_migrates_to_v2_on_explicit_resume() {
+        let (_temp, mut options, cwd) = setup();
+        let mut journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        journal.data.version = LEGACY_JOURNAL_VERSION;
+        journal.persist().unwrap();
+        drop(journal);
+
+        options.resume = true;
+        let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        assert_eq!(journal.data.version, JOURNAL_VERSION);
+        assert_eq!(journal.listener_event_cursor(), None);
+        let persisted = read_journal(&options.directory.join("journal.json")).unwrap();
+        assert_eq!(persisted.version, JOURNAL_VERSION);
+    }
+
+    #[test]
+    fn listener_cursor_is_rejected_outside_service_checkpoints() {
+        let (_temp, options, cwd) = setup();
+        let mut journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        journal.data.listener_cursor = Some(ListenerEventCursor {
+            accepted_sequence: 0,
+            committed_sequence: 0,
+            pending_sha256: None,
+            last_committed_sha256: None,
+        });
+        journal.persist().unwrap();
+        assert!(read_journal(&options.directory.join("journal.json")).is_err());
     }
 
     #[test]

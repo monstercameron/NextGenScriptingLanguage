@@ -111,7 +111,7 @@ def populate(root, binaries, target, system=False):
     bindir.mkdir(parents=True)
     share.mkdir(parents=True, exist_ok=True)
     suffix = ".exe" if "windows" in target else ""
-    for name in ["execute", "execute-model"]:
+    for name in ["execute", "execute-model", "execute-applet"]:
         source = binaries / (name + suffix)
         check_binary(source, target)
         dest = bindir / source.name
@@ -202,6 +202,7 @@ cp -a "%s/usr/." %%{buildroot}/usr/
 %%files
 /usr/bin/execute
 /usr/bin/execute-model
+/usr/bin/execute-applet
 /usr/share/execute
 """
         % (pv, str(payload))

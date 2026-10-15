@@ -1,0 +1,9 @@
+{
+  "command": "python3 -m unittest tests/omarchy_rewrites/test_08_webapp_remove.py -v",
+  "binary": "work/omarchy-rewrites-2026-10-15/execute-base (EXECUTE_TEST_BINARY override supported)",
+  "result": "13 tests passed",
+  "elapsed_seconds": 9.325,
+  "static_check": "passed within test_static_check",
+  "scope": "Disposable temporary HOME only; guarded native rm, mocked menu/notification/cache helpers; untouched pinned upstream source as oracle with fixture-only Bash 3 mapfile compatibility.",
+  "parity": "Success stdout, relevant helper/removal argv, exit status, and complete expected tree checked. Known failure stdout/stderr differences explicitly asserted and documented in provenance.json."
+}

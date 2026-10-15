@@ -1,0 +1,40 @@
+{
+  "repository": "https://github.com/omacom/omarchy",
+  "commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+  "path": "bin/omarchy-theme-current",
+  "source_url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin/omarchy-theme-current",
+  "source_sha256": "bda9450876347d59d622c499b2abfaddc0ecd5cec01fcd40ce175ed123e0bd65",
+  "source_git_blob": "1a9072cb79b0ab8cb3d8f378f77e924e53a9cf08",
+  "source_lines": 12,
+  "source_snapshot": "upstream.sh",
+  "mapping": {
+    "HOME": "home (text environment input, empty default when unset; explicit --input home=... overrides)",
+    "positional_arguments": "arguments list (accepted and ignored, like upstream)",
+    "PATH": "native printf/test/sed command resolution"
+  },
+  "platform": "Bash plus Unix printf/test/sed; preserves the host sed dialect. GNU sed supports uppercase replacement \\u; macOS BSD sed emits literal u. Linux desktop behavior not exercised.",
+  "argv_oracle": {
+    "path": [
+      "printf",
+      "%s/.local/state/omarchy/current/theme.name",
+      "<HOME>"
+    ],
+    "test": [
+      "test",
+      "-f",
+      "<HOME>/.local/state/omarchy/current/theme.name"
+    ],
+    "present": [
+      "sed",
+      "-E",
+      "s/(^|-)([a-z])/\\1\\u\\2/g; s/-/ /g",
+      "<HOME>/.local/state/omarchy/current/theme.name"
+    ],
+    "missing": [
+      "printf",
+      "%s\n",
+      "Unknown"
+    ]
+  },
+  "license": "Upstream MIT; root-level Omarchy rewrite provenance supplies the license text."
+}

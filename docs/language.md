@@ -121,15 +121,19 @@ otherwise
   run "printf" with arguments ["Missing regular file: %s\n", path]
 ```
 
-The grammar is `if <scalar> is [not] <scalar>`, followed by an indented command
-body, and optionally `otherwise` at the same indentation with another body.
-Dedenting ends a block; there is no written end marker. Both bodies use the same
-space indentation. Nested conditionals are allowed to 64 levels; use a nested
-`if` within `otherwise` for another case. Comparison is exact text, integer or
-boolean equality, including text newlines. Types must match, with no implicit
-conversion or truthiness. Lists, ordering/arithmetic operators and boolean
-expression combinators are not implemented. `is not` is a contextual operator;
-use quoted strings for literal words.
+The grammar supports `if <value> is [not] <value>`, `if <value> contains
+<value>`, and `if <value> does not contain <value>`, followed by an indented
+command body and optionally `otherwise` at the same indentation with another
+body. Dedenting ends a block;
+there is no written end marker. Both bodies use the same space indentation.
+Nested conditionals are allowed to 64 levels; use a nested `if` within
+`otherwise` for another case. Scalar equality is exact text, integer or boolean
+equality, including text newlines. JSON arrays and objects use deep equality,
+and `null` can be compared directly. There is no truthiness or implicit
+conversion. `contains` checks a substring in text, a value in an array, or a
+key in an object. List ordering, arithmetic operators and boolean expression
+combinators are not implemented. These operators are contextual; use quoted
+strings for literal words.
 
 Only the selected body executes. A conditional does not consume or copy the
 incoming pipeline value. `then` inside the chosen body may consume that value;
@@ -192,7 +196,7 @@ while ready is not 0
 run "cat" with arguments [path]
 ```
 
-`repeat <integer> times`, `for each <name> in <list of text>` and
+`repeat <integer> times`, `for each <name> in <text list or JSON array>` and
 `while <scalar> is [not] <scalar>` introduce an indented body. Dedenting ends
 it. Loops and conditionals can nest to a combined depth of 64, including inside
 same-file reusable programs. `while` uses the same exact, type-matched equality
@@ -208,9 +212,12 @@ a control-flow boundary.
 
 A loop can rebind an existing outer name only with the same statically known
 type. Each write is checked, including status and stdout bindings. Names created
-inside the body are local to that iteration. The `for each` name is text, cannot
-shadow an existing name, and its list is snapshotted once at entry. `repeat`
-also resolves its count once; `while` reevaluates its comparison each iteration.
+inside the body are local to that iteration. The `for each` name cannot shadow
+an existing name, and its input is snapshotted once at entry. A text-list input
+binds each item as text; a JSON array may contain any JSON values and its
+iteration binding has type JSON. A literal list of strings is a text list; a
+heterogeneous or non-text literal list is JSON. `repeat` also resolves its
+count once; `while` reevaluates its comparison each iteration.
 Reading an
 externally supplied binding with an unknown static type is supported, but
 rebinding it in a loop requires establishing a known type before entry. Ordinary
@@ -226,7 +233,13 @@ Services and TUI handlers start a new guard per handler; managed live execution
 starts one per outer node. Resume counts newly entered iterations and does not
 persist a lifetime quota. Cancellation is checked between VM steps, including
 loops containing only builtins. Browser execution also retains its worker
-watchdog. There is no `break` or `continue` in this increment.
+watchdog. `break` and `continue` target the innermost loop in the current
+reusable-program scope and cannot cross a reusable call boundary. `break`
+leaves the loop; `continue` finishes the current iteration and tests the loop
+again. Neither collects iteration output: the pipeline remains the last value
+produced before the transfer, subject to any `finally` body run while
+unwinding. A reusable program may use `return` to exit early; it preserves its
+current pipeline value and restores its caller's bindings and working directory.
 
 A whole loop is one checkpoint/live node, including its body fingerprint.
 Completed loops are skipped on resume. A failure may have performed partial
@@ -235,7 +248,9 @@ there is no per-iteration recovery. Live cursor changes cannot enter a loop's
 interior, and pause/source replacement take effect at its outer boundary.
 Finite scripts, schedule/listener handlers, reusable finite programs and native
 TUI command handlers accept loops. Persistent stream-stage grammar remains
-separate. The browser supports the same finite loop grammar with virtual applets.
+separate. The browser supports finite loop blocks with virtual applets, but its
+pre-effect validation currently rejects `break`, `continue`, reusable-program
+`return`, `try/catch/finally`, and dynamic JSON pointers.
 
 Runnable utilities: [batch checksums](../examples/batch-checksums.program),
 [repeat log](../examples/repeat-log.program), and
@@ -243,6 +258,44 @@ Runnable utilities: [batch checksums](../examples/batch-checksums.program),
 current source; published 0.9.0-rc.4 and historical 0.8.0 binaries do not include them.
 [Regression controls](../benchmarks/loop-regression-2026-10-14.json) retain paired
 release measurements for existing non-loop workloads.
+
+### Transfers and cleanup
+
+`break` and `continue` are valid only inside a loop. `return` is valid only in
+a same-file reusable program. They target the nearest loop or current reusable
+call and cannot escape into a caller's loop. Each transfer unwinds crossed
+`finally` blocks before reaching its destination.
+
+```text
+try
+  run "false" with arguments []
+catch failure
+  then encode failure as json
+finally
+  run "printf" with arguments ["cleanup finished\n"]
+```
+
+The finalizer runs after the handler and can replace its pipeline output, as in
+this example. Save a caught record before cleanup when both it and the cleanup
+output must be retained.
+
+`try` requires a nonempty body and at least one `catch` or `finally`. A single
+`catch <name>` may precede a single `finally`; each block has an indented,
+nonempty body. A caught error is a JSON record. Its fields include `kind`,
+`outcome`, observed `status` and `signal`, captured stdout/stderr/value with
+separate capture flags, per-stage results, `message`, and `effect_certainty`.
+Missing status is `null`, not a fabricated exit code. `then encode failure as
+json` makes the record available as pipeline bytes.
+
+Ordinary failures in the try or catch body enter the catch when present, then
+run finally. Cancellation bypasses catch but still attempts finally. Cleanup is
+best-effort: nested finalizers share one budget of 128 VM steps and five seconds,
+and the parent workflow deadline remains a hard upper bound. If that deadline
+has expired, cleanup can be skipped or stopped. A cleanup failure cannot replace
+the original cancellation; with an ordinary pending failure, a finally failure
+becomes the reported error and retains the earlier failure as context. A transfer
+inside finally overrides a pending ordinary failure or transfer. These rules do
+not make external effects reversible or exactly once.
 
 ### Structured JSON
 
@@ -255,13 +308,25 @@ take integer at "/stargazers_count" from repository as stars
 then "printf" with arguments ["%s: %s stars\n", name, stars]
 ```
 
+Source values include bounded JSON literals: `null`, JSON numbers, nested
+arrays and objects with quoted keys, for example
+`{"user": {"name": "Ada"}, "tags": ["rust", "execute"]}`. Lists may mix
+JSON value types. Literal object keys must be quoted; duplicate keys and
+trailing commas are errors, and nested values are limited to 64 levels. Literal
+numbers retain signed 64-bit integers when possible and otherwise use the JSON
+number representation. This value grammar also applies to loop inputs and
+command parameters.
+
 `then parse json as name` materializes the current finite bytes within
 `--max-output-bytes`, validates one complete UTF-8 JSON value and binds its typed
 tree. It preserves the original pipeline bytes exactly. A subsequent `take`
 reads a binding without changing those bytes. Neither step launches a helper.
 
 `take <text|integer|boolean|list of text|json> at "<pointer>" from <value> as name`
-selects a value using a literal JSON pointer. `/items/0/name` selects an array
+selects a value using a literal JSON pointer. An unquoted identifier after `at`
+uses a text binding as the pointer, for example `take text at pointer from
+repository as name`; that binding must contain a valid pointer when the step
+executes. `/items/0/name` selects an array
 element's field; `~1` means `/`, `~0` means `~`, and `""` selects the root.
 Empty object keys work. Array indexes are unsigned decimal with no leading
 zeroes; `-` does not append or select. Missing fields, invalid pointers, null
@@ -286,9 +351,8 @@ encoded again. Selecting `text` or `list of text` rejects NUL at that boundary.
 
 `accept data as json` accepts a complete JSON value through `--input`, for example
 `--input 'data={"count":7}'`. Inspection and live state expose ordinary JSON
-objects and arrays. The source grammar still has no object/null/decimal literal
-syntax: supply those through JSON input or parsed bytes. Literal defaults use
-the existing text/integer/boolean/list syntax. Known input selections are checked
+objects and arrays. Object, null and numeric literals are also available in
+ordinary value positions. Known input selections are checked
 before earlier effects; fields from runtime command output are checked when
 reached. Both conditional bodies receive static validation and compatible result
 types must be defined on every path before later use.
@@ -300,8 +364,8 @@ before the next selection. Live failures retain the existing explicit `retry`
 control. Parsing and encoding are finite bounded operations, not streaming JSON
 queries; native stream stages remain native commands. The byte bound is not an
 RSS limit, and native command timeouts do not establish a JSON CPU deadline.
-CSV, record mapping/filtering, dynamic pointers and reusable functions remain
-future work. See [github-repo-summary.program](../examples/github-repo-summary.program),
+CSV, record mapping and filtering remain future work. See
+[github-repo-summary.program](../examples/github-repo-summary.program),
 [json-event-names.program](../examples/json-event-names.program) and
 [json-compact.program](../examples/json-compact.program).
 

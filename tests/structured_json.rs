@@ -16,6 +16,7 @@ fn options(cwd: &Path) -> runtime::RunOptions {
         trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
+        total_timeout: None,
     }
 }
 fn run(cwd: &Path, source: &str) -> runtime::RunResult {
@@ -115,20 +116,27 @@ fn malformed_syntax_names_types_and_branch_bindings_are_rejected_before_effects(
         "then parse yaml as doc",
         "take text at \"name\" from doc as value",
         "take text at \"/~2\" from doc as value",
-        "take text at pointer from doc as value",
+        "take text at 2 from doc as value",
         "take number at \"/n\" from doc as n",
         "then encode doc as yaml",
     ] {
         assert!(parser::parse(&format!("{invalid}\n")).is_err(), "{invalid}");
     }
     let dir = tempfile::tempdir().unwrap();
-    for invalid in ["then parse json as doc\n", "take text at \"/name\" from missing as value\n", "accept d as json\nrun \"printf\" with arguments [d]\n", "accept d as json\nif d is true\n  run \"true\"\n", "run \"printf\" with arguments [\"{}\"]\nthen parse json as doc\ntake text at \"/name\" from doc as doc\n", "run \"printf\" with arguments [\"{}\"]\nif true is true\n  then parse json as doc\nthen encode doc as json\n"] {
+    for invalid in ["then parse json as doc\n", "take text at \"/name\" from missing as value\n", "accept d as json\nrun \"printf\" with arguments [d]\n", "accept pointer as integer\naccept doc as json\ntake text at pointer from doc as value\n", "run \"printf\" with arguments [\"{}\"]\nthen parse json as doc\ntake text at \"/name\" from doc as doc\n", "run \"printf\" with arguments [\"{}\"]\nif true is true\n  then parse json as doc\nthen encode doc as json\n"] {
         let program = parser::parse(invalid).unwrap();
         assert!(runtime::validate(&program, &Registry::default()).is_err(), "{invalid}");
     }
     let program=parser::parse("run \"printf\" with arguments [\"effect\"]\nthen save to \"forbidden\"\ntake integer at \"\" from true as wrong\n").unwrap();
     assert!(runtime::run(&program, &Registry::default(), &options(dir.path())).is_err());
     assert!(!dir.path().join("forbidden").exists());
+
+    let unbound_pointer = parser::parse(
+        "accept doc as json\nrun \"printf\" with arguments [\"effect\"]\nthen save to \"pointer-forbidden\"\ntake text at pointer from doc as value\n",
+    )
+    .unwrap();
+    assert!(runtime::run(&unbound_pointer, &Registry::default(), &options(dir.path())).is_err());
+    assert!(!dir.path().join("pointer-forbidden").exists());
 }
 
 #[test]

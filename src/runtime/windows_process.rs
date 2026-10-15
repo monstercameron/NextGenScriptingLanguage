@@ -1,6 +1,6 @@
 // Included only on Windows; the parser, validation, cache, branches, JSON,
 // same-file calls and checkpoint state machine remain shared with Unix.
-use crate::platform::windows::{available, Job};
+use crate::platform::windows::{Job, available};
 use std::os::windows::io::AsRawHandle;
 
 struct ManagedChild {
@@ -53,6 +53,7 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
 fn windows_statuses(
     children: &mut Children,
     calls: &[(&Invocation, &Manifest, usize)],
+    observed_stages: &mut [Option<execution_result::StageResult>],
     options: &RunOptions,
     signals: &Signals,
     last_status: &mut Option<i32>,
@@ -64,23 +65,51 @@ fn windows_statuses(
             if let Some(status) = managed.child.try_wait()? {
                 managed.reaped = true;
                 managed.job.terminate();
+                let code = status.code();
                 if index + 1 == calls.len() {
-                    *last_status = status.code();
+                    *last_status = code;
                 }
+                let stderr = captured_stage_stderr(calls[index].1, signals)
+                    .then(|| managed.diagnostic.clone());
+                observed_stages[index] = Some(if let Some(code) = code {
+                    execution_result::StageResult::exited(
+                        calls[index].2,
+                        calls[index].1.name_for(calls[index].0),
+                        code,
+                        calls[index].1.outcome_for(code),
+                        stderr,
+                    )
+                } else {
+                    execution_result::StageResult::signaled(
+                        calls[index].2,
+                        calls[index].1.name_for(calls[index].0),
+                        execution_result::exit_signal(status),
+                        stderr,
+                    )
+                });
                 lazy_event(
                     options.trace,
                     signals,
                     || serde_json::json!({"event":"exit","line":calls[index].2,"applet":calls[index].1.name_for(calls[index].0),"status":status.code(),"group_elapsed_us":started.elapsed().as_micros()}),
                 )?;
-                if !status.success() && calls[index].0.status_binding.is_none() {
+                let implicit_success = code.is_some_and(|code| {
+                    calls[index].1.outcome_for(code).kind == crate::contracts::OutcomeKind::Success
+                });
+                if !implicit_success && !(calls[index].0.status_binding.is_some() && code.is_some())
+                {
                     drain_diagnostic(managed)?;
                     return Err(CommandFailed {
                         line: calls[index].2,
                         operation: calls[index].1.name_for(calls[index].0).to_owned(),
                         status,
+                        outcome: code.map(|code| calls[index].1.outcome_for(code)),
                         diagnostic: String::from_utf8_lossy(&managed.diagnostic)
                             .trim()
                             .to_owned(),
+                        stderr: captured_stage_stderr(calls[index].1, signals)
+                            .then(|| managed.diagnostic.clone()),
+                        stdout: None,
+                        stages: collect_native_stages(calls, observed_stages, children, signals),
                     }
                     .into());
                 }
@@ -91,6 +120,7 @@ fn windows_statuses(
 }
 #[allow(clippy::too_many_arguments)]
 fn execute_group_with_sink(
+    registry: &Registry,
     calls: &[(&Invocation, &Manifest, usize)],
     input: Input,
     mut prepared_first_call: Option<(PathBuf, Vec<String>)>,
@@ -102,6 +132,7 @@ fn execute_group_with_sink(
     mut sink: Option<&mut streaming::LineSink<'_>>,
 ) -> Result<GroupOutput> {
     let mut children = Children(Vec::with_capacity(calls.len()));
+    let mut observed_stages = vec![None; calls.len()];
     let mut input = Some(input);
     let mut previous = None;
     let mut writer = None;
@@ -110,45 +141,114 @@ fn execute_group_with_sink(
         cancelled: signals.cancelled.clone(),
         registrations: Vec::new(),
         capture_diagnostics: signals.capture_diagnostics,
-        deadline: options
-            .command_timeout
-            .map(|d| {
-                started
-                    .checked_add(d)
-                    .context("command timeout is too large")
-            })
-            .transpose()?,
+        program_modules: Arc::clone(&signals.program_modules),
+        sensitivity_floor: Arc::clone(&signals.sensitivity_floor),
+        deadline: {
+            let command_deadline = options
+                .command_timeout
+                .map(|d| {
+                    started
+                        .checked_add(d)
+                        .context("command timeout is too large")
+                })
+                .transpose()?;
+            match (signals.deadline, command_deadline) {
+                (Some(total), Some(command)) => Some(total.min(command)),
+                (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+                (None, None) => None,
+            }
+        },
     };
     let signals = &bounded;
     let result = (|| -> Result<GroupOutput> {
-        for (index, (call, manifest, line)) in calls.iter().enumerate() {
-            check_deadline(signals.deadline)?;
-            if signals.cancelled.load(Ordering::Relaxed) {
-                bail!("workflow cancelled by signal");
+        if calls.is_empty() {
+            bail!("cannot execute an empty native command group");
+        }
+        for (index, (_, manifest, line)) in calls.iter().enumerate() {
+            if index + 1 != calls.len()
+                && manifest.stdio().is_some_and(|stdio| {
+                    stdio
+                        .stdout
+                        .is_some_and(|mode| mode != invocation_io::StdioDisposition::Capture)
+                })
+            {
+                bail!("line {line}: only the final pipeline applet can discard or inherit stdout");
             }
+        }
+        let terminal_io = invocation_io::ResolvedStdio::resolve(
+            calls.last().expect("nonempty group").1.stdio(),
+            invocation_io::StdioDisposition::Capture,
+            if signals.capture_diagnostics {
+                invocation_io::StdioDisposition::Capture
+            } else {
+                invocation_io::StdioDisposition::Inherit
+            },
+        );
+        if sink.is_some() && !terminal_io.captures_terminal_stdout() {
+            bail!("streaming requires the final applet's stdout to be captured");
+        }
+        let (terminal_call, terminal_manifest, terminal_line) =
+            calls.last().expect("nonempty group");
+        if !terminal_io.captures_terminal_stdout()
+            && (terminal_call.binding.is_some()
+                || calls.iter().any(|(call, _, _)| call.cache)
+                || terminal_manifest.output_kind().is_some())
+        {
+            bail!(
+                "line {terminal_line}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output"
+            );
+        }
+        for (index, (call, manifest, line)) in calls.iter().enumerate() {
+            check_native_abort(calls, &children, &observed_stages, signals)?;
             let (binary, argv) = match prepared_first_call.take() {
                 Some((path, argv)) => (path, GroupArguments::Owned(argv)),
                 None => (
-                    binary_path(manifest.binary_for(call), cwd)?,
+                    binary_path(manifest.binary_for(call), cwd).map_err(|error| {
+                        native_spawn_failure(
+                            format!(
+                                "line {line}: resolving executable for {}: {error:#}",
+                                manifest.name_for(call)
+                            ),
+                            index,
+                            calls,
+                            &children,
+                            &mut observed_stages,
+                            signals,
+                        )
+                    })?,
                     arguments_for_group_call(call, manifest, bindings)?,
                 ),
             };
-            let mut command = Command::new(&binary);
-            match argv {
-                GroupArguments::Owned(argv) => {
-                    command.args(argv);
-                }
-                GroupArguments::Borrowed(argv) => {
-                    command.args(argv.iter().map(|v| v.as_ref()));
-                }
-            }
-            command.current_dir(cwd).stdout(Stdio::piped()).stderr(
+            let mut command = match &argv {
+                GroupArguments::Owned(argv) => crate::capabilities::command_for(
+                    &binary,
+                    argv.iter().map(|argument| OsStr::new(argument.as_str())),
+                    registry,
+                    &manifest.name,
+                    cwd,
+                )?,
+                GroupArguments::Borrowed(argv) => crate::capabilities::command_for(
+                    &binary,
+                    argv.iter().map(|argument| OsStr::new(argument.as_ref())),
+                    registry,
+                    &manifest.name,
+                    cwd,
+                )?,
+            };
+            let resolved_io = invocation_io::ResolvedStdio::resolve(
+                manifest.stdio(),
+                invocation_io::StdioDisposition::Capture,
                 if signals.capture_diagnostics {
-                    Stdio::piped()
+                    invocation_io::StdioDisposition::Capture
                 } else {
-                    Stdio::inherit()
+                    invocation_io::StdioDisposition::Inherit
                 },
             );
+            let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
+            command
+                .current_dir(cwd)
+                .stdout(invocation_io::process_stdio(stdout_disposition))
+                .stderr(invocation_io::process_stdio(resolved_io.stderr));
             let mut bytes = None;
             let stdin = if index > 0 {
                 Stdio::from(previous.take().expect("prior native stdout"))
@@ -164,8 +264,16 @@ fn execute_group_with_sink(
                 }
             };
             command.stdin(stdin);
-            let (mut child, job) = Job::spawn(&mut command)
-                .with_context(|| format!("line {line}: spawning {}", binary.display()))?;
+            let (mut child, job) = Job::spawn(&mut command).map_err(|error| {
+                native_spawn_failure(
+                    format!("line {line}: spawning {}: {error:#}", binary.display()),
+                    index,
+                    calls,
+                    &children,
+                    &mut observed_stages,
+                    signals,
+                )
+            })?;
             let pid = child.id();
             if let Some(data) = bytes {
                 let mut target = child.stdin.take().expect("native stdin");
@@ -192,24 +300,37 @@ fn execute_group_with_sink(
                 || serde_json::json!({"event":"spawn","line":line,"applet":manifest.name_for(call),"binary":binary,"pid":pid}),
             )?;
         }
-        let mut stdout = previous.take().expect("nonempty pipeline");
+        let mut stdout = previous.take();
         let mut output = Vec::new();
         let mut chunk = [0u8; 32768];
-        let mut eof = false;
+        let mut eof = stdout.is_none();
         let mut status = None;
         loop {
-            check_deadline(signals.deadline)?;
-            if signals.cancelled.load(Ordering::Relaxed) {
-                bail!("workflow cancelled by signal");
-            }
-            windows_statuses(&mut children, calls, options, signals, &mut status, started)?;
+            check_native_abort(calls, &children, &observed_stages, signals)?;
+            windows_statuses(
+                &mut children,
+                calls,
+                &mut observed_stages,
+                options,
+                signals,
+                &mut status,
+                started,
+            )?;
             if !eof {
-                match available(stdout.as_raw_handle())? {
+                match available(
+                    stdout
+                        .as_ref()
+                        .expect("captured stdout pipe")
+                        .as_raw_handle(),
+                )? {
                     None => eof = true,
                     Some(0) => {}
                     Some(count) => {
                         let length = chunk.len().min(count);
-                        let count = stdout.read(&mut chunk[..length])?;
+                        let count = stdout
+                            .as_mut()
+                            .expect("captured stdout pipe")
+                            .read(&mut chunk[..length])?;
                         if count == 0 {
                             eof = true;
                         } else {
@@ -218,6 +339,7 @@ fn execute_group_with_sink(
                                     windows_statuses(
                                         &mut children,
                                         calls,
+                                        &mut observed_stages,
                                         options,
                                         signals,
                                         &mut status,
@@ -226,14 +348,38 @@ fn execute_group_with_sink(
                                     return Ok(GroupOutput {
                                         bytes: output,
                                         status,
+                                        diagnostic: children
+                                            .0
+                                            .last()
+                                            .map_or_else(Vec::new, |child| {
+                                                child.diagnostic.clone()
+                                            }),
+                                        stdout_captured: false,
+                                        stages: collect_native_stages(
+                                            calls,
+                                            &observed_stages,
+                                            &children,
+                                            signals,
+                                        ),
                                     });
                                 }
                             } else {
-                                if count > options.max_output_bytes.saturating_sub(output.len()) {
-                                    bail!(
-                                        "output exceeds maximum of {} bytes",
-                                        options.max_output_bytes
-                                    );
+                                let remaining =
+                                    options.max_output_bytes.saturating_sub(output.len());
+                                if count > remaining {
+                                    output.extend_from_slice(&chunk[..remaining]);
+                                    return Err(native_output_limit_failure(
+                                        format!(
+                                            "output exceeds maximum of {} bytes",
+                                            options.max_output_bytes
+                                        ),
+                                        output,
+                                        calls,
+                                        &children,
+                                        &observed_stages,
+                                        signals,
+                                    )
+                                    .into());
                                 }
                                 output.extend_from_slice(&chunk[..count]);
                             }
@@ -249,6 +395,12 @@ fn execute_group_with_sink(
                 return Ok(GroupOutput {
                     bytes: output,
                     status,
+                    diagnostic: children
+                        .0
+                        .last()
+                        .map_or_else(Vec::new, |child| child.diagnostic.clone()),
+                    stdout_captured: terminal_io.captures_terminal_stdout() && sink.is_none(),
+                    stages: collect_native_stages(calls, &observed_stages, &children, signals),
                 });
             }
             std::thread::sleep(Duration::from_millis(1));

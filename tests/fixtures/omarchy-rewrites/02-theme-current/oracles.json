@@ -1,0 +1,84 @@
+[
+  {
+    "name": "ordinary",
+    "stdout": {
+      "gnu": "Rose Pine\n",
+      "bsd": "urose upine\n"
+    },
+    "contents": "rose-pine\n"
+  },
+  {
+    "name": "missing",
+    "stdout": {
+      "gnu": "Unknown\n",
+      "bsd": "Unknown\n"
+    },
+    "kind": "missing"
+  },
+  {
+    "name": "directory-is-not-regular",
+    "stdout": {
+      "gnu": "Unknown\n",
+      "bsd": "Unknown\n"
+    },
+    "kind": "directory"
+  },
+  {
+    "name": "spaces",
+    "stdout": {
+      "gnu": "Rose pine dawn\n",
+      "bsd": "urose pine dawn\n"
+    },
+    "contents": "rose pine dawn\n"
+  },
+  {
+    "name": "hyphens",
+    "stdout": {
+      "gnu": "One  Two Three \n",
+      "bsd": "uone  utwo uthree \n"
+    },
+    "contents": "one--two-three-\n"
+  },
+  {
+    "name": "literal-metacharacters",
+    "stdout": {
+      "gnu": "Rose $(touch CONTENT_PWNED);`touch BACKTICK_PWNED` * Theme\n",
+      "bsd": "urose $(touch CONTENT_PWNED);`touch BACKTICK_PWNED` * utheme\n"
+    },
+    "home_name": "home with spaces -$(touch HOME_PWNED);`whoami`[*]",
+    "contents": "rose-$(touch CONTENT_PWNED);`touch BACKTICK_PWNED`-*-theme\n"
+  },
+  {
+    "name": "empty-file",
+    "stdout": {
+      "gnu": "",
+      "bsd": ""
+    },
+    "contents": ""
+  },
+  {
+    "name": "unterminated-line",
+    "stdout": {
+      "gnu": "Nord",
+      "bsd": "unord"
+    },
+    "contents": "nord"
+  },
+  {
+    "name": "multiple-lines",
+    "stdout": {
+      "gnu": "Nord\nCatppuccin Mocha\n",
+      "bsd": "unord\nucatppuccin umocha\n"
+    },
+    "contents": "nord\ncatppuccin-mocha\n"
+  },
+  {
+    "name": "regular-file-symlink",
+    "stdout": {
+      "gnu": "Tokyo Night\n",
+      "bsd": "utokyo unight\n"
+    },
+    "kind": "symlink",
+    "contents": "tokyo-night\n"
+  }
+]

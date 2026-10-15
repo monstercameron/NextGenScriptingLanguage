@@ -11,9 +11,9 @@ import zipfile
 from release import version
 
 
-def smoke(executable, helper, manifests):
-    executable, helper, manifests = [
-        p.resolve() for p in [executable, helper, manifests]
+def smoke(executable, model_helper, applet_helper, manifests):
+    executable, model_helper, applet_helper, manifests = [
+        p.resolve() for p in [executable, model_helper, applet_helper, manifests]
     ]
     if (
         not (manifests / "printf.json").is_file()
@@ -37,7 +37,9 @@ def smoke(executable, helper, manifests):
         if run("--version").decode().strip() != "execute " + version():
             raise ValueError("installed version differs from source")
         helper_version = (
-            subprocess.check_output([str(helper), "--version"], cwd=folder, timeout=20)
+            subprocess.check_output(
+                [str(model_helper), "--version"], cwd=folder, timeout=20
+            )
             .decode()
             .strip()
         )
@@ -46,7 +48,7 @@ def smoke(executable, helper, manifests):
         if run("model", "--version").decode().strip() != helper_version:
             raise ValueError("delegated helper version differs")
         result = subprocess.run(
-            [str(helper), "--help"],
+            [str(model_helper), "--help"],
             cwd=folder,
             capture_output=True,
             timeout=20,
@@ -56,6 +58,61 @@ def smoke(executable, helper, manifests):
             raise ValueError("invalid installed model helper")
         if b"execute-model" not in run("model", "--help"):
             raise ValueError("bundled helper discovery failed")
+        applet_version = subprocess.check_output(
+            [str(applet_helper), "--version"], cwd=folder, timeout=20
+        ).decode().strip()
+        if applet_version != "execute-applet " + version():
+            raise ValueError("installed applet helper version differs from source")
+        applet_help = subprocess.run(
+            [str(applet_helper), "--help"],
+            cwd=folder,
+            capture_output=True,
+            timeout=20,
+            check=True,
+        )
+        if b"Persistent workers use --worker" not in applet_help.stdout:
+            raise ValueError("invalid installed applet helper")
+        applet_result = subprocess.run(
+            [str(applet_helper), "path.basename", "--args", '{"path":"/tmp/a file.txt"}'],
+            cwd=folder,
+            input=b"",
+            capture_output=True,
+            timeout=20,
+            check=True,
+        )
+        if applet_result.stdout != b'"a file.txt"\n':
+            raise ValueError("installed applet helper returned incorrect data")
+        helper_manifests = folder / "helper-manifests"
+        helper_manifests.mkdir()
+        (helper_manifests / "helper.json").write_text(
+            json.dumps(
+                {
+                    "name": "packaged.helper",
+                    "binary": "@execute-applet",
+                    "parameters": {
+                        "path": {"type": "path", "required": True}
+                    },
+                    "arguments": [
+                        {"literal": "path.basename"},
+                        {"literal": "--args"},
+                        {"json_arguments": True},
+                    ],
+                    "contract": {
+                        "version": 1,
+                        "backend": "command",
+                        "output": {"type": "text", "encoding": "json"},
+                    },
+                }
+            )
+        )
+        workflow = folder / "applet-helper.program"
+        workflow.write_text(
+            'run packaged.helper with path "/tmp/a file.txt" as name\n'
+            "then encode name as json\n"
+        )
+        result = run(workflow, "--manifest-dir", helper_manifests)
+        if result != b'"a file.txt"':
+            raise ValueError("execute did not resolve its adjacent applet helper")
         (folder / "input.json").write_text('{"count":42}')
         workflow = folder / "test.program"
         workflow.write_text(
@@ -68,7 +125,7 @@ def smoke(executable, helper, manifests):
         run("check", workflow)  # automatic discovery, including /usr/share layout
         run("check", workflow, "--manifest-dir", manifests)
         workflow.write_text(
-            "run " + json.dumps(str(helper)) + ' with arguments ["--help"]\n'
+            "run " + json.dumps(str(model_helper)) + ' with arguments ["--help"]\n'
         )
         if b"execute-model" not in run(workflow):
             raise ValueError("installed native executable invocation failed")
@@ -134,6 +191,7 @@ def main():
         smoke(
             prefix / ("bin/execute" + suffix),
             prefix / ("bin/execute-model" + suffix),
+            prefix / ("bin/execute-applet" + suffix),
             prefix / "share/execute/manifests" if args.system else prefix / "manifests",
         )
 

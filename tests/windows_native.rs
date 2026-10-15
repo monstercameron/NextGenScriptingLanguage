@@ -411,6 +411,7 @@ fn captured_stderr_flood_cannot_starve_native_deadlines() {
         trace: false,
         max_output_bytes: 1024,
         command_timeout: Some(Duration::from_millis(150)),
+        total_timeout: None,
     };
     let started = Instant::now();
     let result = flow::runtime::run_with_context(

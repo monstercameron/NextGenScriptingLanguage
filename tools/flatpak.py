@@ -104,6 +104,25 @@ def main():
     )
     if b"execute-model" not in result:
         raise ValueError("Flatpak bundled helper missing")
+    applet_version = subprocess.check_output(
+        ["flatpak", "run", "--command=execute-applet", APP + "//" + branch, "--version"],
+        text=True,
+    ).strip()
+    if applet_version != "execute-applet " + value:
+        raise ValueError("Flatpak applet helper version mismatch")
+    applet_output = subprocess.check_output(
+        [
+            "flatpak",
+            "run",
+            "--command=execute-applet",
+            APP + "//" + branch,
+            "path.basename",
+            "--args",
+            '{"path":"/tmp/a file.txt"}',
+        ]
+    )
+    if applet_output != b'"a file.txt"\n':
+        raise ValueError("Flatpak applet helper returned incorrect data")
     fixture = work / "sandbox.program"
     data = work / "input.json"
     answer = work / "answer.json"

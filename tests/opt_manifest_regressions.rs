@@ -20,7 +20,10 @@ fn opt_manifest_load_error(json: &str) -> String {
     let dir = tempdir().unwrap();
     let path = dir.path().join("manifest.json");
     fs::write(&path, json).unwrap();
-    format!("{:#}", Registry::load(Path::new(&path)).unwrap_err())
+    match Registry::load(Path::new(&path)) {
+        Ok(_) => panic!("invalid manifest unexpectedly loaded"),
+        Err(error) => format!("{error:#}"),
+    }
 }
 
 #[test]

@@ -9,7 +9,7 @@ pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Re
         // input default merely to construct a temporary finite Program.
         let checked = (|| -> Result<()> {
             crate::inputs::validate(&definition.inputs)?;
-            control::validate_shape(&definition.steps)?;
+            control::validate_shape(&definition.steps, true)?;
             let mut flow = control::FlowState {
                 names: definition
                     .inputs
@@ -22,6 +22,7 @@ pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Re
                     .map(|input| (input.name.clone(), input.kind))
                     .collect(),
                 has_data: true,
+                stdout_unavailable: false,
                 started: false,
                 invariant: BTreeMap::new(),
                 invariant_names: BTreeSet::new(),
@@ -34,6 +35,7 @@ pub(super) fn validate_definitions(program: &Program, registry: &Registry) -> Re
                 0..definition.steps.len(),
                 true,
                 false,
+                true,
             )
         })();
         checked.with_context(|| format!("program {name:?} defined at line {}", definition.line))?;
@@ -292,11 +294,22 @@ pub(super) fn preflight(
                     types.insert(name, InputType::Text);
                 }
             }
+            StepKind::TaskGroup { binding, tasks, .. } => {
+                for task in tasks {
+                    native(task, step.line, registry, &values, &types)?;
+                }
+                forget(&mut values, binding);
+                types.insert(binding.clone(), InputType::Json);
+            }
             StepKind::Invoke { call, .. } => {
                 native(call, step.line, registry, &values, &types)?;
                 if let Some(name) = &call.binding {
                     forget(&mut values, name);
-                    types.insert(name.clone(), InputType::Text);
+                    let kind = registry
+                        .resolve_call(call)?
+                        .output_kind()
+                        .unwrap_or(InputType::Text);
+                    types.insert(name.clone(), kind);
                 }
                 if let Some(name) = &call.status_binding {
                     forget(&mut values, name);
@@ -324,6 +337,25 @@ pub(super) fn preflight(
                 if let Ok(source) = structured_source(source, &values) {
                     crate::structured::take(pointer, &source, *kind, step.line)
                         .with_context(|| format!("line {}: program inputs", step.line))?;
+                }
+                forget(&mut values, binding);
+                types.insert(binding.clone(), *kind);
+            }
+            StepKind::TakeJsonDynamic {
+                pointer,
+                source,
+                kind,
+                binding,
+            } => {
+                if !contains_reference(pointer) {
+                    let pointer = known(pointer, &values);
+                    if let Value::String(pointer) = pointer {
+                        crate::structured::validate_pointer(&pointer)?;
+                        if let Ok(source) = structured_source(source, &values) {
+                            crate::structured::take(&pointer, &source, *kind, step.line)
+                                .with_context(|| format!("line {}: program inputs", step.line))?;
+                        }
+                    }
                 }
                 forget(&mut values, binding);
                 types.insert(binding.clone(), *kind);
@@ -444,11 +476,13 @@ mod tests {
             ("loop_1m", 3, 1024 * 1024),
         ] {
             let source = match mode {
-            0 => "run \"true\"\n",
-            1 => "accept payload as json\ntake integer at \"/n\" from payload as number\nthen encode number as json\n",
-            2 => "accept record as text\nread \"missing\" as record\n",
-            _ => "repeat 0 times\n  run \"true\"\n",
-        };
+                0 => "run \"true\"\n",
+                1 => {
+                    "accept payload as json\ntake integer at \"/n\" from payload as number\nthen encode number as json\n"
+                }
+                2 => "accept record as text\nread \"missing\" as record\n",
+                _ => "repeat 0 times\n  run \"true\"\n",
+            };
             let program = crate::parser::parse(source)?;
             let supplied = if size == 0 {
                 BTreeMap::new()
@@ -672,15 +706,15 @@ mod tests {
     fn preflight_borrowing_preserves_errors_scopes_and_caller_values() -> Result<()> {
         let registry = Registry::default();
         let sources = [
-        "run \"true\"\n",
-        "run \"printf\" with arguments [\"%s\", record] as rendered\nthen \"printf\" with arguments [\"%s\", rendered]\n",
-        "read \"missing\" as record\nrun \"printf\" with arguments [\"%s\", record]\n",
-        "accept payload as json\ntake integer at \"/n\" from payload as number\nrun \"printf\" with arguments [\"%s\", number]\n",
-        "repeat count times\n  run \"true\" as rendered\nrun \"printf\" with arguments [\"%s\", rendered]\n",
-        "for each item in files\n  run \"printf\" with arguments [\"%s\", item] as rendered\n",
-        "define a program named worker\n  accept item as text with default \"default\"\n  run \"printf\" with arguments [\"%s\", item] as private\nrun program worker with item record as rendered\nrun \"printf\" with arguments [\"%s\", rendered]\n",
-        "if true is true\n  run \"printf\" with arguments [\"%s\", record] as rendered\notherwise\n  read \"missing\" as rendered\nrun \"printf\" with arguments [\"%s\", rendered]\n",
-    ];
+            "run \"true\"\n",
+            "run \"printf\" with arguments [\"%s\", record] as rendered\nthen \"printf\" with arguments [\"%s\", rendered]\n",
+            "read \"missing\" as record\nrun \"printf\" with arguments [\"%s\", record]\n",
+            "accept payload as json\ntake integer at \"/n\" from payload as number\nrun \"printf\" with arguments [\"%s\", number]\n",
+            "repeat count times\n  run \"true\" as rendered\nrun \"printf\" with arguments [\"%s\", rendered]\n",
+            "for each item in files\n  run \"printf\" with arguments [\"%s\", item] as rendered\n",
+            "define a program named worker\n  accept item as text with default \"default\"\n  run \"printf\" with arguments [\"%s\", item] as private\nrun program worker with item record as rendered\nrun \"printf\" with arguments [\"%s\", rendered]\n",
+            "if true is true\n  run \"printf\" with arguments [\"%s\", record] as rendered\notherwise\n  read \"missing\" as rendered\nrun \"printf\" with arguments [\"%s\", rendered]\n",
+        ];
         let values = [
             Value::String("text 雪; $HOME".into()),
             Value::Integer(2),

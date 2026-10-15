@@ -10,15 +10,31 @@ making the thesis's capabilities real. GUI rendering is a later phase.
 | Requirement | Implemented evidence | Remaining work |
 | --- | --- | --- |
 | Zero friction | A `.program` runs through an installed interpreter without generated application source or a build step. Direct quoted calls in 0.7.0 need no applet wrapper. | Verify clean distribution/install environments across supported platforms. |
-| Shell dominance | Direct commands, native byte pipes, typed declared inputs, named results, file read/save, cwd, timers, signals, and supervised child groups. Pending candidate adds integer native exit-status capture and nested scalar conditions. | Environment overrides, substitution, redirection variants and process/job control. |
-| Structured data | JSON can reach TUI widgets; typed inputs include text, integers, booleans and text lists. Pending candidate adds native JSON parse, typed pointer selection, explicit encoding, JSON inputs and structured checkpoint/live bindings. | CSV, record mapping/filtering, structured streams and broader transformations; existing demos still use jq/awk/sed where needed. |
-| Composability | Applet contracts, typed CLI input interfaces and same-file TUI text ports. Pending candidate adds finite stdin and same-file finite program definitions/calls with explicit inputs, local scope and byte results through the shared native runtime. | External modules, reusable finite helpers inside screens, lifecycle-owned nested services and unbounded terminal-output streaming composition. |
-| Low latency | Native spawning and OS pipes, bounded streams, optimization probes and paired benchmark harnesses. | Complete cold-start, file-change latency, allocation/memory and representative service measurements on macOS and Linux. |
-| AI-native syntax | Deterministic parser, whole-program validation, line errors, check/explain, 150 tested utilities, editor grammar and snippets. | Formal grammar/discovery sufficient for held-out generation, structured diagnostics, repair evaluation and demonstrated productivity. |
-| Robust execution | Timeouts, cancellation, process-group cleanup, sequential event handlers, durable checkpoints and explicit uncertain-effect retry. | First-class retries, concurrency/jobs, error branches and complete signal semantics; wider fault injection. |
-| Universal integration | `run "tool" with arguments [...]` executes installed tools directly; named manifests remain optional validated adapters. Pending candidate has a 110-case Bash differential matrix across 46 native tools, with exact matches and explicit contract differences. | A broader distinct-command/path/platform matrix; keep explicit shell invocation as an opt-in native command. |
-| Security | Literal argv, local peer-checked private control sockets, bounded queues/captures and inspectable execution plans. | Explicit permissions, enforceable capability boundaries and inspectable structured side-effect contracts. Caller privileges are still inherited. |
-| Incremental complexity | Finite commands, pipelines, services and TUI handlers share invocations and runtime supervision. Pending candidate adds scalar conditions, finite JSON operations and same-file finite reuse in that engine. | Modules, jobs and structured streaming from the same primitives; audit existing programs as these arrive. |
+| Shell dominance | Direct commands, native byte pipes, typed declared inputs, named results, file read/save, cwd, timers, signals, integer status capture, scalar conditions, bounded loops and per-applet environment overlays. | Workflow-scoped environment mutation, substitution, redirection variants and general process/job control. |
+| Structured data | JSON parse/get/set/map/filter helpers, recursive typed applet ports, explicit encodings, JSON inputs, structured checkpoint/live values, comment-preserving JSONC operations and bounded typed graph transport are in current source. | CSV, richer general-purpose record transforms and general structured streaming; existing demos still use jq/awk/sed where needed. |
+| Composability | Versioned applet contracts use shared call syntax across commands, in-process operations and JSON-lines workers; typed CLI inputs, same-file finite calls, versioned external modules and typed applet graphs are in current source. | Lifecycle-owned nested services and unbounded terminal-output streaming composition. |
+| Low latency | Native spawning and OS pipes, bounded streams, optimization probes and paired benchmark harnesses. A same-code applet-boundary harness is prepared but has no result yet. | Complete cold-start, file-change latency, allocation/memory and representative service measurements on macOS and Linux. |
+| AI-native syntax | Deterministic parser, whole-program validation, structured source diagnostics, check/explain/inspect, safe executable discovery, typed port matching, 150 tested utilities, editor grammar and snippets. | Formal grammar/discovery sufficient for held-out generation, repair evaluation and demonstrated productivity. |
+| Robust execution | Timeouts, cancellation, process-group cleanup, sequential handlers, durable checkpoints, explicit uncertain-effect retry, typed outcome branches and bounded parallel/race task groups. | General background jobs, comprehensive signal/trap semantics and wider fault injection. |
+| Universal integration | `run "tool" with arguments [...]` executes installed tools directly; named manifests remain optional validated adapters. The Bash differential matrix covers 110 cases across 46 native tools, with exact matches and explicit contract differences. | A broader distinct-command/path/platform matrix; keep explicit shell invocation as an opt-in native command. |
+| Security | Literal argv, local peer-checked private control sockets, bounded queues/captures and inspectable execution plans. Current source adds opt-in strict v1 capability and data-flow policies, environment/path grants, cache-purity checks, exact-origin and persistence controls, and fail-closed macOS/Linux command sandboxes. | Wider platform and adversarial verification, complete ancestor-race protection, filesystem deadlines and controls for untrusted in-process operations. Without `sandbox_required`, native children still run with caller filesystem/network privileges. |
+| Incremental complexity | Finite commands, pipelines, services and TUI handlers share invocations and runtime supervision. Current source includes scalar conditions, finite JSON operations, bounded loops, same-file finite reuse, external modules, task groups and typed graph interfaces. | Lifecycle-owned background jobs and general structured streaming from the same primitives; continue auditing real programs as they arrive. |
+
+### Current applet-contract source candidate
+
+The current source candidate adds recursive typed applet values and ports,
+explicit status/outcome routing and effect certainty, optional result envelopes,
+stdio dispositions, and command, in-process, JSON-lines-worker, program-module
+and remote backends. The bundled `execute-applet` provides path, text, numeric,
+color, JSON and JSONC operations; single-file compare-and-swap writes; and a
+bounded journaled file-only transaction with explicit recovery. Worker framing
+is bounded and workers persist only for the registry lifetime. Single-file
+updates are atomic; transaction files become visible one at a time, and
+external effects are outside its journal. Command timeout and output-capture
+limits do not bound arbitrary file I/O or inherited streams. The
+[contract guide](applet-contracts.md) and [security guide](../SECURITY.md)
+define these boundaries. This is source-candidate behavior, not a
+published-release claim; no boundary benchmark result has been recorded yet.
 
 The five architectural decisions remain explicit: direct process spawning,
 bounded streaming, a hybrid byte/text/record model, runtime-owned concurrency,
@@ -68,17 +84,20 @@ selection feeds native argv/conditions; encoding is explicit and byte-bounded.
 Objects, arrays, null and supported numbers survive checkpoint/live
 state. The same instructions run in finite, listener, scheduled and native TUI
 bodies. These are finite transforms rather than general query/record operators;
-CSV, external modules and structured streaming remain missing. The
+External modules are now available in current source; CSV and general
+structured streaming remain missing. The
 installed 0.8.0 binaries and packaged artifacts do not include this candidate.
 
-The reuse candidate lowers same-file finite program calls into scoped
+The same-file finite reuse candidate lowers program calls into scoped
 instructions, preserving native command execution, byte transport and local cwd
 restoration. Explicit typed inputs replace implicit variable capture; native
 stdout remains the return interface. Recursion, instruction count and serialized
 expansion size are bounded. Calls share cancellation, native deadlines, caches
-and failures, and form conservative whole checkpoint/live nodes. This is useful
-finite reuse across scripts and services, rather than external modules, async
-jobs, nested service lifecycle ownership or helper definitions in screen files.
+and failures, and form conservative whole checkpoint/live nodes. Current source
+also provides versioned external program modules (see
+[program modules](program-modules.md)); async job lifecycle ownership, nested
+service lifecycle ownership and helper definitions in screen files remain
+separate gaps.
 Large typed values still copy for isolation, and live controls expose the caller
 scope. Complete body changes can shift expanded cursor indexes; richer node
 inspection remains open.
@@ -100,6 +119,13 @@ model study, or proof that arbitrary Bash scripts are interchangeable. The nativ
 runtime and installed release are unchanged by this evidence pass.
 
 ## Current refinement
+
+The remaining entries in this section preserve the status of earlier candidate
+reviews at the time they were recorded. For present source status, use the table
+above and the [current applet-contract candidate](#current-applet-contract-source-candidate);
+phrases such as “pending”, “not yet” and “still open” below are time-bound and
+do not supersede those summaries. Published artifacts and historical reports
+remain unchanged.
 
 0.7.0 adds direct executable calls in finite programs, native pipelines,
 listeners, intervals, stream sources/stages and TUI handlers. These use the same

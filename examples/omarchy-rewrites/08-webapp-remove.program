@@ -1,0 +1,74 @@
+#!/usr/bin/env -S execute --
+# Source: omacom/omarchy bin/omarchy-webapp-remove at c668141e9c42b13c80c9ca4ea108e11708c5e8a5.
+# jq performs bounded text/list adaptation; generic path applets derive launcher
+# names with the same suffix-then-basename order as the pinned Bash source.
+accept home as text from environment "HOME"
+accept arguments as list of text from arguments
+accept notify as text from environment "OMARCHY_REMOVE_NOTIFY" with default "true"
+run "printf" with arguments ["%s/.local/share/applications/", home] as desktop_dir
+run "printf" with arguments ["%s/.local/share/icons/hicolor/256x256/apps", home] as icon_dir
+run "printf" with arguments ["%s/.local/share/applications/icons", home] as old_icon_dir
+run "test" with arguments ["-d", desktop_dir] and keep status as directory_status
+if directory_status is 0
+  run "find" with arguments [desktop_dir, "-name", "*.desktop", "-exec", "grep", "-q", "^Exec=.*\\(omarchy-launch-webapp\\|omarchy-webapp-handler\\).*", "{}", ";", "-print0"]
+  pipe to "jq" with arguments ["-Rs", "split(\"\\u0000\") | map(select(length > 0))"]
+otherwise
+  run "printf" with arguments ["[]"]
+then parse json as paths_json
+take list of text at "" from paths_json as paths
+then encode arguments as json
+then "jq" with arguments ["length"] as argument_count
+if argument_count is "0\n"
+  then encode paths as json
+  then "jq" with arguments ["length"] as path_count
+  if path_count is "0\n"
+    run "printf" with arguments ["No web apps to remove.\n"] as app_name
+    run "false"
+  otherwise
+    run "printf" with arguments [""] as menu_lines
+    for each path in paths
+      run path.remove_suffix with path path and suffix ".desktop" as menu_path_without_suffix
+      run path.basename with path menu_path_without_suffix as menu_name
+      run "printf" with arguments ["%s\n", menu_name] as menu_line
+      run text.concat with parts [menu_lines, menu_line] as menu_lines
+    run "printf" with arguments ["%s", menu_lines]
+    pipe to "sort"
+    pipe to "jq" with arguments ["-Rs", "[\"Select web app to remove\"] + (split(\"\\n\")[:-1]) + [\"--\", \"--width\", \"520\", \"--maxheight\", \"520\"]"]
+    then parse json as menu_json
+    take list of text at "" from menu_json as menu_arguments
+    run "omarchy-menu-select" with arguments menu_arguments as menu_output
+    run "printf" with arguments ["%s", menu_output]
+    pipe to "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as app_name
+otherwise
+  then encode arguments as json
+  then "jq" with arguments ["-j", "join(\" \")"] as app_name
+if app_name is ""
+  run "printf" with arguments ["You must select a web app to remove.\n"]
+  run "false"
+run "printf" with arguments ["%s\n", app_name]
+pipe to "tr" with arguments ["[:upper:]", "[:lower:]"]
+pipe to "sed" with arguments ["s/[^[:alnum:]]\\+/-/g; s/^-//; s/-$//"]
+pipe to "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as icon_name
+run "printf" with arguments [""] as desktop_file
+for each path in paths
+  if desktop_file is ""
+    run path.remove_suffix with path path and suffix ".desktop" as suffixless_path
+    run path.basename with path suffixless_path as indexed_name
+    if indexed_name is app_name
+      run "printf" with arguments ["%s", path] as desktop_file
+if desktop_file is ""
+  run "printf" with arguments ["%s/%s.desktop", desktop_dir, app_name] as selected_desktop
+otherwise
+  run "printf" with arguments ["%s", desktop_file] as selected_desktop
+run "rm" with arguments ["-f", selected_desktop]
+run "printf" with arguments ["%s/%s.png", icon_dir, icon_name] as normalized_icon
+run "printf" with arguments ["%s/%s.png", icon_dir, app_name] as named_icon
+run "printf" with arguments ["%s/%s.png", old_icon_dir, app_name] as old_icon
+run "rm" with arguments ["-f", normalized_icon, named_icon, old_icon]
+if notify is not "false"
+  run "omarchy-notification-send" with arguments ["-g", "", "Web app removed", app_name] as notification_output
+otherwise
+  run "printf" with arguments [""] as notification_output
+run "update-desktop-database" with arguments [desktop_dir]
+# Upstream suppresses database output while retaining notification stdout.
+run "printf" with arguments ["%s", notification_output]

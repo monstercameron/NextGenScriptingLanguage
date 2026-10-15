@@ -101,6 +101,8 @@ pub fn run_stream(
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<StreamResult> {
     crate::stream::validate(program, registry)?;
+    let capability_cwd = fs::canonicalize(&options.working_directory)?;
+    crate::capabilities::preflight(&program.pipeline, registry, &capability_cwd)?;
     let configured = configured_inputs(&program.pipeline, registry, options)?;
     let options = configured.as_ref();
     if max_record_bytes == 0 {
@@ -126,16 +128,20 @@ pub fn run_stream(
         records: 0,
     };
     let mut launched = 0;
-    execute_group_with_sink(
-        &calls,
-        Input::Empty,
-        None,
-        &options.inputs,
-        &options.working_directory,
-        options,
-        &mut launched,
-        &signals,
-        Some(&mut sink),
+    super::redact_command_failure(
+        registry,
+        execute_group_with_sink(
+            registry,
+            &calls,
+            Input::Empty,
+            None,
+            &options.inputs,
+            &options.working_directory,
+            options,
+            &mut launched,
+            &signals,
+            Some(&mut sink),
+        ),
     )?;
     Ok(StreamResult {
         records: sink.records,
@@ -258,6 +264,7 @@ mod tests {
             trace: false,
             max_output_bytes: 8,
             command_timeout: Some(Duration::from_secs(3)),
+            total_timeout: None,
         };
         let mut emitted = Vec::new();
         let result = run_stream(&program, &registry, &options, 8, |bytes, _, _| {
@@ -438,7 +445,11 @@ mod framing_evidence {
                 for max in [0, 1, 3, 8, 8192] {
                     for limit in [None, Some(0), Some(1), Some(3)] {
                         for mode in 0..5 {
-                            assert_eq!(observe(&chunks, limit, max, mode, false), observe(&chunks, limit, max, mode, true), "input={input:?} split={split} max={max} limit={limit:?} mode={mode}");
+                            assert_eq!(
+                                observe(&chunks, limit, max, mode, false),
+                                observe(&chunks, limit, max, mode, true),
+                                "input={input:?} split={split} max={max} limit={limit:?} mode={mode}"
+                            );
                             cases += 1;
                         }
                     }

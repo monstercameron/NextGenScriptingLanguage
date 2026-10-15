@@ -60,6 +60,7 @@ fn run_with_input_and_limit(
             trace: false,
             max_output_bytes,
             command_timeout: Some(command_timeout),
+            total_timeout: None,
         },
         BTreeMap::new(),
         input,

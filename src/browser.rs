@@ -1,7 +1,8 @@
 //! Browser host for the shared Rust language core. No OS processes or network access.
 //! Finite byte pipelines are buffered; this is not the native concurrent pipe host.
 use crate::ast::{Connection, Invocation, ListenSource, Program, StepKind, Trigger, Value};
-use crate::manifest::{Builtin, Manifest, Registry};
+use crate::contracts::OutcomeKind;
+use crate::manifest::{AppletOutput, Builtin, Manifest, Registry};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -18,6 +19,7 @@ mod loops;
 include!("runtime/shared.rs");
 
 const LIMIT: usize = 1024 * 1024;
+const VERSIONED_CACHE_MAGIC: &[u8] = b"FLOW-CONTRACT-CACHE\0\x01";
 const APPLETS: &[&str] = &[
     "cat", "cd", "echo", "false", "grep", "head", "ls", "mkdir", "printf", "pwd", "sort", "true",
     "uniq", "wc",
@@ -208,6 +210,23 @@ impl BrowserSession {
         let supplied = crate::inputs::parse_cli(&program.inputs, &request.inputs)?;
         validate_with_arguments(&program, &self.registry, &supplied)?;
         for step in &program.steps {
+            let unsupported = match &step.kind {
+                StepKind::BreakLoop | StepKind::ContinueLoop | StepKind::Return => {
+                    Some("loop transfers and reusable-program return")
+                }
+                StepKind::Try { .. }
+                | StepKind::Catch { .. }
+                | StepKind::Finally
+                | StepKind::EndTry => Some("try/catch/finally"),
+                StepKind::TakeJsonDynamic { .. } => Some("dynamic JSON pointers"),
+                _ => None,
+            };
+            if let Some(feature) = unsupported {
+                bail!(
+                    "line {}: browser host does not support {feature}; use native execute",
+                    step.line
+                );
+            }
             if let StepKind::Invoke { call, .. } = &step.kind {
                 let manifest = self.registry.resolve_call(call)?;
                 let binary = manifest.binary_for(call);
@@ -270,6 +289,16 @@ impl BrowserSession {
                     }
                     StepKind::Otherwise { end } => jump = Some(index + end),
                     StepKind::EndIf => {}
+                    StepKind::BreakLoop
+                    | StepKind::ContinueLoop
+                    | StepKind::Return
+                    | StepKind::Try { .. }
+                    | StepKind::Catch { .. }
+                    | StepKind::Finally
+                    | StepKind::EndTry
+                    | StepKind::TakeJsonDynamic { .. } => {
+                        bail!("control flow feature was not validated for browser execution");
+                    }
                     StepKind::CallProgram {
                         call,
                         inputs,
@@ -341,9 +370,12 @@ impl BrowserSession {
                         self.write(&path, data.clone())?;
                         response.written_files.insert(path);
                     }
+                    StepKind::TaskGroup { .. } => {
+                        bail!("browser host does not support task groups");
+                    }
                     StepKind::Invoke { call, connection } => {
-                        let manifest = self.registry.resolve_call(call)?;
-                        let argv = arguments_for_call(call, manifest, &bindings)?;
+                        let manifest = self.registry.resolve_call(call)?.clone();
+                        let argv = arguments_for_call(call, &manifest, &bindings)?;
                         let binary = manifest.binary_for(call).to_string();
                         if manifest.builtin == Some(Builtin::Cd) {
                             let next = absolute(&argv[0], &cwd.to_string_lossy())?;
@@ -380,31 +412,37 @@ impl BrowserSession {
                         let (output, status) = match cached {
                             Some(bytes) => {
                                 response.cache_hits += 1;
-                                (bytes, 0)
+                                read_cached_output(&manifest, &bytes)?
                             }
                             None => {
                                 response.applet_calls += 1;
                                 self.applet(&binary, &argv, &data, &cwd.to_string_lossy())?
                             }
                         };
-                        if status != 0 && call.status_binding.is_none() {
-                            bail!("{binary} exited with status {status}");
+                        let outcome = manifest.outcome_for(status);
+                        if outcome.kind != OutcomeKind::Success && call.status_binding.is_none() {
+                            bail!(
+                                "line {}: applet {:?} produced {:?} outcome ({status})",
+                                step.line,
+                                manifest.name_for(call),
+                                outcome.name
+                            );
                         }
                         if let Some(name) = &call.status_binding {
-                            bindings.insert(name.clone(), Value::Integer(status));
+                            bindings.insert(name.clone(), Value::Integer(i64::from(status)));
                         }
-                        if call.cache && !hit {
+                        if call.cache && !hit && outcome.kind == OutcomeKind::Success {
+                            let entry = cached_output(&manifest, &output, status);
                             if self.cache.len() >= 256
-                                || self.cache.values().map(Vec::len).sum::<usize>() + output.len()
+                                || self.cache.values().map(Vec::len).sum::<usize>() + entry.len()
                                     > 4 * LIMIT
                             {
                                 self.cache.clear();
                             }
-                            self.cache
-                                .insert(key.expect("cache requested"), output.clone());
+                            self.cache.insert(key.expect("cache requested"), entry);
                         }
                         data = output;
-                        bind_text(call.binding.as_deref(), &data, &mut bindings)?;
+                        bind_applet_output(call, &manifest, &data, status, &mut bindings)?;
                         response.push_trace(|| serde_json::json!({"line":step.line,"operation":binary,"argv":argv,"input_bytes":input_bytes,"output_bytes":data.len(),"cache_hit":hit,"status":status}));
                     }
                 }
@@ -467,6 +505,60 @@ fn bind_text(
             ),
         );
     }
+    Ok(())
+}
+
+fn read_cached_output(manifest: &Manifest, entry: &[u8]) -> Result<(Vec<u8>, i32)> {
+    if manifest.execution_contract().is_none() {
+        return Ok((entry.to_vec(), 0));
+    }
+    let header = VERSIONED_CACHE_MAGIC.len() + std::mem::size_of::<i32>();
+    if entry.len() < header || !entry.starts_with(VERSIONED_CACHE_MAGIC) {
+        bail!("cached versioned applet result has an invalid header");
+    }
+    let status_at = VERSIONED_CACHE_MAGIC.len();
+    let status = i32::from_le_bytes(
+        entry[status_at..status_at + 4]
+            .try_into()
+            .expect("fixed cache status width"),
+    );
+    if manifest.outcome_for(status).kind != OutcomeKind::Success {
+        bail!("cached versioned applet result has a non-success status {status}");
+    }
+    Ok((entry[header..].to_vec(), status))
+}
+
+fn cached_output(manifest: &Manifest, output: &[u8], status: i32) -> Vec<u8> {
+    if manifest.execution_contract().is_none() {
+        return output.to_vec();
+    }
+    let mut entry = Vec::with_capacity(VERSIONED_CACHE_MAGIC.len() + 4 + output.len());
+    entry.extend_from_slice(VERSIONED_CACHE_MAGIC);
+    entry.extend_from_slice(&status.to_le_bytes());
+    entry.extend_from_slice(output);
+    entry
+}
+
+fn bind_applet_output(
+    call: &Invocation,
+    manifest: &Manifest,
+    bytes: &[u8],
+    status: i32,
+    bindings: &mut BTreeMap<String, Value>,
+) -> Result<()> {
+    let Some(name) = call.binding.as_deref() else {
+        return Ok(());
+    };
+    if manifest.execution_contract().is_none() {
+        return bind_text(Some(name), bytes, bindings);
+    }
+    let value = match manifest.decode_output(bytes, status)? {
+        AppletOutput::Value(value) => value,
+        AppletOutput::Bytes(bytes) => {
+            Value::String(String::from_utf8(bytes).context("named results must be UTF-8 text")?)
+        }
+    };
+    bindings.insert(name.to_owned(), value);
     Ok(())
 }
 

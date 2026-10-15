@@ -183,6 +183,7 @@ fn report_release_allocation_counts() {
         trace: false,
         max_output_bytes: 32,
         command_timeout: Some(std::time::Duration::from_secs(5)),
+        total_timeout: None,
     };
     let checked = runtime::run(&input_program, &registry, &input_options).unwrap();
     assert_eq!(checked.output, b"42");
@@ -344,6 +345,7 @@ fn report_release_allocation_counts() {
             trace: false,
             max_output_bytes: 32,
             command_timeout: None,
+            total_timeout: None,
         };
         let mut checkpoint = runtime::CheckpointOptions {
             directory: checkpoint_root.path().join(name),

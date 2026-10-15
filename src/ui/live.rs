@@ -612,6 +612,7 @@ pub(crate) fn run(shared: Arc<Shared>, options: &RunOptions) -> Result<()> {
                 trace: false,
                 max_output_bytes: options.max_output_bytes,
                 command_timeout: options.command_timeout,
+                total_timeout: options.total_timeout,
             };
             app = Some(App::new(&screen, &shared.registry, &options));
             state.ui_dirty = true;
@@ -1011,6 +1012,7 @@ mod bench {
                 trace: false,
                 max_output_bytes: 1024 * 1024,
                 command_timeout: Some(Duration::from_secs(5)),
+                total_timeout: None,
             },
         )
     }
@@ -1050,7 +1052,11 @@ mod bench {
                             let ui = UiState::deserialize(&value)?;
                             legacy_apply(&mut previous, ui.clone())?;
                             candidate.apply_live_state(ui)?;
-                            assert_eq!(handoff_snapshot(&candidate)?,handoff_snapshot(&previous)?,"fixture={name},input={input:?},fullqueue={fill_queue},generation={generation},step={step}");
+                            assert_eq!(
+                                handoff_snapshot(&candidate)?,
+                                handoff_snapshot(&previous)?,
+                                "fixture={name},input={input:?},fullqueue={fill_queue},generation={generation},step={step}"
+                            );
                         }
                     }
                 }

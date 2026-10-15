@@ -1,0 +1,79 @@
+{
+  "name": "number.parse_integer",
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "text": {
+      "type": "string"
+    },
+    "base": {
+      "type": "integer"
+    },
+    "trim_ascii_whitespace": {
+      "type": "boolean"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "number.parse_integer"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "integer",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "number.compute"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "base": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "trim_ascii_whitespace": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

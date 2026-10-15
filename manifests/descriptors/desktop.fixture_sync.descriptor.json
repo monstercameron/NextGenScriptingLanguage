@@ -1,0 +1,29 @@
+{
+  "protocol_version": 1,
+  "identity": {"name": "desktop.fixture_sync", "version": "1.0.0"},
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {"synced": {"type": "boolean"}, "message": {"type": "text"}},
+      "required": ["synced", "message"]
+    },
+    "capabilities": ["network.loopback"],
+    "effects": ["network.loopback"],
+    "ports": {
+      "inputs": {"click": {"schema": {"type": "record", "fields": {}, "required": []}, "delivery": "events"}},
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {"synced": {"type": "boolean"}, "message": {"type": "text"}},
+            "required": ["synced", "message"]
+          },
+          "delivery": "records"
+        }
+      }
+    }
+  }
+}

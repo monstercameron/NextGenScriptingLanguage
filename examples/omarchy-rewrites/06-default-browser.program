@@ -1,0 +1,73 @@
+# Upstream: https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin/omarchy-default-browser
+# Explicit process inputs: first positional selects a browser; the full argv list
+# distinguishes an empty first positional from no positional and accepts ignored extras.
+# Named typed overrides use selection plus supplied_arguments. No environment values
+# are read; HOME/PATH are inherited, and real env -u removes BROWSER for xdg-settings.
+# jq performs only Bash command-substitution trailing-LF normalization.
+# Compatibility limits and isolated differential fixtures accompany this program.
+accept selection as text from argument 1 with default ""
+accept supplied_arguments as list of text from arguments
+
+define a program named set_browser
+  accept desktop_id as text
+  accept message as text
+  accept glyph as text
+  run "env" with arguments ["-u", "BROWSER", "xdg-settings", "set", "default-web-browser", desktop_id] as set_output and keep status as set_status
+  if set_status is 0
+    run "omarchy-notification-send" with arguments ["-g", glyph, message] as notification_output
+    run "printf" with arguments ["%s%s", set_output, notification_output]
+  otherwise
+    run "false"
+
+run "printf" with arguments [""] as supplied
+for each argument in supplied_arguments
+  run "printf" with arguments ["yes"] as supplied
+if supplied is ""
+  run "env" with arguments ["-u", "BROWSER", "xdg-settings", "get", "default-web-browser"] and keep status as query_status
+  then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as desktop_id
+  if desktop_id is "chromium.desktop"
+    run "printf" with arguments ["%s\n", "chromium"]
+  otherwise
+    if desktop_id is "google-chrome.desktop"
+      run "printf" with arguments ["%s\n", "chrome"]
+    otherwise
+      if desktop_id is "brave-browser.desktop"
+        run "printf" with arguments ["%s\n", "brave"]
+      otherwise
+        if desktop_id is "brave-origin.desktop"
+          run "printf" with arguments ["%s\n", "brave-origin"]
+        otherwise
+          if desktop_id is "microsoft-edge.desktop"
+            run "printf" with arguments ["%s\n", "edge"]
+          otherwise
+            if desktop_id is "firefox.desktop"
+              run "printf" with arguments ["%s\n", "firefox"]
+            otherwise
+              if desktop_id is "zen.desktop"
+                run "printf" with arguments ["%s\n", "zen"]
+              otherwise
+                run "env" with arguments ["-u", "BROWSER", "xdg-settings", "get", "default-web-browser"] and keep status as fallback_status
+otherwise
+  if selection is "chromium"
+    run program set_browser with desktop_id "chromium.desktop" and message "Chromium is now the default browser" and glyph ""
+  otherwise
+    if selection is "chrome"
+      run program set_browser with desktop_id "google-chrome.desktop" and message "Chrome is now the default browser" and glyph "󰊯"
+    otherwise
+      if selection is "brave"
+        run program set_browser with desktop_id "brave-browser.desktop" and message "Brave is now the default browser" and glyph "󰖟"
+      otherwise
+        if selection is "brave-origin"
+          run program set_browser with desktop_id "brave-origin.desktop" and message "Brave Origin is now the default browser" and glyph "󰖟"
+        otherwise
+          if selection is "edge"
+            run program set_browser with desktop_id "microsoft-edge.desktop" and message "Edge is now the default browser" and glyph "󰇩"
+          otherwise
+            if selection is "firefox"
+              run program set_browser with desktop_id "firefox.desktop" and message "Firefox is now the default browser" and glyph "󰈹"
+            otherwise
+              if selection is "zen"
+                run program set_browser with desktop_id "zen.desktop" and message "Zen is now the default browser" and glyph "󰖟"
+              otherwise
+                run "printf" with arguments ["%s\n", "Usage: omarchy-default-browser <chromium|chrome|brave|brave-origin|edge|firefox|zen>"]
+                run "false"

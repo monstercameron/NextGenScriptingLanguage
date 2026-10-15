@@ -149,6 +149,13 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                         references(value, &mut needed);
                     }
                 }
+                crate::ast::StepKind::TaskGroup { tasks, .. } => {
+                    for task in tasks {
+                        for value in task.parameters.values() {
+                            references(value, &mut needed);
+                        }
+                    }
+                }
                 crate::ast::StepKind::If { condition, .. } => {
                     references(&condition.left, &mut needed);
                     references(&condition.right, &mut needed);
@@ -163,10 +170,23 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                 },
                 crate::ast::StepKind::TakeJson { source, .. }
                 | crate::ast::StepKind::EncodeJson { source } => references(source, &mut needed),
+                crate::ast::StepKind::TakeJsonDynamic {
+                    pointer, source, ..
+                } => {
+                    references(pointer, &mut needed);
+                    references(source, &mut needed);
+                }
                 crate::ast::StepKind::ParseJson { .. } => {}
                 crate::ast::StepKind::ReadStdin { .. }
                 | crate::ast::StepKind::ReadCallInput { .. }
                 | crate::ast::StepKind::EndCall
+                | crate::ast::StepKind::BreakLoop
+                | crate::ast::StepKind::ContinueLoop
+                | crate::ast::StepKind::Return
+                | crate::ast::StepKind::Try { .. }
+                | crate::ast::StepKind::Catch { .. }
+                | crate::ast::StepKind::Finally
+                | crate::ast::StepKind::EndTry
                 | crate::ast::StepKind::EndLoop { .. }
                 | crate::ast::StepKind::Otherwise { .. }
                 | crate::ast::StepKind::EndIf => {}
@@ -379,6 +399,7 @@ impl App {
                 trace: options.trace,
                 max_output_bytes: options.max_output_bytes,
                 command_timeout: Some(options.command_timeout.unwrap_or(Duration::from_secs(30))),
+                total_timeout: options.total_timeout,
             },
             sender,
             receiver,
@@ -544,6 +565,7 @@ impl App {
                     trace: self.options.trace,
                     max_output_bytes: self.options.max_output_bytes,
                     command_timeout: self.options.command_timeout,
+                    total_timeout: self.options.total_timeout,
                 };
                 execution.parsed_data = None;
                 let bindings = std::mem::take(&mut execution.bindings);
@@ -1966,6 +1988,7 @@ mod tests {
             trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: None,
+            total_timeout: None,
         };
         let mut app = App::new(&screen, &registry, &options);
         let (instance_index, widget_index) = app
@@ -2100,6 +2123,7 @@ mod tests {
             trace: false,
             max_output_bytes: 4096,
             command_timeout: None,
+            total_timeout: None,
         };
         let mut app = App::new(&screen, &registry, &options);
         for value in 0..125 {
@@ -2129,7 +2153,7 @@ mod tests {
     }
     #[test]
     fn timer_runs_only_when_due_and_headless_skips_ticks() {
-        let source="open a screen titled \"test\"\nplace clock on the left\ndefine a program named clock\n  show a badge named status with text \"waiting\"\n  every 60 seconds\n    show \"ticked\" in status\n";
+        let source = "open a screen titled \"test\"\nplace clock on the left\ndefine a program named clock\n  show a badge named status with text \"waiting\"\n  every 60 seconds\n    show \"ticked\" in status\n";
         let screen = super::super::syntax::parse(source).unwrap();
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = Registry::load(&root.join("manifests")).unwrap();
@@ -2140,6 +2164,7 @@ mod tests {
             trace: false,
             max_output_bytes: 4096,
             command_timeout: None,
+            total_timeout: None,
         };
         let mut app = App::new(&screen, &registry, &options);
         app.advance(true);
@@ -2167,6 +2192,7 @@ mod tests {
                 trace: false,
                 max_output_bytes: 4096,
                 command_timeout: None,
+                total_timeout: None,
             },
         )
     }
@@ -2267,14 +2293,18 @@ mod tests {
 
     #[test]
     fn script_writes_update_native_bindings_and_subsequent_widget_reads() {
-        let mut app = test_app("open a screen titled \"order\"\nplace app on the left\ndefine a program named app\n  show a text field named query with value \"old\"\n  show a text panel named output\n  whenever the program opens\n    show \"new\" in query\n    run printf with message query\n    then show the result in output\n");
+        let mut app = test_app(
+            "open a screen titled \"order\"\nplace app on the left\ndefine a program named app\n  show a text field named query with value \"old\"\n  show a text panel named output\n  whenever the program opens\n    show \"new\" in query\n    run printf with message query\n    then show the result in output\n",
+        );
         finish_jobs(&mut app);
         assert_eq!(app.instances[0].views[0].text, "new");
         assert_eq!(app.instances[0].views[1].text, "new\n");
     }
     #[test]
     fn pending_worker_and_post_worker_send_share_a_snapshot_despite_draft_edits() {
-        let mut app = test_app("open a screen titled \"snapshot\"\nplace source on the left\nplace target on the right\nconnect done from source to received in target\ndefine a program named source\n  offer done as text\n  show a text field named query with value \"old\"\n  show a text panel named output\n  whenever the program opens\n    run printf with message query\n    then show the result in output\n    then send the value of query as done\ndefine a program named target\n  accept received as text\n  show a text panel named output\n  whenever received arrives\n    show the result in output\n");
+        let mut app = test_app(
+            "open a screen titled \"snapshot\"\nplace source on the left\nplace target on the right\nconnect done from source to received in target\ndefine a program named source\n  offer done as text\n  show a text field named query with value \"old\"\n  show a text panel named output\n  whenever the program opens\n    run printf with message query\n    then show the result in output\n    then send the value of query as done\ndefine a program named target\n  accept received as text\n  show a text panel named output\n  whenever received arrives\n    show the result in output\n",
+        );
         app.advance(false);
         assert!(app.instances[0].job.is_some());
         app.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
@@ -2308,7 +2338,9 @@ mod tests {
     }
     #[test]
     fn invalid_dynamic_text_field_update_is_atomic() {
-        let mut app = test_app("open a screen titled \"bounds\"\nplace app on the left\ndefine a program named app\n  accept incoming as text\n  show a text field named query with value \"original\"\n  whenever incoming arrives\n    show the result in query\n");
+        let mut app = test_app(
+            "open a screen titled \"bounds\"\nplace app on the left\ndefine a program named app\n  accept incoming as text\n  show a text field named query with value \"original\"\n  whenever incoming arrives\n    show the result in query\n",
+        );
         for value in ["x".repeat(513), "bad\0value".into()] {
             app.enqueue(0, &Event::Input("incoming".into()), value, String::new());
             app.advance(false);
@@ -2318,7 +2350,7 @@ mod tests {
     }
     #[test]
     fn shortcut_control_flow_changes_with_only_the_program_text() {
-        let source="open a screen titled \"test\"\nplace panel on the left\ndefine a program named panel\n  show a badge named status with text \"waiting\"\n  show a button named refresh labelled \"Do work\"\n  whenever refresh is pressed\n    show \"first\" in status\n    then show \"second\" in status\n";
+        let source = "open a screen titled \"test\"\nplace panel on the left\ndefine a program named panel\n  show a badge named status with text \"waiting\"\n  show a button named refresh labelled \"Do work\"\n  whenever refresh is pressed\n    show \"first\" in status\n    then show \"second\" in status\n";
         let mut app = test_app(source);
         app.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
         app.advance(false);
@@ -2346,12 +2378,14 @@ mod tests {
     }
     #[test]
     fn quit_is_a_script_action_and_closes_before_later_queued_work() {
-        let source="open a screen titled \"test\"\nplace panel on the left\ndefine a program named panel\n  show a badge named status with text \"waiting\"\n";
+        let source = "open a screen titled \"test\"\nplace panel on the left\ndefine a program named panel\n  show a badge named status with text \"waiting\"\n";
         let mut app = test_app(source);
         assert!(!app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)));
         app.advance(false);
         assert!(!app.closing);
-        let bound=format!("{source}  whenever key \"Ctrl-Q\" is pressed\n    close the screen\n  whenever key \"Ctrl-Y\" is pressed\n    show \"should not run\" in status\n");
+        let bound = format!(
+            "{source}  whenever key \"Ctrl-Q\" is pressed\n    close the screen\n  whenever key \"Ctrl-Y\" is pressed\n    show \"should not run\" in status\n"
+        );
         let mut app = test_app(&bound);
         app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
         app.key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
@@ -2365,7 +2399,7 @@ mod tests {
     }
     #[test]
     fn application_error_display_requires_a_script_handler() {
-        let source="open a screen titled \"test\"\nplace panel on the left\ndefine a program named panel\n  accept sample as text\n  show a badge named status with text \"untouched\"\n  show a line chart named history\n  whenever sample arrives\n    add field \"count\" to history\n";
+        let source = "open a screen titled \"test\"\nplace panel on the left\ndefine a program named panel\n  accept sample as text\n  show a badge named status with text \"untouched\"\n  show a line chart named history\n  whenever sample arrives\n    add field \"count\" to history\n";
         let mut app = test_app(source);
         app.enqueue(
             0,
@@ -2392,7 +2426,7 @@ mod tests {
 
     #[test]
     fn bars_accept_fractional_values_and_reject_invalid_data_without_partial_update() {
-        let source="open a screen titled \"test\"\nplace panel on the left\ndefine a program named panel\n  accept sample as text\n  show a bar chart named usage\n    label each bar from \"name\"\n    size each bar from \"value\"\n    label bar values with \"%\"\n  whenever sample arrives\n    show JSON as bars in usage\n";
+        let source = "open a screen titled \"test\"\nplace panel on the left\ndefine a program named panel\n  accept sample as text\n  show a bar chart named usage\n    label each bar from \"name\"\n    size each bar from \"value\"\n    label bar values with \"%\"\n  whenever sample arrives\n    show JSON as bars in usage\n";
         let mut app = test_app(source);
         app.enqueue(0,&Event::Input("sample".into()),r#"[{"name":"fraction","value":0.1},{"name":"multi","value":150.5},{"name":"idle","value":0}]"#.into(),String::new());
         app.advance(false);
@@ -2905,6 +2939,7 @@ mod tests {
             trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: None,
+            total_timeout: None,
         };
         let mut app = App::new(&screen, &registry, &options);
         for instance in &mut app.instances {
@@ -2993,6 +3028,7 @@ mod tests {
             trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: None,
+            total_timeout: None,
         };
         let mut app = App::new(&screen, &registry, &options);
         for instance in &mut app.instances {
@@ -3084,6 +3120,7 @@ mod tests {
             trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: None,
+            total_timeout: None,
         };
         let mut app = App::new(&screen, &registry, &options);
         for instance in &mut app.instances {

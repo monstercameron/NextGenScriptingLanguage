@@ -1,4 +1,5 @@
 //! Local, opt-in JSON control plane for real program execution state.
+pub(crate) mod auth;
 pub(crate) mod state;
 mod transport;
 #[cfg(windows)]
@@ -7,7 +8,9 @@ mod worker;
 #[cfg(windows)]
 use windows_transport::{Listener as UnixListener, Stream as UnixStream};
 
+use self::auth::{AgentAuthPolicy, AgentCredential, RequestAuth};
 use self::state::*;
+use crate::capabilities::CapabilityPolicy;
 use crate::manifest::Registry;
 use crate::runtime::RunOptions;
 use anyhow::{bail, Context, Result};
@@ -57,22 +60,25 @@ fn error_response(error: &anyhow::Error) -> Json {
 }
 fn schema() -> Json {
     json!({"ok":true,"protocol":"execute.live/1","execute_version":env!("CARGO_PKG_VERSION"),"commands":{
-        "serve":"execute live serve FILE --socket PATH [--paused] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
-        "read":"execute live read [JSON_POINTER] --socket PATH",
-        "create":"execute live create JSON_POINTER --json JSON --socket PATH [--if-revision N]",
-        "update":"execute live update JSON_POINTER --json JSON --socket PATH [--if-revision N]",
-        "delete":"execute live delete JSON_POINTER --socket PATH [--if-revision N]",
-        "patch":"execute live patch --json '[{\"op\":\"replace\",\"path\":\"/bindings/name\",\"value\":\"value\"}]' --socket PATH [--if-revision N]",
-        "control":"execute live control pause|resume|step|cancel|retry|reset|restart|restart-source|stop --socket PATH [--if-revision N]",
-        "event":"execute live event --json '{\"type\":\"press\",\"program\":\"chooser\",\"widget\":\"track\"}' --socket PATH",
-        "send":"execute live send --json '{\"text\":\"event\\n\"}' --socket PATH",
-        "wait":"execute live wait [JSON_POINTER] --after REVISION --timeout-ms 1000 --socket PATH",
-        "request":"execute live request --json JSON --socket PATH"},
+        "serve":"execute live serve FILE --socket PATH [--paused] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--agent-policy FILE] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
+        "token-create":"execute live token-create --agent ID --token-file FILE (creates a new private file and displays the token once)",
+        "read":"execute live read [JSON_POINTER] --socket PATH [--agent ID --token-file FILE]",
+        "create":"execute live create JSON_POINTER --json JSON --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
+        "update":"execute live update JSON_POINTER --json JSON --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
+        "delete":"execute live delete JSON_POINTER --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
+        "patch":"execute live patch --json '[{\"op\":\"replace\",\"path\":\"/bindings/name\",\"value\":\"value\"}]' --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
+        "control":"execute live control pause|resume|step|cancel|retry|reset|restart|restart-source|stop --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
+        "event":"execute live event --json '{\"type\":\"press\",\"program\":\"chooser\",\"widget\":\"track\"}' --socket PATH [--agent ID --token-file FILE]",
+        "send":"execute live send --json '{\"text\":\"event\\n\"}' --socket PATH [--agent ID --token-file FILE]",
+        "wait":"execute live wait [JSON_POINTER] --after REVISION --timeout-ms 1000 --socket PATH [--agent ID --token-file FILE]",
+        "request":"execute live request --json JSON --socket PATH [--agent ID --token-file FILE]; raw JSON may include top-level auth when a server agent policy is enabled"},
         "value_sources":["--json JSON (use - to read stdin)","--json-file FILE","--text-file FILE (JSON string)"],
         "inspection":"execute inspect FILE [--input NAME=VALUE] returns execute.inspect/1 JSON input types/defaults/missing values or TUI component ports without executing applets",
         "declared_inputs":"top-level accept declarations constrain /bindings: required inputs must exist, defaults materialize at startup, typed values cannot be deleted or changed to another type; inspect FILE discovers the contract",
         "state":{"source":".program text, <=64 KiB; replace source and cursor atomically to change the pending workflow","cwd":"existing absolute working directory","bindings":"real named values; string/bool/integer/list map to native parameters; objects/null/floats become JSON text in argv","input":"next pipeline input: {text:UTF8} or {bytes:[0..255]}","cursor":"zero-based next statement; native pipeline groups, conditionals, reusable calls and whole loops are indivisible","inbox":"bounded listener input queue; listen to stdin uses this queue in managed mode","user":"arbitrary JSON metadata object","ui":"live component inputs, widget state, focus, and queued UI events for a screen program"},
         "read_only":["/runtime","/events"],"runtime_fields":["status","in_flight","active_node","effects_may_be_incomplete","error","runs_completed","nodes_completed","completed_native_launches","cache_hits","last_output","frame","ui_applied_revision","ui_errors"],
+        "authorization":{"mode":"same_user_trusted_without_policy","opt_in":"serve --agent-policy FILE requires every request to carry an authorized --agent ID --token-file FILE credential; policy stores token hashes; credentials are not persisted or echoed","boundary":"same-UID clients remain inside the existing OS ownership boundary; bearer-token scopes are cooperative client authorization and do not isolate a hostile same-UID process that can read private token files","permissions":["read","edit","control","input","stop"]},
+        "capability_policy_scope":"--capability-policy grants applet capabilities only; use --data-flow-policy to enforce remote-origin and persistence data-flow grants",
         "semantics":{"revision":"monotonic; if_revision protects atomic writes against concurrent edits and execution","create":"requires absent object key; arrays insert at index or -","update":"requires existing path","delete":"requires existing path; required document fields cannot be removed","patch":"atomic RFC 6902 add/replace/remove/test operations; all changes validate before commit","pause":"finish the current native group, then pause; streams pause at their next emitted record","cancel":"cancel/reap the active native group; retry explicitly acknowledges possibly incomplete effects","source":"in-memory replacement only; source file is not rewritten; changing the native listener source/cwd restarts its producer and may replay input; handler-only edits preserve it","reset":"reset cursor/cwd/input and local result bindings; preserves external bindings and user metadata; does not undo effects","restart":"reset and run; may repeat effects","completed":"the control server remains alive for inspection and edits until stop","stream":"native argv is fixed for the lifetime of a stream; cancel and wait before editing/restarting its pipeline","ui":"actual renderer state under /ui/programs/NAME/widgets/ID; edit text, items/selection, table rows, bars, chart series and focus; component input changes invoke .program handlers; event dispatch supports press/submit/choose/open; source replacement changes layout and widget identities","durability":"ephemeral live state; separate from durable checkpoints; completed effects are never rolled back"},
         "limits":{"request_bytes":MAX_MESSAGE,"state_bytes":MAX_STATE,"inbox_records":MAX_QUEUE,"event_history":64,"concurrent_clients":16,"wait_timeout_ms":10000,"request_read_timeout_ms":2000,"response_write_timeout_ms":2000,"client_response_timeout_ms":12000},
         "supported":["finite","interval","calendar","stdin listener via send/inbox","native applet listener","persistent native stream","interactive TUI","persistent headless TUI"]})
@@ -110,6 +116,9 @@ fn options(args: &[String]) -> Result<Options> {
                 "--bindings",
                 "--state-file",
                 "--manifest-dir",
+                "--capability-policy",
+                "--data-flow-policy",
+                "--agent-policy",
                 "--working-dir",
                 "--cache-dir",
                 "--command-timeout-ms",
@@ -120,6 +129,8 @@ fn options(args: &[String]) -> Result<Options> {
                 "--if-revision",
                 "--after",
                 "--timeout-ms",
+                "--agent",
+                "--token-file",
             ];
             if !allowed.contains(&value.as_str()) {
                 bail!("unknown live option {value}");
@@ -229,6 +240,31 @@ fn dispatch(
         }
         return Ok(schema());
     }
+    if command == "token-create" {
+        let opts = options(&args[1..])?;
+        only(&opts, &["--agent", "--token-file"], false)?;
+        if !opts.positional.is_empty() {
+            bail!("token-create takes no positional arguments");
+        }
+        let agent = opts
+            .flags
+            .get("--agent")
+            .context("token-create requires --agent ID")?;
+        let token_file = opts
+            .flags
+            .get("--token-file")
+            .context("token-create requires --token-file FILE")?;
+        let credential = AgentCredential::create_token_file(agent, Path::new(token_file))
+            .context("creating live agent token file")?;
+        let auth = credential.request_auth();
+        return Ok(json!({
+            "ok": true,
+            "agent": auth.agent,
+            "token_file": token_file,
+            "token_sha256": credential.token_sha256(),
+            "token": auth.token
+        }));
+    }
     let opts = options(&args[1..])?;
     let socket = PathBuf::from(
         opts.flags
@@ -243,6 +279,9 @@ fn dispatch(
                 "--bindings",
                 "--state-file",
                 "--manifest-dir",
+                "--capability-policy",
+                "--data-flow-policy",
+                "--agent-policy",
                 "--working-dir",
                 "--cache-dir",
                 "--command-timeout-ms",
@@ -306,6 +345,41 @@ fn dispatch(
             Some(path) => Registry::load(Path::new(path)),
             None => Registry::load_optional(&default_manifests),
         }?;
+        let registry = if let Some(path) = opts.flags.get("--capability-policy") {
+            let bytes = limited_read(Path::new(path), 1024 * 1024)
+                .with_context(|| format!("reading capability policy {path}"))?;
+            let source =
+                String::from_utf8(bytes).context("capability policy must be UTF-8 JSON")?;
+            let policy = CapabilityPolicy::from_json(&source)
+                .with_context(|| format!("loading capability policy {path}"))?;
+            registry.set_host_state(Some(policy));
+            registry
+        } else {
+            registry
+        };
+        let registry = if let Some(path) = opts.flags.get("--agent-policy") {
+            let policy = AgentAuthPolicy::load(Path::new(path))
+                .with_context(|| format!("loading agent authorization policy {path}"))?;
+            registry.set_host_state(Some(policy));
+            registry
+        } else {
+            registry
+        };
+        let registry = if let Some(path) = opts.flags.get("--data-flow-policy") {
+            let policy = crate::security::DataFlowPolicy::load(Path::new(path))
+                .map_err(|error| anyhow::anyhow!("loading data-flow policy {path}: {error}"))?;
+            registry.set_host_state(policy);
+            registry
+        } else {
+            registry
+        };
+        if opts.flags.contains_key("--capability-policy")
+            && !opts.flags.contains_key("--data-flow-policy")
+        {
+            crate::runtime::write_diagnostic(
+                b"warning: --capability-policy grants applet capabilities only; without --data-flow-policy, remote egress and persistence are not protected by data-flow grants\n",
+            );
+        }
         let initial_plan = Plan::parse(&doc.source)?;
         for input in &initial_plan.program.inputs {
             if let Some(default) = &input.default {
@@ -379,6 +453,7 @@ fn dispatch(
             trace: false,
             max_output_bytes: max_bytes,
             command_timeout: timeout,
+            total_timeout: None,
         };
         return serve(&socket, shared, options);
     }
@@ -392,6 +467,8 @@ fn dispatch(
             "--if-revision",
             "--after",
             "--timeout-ms",
+            "--agent",
+            "--token-file",
         ],
         false,
     )?;
@@ -470,6 +547,25 @@ fn dispatch(
             .any(|key| opts.flags.contains_key(*key))
     {
         bail!("this command does not take a JSON value");
+    }
+    let agent = opts.flags.get("--agent");
+    let token_file = opts.flags.get("--token-file");
+    if agent.is_some() != token_file.is_some() {
+        bail!("--agent and --token-file must be supplied together");
+    }
+    if let Some(agent) = agent {
+        let credential = AgentCredential::from_token_file(agent, Path::new(token_file.unwrap()))
+            .context("loading live agent credential")?;
+        let object = request
+            .as_object_mut()
+            .context("request must be a JSON object")?;
+        if object.contains_key("auth") {
+            bail!("do not include auth in JSON when using --agent and --token-file");
+        }
+        object.insert(
+            "auth".into(),
+            serde_json::to_value(credential.request_auth())?,
+        );
     }
     let mut encoded = serde_json::to_vec(&request)?;
     if encoded.len() >= MAX_MESSAGE {
@@ -654,7 +750,7 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
         if bytes.len() > MAX_MESSAGE {
             bail!("request exceeds 1 MiB");
         }
-        let value: Json = serde_json::from_slice(&bytes)?;
+        let mut value: Json = serde_json::from_slice(&bytes)?;
         if matches!(
             value.get("op").and_then(Json::as_str),
             Some("create" | "update" | "send" | "event")
@@ -665,8 +761,66 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
         let op = value
             .get("op")
             .and_then(Json::as_str)
-            .context("request needs op")?;
-        let allowed: &[&str] = match op {
+            .context("request needs op")?
+            .to_owned();
+        let action = value
+            .get("action")
+            .and_then(Json::as_str)
+            .map(str::to_owned);
+        let auth = value
+            .get("auth")
+            .cloned()
+            .map(serde_json::from_value::<RequestAuth>)
+            .transpose()
+            .context("auth must contain an agent and token")?;
+        let agent_policy = shared.registry.host_state::<Option<AgentAuthPolicy>>();
+        if let Some(policy) = agent_policy.as_ref() {
+            let required = auth::required_permission(&op, action.as_deref()).ok();
+            let authorization = policy.authorize(auth.as_ref(), &op, action.as_deref());
+            if let Some(required) = required {
+                let (permission, risk) = match required {
+                    auth::AgentPermission::Read => ("read", crate::security::PolicyRisk::Low),
+                    auth::AgentPermission::Edit => ("edit", crate::security::PolicyRisk::High),
+                    auth::AgentPermission::Control => {
+                        ("control", crate::security::PolicyRisk::High)
+                    }
+                    auth::AgentPermission::Input => ("input", crate::security::PolicyRisk::High),
+                    auth::AgentPermission::Stop => ("stop", crate::security::PolicyRisk::High),
+                };
+                let (outcome, reason) = if authorization.is_ok() {
+                    (
+                        crate::security::PolicyDecisionOutcome::Approved,
+                        crate::security::PolicyDecisionReason::PolicyMatched,
+                    )
+                } else {
+                    (
+                        crate::security::PolicyDecisionOutcome::Denied,
+                        crate::security::PolicyDecisionReason::MissingGrant,
+                    )
+                };
+                let subject = auth
+                    .as_ref()
+                    .map_or("unknown", |credential| credential.agent.as_str());
+                crate::security::record_policy_decision(
+                    &shared.registry,
+                    subject,
+                    &format!("live.{permission}"),
+                    None,
+                    risk,
+                    outcome,
+                    reason,
+                );
+            }
+            authorization
+                .map_err(|error| anyhow::anyhow!("live request is unauthorized: {error}"))?;
+        } else if auth.is_some() {
+            bail!("live agent credentials require serve --agent-policy");
+        }
+        value
+            .as_object_mut()
+            .context("request must be an object")?
+            .remove("auth");
+        let allowed: &[&str] = match op.as_str() {
             "read" => &["op", "path"],
             "create" | "update" => &["op", "path", "value", "if_revision"],
             "delete" => &["op", "path", "if_revision"],

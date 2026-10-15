@@ -1,0 +1,7 @@
+{
+  "protocol_version": 1,
+  "request_id": "caller-482",
+  "operation": "echo",
+  "arguments": {"name": "sample"},
+  "input": {"encoding": "base64", "data": "AP8K"}
+}

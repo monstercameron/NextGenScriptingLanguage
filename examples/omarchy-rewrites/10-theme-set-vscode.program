@@ -1,0 +1,398 @@
+# Port of MIT-licensed omacom/omarchy bin/omarchy-theme-set-vscode,
+# revision c668141e9c42b13c80c9ca4ea108e11708c5e8a5. Untouched source/license
+# and measured limits: tests/fixtures/omarchy-rewrites/10-theme-set-vscode/.
+# Editor order, decisions, failure routes and effects live here. Generic applets
+# parse JSON, edit JSONC, inspect paths and perform snapshot-CAS filesystem updates.
+
+define a program named report_failure
+  accept operation as text
+  accept path as text
+  accept status as integer
+  run "printf" with arguments ["Warning: %s failed for %s (status %s)\n", operation, path, status]
+  then "awk" with arguments ["{ print > \"/dev/stderr\" }"]
+
+define a program named write_if_missing
+  accept path as text
+  accept content as text
+  run fs.write_atomic with path path and expected_content_hash "missing" and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+  if write_status is not 0
+    run program report_failure with operation "atomic file creation" and path path and status write_status
+
+define a program named save_text_atomic
+  accept path as text
+  accept content as text
+  run fs.snapshot with path path as prior_snapshot and keep status as snapshot_status
+  if snapshot_status is 0
+    take text at "/value/content_hash" from prior_snapshot as expected_hash
+    run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+    if write_status is not 0
+      run program report_failure with operation "atomic file update" and path path and status write_status
+  otherwise
+    take text at "/outcome" from prior_snapshot as outcome
+    if outcome is "absence"
+      run fs.write_atomic with path path and expected_content_hash "missing" and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+      if write_status is not 0
+        run program report_failure with operation "atomic file creation" and path path and status write_status
+    otherwise
+      run program report_failure with operation "atomic file snapshot" and path path and status snapshot_status
+
+# Return one JSON string property as compact JSON source. This keeps arbitrary
+# quotes, backslashes, control characters, and trailing line feeds intact while
+# allowing generic JSON applets to enforce the field type.
+define a program named read_json_string_property
+  accept document as json
+  accept pointer as text
+  accept path as text
+  # Probe status before binding an output: json.get encodes absence as exit 1
+  # and has no nullable JSON value contract. This captures the result and
+  # routes absence explicitly, then binds the JSON output only on success.
+  run json.get with document document and pointer pointer and keep status as property_status
+  if property_status is 0
+    run json.get with document document and pointer pointer as property
+    run json.stringify with value property as property_source
+    if property_source is "null"
+      run program report_failure with operation "JSON property must be a string" and path path and status 2
+      run "printf" with arguments ["\"\""]
+    otherwise
+      run "printf" with arguments ["[{\"type\":\"string\"}]"] as predicate_source
+      run json.parse with text predicate_source as string_predicate
+      run text.concat with parts ["[", property_source, "]"] as singleton_source
+      run json.parse with text singleton_source as singleton
+      run json.filter with document singleton and where string_predicate as matching_strings
+      then encode matching_strings as json
+      then parse json as matches_json
+      run json.get with document matches_json and pointer "/0" and keep status as type_status
+      if type_status is 0
+        run json.get with document matches_json and pointer "/0" as string_value
+        then encode string_value as json
+      otherwise
+        if type_status is 1
+          run program report_failure with operation "JSON property must be a string" and path path and status 2
+          run "printf" with arguments ["\"\""]
+        otherwise
+          run program report_failure with operation "JSON property type read" and path path and status type_status
+          run "printf" with arguments ["\"\""]
+  otherwise
+    if property_status is 1
+      # jq's `.field // empty` policy is an empty string for absent values.
+      run "printf" with arguments ["\"\""]
+    otherwise
+      run program report_failure with operation "JSON property read" and path path and status property_status
+      run "printf" with arguments ["\"\""]
+
+define a program named remove_file_cas
+  accept home as text
+  accept path as text
+  accept expected_hash as text
+  run "printf" with arguments ["{}"]
+  then parse json as operation
+  then encode path as json
+  then parse json as path_value
+  run json.set with document operation and pointer "/path" and value path_value as operation_with_path
+  then encode expected_hash as json
+  then parse json as hash_value
+  run json.set with document operation_with_path and pointer "/expected_content_hash" and value hash_value as operation_with_hash
+  run "printf" with arguments ["\"remove\""]
+  then parse json as action_value
+  run json.set with document operation_with_hash and pointer "/action" and value action_value as operation_with_action
+  run "printf" with arguments ["[]"]
+  then parse json as empty_operations
+  run json.set with document empty_operations and pointer "/-" and value operation_with_action as operations
+  run "printf" with arguments ["%s/.local/state/execute/transactions", home] as transaction_root
+  run "mkdir" with arguments ["-p", "-m", "700", transaction_root] and keep status as mkdir_status
+  if mkdir_status is 0
+    run text.concat with parts [transaction_root, "/omarchy-vscode.XXXXXX"] as temporary_directory_template
+    run "mktemp" with arguments ["-d", temporary_directory_template] as temporary_directory_text and keep status as temporary_directory_status
+    if temporary_directory_status is 0
+      run text.trim_final_lf with text temporary_directory_text as temporary_directory
+      run text.concat with parts [temporary_directory, "/journal"] as journal
+      run fs.transaction with journal journal and operations operations as transaction_result and keep status as transaction_status
+      if transaction_status is not 0
+        run program report_failure with operation "empty obsolete registry removal (journal retained)" and path journal and status transaction_status
+    otherwise
+      run program report_failure with operation "obsolete removal journal allocation" and path transaction_root and status temporary_directory_status
+  otherwise
+    run program report_failure with operation "obsolete removal journal directory creation" and path transaction_root and status mkdir_status
+
+define a program named register_generated
+  accept home as text
+  accept extension_directory as text
+  run path.dirname with path extension_directory as base
+  run "printf" with arguments ["%s/extensions.json", base] as registry
+  run "printf" with arguments ["%s/.obsolete", base] as obsolete
+  run "test" with arguments ["-f", obsolete] and keep status as obsolete_status
+  if obsolete_status is 0
+    run fs.snapshot with path obsolete as obsolete_snapshot and keep status as obsolete_snapshot_status
+    if obsolete_snapshot_status is 0
+      take text at "/value/content_hash" from obsolete_snapshot as obsolete_hash
+      take text at "/value/snapshot" from obsolete_snapshot as obsolete_snapshot_token
+      take text at "/value/content" from obsolete_snapshot as obsolete_content
+      take json at "/value/symlink" from obsolete_snapshot as obsolete_link_target
+      run json.stringify with value obsolete_link_target as obsolete_link_json
+      run "printf" with arguments ["%s", obsolete_content]
+      then "jq" with arguments ["--arg", "key", "local.omarchy-theme-1.0.0", "del(.[$key])"] as clean_obsolete and keep status as jq_obsolete_status
+      if jq_obsolete_status is 0
+        run "printf" with arguments ["%s", clean_obsolete]
+        then "jq" with arguments ["length"] as remaining_obsolete and keep status as obsolete_length_status
+        if obsolete_length_status is 0
+          if remaining_obsolete is "0\n"
+            if obsolete_link_json is not "null"
+              run fs.unlink_checked with path obsolete and expected_snapshot obsolete_snapshot_token as unlink_result and keep status as unlink_status
+              if unlink_status is not 0
+                run program report_failure with operation "obsolete symlink unlink" and path obsolete and status unlink_status
+            otherwise
+              run program remove_file_cas with home home and path obsolete and expected_hash obsolete_hash
+          otherwise
+            if obsolete_link_json is not "null"
+              run fs.write_atomic with path obsolete and expected_content_hash obsolete_hash and symlink_policy "replace" and permissions_policy "preserve" and content clean_obsolete as obsolete_write and keep status as obsolete_write_status
+            otherwise
+              run fs.write_atomic with path obsolete and expected_content_hash obsolete_hash and symlink_policy "preserve" and permissions_policy "preserve" and content clean_obsolete as obsolete_write and keep status as obsolete_write_status
+            if obsolete_write_status is not 0
+              run program report_failure with operation "obsolete registry update" and path obsolete and status obsolete_write_status
+        otherwise
+          run program report_failure with operation "obsolete registry length" and path obsolete and status obsolete_length_status
+      otherwise
+        run program report_failure with operation "obsolete registry transform" and path obsolete and status jq_obsolete_status
+    otherwise
+      run program report_failure with operation "obsolete registry snapshot" and path obsolete and status obsolete_snapshot_status
+  otherwise
+    if obsolete_status is not 1
+      run program report_failure with operation "obsolete registry presence check" and path obsolete and status obsolete_status
+  run "test" with arguments ["-f", registry] and keep status as registry_exists
+  if registry_exists is 1
+    run program write_if_missing with path registry and content "[]\n"
+  otherwise
+    if registry_exists is not 0
+      run program report_failure with operation "extension registry presence check" and path registry and status registry_exists
+  run fs.snapshot with path registry as registry_snapshot and keep status as registry_snapshot_status
+  if registry_snapshot_status is 0
+    take text at "/value/content_hash" from registry_snapshot as registry_hash
+    take text at "/value/content" from registry_snapshot as registry_content
+    run json.parse with text registry_content and keep status as registry_parse_status
+    if registry_parse_status is 0
+      run json.parse with text registry_content as registry_document
+      run "printf" with arguments ["[{\"pointer\":\"/identifier/id\",\"not_equals\":\"local.omarchy-theme\"}]"] as registry_predicate_text
+      run json.parse with text registry_predicate_text as registry_predicate
+      run json.filter with document registry_document and where registry_predicate as registry_without_previous and keep status as registry_filter_status
+      if registry_filter_status is 0
+        run "printf" with arguments ["{\"identifier\":{\"id\":\"local.omarchy-theme\"},\"version\":\"1.0.0\",\"location\":{\"$mid\":1,\"fsPath\":\"\",\"external\":\"\",\"path\":\"\",\"scheme\":\"file\"},\"relativeLocation\":\"omarchy-theme\"}"] as new_entry_text
+        run json.parse with text new_entry_text as new_entry
+        then encode extension_directory as json
+        then parse json as extension_path_value
+        run json.set with document new_entry and pointer "/location/fsPath" and value extension_path_value as entry_with_fs_path
+        run json.set with document entry_with_fs_path and pointer "/location/path" and value extension_path_value as entry_with_path
+        run text.concat with parts ["file://", extension_directory] as extension_external_url
+        then encode extension_external_url as json
+        then parse json as extension_external_value
+        run json.set with document entry_with_path and pointer "/location/external" and value extension_external_value as complete_entry
+        run json.set with document registry_without_previous and pointer "/-" and value complete_entry as updated_registry
+        run json.stringify with value updated_registry as compact_registry
+        run "printf" with arguments ["%s", compact_registry]
+        then "jq" with arguments ["."] as new_registry and keep status as registry_format_status
+        if registry_format_status is 0
+          run fs.write_atomic with path registry and expected_content_hash registry_hash and symlink_policy "preserve" and permissions_policy "preserve" and content new_registry as registry_write and keep status as registry_write_status
+          if registry_write_status is not 0
+            run program report_failure with operation "extension registry update" and path registry and status registry_write_status
+        otherwise
+          run program report_failure with operation "extension registry JSON formatting" and path registry and status registry_format_status
+      otherwise
+        run program report_failure with operation "extension registry filter" and path registry and status registry_filter_status
+    otherwise
+      run program report_failure with operation "extension registry JSON parse" and path registry and status registry_parse_status
+  otherwise
+    run program report_failure with operation "extension registry snapshot" and path registry and status registry_snapshot_status
+  run "printf" with arguments [""]
+
+define a program named install_generated
+  accept home as text
+  accept extension_directory as text
+  accept generated as text
+  run fs.snapshot with path generated as generated_snapshot and keep status as snapshot_status
+  if snapshot_status is 0
+    take text at "/value/content" from generated_snapshot as generated_content
+    run json.parse with text generated_content and keep status as parse_status
+    if parse_status is 0
+      run json.parse with text generated_content as generated_document
+      run program read_json_string_property with document generated_document and pointer "/type" and path generated as theme_type_source
+      then parse json as theme_type_value
+      take text at "" from theme_type_value as theme_type
+      run text.trim_final_lf with text theme_type as normalized_type
+      if normalized_type is "light"
+        run "printf" with arguments ["vs"] as ui_theme
+      otherwise
+        run "printf" with arguments ["vs-dark"] as ui_theme
+    otherwise
+      run program report_failure with operation "generated theme JSON parse" and path generated and status parse_status
+      run "printf" with arguments ["vs-dark"] as ui_theme
+  otherwise
+    run program report_failure with operation "generated theme snapshot" and path generated and status snapshot_status
+    run "printf" with arguments ["vs-dark"] as ui_theme
+  run "printf" with arguments ["%s/themes", extension_directory] as themes
+  run "printf" with arguments ["%s/themes/omarchy-color-theme.json", extension_directory] as theme_link
+  run "printf" with arguments ["%s/package.json", extension_directory] as package
+  run "mkdir" with arguments ["-p", themes] and keep status as themes_status
+  if themes_status is not 0
+    run program report_failure with operation "theme extension directory creation" and path themes and status themes_status
+  run "ln" with arguments ["-sfn", generated, theme_link] and keep status as link_status
+  if link_status is not 0
+    run program report_failure with operation "generated theme link" and path theme_link and status link_status
+  run "printf" with arguments ["{\n    \"name\": \"omarchy-theme\",\n    \"displayName\": \"Omarchy\",\n    \"description\": \"Omarchy color theme\",\n    \"publisher\": \"local\",\n    \"version\": \"1.0.0\",\n    \"engines\": { \"vscode\": \"^1.70.0\" },\n    \"categories\": [\"Themes\"],\n    \"contributes\": {\n        \"themes\": [{\n            \"label\": \"Omarchy\",\n            \"uiTheme\": \"%s\",\n            \"path\": \"./themes/omarchy-color-theme.json\"\n        }]\n    }\n}\n", ui_theme] as package_content
+  run program save_text_atomic with path package and content package_content
+  run program register_generated with home home and extension_directory extension_directory
+
+define a program named update_setting
+  accept path as text
+  accept theme_name as json
+  run fs.snapshot with path path as settings_snapshot and keep status as snapshot_status
+  if snapshot_status is 0
+    take text at "/value/content_hash" from settings_snapshot as expected_hash
+    run json.stringify with value theme_name as encoded_theme_name
+    if encoded_theme_name is "\"\""
+      run jsonc.remove with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and key "workbench.colorTheme" and keep status as mutation_status
+      run "printf" with arguments [""]
+    otherwise
+      run jsonc.set with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and key "workbench.colorTheme" and value theme_name and keep status as mutation_status
+      run "printf" with arguments [""]
+    if mutation_status is not 0
+      run program report_failure with operation "JSONC theme setting update" and path path and status mutation_status
+  otherwise
+    run program report_failure with operation "settings snapshot" and path path and status snapshot_status
+
+define a program named set_editor_theme
+  accept home as text
+  accept editor as text
+  accept settings as text
+  accept extension_directory as text
+  accept descriptor as text
+  accept generated as text
+  run "omarchy-cmd-present" with arguments [editor] and keep status as present
+  if present is 0
+    run "test" with arguments ["-f", descriptor] and keep status as descriptor_status
+    if descriptor_status is 0
+      run fs.snapshot with path descriptor as descriptor_snapshot and keep status as descriptor_snapshot_status
+      if descriptor_snapshot_status is 0
+        take text at "/value/content" from descriptor_snapshot as descriptor_content
+        run json.parse with text descriptor_content and keep status as descriptor_parse_status
+        if descriptor_parse_status is 0
+          run json.parse with text descriptor_content as descriptor_document
+          run program read_json_string_property with document descriptor_document and pointer "/name" and path descriptor
+          then parse json as theme_name
+          run program read_json_string_property with document descriptor_document and pointer "/extension" and path descriptor
+          then parse json as extension_value
+          run json.stringify with value extension_value as extension_source
+          run "printf" with arguments ["%s", extension_source]
+          then "jq" with arguments ["-e", "type == \"string\" and test(\"^[a-zA-Z0-9._-]+$\")"] and keep status as extension_valid
+          if extension_valid is 0
+            run "printf" with arguments ["%s", extension_source]
+            then "jq" with arguments ["-r", "."] as extension_raw and keep status as extension_decode_status
+            if extension_decode_status is 0
+              run text.trim_final_lf with text extension_raw as extension
+              run omarchy.editor-list with command editor as list_result and keep status as list_status
+              if list_status is 0
+                take text at "/value" from list_result as installed_extensions
+                run "printf" with arguments ["%s", installed_extensions]
+                then "grep" with arguments ["-Fxq", "--", extension] and keep status as installed_status
+                if installed_status is 1
+                  run omarchy.editor-install with command editor and extension extension and keep status as install_status
+                  if install_status is not 0
+                    run program report_failure with operation "editor extension installation" and path extension and status install_status
+                otherwise
+                  if installed_status is not 0
+                    run program report_failure with operation "installed extension match" and path extension and status installed_status
+              otherwise
+                run program report_failure with operation "installed extension listing (installation attempted)" and path editor and status list_status
+                run omarchy.editor-install with command editor and extension extension and keep status as install_status
+                if install_status is not 0
+                  run program report_failure with operation "editor extension installation" and path extension and status install_status
+            otherwise
+              run program report_failure with operation "theme descriptor extension decode" and path descriptor and status extension_decode_status
+          otherwise
+            if extension_valid is not 1
+              run program report_failure with operation "theme descriptor extension validation" and path descriptor and status extension_valid
+        otherwise
+          run program report_failure with operation "theme descriptor JSON parse" and path descriptor and status descriptor_parse_status
+          run "printf" with arguments ["\"\""]
+          then parse json as theme_name
+      otherwise
+        run program report_failure with operation "theme descriptor snapshot" and path descriptor and status descriptor_snapshot_status
+        run "printf" with arguments ["\"\""]
+        then parse json as theme_name
+    otherwise
+      if descriptor_status is 1
+        run "test" with arguments ["-f", generated] and keep status as generated_status
+        if generated_status is 0
+          run program install_generated with home home and extension_directory extension_directory and generated generated
+          run "printf" with arguments ["\"Omarchy\""]
+          then parse json as theme_name
+        otherwise
+          run "printf" with arguments ["\"\""]
+          then parse json as theme_name
+          if generated_status is not 1
+            run program report_failure with operation "generated theme presence check" and path generated and status generated_status
+      otherwise
+        run program report_failure with operation "theme descriptor presence check" and path descriptor and status descriptor_status
+        run "printf" with arguments ["\"\""]
+        then parse json as theme_name
+    run json.stringify with value theme_name as encoded_theme_name
+    if encoded_theme_name is not "\"\""
+      run path.dirname with path settings as settings_directory
+      run "mkdir" with arguments ["-p", settings_directory] and keep status as directory_status
+      if directory_status is 0
+        run "test" with arguments ["-f", settings] and keep status as settings_status
+        if settings_status is 1
+          run program write_if_missing with path settings and content "{\n}\n"
+        otherwise
+          if settings_status is not 0
+            run program report_failure with operation "settings presence check" and path settings and status settings_status
+        run "test" with arguments ["-f", settings] and keep status as settings_after_create
+        if settings_after_create is 0
+          run program update_setting with path settings and theme_name theme_name
+        otherwise
+          if settings_after_create is not 1
+            run program report_failure with operation "settings presence check after creation" and path settings and status settings_after_create
+      otherwise
+        run program report_failure with operation "settings directory creation" and path settings_directory and status directory_status
+    otherwise
+      run "test" with arguments ["-f", settings] and keep status as settings_status
+      if settings_status is 0
+        run "printf" with arguments ["\"\""]
+        then parse json as empty_theme
+        run program update_setting with path settings and theme_name empty_theme
+      otherwise
+        if settings_status is not 1
+          run program report_failure with operation "settings presence check" and path settings and status settings_status
+  otherwise
+    if present is not 1
+      run program report_failure with operation "editor presence check" and path editor and status present
+  run "printf" with arguments [""]
+
+accept home as text from environment "HOME"
+accept ignored_arguments as list of text from arguments
+# Mapping allows safe fake Cursor execution; upstream hardcodes /usr/bin/cursor.
+accept cursor_command as text with default "/usr/bin/cursor"
+run "printf" with arguments ["%s/.local/state/omarchy/current/theme/vscode.json", home] as descriptor
+run "printf" with arguments ["%s/.local/state/omarchy/current/theme/vscode-theme.json", home] as generated
+run "omarchy-toggle-enabled" with arguments ["skip-vscode-theme-changes"] and keep status as skip_code
+if skip_code is not 0
+  run "printf" with arguments ["%s/.config/Code/User/settings.json", home] as code_settings
+  run "printf" with arguments ["%s/.vscode/extensions/omarchy-theme", home] as code_extensions
+  run program set_editor_theme with home home and editor "code" and settings code_settings and extension_directory code_extensions and descriptor descriptor and generated generated
+run "omarchy-toggle-enabled" with arguments ["skip-vscode-insiders-theme-changes"] and keep status as skip_insiders
+if skip_insiders is not 0
+  run "printf" with arguments ["%s/.config/Code - Insiders/User/settings.json", home] as insiders_settings
+  run "printf" with arguments ["%s/.vscode-insiders/extensions/omarchy-theme", home] as insiders_extensions
+  run program set_editor_theme with home home and editor "code-insiders" and settings insiders_settings and extension_directory insiders_extensions and descriptor descriptor and generated generated
+run "omarchy-toggle-enabled" with arguments ["skip-codium-theme-changes"] and keep status as skip_codium
+if skip_codium is not 0
+  run "printf" with arguments ["%s/.config/VSCodium/User/settings.json", home] as codium_settings
+  run "printf" with arguments ["%s/.vscode-oss/extensions/omarchy-theme", home] as codium_extensions
+  run program set_editor_theme with home home and editor "codium" and settings codium_settings and extension_directory codium_extensions and descriptor descriptor and generated generated
+run "omarchy-toggle-enabled" with arguments ["skip-cursor-theme-changes"] and keep status as skip_cursor
+if skip_cursor is not 0
+  run "printf" with arguments ["%s/.config/Cursor/User/settings.json", home] as cursor_settings
+  run "printf" with arguments ["%s/.cursor/extensions/omarchy-theme", home] as cursor_extensions
+  run program set_editor_theme with home home and editor cursor_command and settings cursor_settings and extension_directory cursor_extensions and descriptor descriptor and generated generated
+otherwise
+  # Bash's final ! toggle-enabled && ... expression exits 1 when skipped.
+  run "false"
+run "printf" with arguments [""]

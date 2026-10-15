@@ -1,0 +1,71 @@
+# Upstream: https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin/omarchy-hyprland-workspace-layout-toggle
+# Native Execute owns validation, layout selection, fallback and notice. Generic
+# filesystem applets snapshot and atomically update the state file with an
+# explicit follow-symlink policy and compare-and-swap. jq adapts compositor JSON
+# and checks the Bash-compatible workspace id spelling.
+accept home as text from environment "HOME"
+accept ignored_arguments as list of text from arguments
+
+define a program named report_file_failure
+  accept path as text
+  accept operation as text
+  accept status as integer
+  run "printf" with arguments ["Warning: %s failed for %s (status %s)\n", operation, path, status]
+  then "awk" with arguments ["{ print > \"/dev/stderr\" }"]
+
+define a program named save_workspace_state
+  accept path as text
+  accept content as text
+  accept expected_hash as text
+  run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+  if write_status is not 0
+    run program report_file_failure with path path and operation "workspace layout save" and status write_status
+
+run "hyprctl" with arguments ["activeworkspace", "-j"] and keep status as workspace_status
+then "jq" with arguments ["-sc", "{id: (map(.id | tostring) | join(\"\\n\") | sub(\"\\n+$\"; \"\"))} | . + {valid: (.id | test(\"^-?[0-9]+$\"))}"]
+then parse json as workspace
+take text at "/id" from workspace as workspace_id
+take boolean at "/valid" from workspace as valid_id
+if valid_id is true
+  run "hyprctl" with arguments ["activeworkspace", "-j"] and keep status as layout_status
+  then "jq" with arguments ["-sc", "{layout: (map(.tiledLayout | tostring) | join(\"\\n\") | sub(\"\\n+$\"; \"\"))}"] as layout_json and keep status as layout_parse_status
+  if layout_parse_status is 0
+    then parse json as layout_data
+    take text at "/layout" from layout_data as current_layout
+  otherwise
+    # The source case statement maps an empty jq result to its default arm.
+    # Keep that policy explicit after recording a malformed second response.
+    run "printf" with arguments [""] as current_layout
+  if current_layout is "dwindle"
+    run "printf" with arguments ["%s", "scrolling"] as new_layout
+  otherwise
+    run "printf" with arguments ["%s", "dwindle"] as new_layout
+  run "printf" with arguments ["%s/.local/state/omarchy/workspace-layouts", home] as layouts_dir
+  run "printf" with arguments ["%s/%s.lua", layouts_dir, workspace_id] as layout_file
+  run "printf" with arguments ["hl.workspace_rule({ workspace = \"%s\", layout = \"%s\" })\n", workspace_id, new_layout] as layout_content
+  run "mkdir" with arguments ["-p", layouts_dir] and keep status as mkdir_status
+  if mkdir_status is 0
+    run fs.snapshot with path layout_file as layout_snapshot and keep status as snapshot_status
+    if snapshot_status is 0
+      take text at "/value/content_hash" from layout_snapshot as expected_hash
+      run program save_workspace_state with path layout_file and content layout_content and expected_hash expected_hash
+    otherwise
+      take text at "/outcome" from layout_snapshot as snapshot_outcome
+      if snapshot_outcome is "absence"
+        run program save_workspace_state with path layout_file and content layout_content and expected_hash "missing"
+      otherwise
+        run program report_file_failure with path layout_file and operation "workspace layout snapshot" and status snapshot_status
+  otherwise
+    run program report_file_failure with path layouts_dir and operation "workspace layout directory creation" and status mkdir_status
+  run "printf" with arguments ["hl.workspace_rule({ workspace = \"%s\", layout = \"%s\" })", workspace_id, new_layout] as workspace_rule
+  run "hyprctl" with arguments ["eval", workspace_rule] and keep status as eval_status
+  run "printf" with arguments ["Workspace layout set to %s", new_layout] as notification
+  if eval_status is 0
+    run "omarchy-notification-send" with arguments ["-g", "󱂬", notification]
+  otherwise
+    run "printf" with arguments ["%s, layout:%s", workspace_id, new_layout] as keyword_rule
+    run "hyprctl" with arguments ["keyword", "workspace", keyword_rule] as fallback_output and keep status as keyword_status
+    run "omarchy-notification-send" with arguments ["-g", "󱂬", notification] as notification_output
+    run "printf" with arguments ["%s%s", fallback_output, notification_output]
+otherwise
+  run "false"

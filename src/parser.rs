@@ -1,6 +1,6 @@
 use crate::ast::{
-    Condition, Connection, InputDeclaration, InputSource, InputType, Invocation, ListenSource,
-    LoopKind, Program, Step, StepKind, Trigger, Value,
+    Condition, ConditionOperator, Connection, InputDeclaration, InputSource, InputType, Invocation,
+    ListenSource, LoopKind, Program, Step, StepKind, Trigger, Value,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use std::borrow::Cow;
@@ -14,6 +14,9 @@ pub(crate) enum Token<'source> {
     LeftBracket,
     RightBracket,
     Comma,
+    LeftBrace,
+    RightBrace,
+    Colon,
 }
 
 struct SourceLine {
@@ -39,7 +42,15 @@ pub(crate) struct BlockLine<'arena, 'source> {
 }
 
 const MAX_CONTROL_DEPTH: usize = 64;
+#[derive(Debug, Clone, Copy, Default)]
+struct StatementScope {
+    loop_depth: usize,
+    reusable_program: bool,
+}
+
+mod control_flow;
 mod reusable;
+mod tasks;
 
 /// Lower one indented statement into relative control instructions. Offsets remain
 /// valid when a complete block is copied into a managed execution node.
@@ -49,6 +60,44 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
     indent: usize,
     steps: &mut Vec<Step>,
     depth: usize,
+) -> Result<()> {
+    parse_statement_in_scope(
+        line_at,
+        cursor,
+        indent,
+        steps,
+        depth,
+        StatementScope::default(),
+    )
+}
+
+pub(super) fn parse_reusable_statement<'arena, 'source: 'arena>(
+    line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
+    cursor: &mut usize,
+    indent: usize,
+    steps: &mut Vec<Step>,
+    depth: usize,
+) -> Result<()> {
+    parse_statement_in_scope(
+        line_at,
+        cursor,
+        indent,
+        steps,
+        depth,
+        StatementScope {
+            loop_depth: 0,
+            reusable_program: true,
+        },
+    )
+}
+
+fn parse_statement_in_scope<'arena, 'source: 'arena>(
+    line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
+    cursor: &mut usize,
+    indent: usize,
+    steps: &mut Vec<Step>,
+    depth: usize,
+    scope: StatementScope,
 ) -> Result<()> {
     let line = line_at(*cursor).expect("statement cursor");
     if line.indent != indent {
@@ -72,11 +121,37 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
             line.number
         );
     }
+    if let Some(kind) = control_flow::parse_transfer(line.tokens, scope, line.number)? {
+        steps.push(Step {
+            line: line.number,
+            kind,
+        });
+        *cursor += 1;
+        return Ok(());
+    }
+    if word_is(line.tokens.first(), "try") {
+        return control_flow::parse_try(line_at, cursor, indent, steps, depth, scope);
+    }
+    if matches!(line.tokens.first(), Some(Token::Word("catch" | "finally"))) {
+        bail!(
+            "line {}: catch and finally must belong to a try block",
+            line.number
+        );
+    }
     if matches!(
         line.tokens.first(),
         Some(Token::Word("repeat" | "for" | "while"))
     ) {
-        return parse_loop(line_at, cursor, indent, steps, depth);
+        return parse_loop(line_at, cursor, indent, steps, depth, scope);
+    }
+    if matches!(line.tokens.first(), Some(Token::Word("parallel" | "race"))) {
+        if depth >= MAX_CONTROL_DEPTH {
+            bail!(
+                "line {}: control nesting exceeds {MAX_CONTROL_DEPTH} levels",
+                line.number
+            );
+        }
+        return tasks::parse_group(line_at, cursor, indent, steps);
     }
     if !word_is(line.tokens.first(), "if") {
         let kind =
@@ -116,7 +191,7 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
             )
         })?;
     while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-        parse_statement(line_at, cursor, body_indent, steps, depth + 1)?;
+        parse_statement_in_scope(line_at, cursor, body_indent, steps, depth + 1, scope)?;
     }
     let mut alternative = None;
     if let Some(otherwise) = line_at(*cursor)
@@ -137,7 +212,7 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
             );
         }
         while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-            parse_statement(line_at, cursor, body_indent, steps, depth + 1)?;
+            parse_statement_in_scope(line_at, cursor, body_indent, steps, depth + 1, scope)?;
         }
     }
     steps.push(Step {
@@ -160,12 +235,25 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
 fn parse_condition(tokens: &[Token<'_>], keyword: &str) -> Result<Condition> {
     let mut token = 1;
     let left = parse_value(tokens, &mut token).with_context(|| format!("{keyword} left value"))?;
-    if !word_is(tokens.get(token), "is") {
-        bail!("expected `{keyword} <value> is [not] <value>`");
-    }
-    token += 1;
-    let negated = word_is(tokens.get(token), "not");
-    token += usize::from(negated);
+    let (operator, negated) = if word_is(tokens.get(token), "is") {
+        token += 1;
+        let negated = word_is(tokens.get(token), "not");
+        token += usize::from(negated);
+        (ConditionOperator::Equals, negated)
+    } else if word_is(tokens.get(token), "contains") {
+        token += 1;
+        (ConditionOperator::Contains, false)
+    } else if word_is(tokens.get(token), "does")
+        && word_is(tokens.get(token + 1), "not")
+        && word_is(tokens.get(token + 2), "contain")
+    {
+        token += 3;
+        (ConditionOperator::Contains, true)
+    } else {
+        bail!(
+            "expected `{keyword} <value> is [not] <value>` or `{keyword} <value> contains <value>`"
+        );
+    };
     let right =
         parse_value(tokens, &mut token).with_context(|| format!("{keyword} right value"))?;
     ensure_end(tokens, token)?;
@@ -173,6 +261,7 @@ fn parse_condition(tokens: &[Token<'_>], keyword: &str) -> Result<Condition> {
         left,
         right,
         negated,
+        operator,
     })
 }
 
@@ -182,6 +271,7 @@ fn parse_loop<'arena, 'source: 'arena>(
     indent: usize,
     steps: &mut Vec<Step>,
     depth: usize,
+    scope: StatementScope,
 ) -> Result<()> {
     let line = line_at(*cursor).expect("loop cursor");
     if depth >= MAX_CONTROL_DEPTH {
@@ -231,7 +321,17 @@ fn parse_loop<'arena, 'source: 'arena>(
             )
         })?;
     while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-        parse_statement(line_at, cursor, body_indent, steps, depth + 1)?;
+        parse_statement_in_scope(
+            line_at,
+            cursor,
+            body_indent,
+            steps,
+            depth + 1,
+            StatementScope {
+                loop_depth: scope.loop_depth + 1,
+                ..scope
+            },
+        )?;
     }
     let back = steps.len() - start;
     steps.push(Step {
@@ -644,6 +744,7 @@ pub(crate) fn tokenize<'source>(line: &'source str) -> Result<Vec<Token<'source>
 fn tokenize_into<'source>(line: &'source str, tokens: &mut Vec<Token<'source>>) -> Result<()> {
     let bytes = line.as_bytes();
     let mut i = 0;
+    let mut object_depth = 0usize;
     while i < bytes.len() {
         match bytes[i] {
             b' ' | b'\t' | b'\r' => i += 1,
@@ -657,6 +758,23 @@ fn tokenize_into<'source>(line: &'source str, tokens: &mut Vec<Token<'source>>) 
             }
             b',' => {
                 tokens.push(Token::Comma);
+                i += 1;
+            }
+            b'{' if object_depth > 0
+                || i == 0
+                || matches!(bytes[i - 1], b' ' | b'\t' | b'\r' | b'[' | b',') =>
+            {
+                object_depth += 1;
+                tokens.push(Token::LeftBrace);
+                i += 1;
+            }
+            b'}' if object_depth > 0 => {
+                object_depth -= 1;
+                tokens.push(Token::RightBrace);
+                i += 1;
+            }
+            b':' if object_depth > 0 => {
+                tokens.push(Token::Colon);
                 i += 1;
             }
             b'"' => {
@@ -696,6 +814,7 @@ fn tokenize_into<'source>(line: &'source str, tokens: &mut Vec<Token<'source>>) 
                 let start = i;
                 while i < bytes.len()
                     && !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'[' | b']' | b',' | b'"')
+                    && !(object_depth > 0 && matches!(bytes[i], b'{' | b'}' | b':'))
                 {
                     // Every delimiter is ASCII. Advancing byte-by-byte is safe
                     // for UTF-8 here because a delimiter cannot occur inside a
@@ -778,6 +897,18 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
     parse_invocation(tokens)
 }
 
+/// Parse one typed literal/reference using the same grammar as `.program` values.
+/// Graph and other source surfaces reuse this to avoid divergent JSON coercions.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn parse_value_source(source: &str) -> Result<Value> {
+    let mut tokens = Vec::new();
+    tokenize_into(source, &mut tokens)?;
+    let mut cursor = 0;
+    let value = parse_value(&tokens, &mut cursor)?;
+    ensure_end(&tokens, cursor)?;
+    Ok(value)
+}
+
 fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
     let (kind, mut cursor) = match tokens.get(1) {
         Some(Token::Word("text")) => (InputType::Text, 2),
@@ -790,10 +921,16 @@ fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
     if !word_is(tokens.get(cursor), "at") {
         bail!("expected at before JSON pointer");
     }
-    let Some(Token::String(pointer)) = tokens.get(cursor + 1) else {
-        bail!("JSON pointer must be a quoted string");
+    let (pointer, dynamic) = match tokens.get(cursor + 1) {
+        Some(Token::String(pointer)) => {
+            crate::structured::validate_pointer(pointer)?;
+            (Value::String(pointer.clone().into_owned()), false)
+        }
+        Some(Token::Word(pointer)) if is_identifier(pointer) => {
+            (Value::Reference((*pointer).to_owned()), true)
+        }
+        _ => bail!("JSON pointer must be a quoted literal or a text binding name"),
     };
-    crate::structured::validate_pointer(pointer)?;
     cursor += 2;
     if !word_is(tokens.get(cursor), "from") {
         bail!("expected from before JSON source");
@@ -805,12 +942,24 @@ fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
     }
     let binding = parse_binding_identifier(tokens.get(cursor + 1), "JSON binding")?;
     ensure_end(tokens, cursor + 2)?;
-    Ok(StepKind::TakeJson {
-        pointer: pointer.clone().into_owned(),
-        source,
-        kind,
-        binding,
-    })
+    if dynamic {
+        Ok(StepKind::TakeJsonDynamic {
+            pointer,
+            source,
+            kind,
+            binding,
+        })
+    } else {
+        let Value::String(pointer) = pointer else {
+            unreachable!("literal pointer is text")
+        };
+        Ok(StepKind::TakeJson {
+            pointer,
+            source,
+            kind,
+            binding,
+        })
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1018,7 +1167,7 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
     })
 }
 
-const MAX_LIST_NESTING: usize = 64;
+const MAX_VALUE_NESTING: usize = 64;
 
 fn parse_value(tokens: &[Token<'_>], cursor: &mut usize) -> Result<Value> {
     parse_value_depth(tokens, cursor, 0)
@@ -1037,10 +1186,26 @@ fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> 
             *cursor += 1;
             Ok(Value::Bool(*word == "true"))
         }
+        Token::Word("null") => {
+            *cursor += 1;
+            Ok(Value::Null)
+        }
         Token::Word(word) => {
             *cursor += 1;
             if let Ok(integer) = word.parse::<i64>() {
                 Ok(Value::Integer(integer))
+            } else if word
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'-')
+            {
+                word.parse::<serde_json::Number>()
+                    .map(Value::Number)
+                    .map_err(|_| {
+                        anyhow!(
+                            "invalid JSON number `{word}`; quote strings containing punctuation"
+                        )
+                    })
             } else if is_identifier(word) {
                 Ok(Value::Reference((*word).to_owned()))
             } else {
@@ -1048,8 +1213,8 @@ fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> 
             }
         }
         Token::LeftBracket => {
-            if depth >= MAX_LIST_NESTING {
-                bail!("list nesting exceeds the maximum depth of {MAX_LIST_NESTING}");
+            if depth >= MAX_VALUE_NESTING {
+                bail!("value nesting exceeds the maximum depth of {MAX_VALUE_NESTING}");
             }
             *cursor += 1;
             let mut values = Vec::new();
@@ -1075,8 +1240,50 @@ fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> 
             }
             Ok(Value::List(values))
         }
+        Token::LeftBrace => {
+            if depth >= MAX_VALUE_NESTING {
+                bail!("value nesting exceeds the maximum depth of {MAX_VALUE_NESTING}");
+            }
+            *cursor += 1;
+            let mut fields = BTreeMap::new();
+            if matches!(tokens.get(*cursor), Some(Token::RightBrace)) {
+                *cursor += 1;
+                return Ok(Value::Record(fields));
+            }
+            loop {
+                let Some(Token::String(key)) = tokens.get(*cursor) else {
+                    bail!("JSON object keys must be quoted strings");
+                };
+                let key = key.clone().into_owned();
+                *cursor += 1;
+                if !matches!(tokens.get(*cursor), Some(Token::Colon)) {
+                    bail!("expected `:` after JSON object key");
+                }
+                *cursor += 1;
+                let value = parse_value_depth(tokens, cursor, depth + 1)?;
+                if fields.insert(key.clone(), value).is_some() {
+                    bail!("duplicate JSON object key {key:?}");
+                }
+                match tokens.get(*cursor) {
+                    Some(Token::Comma) => {
+                        *cursor += 1;
+                        if matches!(tokens.get(*cursor), Some(Token::RightBrace)) {
+                            bail!("trailing comma in JSON object");
+                        }
+                    }
+                    Some(Token::RightBrace) => {
+                        *cursor += 1;
+                        break;
+                    }
+                    _ => bail!("expected `,` or `}}` in JSON object"),
+                }
+            }
+            Ok(Value::Record(fields))
+        }
         Token::RightBracket => bail!("unexpected `]` while reading value"),
+        Token::RightBrace => bail!("unexpected `}}` while reading value"),
         Token::Comma => bail!("unexpected `,` while reading value"),
+        Token::Colon => bail!("unexpected `:` while reading value"),
     }
 }
 
@@ -1121,6 +1328,9 @@ fn token_text(token: &Token<'_>) -> String {
         Token::LeftBracket => "[".into(),
         Token::RightBracket => "]".into(),
         Token::Comma => ",".into(),
+        Token::LeftBrace => "{".into(),
+        Token::RightBrace => "}".into(),
+        Token::Colon => ":".into(),
     }
 }
 
@@ -1506,7 +1716,7 @@ mod tests {
 
     #[test]
     fn rejects_excessively_nested_lists_without_recursing_unboundedly() {
-        let depth = MAX_LIST_NESTING + 1;
+        let depth = MAX_VALUE_NESTING + 1;
         let source = format!(
             "run printf with message {}1{}",
             "[".repeat(depth),
@@ -1553,7 +1763,8 @@ mod tests {
         } if binding == "path" && values.len() == 2));
         assert!(matches!(&program.steps[2].kind, StepKind::Loop {
             kind: LoopKind::While { condition: Condition {
-                left: Value::Reference(left), right: Value::Bool(false), negated: true
+                left: Value::Reference(left), right: Value::Bool(false), negated: true,
+                operator: ConditionOperator::Equals,
             } }, end: 3
         } if left == "ready"));
         for (index, back) in [(4, 2), (5, 4), (6, 6)] {

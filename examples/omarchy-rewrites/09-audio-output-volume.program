@@ -1,0 +1,189 @@
+# Omarchy c668141e9c42b13c80c9ca4ea108e11708c5e8a5, bin/omarchy-audio-output-volume.
+# Execute owns validation, dispatch, debounce, clamping, side effects and OSD.
+# jq supplies text/regex/number operations; awk retains upstream percent parsing.
+# See fixture README for finite-output, redirection, arithmetic and save limits.
+accept action as text from argument 1 with default ""
+accept ignored_arguments as list of text from arguments
+accept runtime_directory as text from environment "XDG_RUNTIME_DIR" with default "/tmp"
+
+define a program named percent
+  accept sink as text
+  run "pactl" with arguments ["get-sink-volume", sink] and keep status as volume_status
+  then "awk" with arguments ["NR == 1 {for (i = 1; i <= NF; i++) if ($i ~ /%$/) {sub(\"%\", \"\", $i); print $i; exit}}"]
+  then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"]
+
+define a program named osd
+  accept sink as text
+  accept prior_output as text
+  run program percent with sink sink as volume
+  if volume is ""
+    run "printf" with arguments ["0"] as display_volume
+  otherwise
+    run "printf" with arguments ["%s", volume] as display_volume
+  run "pactl" with arguments ["get-sink-mute", sink] and keep status as mute_status
+  then "jq" with arguments ["-Rs", "sub(\"\\n+$\"; \"\") | {muted: endswith(\"yes\")}"]
+  then parse json as mute_data
+  take boolean at "/muted" from mute_data as muted
+  if muted is true
+    run "printf" with arguments ["volume-muted"] as icon
+  otherwise
+    run "test" with arguments [display_volume, "-eq", "0"] and keep status as zero_status
+    if zero_status is 0
+      run "printf" with arguments ["volume-muted"] as icon
+    otherwise
+      run "printf" with arguments ["volume-high"] as icon
+  run "omarchy-osd" with arguments ["-i", icon, "-p", display_volume] as osd_output
+  run "printf" with arguments ["%s%s", prior_output, osd_output]
+
+define a program named report_file_failure
+  accept path as text
+  accept operation as text
+  accept status as integer
+  run "printf" with arguments ["Warning: %s failed for %s (status %s)\n", operation, path, status]
+  then "awk" with arguments ["{ print > \"/dev/stderr\" }"]
+
+define a program named save_debounce_timestamp
+  accept path as text
+  accept content as text
+  accept expected_hash as text
+  run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+  if write_status is not 0
+    run program report_file_failure with path path and operation "mute debounce save" and status write_status
+
+define a program named adjust
+  accept sink as text
+  accept signed_step as text
+  run "printf" with arguments ["%s", signed_step]
+  then "jq" with arguments ["-Rs", "capture(\"^(?<direction>[+-])(?<step>[0-9]+)\\\\z\")"]
+  then parse json as adjustment
+  take text at "/direction" from adjustment as direction
+  take text at "/step" from adjustment as step
+  run "jq" with arguments ["-n", "--arg", "step", step, "($step | startswith(\"0\") and length > 1)"]
+  then parse json as leading_zero
+  take boolean at "" from leading_zero as has_leading_zero
+  if has_leading_zero is true
+    run number.parse_integer.result with text step and base 8 as amount_result and keep status as amount_status
+  otherwise
+    run number.parse_integer.result with text step and base 10 as amount_result and keep status as amount_status
+  run program percent with sink sink as current
+  if current is ""
+    run "printf" with arguments ["Could not read volume for %s.\n", sink]
+    then "awk" with arguments ["{print > \"/dev/stderr\"}"]
+    run "false"
+  otherwise
+    if amount_status is 0
+      take integer at "/value" from amount_result as amount
+      run number.parse_integer.result with text current and base 10 as current_result and keep status as current_status
+      if current_status is 0
+        take integer at "/value" from current_result as current_number
+        run program apply_adjustment with sink sink and direction direction and current current_number and amount amount
+      otherwise
+        run program report_file_failure with path sink and operation "current volume parse" and status current_status
+        run "false"
+    otherwise
+      run program report_file_failure with path sink and operation "volume step parse" and status amount_status
+      run "false"
+
+define a program named apply_adjustment
+  accept sink as text
+  accept direction as text
+  accept current as integer
+  accept amount as integer
+  then encode current as json
+  then parse json as current_value
+  then encode amount as json
+  then parse json as amount_value
+  if direction is "+"
+    run number.add with left current_value and right amount_value as calculated_result
+  otherwise
+    run number.subtract with left current_value and right amount_value as calculated_result
+  take integer at "" from calculated_result as calculated
+  then encode calculated as json
+  then parse json as calculated_value
+  then encode 100 as json
+  then parse json as ceiling_value
+  then encode 0 as json
+  then parse json as floor_value
+  run number.compare with left calculated_value and right ceiling_value as ceiling_comparison
+  run number.compare with left calculated_value and right floor_value as floor_comparison
+  if direction is "+"
+    if ceiling_comparison is 1
+      run "printf" with arguments ["100"] as next
+    otherwise
+      run "printf" with arguments ["%s", calculated] as next
+  otherwise
+    if floor_comparison is -1
+      run "printf" with arguments ["0"] as next
+    otherwise
+      run "printf" with arguments ["%s", calculated] as next
+  run "printf" with arguments ["%s%%", next] as volume_argument
+  run "pactl" with arguments ["set-sink-mute", sink, "0"] as unmute_output and keep status as unmute_status
+  run "pactl" with arguments ["set-sink-volume", sink, volume_argument] as volume_output and keep status as set_status
+  run "printf" with arguments ["%s%s", unmute_output, volume_output] as prior_output
+  run program osd with sink sink and prior_output prior_output
+
+if action is ""
+  run "printf" with arguments ["Usage: omarchy-audio-output-volume <raise|lower|mute-toggle|+N|-N>\n"]
+  run "false"
+otherwise
+  run "omarchy-audio-output-sink" and keep status as sink_status
+  then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as sink
+  if sink is ""
+    run "printf" with arguments ["Could not resolve an audio sink to control.\n"]
+    then "awk" with arguments ["{print > \"/dev/stderr\"}"]
+    run "false"
+  otherwise
+    if action is "mute-toggle"
+      if runtime_directory is ""
+        run "printf" with arguments ["/tmp"] as runtime
+      otherwise
+        run "printf" with arguments ["%s", runtime_directory] as runtime
+      run "printf" with arguments ["%s/omarchy-audio-output-volume-mute-toggle.last", runtime] as debounce_file
+      run "date" with arguments ["+%s%3N"] and keep status as date_status
+      then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as now
+      run text.concat with parts [now, "\n"] as timestamp_content
+      run "test" with arguments ["-r", debounce_file] and keep status as readable
+      if readable is 0
+        # read -r takes just the first line and trims default IFS whitespace.
+        run "jq" with arguments ["-Rsj", "(split(\"\\n\")[0] // \"\") | gsub(\"^[ \\t]+|[ \\t]+$\"; \"\")", debounce_file] as read_value and keep status as read_status
+        if read_status is 0
+          run "printf" with arguments ["%s", read_value] as last
+        otherwise
+          run program report_file_failure with path debounce_file and operation "mute debounce read; using zero" and status read_status
+          run "printf" with arguments ["0"] as last
+      otherwise
+        run "printf" with arguments ["0"] as last
+      run "jq" with arguments ["-n", "--arg", "now", now, "--arg", "last", last, "{elapsed: (($now|tonumber) - (if $last == \"\" then 0 else ($last|tonumber) end))} | {debounced: (.elapsed < 250)}"]
+      then parse json as debounce
+      take boolean at "/debounced" from debounce as debounced
+      if debounced is true
+        run "printf" with arguments [""]
+      otherwise
+        run fs.snapshot with path debounce_file as debounce_snapshot and keep status as snapshot_status
+        if snapshot_status is 0
+          take text at "/value/content_hash" from debounce_snapshot as expected_hash
+          run program save_debounce_timestamp with path debounce_file and content timestamp_content and expected_hash expected_hash
+        otherwise
+          take text at "/outcome" from debounce_snapshot as snapshot_outcome
+          if snapshot_outcome is "absence"
+            run program save_debounce_timestamp with path debounce_file and content timestamp_content and expected_hash "missing"
+          otherwise
+            run program report_file_failure with path debounce_file and operation "mute debounce snapshot" and status snapshot_status
+        run "pactl" with arguments ["set-sink-mute", sink, "toggle"] as mute_output and keep status as toggle_status
+        run program osd with sink sink and prior_output mute_output
+    otherwise
+      if action is "raise"
+        run program adjust with sink sink and signed_step "+5"
+      otherwise
+        if action is "lower"
+          run program adjust with sink sink and signed_step "-5"
+        otherwise
+          run "printf" with arguments ["%s", action]
+          then "jq" with arguments ["-Rs", "{valid: test(\"^[+-][0-9]+\\\\z\")}"]
+          then parse json as validation
+          take boolean at "/valid" from validation as valid
+          if valid is true
+            run program adjust with sink sink and signed_step action
+          otherwise
+            run "printf" with arguments ["Unknown volume action: %s\n", action]
+            run "false"

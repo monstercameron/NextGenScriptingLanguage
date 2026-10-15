@@ -1,0 +1,15 @@
+# Five application components share one typed graph:
+# clock source, formatter, text widget, button widget, and remote sync applet.
+# The runner substitutes only the source backend and rendering backend.
+graph desktop_clock
+  every 1 seconds as pulse
+  run {{CLOCK_SOURCE}} as clock_source
+  run desktop.clock_format as formatter
+  render {{RENDERER}}:text as clock
+  render {{RENDERER}}:button with properties {"text": "Sync now", "enabled": true} as sync_button
+  run desktop.fixture_sync as sync
+  bind pulse.tick to clock_source.pulse with capacity 1 latest
+  bind clock_source.value to formatter.seconds with capacity 1 latest
+  bind formatter.value to clock.property_updates with capacity 1 latest
+  bind sync_button.clicked to sync.click with capacity 8 lossless
+end graph

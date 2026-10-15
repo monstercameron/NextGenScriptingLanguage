@@ -22,7 +22,11 @@ pub(crate) fn execute_node(
     state: NodeState,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(RunResult, NodeState)> {
-    let signals = Signals::with_cancellation(cancelled, true)?;
+    let signals = Signals::with_cancellation_and_deadline(
+        cancelled,
+        true,
+        deadline_after(options.total_timeout, "total timeout")?,
+    )?;
     let options = RunOptions {
         inputs: Default::default(),
         working_directory: state.cwd,
@@ -30,7 +34,9 @@ pub(crate) fn execute_node(
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
+        total_timeout: options.total_timeout,
     };
+    crate::capabilities::preflight(node, registry, &options.working_directory)?;
     // run_finite_state replaces this slot on success; errors publish no state.
     // Copying the incoming bindings and bytes here only to discard them can
     // duplicate megabytes for every managed node.
@@ -62,12 +68,17 @@ pub(crate) fn producer(
     max_record: usize,
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<usize> {
-    let signals = Signals::with_cancellation(cancelled, true)?;
+    let signals = Signals::with_cancellation_and_deadline(
+        cancelled,
+        true,
+        deadline_after(options.total_timeout, "total timeout")?,
+    )?;
     let manifest = registry.resolve_call(invocation)?;
     let calls = [(invocation, manifest, 0)];
     let mut sink = streaming::LineSink::new(&mut emit, None, max_record);
     let mut launched = 0;
     execute_group_with_sink(
+        registry,
         &calls,
         Input::Empty,
         None,
@@ -90,7 +101,11 @@ pub(crate) fn stream(
     max_record: usize,
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<usize> {
-    let signals = Signals::with_cancellation(cancelled, true)?;
+    let signals = Signals::with_cancellation_and_deadline(
+        cancelled,
+        true,
+        deadline_after(options.total_timeout, "total timeout")?,
+    )?;
     let calls = stream
         .pipeline
         .steps
@@ -105,6 +120,7 @@ pub(crate) fn stream(
     let mut sink = streaming::LineSink::new(&mut emit, stream.line_limit, max_record);
     let mut launched = 0;
     execute_group_with_sink(
+        registry,
         &calls,
         Input::Empty,
         None,

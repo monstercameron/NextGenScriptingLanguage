@@ -13,17 +13,35 @@ pub(super) fn repeat_count(value: &Value) -> Result<usize> {
         _ => bail!("repeat count requires an integer"),
     }
 }
-fn text_items(value: &Value) -> Result<&[Value]> {
+fn list_items(value: &Value) -> Result<&[Value]> {
     let Value::List(items) = value else {
-        bail!("for each requires a list of text");
+        bail!("for each requires a JSON array or list of text");
     };
-    if items
-        .iter()
-        .any(|item| !matches!(item, Value::String(text) if !text.contains('\0')))
-    {
-        bail!("for each requires text list items without NUL bytes");
-    }
     Ok(items)
+}
+
+pub(super) fn element_type(
+    value: &Value,
+    types: &BTreeMap<String, InputType>,
+) -> Result<InputType> {
+    let is_text_item = |item: &Value| match item {
+        Value::String(text) => !text.contains('\0'),
+        Value::Reference(name) => types.get(name).is_none_or(|kind| *kind == InputType::Text),
+        _ => false,
+    };
+    match value {
+        Value::Reference(name) => match types.get(name).copied() {
+            Some(InputType::TextList) => Ok(InputType::Text),
+            Some(InputType::Json) => Ok(InputType::Json),
+            Some(kind) => bail!("for each requires a list or JSON array, {name:?} is {kind}"),
+            // Untyped component bindings retain the historical text-list
+            // interpretation. Declared JSON inputs opt into general values.
+            None => Ok(InputType::Text),
+        },
+        Value::List(items) if items.iter().all(is_text_item) => Ok(InputType::Text),
+        Value::List(_) => Ok(InputType::Json),
+        _ => bail!("for each requires a JSON array or list of text"),
+    }
 }
 
 /// Validate the header even when its body can never run.
@@ -48,28 +66,7 @@ pub(super) fn validate(kind: &LoopKind, flow: &control::FlowState) -> Result<()>
                 bail!("iteration binding {binding:?} is already defined");
             }
             check_value(values, &flow.names)?;
-            match values {
-                Value::Reference(name)
-                    if flow
-                        .types
-                        .get(name)
-                        .is_none_or(|kind| *kind == InputType::TextList) => {}
-                Value::Reference(_) => bail!("for each requires a list of text"),
-                Value::List(items) => {
-                    for item in items {
-                        match item {
-                            Value::String(text) if !text.contains('\0') => {}
-                            Value::Reference(name)
-                                if flow
-                                    .types
-                                    .get(name)
-                                    .is_none_or(|kind| *kind == InputType::Text) => {}
-                            _ => bail!("for each requires text list items without NUL bytes"),
-                        }
-                    }
-                }
-                _ => bail!("for each requires a list of text"),
-            }
+            element_type(values, &flow.types)?;
         }
         LoopKind::While { condition } => {
             control::validate_condition(condition, &flow.names, &flow.types)?
@@ -91,28 +88,23 @@ pub(super) fn preflight(kind: &LoopKind, values: &BTreeMap<String, Value>) -> Re
         }
         LoopKind::ForEach { values: source, .. } => {
             if !contains_reference(source) {
-                text_items(source)?;
+                list_items(source)?;
             } else if let Ok(value) = resolve(source, values) {
-                text_items(&value)?;
+                list_items(&value)?;
             }
         }
         LoopKind::While { condition } => {
             let left = resolve(&condition.left, values).ok();
             let right = resolve(&condition.right, values).ok();
-            for value in left.iter().chain(right.iter()) {
-                if !matches!(value, Value::String(_) | Value::Integer(_) | Value::Bool(_)) {
-                    bail!("condition requires two scalars of the same type; implicit conversion is unsupported");
-                }
-            }
             if let (Some(left), Some(right)) = (left, right) {
-                control::evaluate(
-                    &crate::ast::Condition {
-                        left,
-                        right,
-                        negated: condition.negated,
-                    },
-                    &BTreeMap::new(),
-                )?;
+                let resolved = crate::ast::Condition {
+                    left,
+                    right,
+                    negated: condition.negated,
+                    operator: condition.operator,
+                };
+                control::validate_condition(&resolved, &BTreeSet::new(), &BTreeMap::new())?;
+                control::evaluate(&resolved, &BTreeMap::new())?;
             }
         }
     }
@@ -154,9 +146,8 @@ impl LoopStack {
                         bail!("iteration binding {binding:?} is already defined");
                     }
                     let values = resolve(values, bindings)?;
-                    text_items(&values)?;
                     let Value::List(items) = values else {
-                        unreachable!()
+                        bail!("for each requires a JSON array or list of text");
                     };
                     Iterations::ForEach {
                         binding: binding.clone(),
@@ -219,6 +210,24 @@ impl LoopStack {
         bindings.retain(|name, _| frame.outer.contains(name));
         Ok(())
     }
+
+    /// Remove nested loop frames crossed by a lexical transfer. Each popped
+    /// frame restores the names that existed before that loop was entered.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn unwind_to(
+        &mut self,
+        depth: usize,
+        bindings: &mut BTreeMap<String, Value>,
+    ) -> Result<()> {
+        if depth > self.frames.len() {
+            bail!("control transfer targets an inactive loop scope");
+        }
+        while self.frames.len() > depth {
+            let frame = self.frames.pop().expect("loop depth checked");
+            bindings.retain(|name, _| frame.outer.contains(name));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -228,7 +237,9 @@ mod tests {
     #[test]
     fn validation_rejects_temporary_outer_type_drift_and_unknown_outer_writes() -> Result<()> {
         let registry = Registry::from_sources(&[] as &[&str])?;
-        let program = crate::parser::parse("accept flag as boolean\nrepeat 1 times\n  run \"true\" with arguments [] and keep status as flag\n")?;
+        let program = crate::parser::parse(
+            "accept flag as boolean\nrepeat 1 times\n  run \"true\" with arguments [] and keep status as flag\n",
+        )?;
         assert!(format!(
             "{:#}",
             super::super::validate(&program, &registry).unwrap_err()
@@ -255,6 +266,7 @@ mod tests {
                 left: Value::Reference("flag".into()),
                 right: Value::Bool(true),
                 negated: false,
+                operator: crate::ast::ConditionOperator::Equals,
             },
         };
         assert!(preflight(
@@ -345,6 +357,7 @@ mod tests {
                 left: Value::Reference("ready".into()),
                 right: Value::Bool(false),
                 negated: false,
+                operator: crate::ast::ConditionOperator::Equals,
             },
         };
         let mut stack = LoopStack::default();

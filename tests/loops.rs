@@ -21,6 +21,7 @@ fn options(cwd: &Path) -> runtime::RunOptions {
         trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(3)),
+        total_timeout: None,
     }
 }
 fn run(cwd: &Path, source: &str) -> runtime::RunResult {
@@ -86,6 +87,16 @@ fn foreach_uses_literal_filenames_and_keeps_only_last_result() {
 }
 
 #[test]
+fn foreach_iterates_json_array_literals_and_keeps_the_last_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = run(
+        dir.path(),
+        "for each item in [1, null, {\"nested\": [2]}]\n  then encode item as json\n",
+    );
+    assert_eq!(result.output, br#"{"nested":[2]}"#);
+}
+
+#[test]
 fn while_reevaluates_status_and_preserves_type_compatible_outer_rebinding() {
     let dir = tempfile::tempdir().unwrap();
     let result = run(dir.path(), "run \"true\" and keep status as code\nwhile code is 0\n  run \"printf\" with arguments [\"one iteration\"]\n  then save to \"observed\"\n  run \"false\" and keep status as code\nthen \"printf\" with arguments [\"status=%s\", code]\n");
@@ -112,7 +123,7 @@ fn invalid_body_counts_and_local_escapes_fail_before_any_effect() {
         "repeat -1 times\n  run \"true\"",
         "repeat 100001 times\n  run \"true\"",
         "repeat 0 times\n  run missing_manifest",
-        "for each item in [1]\n  run \"true\"",
+        "for each item in true\n  run \"true\"",
         "repeat 1 times\n  run \"printf\" with arguments [\"x\"] as local\nthen \"printf\" with arguments [local]",
         "run \"printf\" with arguments [\"outer\"] as item\nfor each item in [\"a\"]\n  run \"true\"",
         "run \"true\" and keep status as code\nwhile code is 0\n  run \"printf\" with arguments [\"wrong type\"] as code",

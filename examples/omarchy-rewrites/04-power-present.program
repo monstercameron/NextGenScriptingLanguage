@@ -1,0 +1,64 @@
+# Omarchy omarchy-power-present, pinned c668141e9c42b13c80c9ca4ea108e11708c5e8a5.
+# Source and MIT license: ../../tests/fixtures/omarchy-rewrites/04-power-present/README.md
+# Run against an owned fixture with --input power_supply_path=/absolute/fake/root.
+accept power_supply_path as text from environment "OMARCHY_POWER_SUPPLY_PATH" with default "/sys/class/power_supply"
+accept arguments as list of text from arguments
+
+# Bash's ${VAR:-default} also defaults an explicitly empty environment value.
+run "printf" with arguments ["%s", power_supply_path]
+pipe to "jq" with arguments ["-Rs", "if . == \"\" then \"/sys/class/power_supply\" else . end"]
+then parse json as root_value
+take text at "" from root_value as supply_root
+run "test" with arguments ["-d", supply_root] and keep status as root_directory
+if root_directory is 0
+  run "test" with arguments ["-r", supply_root] and keep status as root_readable
+  if root_readable is 0
+    run "test" with arguments ["-x", supply_root] and keep status as root_searchable
+    if root_searchable is 0
+      run cd with path supply_root
+      # NUL framing preserves spaces, newlines, and shell metacharacters.
+      # Bash '*' excludes dot entries; sorting matches its C-locale order.
+      run "find" with arguments [".", "-mindepth", "1", "-maxdepth", "1", "!", "-name", ".*", "-print0"]
+      pipe to "jq" with arguments ["-Rs", "split(\"\\u0000\")[:-1] | sort"]
+    otherwise
+      run "printf" with arguments ["[]"]
+  otherwise
+    run "printf" with arguments ["[]"]
+otherwise
+  run "printf" with arguments ["[]"]
+then parse json as entries
+take list of text at "" from entries as supplies
+
+run "test" with arguments ["0", "=", "1"] and keep status as found
+for each supply in supplies
+  # Execute currently has no break/exit. Guard every later iteration after success.
+  if found is not 0
+    run "printf" with arguments ["%s", supply]
+    pipe to "jq" with arguments ["-Rs", "{type: (. + \"/type\"), online: (. + \"/online\")}"]
+    then parse json as paths
+    take text at "/type" from paths as type_path
+    take text at "/online" from paths as online_path
+    run "test" with arguments ["-r", online_path] and keep status as online_readable
+    if online_readable is 0
+      run "test" with arguments ["-r", type_path] and keep status as type_readable
+      if type_readable is 0
+        # Command substitution in Bash removes every trailing newline.
+        run "jq" with arguments ["-Rs", "sub(\"\\n+$\"; \"\")", type_path] and keep status as type_read
+        if type_read is 0
+          then parse json as type_value
+          take text at "" from type_value as supply_type
+          run "test" with arguments ["0", "=", "1"] and keep status as supported
+          if supply_type is "Mains"
+            run "test" with arguments ["1", "=", "1"] and keep status as supported
+          if supply_type is "USB"
+            run "test" with arguments ["1", "=", "1"] and keep status as supported
+          if supported is 0
+            run "jq" with arguments ["-Rs", "sub(\"\\n+$\"; \"\")", online_path] and keep status as online_read
+            if online_read is 0
+              then parse json as online_value
+              take text at "" from online_value as online
+              if online is "1"
+                run "test" with arguments ["1", "=", "1"] and keep status as found
+
+# Native failure propagates status 1 and Execute's contextual stderr diagnostic.
+run "test" with arguments [found, "=", "0"]

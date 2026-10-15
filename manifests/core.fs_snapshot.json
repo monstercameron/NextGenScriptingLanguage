@@ -1,0 +1,63 @@
+{
+  "name": "fs.snapshot",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "stdio": {
+    "stderr": "discard"
+  },
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.snapshot"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 1,
+        "name": "absence",
+        "kind": "absence"
+      },
+      {
+        "status": 2,
+        "name": "failure",
+        "kind": "failure"
+      },
+      {
+        "status": 75,
+        "name": "retryable",
+        "kind": "retryable"
+      }
+    ],
+    "capabilities": [
+      "filesystem.read"
+    ],
+    "effects": [],
+    "result_envelope": true
+  }
+}

@@ -1,11 +1,12 @@
 //! Unix program executor with finite pipelines and persistent event services.
 use crate::ast::{Connection, Invocation, ListenSource, Program, StepKind, Trigger, Value};
-use crate::manifest::{Builtin, Manifest, Registry};
+use crate::contracts::{AppletBackend, Lifecycle, OutcomeKind};
+use crate::manifest::{AppletOutput, Builtin, Manifest, Registry};
 use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -16,20 +17,28 @@ use std::os::fd::{FromRawFd, OwnedFd};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::process::Command;
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 mod cache;
 mod calls;
 mod checkpoint;
 mod control;
+mod control_flow;
+pub mod execution_result;
+pub mod invocation_io;
 pub(crate) mod live;
 mod loops;
+mod program_backend;
 mod resume;
 mod service;
 mod streaming;
+pub mod tasks;
+pub mod worker_backend;
 pub use checkpoint::CheckpointOptions;
 pub use resume::run_checkpointed;
 pub use streaming::{run_stream, StreamResult};
@@ -37,8 +46,9 @@ pub use streaming::{run_stream, StreamResult};
 mod stdio;
 pub(crate) use service::next_interval;
 pub use service::{
-    run_service, run_service_checkpointed, run_service_with_cancellation, ServiceLimits,
-    ServiceResult,
+    run_service, run_service_checkpointed, run_service_checkpointed_with_schedule_options,
+    run_service_with_cancellation, run_service_with_schedule_options, CalendarDedupPolicy,
+    MissedTickPolicy, ScheduleOptions, ServiceLimits, ServiceResult,
 };
 pub use stdio::{write_cancellable, write_diagnostic, write_with_deadline};
 
@@ -51,20 +61,81 @@ pub struct RunOptions {
     pub max_output_bytes: usize,
     /// Maximum lifetime of each native pipeline group or finite stdin capture, not file I/O.
     pub command_timeout: Option<Duration>,
+    /// Maximum lifetime of the full runtime operation, including scheduler waits.
+    pub total_timeout: Option<Duration>,
 }
 #[derive(Debug)]
 struct CommandTimedOut;
 impl std::fmt::Display for CommandTimedOut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("command pipeline timed out; external effects may be incomplete")
+        f.write_str("command timed out")
     }
 }
 impl std::error::Error for CommandTimedOut {}
+#[derive(Debug)]
+pub struct AppletInvocationError {
+    source: anyhow::Error,
+    launched_processes: usize,
+}
+impl AppletInvocationError {
+    pub fn launched_processes(&self) -> usize {
+        self.launched_processes
+    }
+
+    /// Whether a failed invocation may have completed external effects.
+    pub fn uncertain(&self) -> bool {
+        execution_result::effect_certainty(&self.source)
+            == execution_result::EffectCertainty::Uncertain
+    }
+}
+impl std::fmt::Display for AppletInvocationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{:#}", self.source)
+    }
+}
+impl std::error::Error for AppletInvocationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
 fn check_deadline(deadline: Option<Instant>) -> Result<()> {
     if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-        return Err(CommandTimedOut.into());
+        return Err(
+            anyhow!("execution deadline exceeded; external effects may be incomplete")
+                .context(CommandTimedOut),
+        );
     }
     Ok(())
+}
+fn check_execution_budget(cancelled: &AtomicBool, deadline: Option<Instant>) -> Result<()> {
+    check_deadline(deadline)?;
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(execution_result::ExecutionFailure::new(
+            execution_result::ExecutionResult::runtime_failure(
+                execution_result::ExecutionKind::Cancelled,
+                "workflow cancelled by signal",
+                execution_result::EffectCertainty::Uncertain,
+            ),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn is_timeout_error(error: &anyhow::Error) -> bool {
+    error.is::<CommandTimedOut>()
+        || error
+            .downcast_ref::<execution_result::ExecutionFailure>()
+            .is_some_and(|failure| failure.result.kind == execution_result::ExecutionKind::Timeout)
+}
+fn deadline_after(timeout: Option<Duration>, label: &str) -> Result<Option<Instant>> {
+    timeout
+        .map(|duration| {
+            Instant::now()
+                .checked_add(duration)
+                .with_context(|| format!("{label} is too large"))
+        })
+        .transpose()
 }
 #[cfg(unix)]
 fn deadline_poll_timeout(deadline: Option<Instant>, maximum_ms: libc::c_int) -> libc::c_int {
@@ -79,6 +150,25 @@ fn deadline_poll_timeout(deadline: Option<Instant>, maximum_ms: libc::c_int) -> 
 pub struct RunResult {
     pub output: Vec<u8>,
     pub cache_hits: usize,
+    pub launched_processes: usize,
+    pub executions: Vec<execution_result::ExecutionRecord>,
+    pub dropped_executions: usize,
+    pub dropped_stages: usize,
+}
+
+/// Result of one explicit applet invocation through its declared backend.
+/// `output` always preserves the exact stdout bytes; `value` is available only
+/// when a typed contract successfully decodes the result (or creates an
+/// explicit result envelope).
+#[derive(Debug, Clone)]
+pub struct AppletInvocationResult {
+    pub output: Vec<u8>,
+    pub status: i32,
+    pub outcome: crate::contracts::Outcome,
+    pub value: Option<Value>,
+    pub stderr: Vec<u8>,
+    pub uncertain: bool,
+    /// Actual helper/native processes started by this single invocation.
     pub launched_processes: usize,
 }
 
@@ -102,6 +192,7 @@ fn configured_inputs<'a>(
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
+        total_timeout: options.total_timeout,
     };
     preflight_inputs(program, registry, &configured.inputs)?;
     Ok(Cow::Owned(configured))
@@ -162,32 +253,112 @@ include!("runtime/unix_process.rs");
 #[cfg(windows)]
 include!("runtime/windows_process.rs");
 
-struct Signals {
+pub(crate) struct Signals {
     cancelled: Arc<AtomicBool>,
     registrations: Vec<signal_hook::SigId>,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
+    program_modules: Arc<Mutex<Option<Arc<crate::modules::ProgramModuleSession>>>>,
+    sensitivity_floor: Arc<OnceLock<crate::security::SensitivitySet>>,
 }
 impl Signals {
     fn register() -> Result<Self> {
+        Self::register_with_deadline(None)
+    }
+
+    pub(crate) fn register_with_deadline(deadline: Option<Instant>) -> Result<Self> {
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
-            deadline: None,
+            deadline,
+            program_modules: Arc::new(Mutex::new(None)),
+            sensitivity_floor: Arc::new(OnceLock::new()),
         };
         guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
         Ok(guard)
     }
 
+    #[cfg(test)]
     fn with_cancellation(cancelled: Arc<AtomicBool>, capture_diagnostics: bool) -> Result<Self> {
+        Self::with_cancellation_and_deadline(cancelled, capture_diagnostics, None)
+    }
+
+    pub(crate) fn with_cancellation_and_deadline(
+        cancelled: Arc<AtomicBool>,
+        capture_diagnostics: bool,
+        deadline: Option<Instant>,
+    ) -> Result<Self> {
         Ok(Self {
             cancelled,
             registrations: Vec::new(),
             capture_diagnostics,
-            deadline: None,
+            deadline,
+            program_modules: Arc::new(Mutex::new(None)),
+            sensitivity_floor: Arc::new(OnceLock::new()),
         })
     }
+
+    fn set_sensitivity_floor(&self, sensitivity: crate::security::SensitivitySet) {
+        let _ = self.sensitivity_floor.set(sensitivity);
+    }
+
+    fn sensitivity_floor(&self) -> crate::security::SensitivitySet {
+        self.sensitivity_floor.get().cloned().unwrap_or_default()
+    }
+}
+
+/// Load and validate every statically reachable program module before a
+/// producer, journal, or workflow step can have effects. The immutable
+/// snapshot is retained on Signals for all nested execution calls.
+pub(crate) fn preload_program_modules(
+    program: &Program,
+    registry: &Registry,
+    signals: &Signals,
+    cwd: &Path,
+) -> Result<Arc<crate::modules::ProgramModuleSession>> {
+    let mut slot = signals
+        .program_modules
+        .lock()
+        .map_err(|_| anyhow!("program module session lock is poisoned"))?;
+    if let Some(session) = slot.as_ref() {
+        return Ok(Arc::clone(session));
+    }
+    let mut session = crate::modules::ProgramModuleSession::preload_program(program, registry)?;
+    session.fingerprint_body_calls(cwd, program_module_body_call_fingerprint)?;
+    let session = Arc::new(session);
+    preflight_module_session(&session, registry, cwd)?;
+    *slot = Some(Arc::clone(&session));
+    Ok(session)
+}
+
+fn preflight_module_session(
+    session: &crate::modules::ProgramModuleSession,
+    registry: &Registry,
+    cwd: &Path,
+) -> Result<()> {
+    for (scope, invocation) in session.scoped_body_invocations() {
+        crate::capabilities::preflight_invocations(std::iter::once(invocation), scope, cwd)
+            .with_context(|| {
+                format!(
+                    "preflighting program module body call {:?}",
+                    invocation.operation
+                )
+            })?;
+    }
+    // Keep the argument in this helper to make accidental cross-registry
+    // preflight visible while imported scopes are being assembled.
+    let _ = registry;
+    Ok(())
+}
+
+fn current_module_session(signals: &Signals) -> Result<Arc<crate::modules::ProgramModuleSession>> {
+    signals
+        .program_modules
+        .lock()
+        .map_err(|_| anyhow!("program module session lock is poisoned"))?
+        .clone()
+        .ok_or_else(|| anyhow!("program module source was not preloaded before execution"))
 }
 impl Drop for Signals {
     fn drop(&mut self) {
@@ -196,9 +367,12 @@ impl Drop for Signals {
         }
     }
 }
-fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
+pub(crate) fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
     if binary == "@execute-model" {
         return bundled_model_applet();
+    }
+    if binary == "@execute-applet" {
+        return bundled_applet_helper();
     }
     // Keep the selected path spelling: multicall tools and symlink aliases
     // dispatch on argv[0], so canonicalizing to the target changes behavior.
@@ -216,6 +390,23 @@ fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
         let path = std::env::var_os("PATH").unwrap_or_default();
         binary_path_from_path(binary, cwd, &path)
     }
+}
+
+/// Locate the version-matched generic applet helper beside this executable.
+pub fn bundled_applet_helper() -> Result<PathBuf> {
+    let executable = std::env::current_exe().context("locating the running interpreter")?;
+    let helper = executable.with_file_name(if cfg!(windows) {
+        "execute-applet.exe"
+    } else {
+        "execute-applet"
+    });
+    let metadata = fs::metadata(&helper).with_context(|| {
+        "bundled execute-applet helper missing; build the interpreter and helper binaries with cargo build --release"
+    })?;
+    if !metadata.is_file() || !crate::platform::executable(&metadata) {
+        bail!("bundled execute-applet helper is not an executable file");
+    }
+    Ok(helper)
 }
 
 /// Locate the version-matched native model applet beside this executable.
@@ -283,9 +474,11 @@ fn lazy_event(
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 fn scan_child_statuses(
     children: &mut Children,
     calls: &[(&Invocation, &Manifest, usize)],
+    observed_stages: &mut [Option<execution_result::StageResult>],
     trace: bool,
     signals: &Signals,
     observer: &mut Option<ChildObserver>,
@@ -310,22 +503,48 @@ fn scan_child_statuses(
                 // Reclaim descendants that outlive their owning applet.
                 kill_group(&managed.child);
                 managed.reaped = true;
+                let code = status.code();
+                let stderr = captured_stage_stderr(calls[index].1, signals)
+                    .then(|| managed.diagnostic.clone());
+                observed_stages[index] = Some(if let Some(code) = code {
+                    execution_result::StageResult::exited(
+                        calls[index].2,
+                        calls[index].1.name_for(calls[index].0),
+                        code,
+                        calls[index].1.outcome_for(code),
+                        stderr,
+                    )
+                } else {
+                    execution_result::StageResult::signaled(
+                        calls[index].2,
+                        calls[index].1.name_for(calls[index].0),
+                        execution_result::exit_signal(status),
+                        stderr,
+                    )
+                });
                 lazy_event(
                     trace,
                     signals,
                     || serde_json::json!({"event":"exit","line":calls[index].2,"applet":calls[index].1.name_for(calls[index].0),"status":status.code(),"group_elapsed_us":started.elapsed().as_micros()}),
                 )?;
-                if !status.success()
-                    && !(calls[index].0.status_binding.is_some() && status.code().is_some())
+                let implicit_success = code.is_some_and(|code| {
+                    calls[index].1.outcome_for(code).kind == crate::contracts::OutcomeKind::Success
+                });
+                if !implicit_success && !(calls[index].0.status_binding.is_some() && code.is_some())
                 {
                     drain_diagnostic(managed)?;
                     return Err(CommandFailed {
                         line: calls[index].2,
                         operation: calls[index].1.name_for(calls[index].0).to_owned(),
                         status,
+                        outcome: code.map(|code| calls[index].1.outcome_for(code)),
                         diagnostic: String::from_utf8_lossy(&managed.diagnostic)
                             .trim()
                             .to_owned(),
+                        stderr: captured_stage_stderr(calls[index].1, signals)
+                            .then(|| managed.diagnostic.clone()),
+                        stdout: None,
+                        stages: collect_native_stages(calls, observed_stages, children, signals),
                     }
                     .into());
                 }
@@ -345,7 +564,15 @@ pub struct CommandFailed {
     pub line: usize,
     pub operation: String,
     pub status: std::process::ExitStatus,
+    pub outcome: Option<crate::contracts::Outcome>,
     pub diagnostic: String,
+    /// Raw captured stderr bytes from the failed stage, when stderr capture
+    /// was enabled. The text diagnostic remains for legacy CLI formatting.
+    pub stderr: Option<Vec<u8>>,
+    /// Captured terminal stdout, when available at the point the failure was
+    /// observed. Native fail-fast behavior can make this unavailable.
+    pub stdout: Option<Vec<u8>>,
+    pub stages: Vec<execution_result::StageResult>,
 }
 impl std::fmt::Display for CommandFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -361,10 +588,157 @@ impl std::error::Error for CommandFailed {}
 struct GroupOutput {
     bytes: Vec<u8>,
     status: Option<i32>,
+    diagnostic: Vec<u8>,
+    stdout_captured: bool,
+    stages: Vec<execution_result::StageResult>,
+}
+
+fn captured_stage_stderr(manifest: &Manifest, signals: &Signals) -> bool {
+    invocation_io::ResolvedStdio::resolve(
+        manifest.stdio(),
+        invocation_io::StdioDisposition::Capture,
+        if signals.capture_diagnostics {
+            invocation_io::StdioDisposition::Capture
+        } else {
+            invocation_io::StdioDisposition::Inherit
+        },
+    )
+    .captures_stderr()
+}
+
+fn collect_native_stages(
+    calls: &[(&Invocation, &Manifest, usize)],
+    observed: &[Option<execution_result::StageResult>],
+    children: &Children,
+    signals: &Signals,
+) -> Vec<execution_result::StageResult> {
+    calls
+        .iter()
+        .enumerate()
+        .map(|(index, (call, manifest, line))| {
+            let mut stage = observed
+                .get(index)
+                .and_then(Clone::clone)
+                .unwrap_or_else(|| {
+                    if index < children.0.len() {
+                        execution_result::StageResult::unknown(*line, manifest.name_for(call))
+                    } else {
+                        execution_result::StageResult::not_started(*line, manifest.name_for(call))
+                    }
+                });
+            if captured_stage_stderr(manifest, signals) {
+                stage.stderr = children.0.get(index).map(|child| child.diagnostic.clone());
+            }
+            stage
+        })
+        .collect()
+}
+
+fn native_execution_failure(
+    kind: execution_result::ExecutionKind,
+    message: impl Into<String>,
+    calls: &[(&Invocation, &Manifest, usize)],
+    children: &Children,
+    observed: &[Option<execution_result::StageResult>],
+    signals: &Signals,
+) -> execution_result::ExecutionFailure {
+    let stages = collect_native_stages(calls, observed, children, signals);
+    let mut result = execution_result::ExecutionResult::runtime_failure(
+        kind,
+        message,
+        if children.0.is_empty() {
+            execution_result::EffectCertainty::NotStarted
+        } else {
+            execution_result::EffectCertainty::Uncertain
+        },
+    );
+    result.stderr = stages.iter().rev().find_map(|stage| stage.stderr.clone());
+    result.stages = stages;
+    execution_result::ExecutionFailure::new(result)
+}
+
+fn native_output_limit_failure(
+    message: impl Into<String>,
+    output: Vec<u8>,
+    calls: &[(&Invocation, &Manifest, usize)],
+    children: &Children,
+    observed: &[Option<execution_result::StageResult>],
+    signals: &Signals,
+) -> execution_result::ExecutionFailure {
+    let mut result = native_execution_failure(
+        execution_result::ExecutionKind::OutputLimit,
+        message,
+        calls,
+        children,
+        observed,
+        signals,
+    )
+    .result;
+    result.stdout = Some(output);
+    execution_result::ExecutionFailure::new(result)
+}
+
+fn check_native_abort(
+    calls: &[(&Invocation, &Manifest, usize)],
+    children: &Children,
+    observed: &[Option<execution_result::StageResult>],
+    signals: &Signals,
+) -> Result<()> {
+    if signals.cancelled.load(Ordering::Relaxed) {
+        return Err(native_execution_failure(
+            execution_result::ExecutionKind::Cancelled,
+            "workflow cancelled by signal",
+            calls,
+            children,
+            observed,
+            signals,
+        )
+        .into());
+    }
+    if signals
+        .deadline
+        .is_some_and(|deadline| Instant::now() >= deadline)
+    {
+        return Err(native_execution_failure(
+            execution_result::ExecutionKind::Timeout,
+            "command pipeline timed out; external effects may be incomplete",
+            calls,
+            children,
+            observed,
+            signals,
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn native_spawn_failure(
+    message: String,
+    index: usize,
+    calls: &[(&Invocation, &Manifest, usize)],
+    children: &Children,
+    observed: &mut [Option<execution_result::StageResult>],
+    signals: &Signals,
+) -> anyhow::Error {
+    let (call, manifest, line) = calls[index];
+    observed[index] = Some(execution_result::StageResult::spawn_failed(
+        line,
+        manifest.name_for(call),
+    ));
+    native_execution_failure(
+        execution_result::ExecutionKind::SpawnError,
+        message,
+        calls,
+        children,
+        observed,
+        signals,
+    )
+    .into()
 }
 
 #[allow(clippy::too_many_arguments)]
 fn execute_group(
+    registry: &Registry,
     calls: &[(&Invocation, &Manifest, usize)],
     input: Input,
     prepared_first_call: Option<(PathBuf, Vec<String>)>,
@@ -374,22 +748,37 @@ fn execute_group(
     launched: &mut usize,
     signals: &Signals,
 ) -> Result<GroupOutput> {
-    execute_group_with_sink(
-        calls,
-        input,
-        prepared_first_call,
-        bindings,
-        cwd,
-        options,
-        launched,
-        signals,
-        None,
+    redact_command_failure(
+        registry,
+        execute_group_with_sink(
+            registry,
+            calls,
+            input,
+            prepared_first_call,
+            bindings,
+            cwd,
+            options,
+            launched,
+            signals,
+            None,
+        ),
     )
+}
+
+fn redact_command_failure<T>(registry: &Registry, mut result: Result<T>) -> Result<T> {
+    if let Err(error) = &mut result {
+        if let Some(failure) = error.downcast_mut::<CommandFailed>() {
+            failure.diagnostic =
+                crate::security::secret_redactor(registry).redact_text(&failure.diagnostic);
+        }
+    }
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
 #[cfg(unix)]
 fn execute_group_with_sink(
+    registry: &Registry,
     calls: &[(&Invocation, &Manifest, usize)],
     input: Input,
     prepared_first_call: Option<(PathBuf, Vec<String>)>,
@@ -402,6 +791,7 @@ fn execute_group_with_sink(
 ) -> Result<GroupOutput> {
     let mut writer = InputWriter::default();
     let mut children = Children(Vec::with_capacity(calls.len()));
+    let mut observed_stages = vec![None; calls.len()];
     let mut input = Some(input);
     let mut prepared_first_call = prepared_first_call;
     let mut previous = None;
@@ -412,45 +802,113 @@ fn execute_group_with_sink(
         cancelled: signals.cancelled.clone(),
         registrations: Vec::new(),
         capture_diagnostics: signals.capture_diagnostics,
-        deadline: options
-            .command_timeout
-            .map(|duration| {
-                started
-                    .checked_add(duration)
-                    .context("command timeout is too large")
-            })
-            .transpose()?,
+        program_modules: Arc::clone(&signals.program_modules),
+        sensitivity_floor: Arc::clone(&signals.sensitivity_floor),
+        deadline: {
+            let command_deadline = options
+                .command_timeout
+                .map(|duration| {
+                    started
+                        .checked_add(duration)
+                        .context("command timeout is too large")
+                })
+                .transpose()?;
+            match (signals.deadline, command_deadline) {
+                (Some(total), Some(command)) => Some(total.min(command)),
+                (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+                (None, None) => None,
+            }
+        },
     };
     let signals = &bounded_signals;
-    for (index, (call, manifest, line)) in calls.iter().enumerate() {
-        if signals.cancelled.load(Ordering::Relaxed) {
-            bail!("workflow cancelled by signal");
+    if calls.is_empty() {
+        bail!("cannot execute an empty native command group");
+    }
+    for (index, (_, manifest, line)) in calls.iter().enumerate() {
+        if index + 1 != calls.len()
+            && manifest.stdio().is_some_and(|stdio| {
+                stdio
+                    .stdout
+                    .is_some_and(|mode| mode != invocation_io::StdioDisposition::Capture)
+            })
+        {
+            bail!("line {line}: only the final pipeline applet can discard or inherit stdout");
         }
-        check_deadline(signals.deadline)?;
+    }
+    let terminal_io = invocation_io::ResolvedStdio::resolve(
+        calls.last().expect("nonempty group").1.stdio(),
+        invocation_io::StdioDisposition::Capture,
+        if signals.capture_diagnostics {
+            invocation_io::StdioDisposition::Capture
+        } else {
+            invocation_io::StdioDisposition::Inherit
+        },
+    );
+    if sink.is_some() && !terminal_io.captures_terminal_stdout() {
+        bail!("streaming requires the final applet's stdout to be captured");
+    }
+    let (terminal_call, terminal_manifest, terminal_line) = calls.last().expect("nonempty group");
+    if !terminal_io.captures_terminal_stdout()
+        && (terminal_call.binding.is_some()
+            || calls.iter().any(|(call, _, _)| call.cache)
+            || terminal_manifest.output_kind().is_some())
+    {
+        bail!(
+            "line {terminal_line}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output"
+        );
+    }
+    for (index, (call, manifest, line)) in calls.iter().enumerate() {
+        check_native_abort(calls, &children, &observed_stages, signals)?;
         let (binary, argv) = match prepared_first_call.take() {
             Some((binary, argv)) => (binary, GroupArguments::Owned(argv)),
             None => {
                 let argv = arguments_for_group_call(call, manifest, bindings)?;
-                (binary_path(manifest.binary_for(call), cwd)?, argv)
+                let binary = binary_path(manifest.binary_for(call), cwd).map_err(|error| {
+                    native_spawn_failure(
+                        format!(
+                            "line {line}: resolving executable for {}: {error:#}",
+                            manifest.name_for(call)
+                        ),
+                        index,
+                        calls,
+                        &children,
+                        &mut observed_stages,
+                        signals,
+                    )
+                })?;
+                (binary, argv)
             }
         };
-        let mut command = Command::new(&binary);
-        match &argv {
-            GroupArguments::Owned(argv) => {
-                command.args(argv);
-            }
-            GroupArguments::Borrowed(argv) => {
-                command.args(argv.iter().map(|argument| argument.as_ref()));
-            }
-        }
+        let mut command = match &argv {
+            GroupArguments::Owned(argv) => crate::capabilities::command_for(
+                &binary,
+                argv.iter().map(|argument| OsStr::new(argument.as_str())),
+                registry,
+                &manifest.name,
+                cwd,
+            )?,
+            GroupArguments::Borrowed(argv) => crate::capabilities::command_for(
+                &binary,
+                argv.iter().map(|argument| OsStr::new(argument.as_ref())),
+                registry,
+                &manifest.name,
+                cwd,
+            )?,
+        };
+        let resolved_io = invocation_io::ResolvedStdio::resolve(
+            manifest.stdio(),
+            invocation_io::StdioDisposition::Capture,
+            if signals.capture_diagnostics {
+                invocation_io::StdioDisposition::Capture
+            } else {
+                invocation_io::StdioDisposition::Inherit
+            },
+        );
+        let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
         command
             .current_dir(cwd)
-            .stdout(Stdio::piped())
-            .stderr(if signals.capture_diagnostics {
-                Stdio::piped()
-            } else {
-                Stdio::inherit()
-            })
+            .stdout(invocation_io::process_stdio(stdout_disposition))
+            .stderr(invocation_io::process_stdio(resolved_io.stderr))
             .process_group(0);
         let mut bytes = None;
         let mut prefilled_input = None;
@@ -486,13 +944,17 @@ fn execute_group_with_sink(
             }
         };
         command.stdin(stdin);
-        if signals.cancelled.load(Ordering::Relaxed) {
-            bail!("workflow cancelled by signal");
-        }
-        check_deadline(signals.deadline)?;
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("line {line}: spawning {}", binary.display()))?;
+        check_native_abort(calls, &children, &observed_stages, signals)?;
+        let mut child = command.spawn().map_err(|error| {
+            native_spawn_failure(
+                format!("line {line}: spawning {}: {error}", binary.display()),
+                index,
+                calls,
+                &children,
+                &mut observed_stages,
+                signals,
+            )
+        })?;
         let observer_failed = child_observer
             .as_ref()
             .and_then(|observer| observer.observe(child.id()).err())
@@ -546,20 +1008,28 @@ fn execute_group_with_sink(
             || serde_json::json!({"event":"spawn", "line":line,"applet":manifest.name_for(call),"binary":binary,"pid":children.0.last().unwrap().child.id()}),
         )?;
     }
-    let mut stdout = previous.expect("nonempty group");
-    let fd = stdout.as_raw_fd();
-    // Only the terminal pipe is monitored. Intermediate bytes travel directly
-    // between child descriptors; the interpreter never copies them.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        return Err(std::io::Error::last_os_error()).context("setting terminal pipe nonblocking");
-    }
-    let mut diagnostic_poll_descriptors = Vec::with_capacity(if signals.capture_diagnostics {
+    let mut stdout = previous;
+    // Only a captured terminal pipe is monitored. Intermediate bytes travel
+    // directly between child descriptors; the interpreter never copies them.
+    let (fd, mut eof) = if let Some(stdout) = stdout.as_ref() {
+        let fd = stdout.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("setting terminal pipe nonblocking");
+        }
+        (fd, false)
+    } else {
+        (-1, true)
+    };
+    let capture_diagnostics = children.0.iter().any(|child| child.stderr.is_some());
+    let mut diagnostic_poll_descriptors = Vec::with_capacity(if capture_diagnostics {
         children.0.len() + 2
     } else {
         0
     });
-    if signals.capture_diagnostics {
+    if capture_diagnostics {
         for _ in 0..children.0.len() + 2 {
             diagnostic_poll_descriptors.push(libc::pollfd {
                 fd: -1,
@@ -569,16 +1039,13 @@ fn execute_group_with_sink(
         }
     }
     let mut output = Vec::new();
-    let mut eof = false;
     let mut chunk = [0u8; 32768];
     loop {
-        check_deadline(signals.deadline)?;
-        if signals.cancelled.load(Ordering::Relaxed) {
-            bail!("workflow cancelled by signal");
-        }
+        check_native_abort(calls, &children, &observed_stages, signals)?;
         scan_child_statuses(
             &mut children,
             calls,
+            &mut observed_stages,
             options.trace,
             signals,
             &mut child_observer,
@@ -588,7 +1055,11 @@ fn execute_group_with_sink(
         let mut reached_eof = false;
         if !eof {
             loop {
-                match stdout.read(&mut chunk) {
+                match stdout
+                    .as_mut()
+                    .expect("captured stdout pipe")
+                    .read(&mut chunk)
+                {
                     Ok(0) => {
                         eof = true;
                         reached_eof = true;
@@ -605,6 +1076,7 @@ fn execute_group_with_sink(
                                 scan_child_statuses(
                                     &mut children,
                                     calls,
+                                    &mut observed_stages,
                                     options.trace,
                                     signals,
                                     &mut child_observer,
@@ -617,14 +1089,35 @@ fn execute_group_with_sink(
                                 return Ok(GroupOutput {
                                     bytes: output,
                                     status: None,
+                                    diagnostic: children
+                                        .0
+                                        .last()
+                                        .map_or_else(Vec::new, |child| child.diagnostic.clone()),
+                                    stdout_captured: false,
+                                    stages: collect_native_stages(
+                                        calls,
+                                        &observed_stages,
+                                        &children,
+                                        signals,
+                                    ),
                                 });
                             }
                         } else {
-                            if count > options.max_output_bytes.saturating_sub(output.len()) {
-                                bail!(
-                                    "output exceeds maximum of {} bytes",
-                                    options.max_output_bytes
-                                );
+                            let remaining = options.max_output_bytes.saturating_sub(output.len());
+                            if count > remaining {
+                                output.extend_from_slice(&chunk[..remaining]);
+                                return Err(native_output_limit_failure(
+                                    format!(
+                                        "output exceeds maximum of {} bytes",
+                                        options.max_output_bytes
+                                    ),
+                                    output,
+                                    calls,
+                                    &children,
+                                    &observed_stages,
+                                    signals,
+                                )
+                                .into());
                             }
                             output.extend_from_slice(&chunk[..count]);
                         }
@@ -633,22 +1126,17 @@ fn execute_group_with_sink(
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(error) => return Err(error).context("reading terminal pipe"),
                 }
-                if signals.cancelled.load(Ordering::Relaxed) {
-                    bail!("workflow cancelled by signal");
-                }
-                check_deadline(signals.deadline)?;
+                check_native_abort(calls, &children, &observed_stages, signals)?;
             }
         }
         if reached_eof && children.0.iter().any(|child| !child.reaped) {
             // stdout EOF can precede child exit. Recheck once before falling
             // back to the short no-descriptor poll for cancellation/deadline.
-            check_deadline(signals.deadline)?;
-            if signals.cancelled.load(Ordering::Relaxed) {
-                bail!("workflow cancelled by signal");
-            }
+            check_native_abort(calls, &children, &observed_stages, signals)?;
             scan_child_statuses(
                 &mut children,
                 calls,
+                &mut observed_stages,
                 options.trace,
                 signals,
                 &mut child_observer,
@@ -669,7 +1157,7 @@ fn execute_group_with_sink(
         };
         let timeout_ms = deadline_poll_timeout(signals.deadline, maximum_wait_ms);
         let observer_notified;
-        let ready = if signals.capture_diagnostics {
+        let ready = if capture_diagnostics {
             let descriptors = &mut diagnostic_poll_descriptors;
             descriptors[0].fd = if eof { -1 } else { fd };
             descriptors[0].events = libc::POLLIN;
@@ -718,20 +1206,19 @@ fn execute_group_with_sink(
     writer
         .join()
         .with_context(|| format!("line {}: feeding applet stdin", calls[0].2))?;
-    let status = if calls.last().unwrap().0.status_binding.is_some() {
-        children
-            .0
-            .last_mut()
-            .unwrap()
-            .child
-            .try_wait()?
-            .and_then(|status| status.code())
-    } else {
-        None
-    };
+    let status = observed_stages
+        .last()
+        .and_then(Option::as_ref)
+        .and_then(|stage| stage.status);
     Ok(GroupOutput {
         bytes: output,
         status,
+        diagnostic: children
+            .0
+            .last()
+            .map_or_else(Vec::new, |child| child.diagnostic.clone()),
+        stdout_captured: terminal_io.captures_terminal_stdout() && sink.is_none(),
+        stages: collect_native_stages(calls, &observed_stages, &children, signals),
     })
 }
 
@@ -739,6 +1226,7 @@ fn hash_field(hash: &mut Sha256, bytes: &[u8]) {
     hash.update((bytes.len() as u64).to_le_bytes());
     hash.update(bytes);
 }
+#[cfg(test)]
 fn cache_key(
     manifest: &Manifest,
     argv: &[String],
@@ -747,6 +1235,69 @@ fn cache_key(
     input: &[u8],
 ) -> Result<String> {
     cache_key_with_environment(manifest, argv, executable, cwd, input, std::env::vars_os)
+}
+
+fn cache_key_for_applet(
+    registry: &Registry,
+    manifest: &Manifest,
+    argv: &[String],
+    executable: &Path,
+    cwd: &Path,
+    input: &[u8],
+) -> Result<String> {
+    let environment = crate::capabilities::effective_environment(registry, &manifest.name)?;
+    cache_key_with_environment(manifest, argv, executable, cwd, input, || environment)
+}
+
+fn cache_key_for_program_module(
+    registry: &Registry,
+    manifest: &Manifest,
+    argv: &[String],
+    resolved_parameters: &[u8],
+    cwd: &Path,
+    input: &[u8],
+    module_fingerprint: &str,
+) -> Result<String> {
+    let environment = crate::capabilities::effective_environment(registry, &manifest.name)?;
+    let mut hash = Sha256::new();
+    hash_field(&mut hash, b"flow-cache-program-module-v1");
+    let mut serialized = Vec::with_capacity(128);
+    serde_json::to_writer(&mut serialized, manifest)?;
+    hash_field(&mut hash, &serialized);
+    serialized.clear();
+    serde_json::to_writer(&mut serialized, argv)?;
+    hash_field(&mut hash, &serialized);
+    hash_field(&mut hash, resolved_parameters);
+    hash_field(&mut hash, cwd.as_os_str().as_encoded_bytes());
+    hash_field(&mut hash, module_fingerprint.as_bytes());
+    hash_environment(&mut hash, environment);
+    hash_field(&mut hash, input);
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn program_module_cache_is_closed(session: &crate::modules::ProgramModuleSession) -> Result<bool> {
+    for (scope, invocation) in session.scoped_body_invocations() {
+        if scope.resolve_call(invocation)?.execution_backend() != AppletBackend::ProgramModule {
+            // A module body that calls an ordinary applet depends on that
+            // applet's manifest and executable identity as well as its own
+            // source. Until those identities are part of the module cache
+            // key, run it uncached rather than risk stale results.
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn key_with_dependency_fingerprint(key: &str, fingerprint: [u8; 32]) -> String {
+    let mut hash = Sha256::new();
+    hash_field(&mut hash, b"flow-cache-dependency-key-v1");
+    hash_field(&mut hash, key.as_bytes());
+    hash_field(&mut hash, &fingerprint);
+    format!("{:x}", hash.finalize())
+}
+
+fn dependency_fingerprint_matches(manifest: &Manifest, cwd: &Path, expected: [u8; 32]) -> bool {
+    cache::dependency_fingerprint(manifest, cwd).ok().flatten() == Some(expected)
 }
 
 fn cache_key_with_environment<F, I>(
@@ -807,6 +1358,27 @@ where
     }
 }
 
+/// Fingerprint one ordinary applet call made by a preloaded program-module
+/// body. Module imports are already covered by the package graph; remote
+/// calls without a pinned descriptor return `None` because their identity is
+/// not stable enough for checkpoint reuse.
+pub(crate) fn program_module_body_call_fingerprint(
+    registry: &Registry,
+    invocation: &Invocation,
+    cwd: &Path,
+) -> Result<Option<String>> {
+    let Some(call_identity) = resume::module_body_call_identity(invocation, registry, cwd)? else {
+        return Ok(None);
+    };
+    let manifest = registry.resolve_call(invocation)?;
+    let environment = crate::capabilities::effective_environment(registry, &manifest.name)?;
+    let mut hash = Sha256::new();
+    hash_field(&mut hash, b"execute-module-body-call-environment-v1");
+    hash_field(&mut hash, call_identity.as_bytes());
+    hash_environment(&mut hash, environment);
+    Ok(Some(format!("{:x}", hash.finalize())))
+}
+
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -833,13 +1405,1096 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
 }
 
 pub fn run(program: &Program, registry: &Registry, options: &RunOptions) -> Result<RunResult> {
+    let deadline = deadline_after(options.total_timeout, "total timeout")?;
+    let signals = Signals::register_with_deadline(deadline)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
-    let options = configured_inputs(program, registry, options)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     if program.trigger.is_some() {
         bail!("triggered programs require run_service");
     }
-    let signals = Signals::register()?;
+    let cwd = fs::canonicalize(&options.working_directory)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    let options = configured_inputs(program, registry, options)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    crate::capabilities::preflight_with_cache_directory(
+        program,
+        registry,
+        &cwd,
+        options.cache_directory.as_deref(),
+    )?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
+    preload_program_modules(program, registry, &signals, &cwd)?;
+    check_execution_budget(&signals.cancelled, signals.deadline)?;
     run_finite(program, registry, &options, &signals, Input::Empty, None)
+}
+
+pub(super) fn authorize_checkpoint_persistence(
+    registry: &Registry,
+    sensitivities: &crate::security::SensitivitySet,
+) -> Result<()> {
+    crate::security::authorize_persistence_set(
+        registry,
+        "workflow.checkpoint",
+        crate::security::PersistenceKind::Checkpoint,
+        sensitivities,
+    )?;
+    Ok(())
+}
+
+const VERSIONED_CACHE_MAGIC: &[u8] = b"FLOW-CONTRACT-CACHE\0\x01";
+
+fn read_cached_output(
+    manifest: &Manifest,
+    file: File,
+    limit: usize,
+) -> Result<(Vec<u8>, Option<i32>)> {
+    if manifest.execution_contract().is_none() {
+        return Ok((capture(file, limit)?, None));
+    }
+    let header = VERSIONED_CACHE_MAGIC.len() + std::mem::size_of::<i32>();
+    let entry = capture(file, limit.saturating_add(header))?;
+    if entry.len() < header || !entry.starts_with(VERSIONED_CACHE_MAGIC) {
+        bail!("cached versioned applet result has an invalid header");
+    }
+    let status_at = VERSIONED_CACHE_MAGIC.len();
+    let status = i32::from_le_bytes(
+        entry[status_at..status_at + std::mem::size_of::<i32>()]
+            .try_into()
+            .expect("fixed cache status width"),
+    );
+    if manifest.outcome_for(status).kind != OutcomeKind::Success {
+        bail!("cached versioned applet result has a non-success status {status}");
+    }
+    let payload = entry[header..].to_vec();
+    if payload.len() > limit {
+        bail!("cached result exceeds maximum of {limit} bytes");
+    }
+    Ok((payload, Some(status)))
+}
+
+fn cache_output(manifest: &Manifest, bytes: &[u8], status: Option<i32>) -> Result<Vec<u8>> {
+    let Some(_contract) = manifest.execution_contract() else {
+        return Ok(bytes.to_vec());
+    };
+    let status = status.context("versioned applet result finished without an exit code")?;
+    if manifest.outcome_for(status).kind != OutcomeKind::Success {
+        bail!("refusing to cache non-success applet status {status}");
+    }
+    let mut entry = Vec::with_capacity(VERSIONED_CACHE_MAGIC.len() + 4 + bytes.len());
+    entry.extend_from_slice(VERSIONED_CACHE_MAGIC);
+    entry.extend_from_slice(&status.to_le_bytes());
+    entry.extend_from_slice(bytes);
+    Ok(entry)
+}
+
+fn resolved_json_arguments(
+    call: &Invocation,
+    manifest: &Manifest,
+    bindings: &BTreeMap<String, Value>,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let values = call
+        .parameters
+        .iter()
+        .map(|(name, value)| {
+            let value = resolve(value, bindings)?;
+            Ok((name.clone(), value))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    manifest.parameters_json(&values)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bind_call_output(
+    name: &str,
+    manifest: &Manifest,
+    line: usize,
+    bytes: &[u8],
+    status: Option<i32>,
+    stdout_captured: bool,
+    stderr: Option<Vec<u8>>,
+    stages: Vec<execution_result::StageResult>,
+    bindings: &mut BTreeMap<String, Value>,
+) -> Result<Value> {
+    let decode_failure = |error: anyhow::Error, outcome: Option<crate::contracts::Outcome>| {
+        let error = error.context(format!("line {line}: decoding named applet output"));
+        execution_result::output_decode_failure(
+            &error,
+            outcome,
+            stdout_captured.then(|| bytes.to_vec()),
+            stderr.clone(),
+            stages.clone(),
+        )
+    };
+    let value = if manifest.execution_contract().is_none() {
+        // Preserve the legacy named-output boundary exactly: it is always
+        // strict UTF-8 text, even when a separately kept native status is
+        // nonzero.
+        let text = String::from_utf8(bytes.to_vec())
+            .context("named results must be UTF-8 text")
+            .map_err(|error| {
+                decode_failure(error, status.map(|status| manifest.outcome_for(status)))
+            })?;
+        Value::String(text)
+    } else {
+        let status = status.ok_or_else(|| {
+            let error = anyhow!("versioned applet finished without an exit code");
+            decode_failure(error, None)
+        })?;
+        let decode_failure_for_status = |error: anyhow::Error| {
+            let outcome = manifest.outcome_for(status);
+            decode_failure(error, Some(outcome))
+        };
+        let decoded = manifest
+            .decode_output(bytes, status)
+            .map_err(decode_failure_for_status)?;
+        match decoded {
+            AppletOutput::Value(value) => value,
+            AppletOutput::Bytes(bytes) => Value::String(
+                String::from_utf8(bytes)
+                    .context("named results must be UTF-8 text")
+                    .map_err(decode_failure_for_status)?,
+            ),
+        }
+    };
+    bindings.insert(name.to_owned(), value.clone());
+    Ok(value)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_retained_status(
+    call: &Invocation,
+    manifest: &Manifest,
+    line: usize,
+    status: i32,
+    diagnostic: &str,
+    stdout: Option<Vec<u8>>,
+    stderr: Option<Vec<u8>>,
+    registry: &Registry,
+) -> Result<()> {
+    let outcome = manifest.outcome_for(status);
+    if outcome.kind != OutcomeKind::Success && call.status_binding.is_none() {
+        let message = format!(
+            "line {line}: applet {:?} produced {:?} outcome ({}): {}",
+            manifest.name_for(call),
+            outcome.name,
+            status,
+            crate::security::secret_redactor(registry).redact_text(diagnostic.trim())
+        );
+        let stderr =
+            stderr.or_else(|| (!diagnostic.is_empty()).then(|| diagnostic.as_bytes().to_vec()));
+        let effect_certainty = outcome.effect_certainty;
+        let result = execution_result::ExecutionResult {
+            kind: execution_result::ExecutionKind::from_outcome(outcome.kind),
+            outcome: Some(outcome.name.clone()),
+            status: Some(status),
+            signal: None,
+            stdout,
+            value: None,
+            stderr: stderr.clone(),
+            stages: vec![execution_result::StageResult::exited(
+                line,
+                manifest.name_for(call),
+                status,
+                outcome,
+                stderr,
+            )],
+            message: Some(message),
+            effect_certainty,
+        };
+        return Err(execution_result::ExecutionFailure::new(result).into());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_in_process(
+    call: &Invocation,
+    manifest: &Manifest,
+    line: usize,
+    input: Input,
+    bindings: &BTreeMap<String, Value>,
+    cwd: &Path,
+    options: &RunOptions,
+    signals: &Signals,
+    registry: &Registry,
+) -> Result<GroupOutput> {
+    check_deadline(signals.deadline)?;
+    if signals.cancelled.load(Ordering::Relaxed) {
+        let mut failure = execution_result::ExecutionResult::runtime_failure(
+            execution_result::ExecutionKind::Cancelled,
+            "workflow cancelled before in_process applet execution",
+            execution_result::EffectCertainty::NotStarted,
+        );
+        failure
+            .stages
+            .push(execution_result::StageResult::not_started(
+                line,
+                manifest.name_for(call),
+            ));
+        return Err(execution_result::ExecutionFailure::new(failure).into());
+    }
+    let input = input.materialize(options.max_output_bytes, signals, options.command_timeout)?;
+    let arguments = resolved_json_arguments(call, manifest, bindings)?;
+    let result = crate::applets::execute_in_cwd(manifest.name_for(call), &arguments, &input, cwd);
+    match result {
+        Ok(value) => {
+            let mut bytes = serde_json::to_vec(&value)?;
+            bytes.push(b'\n');
+            let outcome = manifest.outcome_for(0);
+            let stage = execution_result::StageResult::exited(
+                line,
+                manifest.name_for(call),
+                0,
+                outcome.clone(),
+                None,
+            );
+            if let Err(error) = check_deadline(signals.deadline) {
+                let mut failure = execution_result::ExecutionResult::from_outcome(
+                    outcome,
+                    Some(bytes.clone()),
+                    None,
+                    Some(crate::structured::from_json(value.clone())),
+                    vec![stage],
+                );
+                failure.kind = execution_result::ExecutionKind::Timeout;
+                failure.message = Some(format!("{error:#}"));
+                return Err(execution_result::ExecutionFailure::new(failure).into());
+            }
+            if signals.cancelled.load(Ordering::Relaxed) {
+                let mut failure = execution_result::ExecutionResult::from_outcome(
+                    outcome,
+                    Some(bytes.clone()),
+                    None,
+                    Some(crate::structured::from_json(value.clone())),
+                    vec![stage],
+                );
+                failure.kind = execution_result::ExecutionKind::Cancelled;
+                failure.message =
+                    Some("workflow cancelled after in_process applet execution".into());
+                return Err(execution_result::ExecutionFailure::new(failure).into());
+            }
+            if bytes.len() > options.max_output_bytes {
+                return Err(execution_result::completed_output_limit_failure(
+                    format!(
+                        "output exceeds maximum of {} bytes",
+                        options.max_output_bytes
+                    ),
+                    outcome,
+                    line,
+                    manifest.name_for(call),
+                    Some(bytes[..options.max_output_bytes].to_vec()),
+                    None,
+                )
+                .into());
+            }
+            Ok(GroupOutput {
+                bytes,
+                status: Some(0),
+                diagnostic: Vec::new(),
+                stdout_captured: true,
+                stages: vec![execution_result::StageResult::exited(
+                    line,
+                    manifest.name_for(call),
+                    0,
+                    outcome,
+                    None,
+                )],
+            })
+        }
+        Err(error) => {
+            let status = error.exit_status();
+            let diagnostic = format!("execute-applet: {error}\n");
+            let diagnostic_bytes = diagnostic.as_bytes().to_vec();
+            check_retained_status(
+                call,
+                manifest,
+                line,
+                status,
+                &diagnostic,
+                None,
+                Some(diagnostic_bytes),
+                registry,
+            )?;
+            Ok(GroupOutput {
+                bytes: Vec::new(),
+                status: Some(status),
+                diagnostic: diagnostic.as_bytes().to_vec(),
+                stdout_captured: true,
+                stages: vec![execution_result::StageResult::exited(
+                    line,
+                    manifest.name_for(call),
+                    status,
+                    manifest.outcome_for(status),
+                    Some(diagnostic.into_bytes()),
+                )],
+            })
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_json_lines_worker(
+    call: &Invocation,
+    manifest: &Manifest,
+    line: usize,
+    input: Input,
+    cwd: &Path,
+    options: &RunOptions,
+    signals: &Signals,
+    registry: &Registry,
+    argv: Vec<String>,
+    launched: &mut usize,
+) -> Result<GroupOutput> {
+    let input = input.materialize(options.max_output_bytes, signals, options.command_timeout)?;
+    let contract = manifest
+        .execution_contract()
+        .context("json_lines_worker requires a versioned applet contract")?;
+    let Lifecycle::JsonLines {
+        startup_arguments,
+        timeout_ms,
+        max_frame_bytes,
+        max_stderr_bytes,
+    } = &contract.lifecycle
+    else {
+        bail!("json_lines_worker requires a json_lines lifecycle");
+    };
+    let binary = binary_path(manifest.binary_for(call), cwd)?;
+    let launch = worker_backend::WorkerLaunch::inherited(
+        registry.clone(),
+        manifest.name_for(call).to_owned(),
+        binary,
+        cwd.to_path_buf(),
+        startup_arguments.iter().map(OsString::from).collect(),
+        Duration::from_millis(*timeout_ms),
+        *max_frame_bytes,
+        *max_stderr_bytes,
+    )?;
+    let command_deadline = options
+        .command_timeout
+        .map(|duration| {
+            Instant::now()
+                .checked_add(duration)
+                .context("command timeout is too large")
+        })
+        .transpose()?;
+    let deadline = match (command_deadline, signals.deadline) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
+    };
+    let spawned = Arc::new(AtomicBool::new(false));
+    let request = worker_backend::WorkerRequest {
+        arguments: argv,
+        input,
+        max_output_bytes: options.max_output_bytes,
+        deadline,
+        cancelled: signals.cancelled.clone(),
+        spawned: Arc::clone(&spawned),
+    };
+    let response = registry
+        .host_state::<worker_backend::WorkerPool>()
+        .invoke(launch, request)
+        .with_context(|| {
+            format!(
+                "line {line}: running json_lines_worker applet {:?}",
+                manifest.name_for(call)
+            )
+        });
+    if spawned.load(Ordering::Acquire) {
+        *launched += 1;
+    }
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(worker_error) = error.downcast_ref::<worker_backend::WorkerError>() {
+                let outcome = worker_error
+                    .completed_status
+                    .map(|status| manifest.outcome_for(status));
+                let failure = execution_result::worker_failure(
+                    worker_error,
+                    line,
+                    manifest.name_for(call),
+                    outcome,
+                );
+                return Err(anyhow::Error::from(failure)).with_context(|| {
+                    format!(
+                        "line {line}: running json_lines_worker applet {:?}",
+                        manifest.name_for(call)
+                    )
+                });
+            }
+            return Err(error);
+        }
+    };
+    check_retained_status(
+        call,
+        manifest,
+        line,
+        response.status,
+        &String::from_utf8_lossy(&response.stderr),
+        Some(response.output.clone()),
+        Some(response.stderr.clone()),
+        registry,
+    )?;
+    Ok(GroupOutput {
+        bytes: response.output,
+        status: Some(response.status),
+        diagnostic: response.stderr.clone(),
+        stdout_captured: true,
+        stages: vec![execution_result::StageResult::exited(
+            line,
+            manifest.name_for(call),
+            response.status,
+            manifest.outcome_for(response.status),
+            Some(response.stderr),
+        )],
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_call_group(
+    calls: &[(&Invocation, &Manifest, usize)],
+    input: Input,
+    prepared_first_call: Option<(PathBuf, Vec<String>)>,
+    bindings: &BTreeMap<String, Value>,
+    cwd: &Path,
+    options: &RunOptions,
+    launched: &mut usize,
+    signals: &Signals,
+    registry: &Registry,
+) -> Result<GroupOutput> {
+    let Some((call, manifest, line)) = calls.first().copied() else {
+        bail!("cannot execute an empty applet group");
+    };
+    let sensitivities = signals.sensitivity_floor();
+    for (_, stage_manifest, _) in calls {
+        crate::security::authorize_declared_filesystem_write(
+            registry,
+            stage_manifest,
+            &sensitivities,
+        )?;
+    }
+    let backend = manifest.execution_backend();
+    if backend == AppletBackend::Command {
+        if calls.iter().any(|(_, stage_manifest, _)| {
+            stage_manifest.execution_backend() != AppletBackend::Command
+        }) {
+            bail!("mixed command and non-command applet groups are unsupported");
+        }
+        return execute_group(
+            registry,
+            calls,
+            input,
+            prepared_first_call,
+            bindings,
+            cwd,
+            options,
+            launched,
+            signals,
+        );
+    }
+    if calls.len() != 1 {
+        bail!(
+            "{} applet calls cannot participate in native pipe groups",
+            match backend {
+                AppletBackend::InProcess => "in_process",
+                AppletBackend::JsonLinesWorker => "json_lines_worker",
+                AppletBackend::Command => "command",
+                AppletBackend::ProgramModule => "program_module",
+                AppletBackend::Remote => "remote",
+            }
+        );
+    }
+    let argv = if backend == AppletBackend::JsonLinesWorker {
+        match prepared_first_call {
+            Some((_, argv)) => argv,
+            None => arguments_for_call(call, manifest, bindings)?,
+        }
+    } else {
+        Vec::new()
+    };
+    match backend {
+        AppletBackend::Command => unreachable!("handled above"),
+        AppletBackend::InProcess => execute_in_process(
+            call, manifest, line, input, bindings, cwd, options, signals, registry,
+        ),
+        AppletBackend::JsonLinesWorker => execute_json_lines_worker(
+            call, manifest, line, input, cwd, options, signals, registry, argv, launched,
+        ),
+        AppletBackend::ProgramModule => {
+            let session = current_module_session(signals)?;
+            let loaded = session
+                .get_for_manifest(registry, manifest)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "program module applet {:?} was not preloaded before effects",
+                        manifest.name
+                    )
+                })?;
+            let child_registry = session.registry_for(registry, manifest).ok_or_else(|| {
+                anyhow!(
+                    "program module scope for {:?} was not preloaded before effects",
+                    manifest.name
+                )
+            })?;
+            program_backend::execute(
+                loaded,
+                call,
+                manifest,
+                input,
+                bindings,
+                cwd,
+                options,
+                signals,
+                child_registry,
+                launched,
+                line,
+            )
+        }
+        AppletBackend::Remote => execute_remote_applet(
+            call, manifest, line, input, bindings, cwd, options, signals, registry,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_remote_applet(
+    call: &Invocation,
+    manifest: &Manifest,
+    line: usize,
+    input: Input,
+    bindings: &BTreeMap<String, Value>,
+    cwd: &Path,
+    options: &RunOptions,
+    signals: &Signals,
+    registry: &Registry,
+) -> Result<GroupOutput> {
+    use crate::contracts::{OutputEncoding, OutputType, RemoteAuthSource};
+    use crate::remote::{RemoteClient, RemoteRequest, RemoteValue};
+    let contract = manifest
+        .execution_contract()
+        .context("remote backend requires a versioned applet contract")?;
+    let endpoint = contract
+        .remote
+        .as_ref()
+        .context("remote backend requires an endpoint configuration")?;
+    crate::capabilities::authorize_network_endpoint(registry, &manifest.name, &endpoint.endpoint)?;
+    crate::security::authorize_data_flow_set(
+        registry,
+        &manifest.name,
+        &endpoint.endpoint,
+        &signals.sensitivity_floor(),
+    )?;
+
+    let credential_base = manifest
+        .origin()
+        .and_then(Path::parent)
+        .unwrap_or(cwd)
+        .to_path_buf();
+    match endpoint.auth.as_ref() {
+        Some(RemoteAuthSource::BearerEnv { name }) => {
+            crate::capabilities::authorize_environment_variable(registry, &manifest.name, name)?;
+        }
+        Some(RemoteAuthSource::BearerFile { .. }) => {}
+        None => {}
+    }
+
+    let mut client_config = endpoint.clone();
+    if let Some(deadline) = signals.deadline {
+        let remaining_ms = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .max(1)
+            .min(u64::MAX as u128) as u64;
+        client_config.timeout_ms = client_config.timeout_ms.min(remaining_ms);
+    }
+    let client = RemoteClient::new_with_credential_base(client_config, credential_base)?
+        .with_secret_redactor(crate::security::secret_redactor(registry))
+        .with_resolver_helper(std::env::current_exe()?);
+    if let Some(path) = client.descriptor_cache_path() {
+        crate::capabilities::authorize_applet_host_path(
+            registry,
+            &manifest.name,
+            &path,
+            false,
+            cwd,
+        )?;
+    }
+    if let Some(path) = client.bearer_file_path() {
+        crate::capabilities::authorize_applet_host_path(
+            registry,
+            &manifest.name,
+            &path,
+            false,
+            cwd,
+        )?;
+    }
+    let descriptor = match client.load_configured_descriptor_cache()? {
+        Some(descriptor) => {
+            client.use_cached_descriptor(descriptor.clone())?;
+            descriptor
+        }
+        None if endpoint.allow_discovery => client.discover_cancellable(&signals.cancelled)?,
+        None => bail!(
+            "remote applet {:?} needs a pinned descriptor cache or allow_discovery:true",
+            manifest.name
+        ),
+    };
+    client.check_compatible(&manifest.name, contract)?;
+
+    let resolved = call
+        .parameters
+        .iter()
+        .map(|(name, value)| Ok((name.clone(), resolve(value, bindings)?)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let json_arguments = manifest.parameters_json(&resolved)?.into_iter().collect();
+    let mut request = RemoteRequest::new(&manifest.name);
+    request.arguments = json_arguments;
+    let input = input.materialize(options.max_output_bytes, signals, options.command_timeout)?;
+    if manifest.accepts_stdin {
+        request.set_input_bytes(contract, &input)?;
+    }
+    let response = match client.invoke_cancellable(&descriptor, &request, &signals.cancelled) {
+        Ok(response) => response,
+        Err(error) => {
+            let failure = execution_result::remote_failure(&error, line, manifest.name_for(call));
+            return Err(anyhow::Error::from(failure).context(format!(
+                "line {line}: invoking remote applet {:?}",
+                manifest.name_for(call)
+            )));
+        }
+    };
+    let status = response.status;
+    let outcome = manifest.outcome_for(status);
+    let diagnostic = response
+        .error
+        .as_ref()
+        .map(|error| format!("{}: {}", error.code, error.message))
+        .unwrap_or_default();
+    let output_schema = contract.output.as_ref();
+    let output_bytes = match (response.outputs.len(), output_schema) {
+        (0, _) => Vec::new(),
+        (1, schema) => {
+            let (_, value) = response.outputs.iter().next().expect("one output");
+            match value {
+                RemoteValue::Base64(_) => value
+                    .decode_bytes(endpoint.max_response_bytes)?
+                    .unwrap_or_default(),
+                RemoteValue::Json(value)
+                    if schema.is_some_and(|schema| {
+                        schema.encoding == OutputEncoding::Raw
+                            && matches!(schema.kind, OutputType::Text | OutputType::Path)
+                    }) =>
+                {
+                    value
+                        .as_str()
+                        .ok_or_else(|| anyhow!("remote raw text output was not a JSON string"))?
+                        .as_bytes()
+                        .to_vec()
+                }
+                RemoteValue::Json(value) => serde_json::to_vec(value)?,
+            }
+        }
+        (_, _) => {
+            let mut values = serde_json::Map::new();
+            for (name, value) in &response.outputs {
+                let value = match value {
+                    RemoteValue::Json(value) => value.clone(),
+                    RemoteValue::Base64(encoded) => serde_json::Value::String(encoded.clone()),
+                };
+                values.insert(name.clone(), value);
+            }
+            serde_json::to_vec(&serde_json::Value::Object(values))?
+        }
+    };
+    check_retained_status(
+        call,
+        manifest,
+        line,
+        status,
+        &diagnostic,
+        Some(output_bytes.clone()),
+        Some(diagnostic.as_bytes().to_vec()),
+        registry,
+    )?;
+    if output_bytes.len() > options.max_output_bytes {
+        let captured = output_bytes[..options.max_output_bytes].to_vec();
+        let failure = execution_result::completed_output_limit_failure(
+            format!(
+                "remote applet output exceeds maximum of {} bytes",
+                options.max_output_bytes
+            ),
+            outcome,
+            line,
+            manifest.name_for(call),
+            Some(captured),
+            Some(diagnostic.as_bytes().to_vec()),
+        );
+        return Err(failure.into());
+    }
+    let diagnostic_bytes = diagnostic.into_bytes();
+    Ok(GroupOutput {
+        bytes: output_bytes,
+        status: Some(status),
+        diagnostic: diagnostic_bytes.clone(),
+        stdout_captured: true,
+        stages: vec![execution_result::StageResult::exited(
+            line,
+            manifest.name_for(call),
+            status,
+            outcome,
+            Some(diagnostic_bytes),
+        )],
+    })
+}
+
+fn value_contains_reference(value: &Value) -> bool {
+    match value {
+        Value::Reference(_) => true,
+        Value::List(values) => values.iter().any(value_contains_reference),
+        Value::Record(values) => values.values().any(value_contains_reference),
+        Value::String(_) | Value::Integer(_) | Value::Bool(_) | Value::Null | Value::Number(_) => {
+            false
+        }
+    }
+}
+
+fn append_invocation_sensitivities(
+    call: &Invocation,
+    registry: &Registry,
+    sensitivities: &mut crate::security::SensitivitySet,
+) -> Result<()> {
+    let manifest = registry.resolve_call(call)?;
+    append_manifest_sensitivities(call, manifest, registry, sensitivities);
+    Ok(())
+}
+
+fn append_manifest_sensitivities(
+    call: &Invocation,
+    manifest: &Manifest,
+    registry: &Registry,
+    sensitivities: &mut crate::security::SensitivitySet,
+) {
+    use crate::contracts::Sensitivity;
+
+    let contract = manifest.execution_contract();
+    let ports = contract.and_then(|contract| contract.ports.as_ref());
+    for (name, value) in &call.parameters {
+        let declared = ports
+            .and_then(|ports| ports.inputs.get(name))
+            .map(|port| port.sensitivity);
+        if value_contains_reference(value) {
+            // Referenced values are tracked separately by the workflow floor;
+            // retain Unknown as a distinct contributor until that provenance
+            // is available at the source boundary.
+            sensitivities.insert(Sensitivity::Unknown);
+            if let Some(declared) = declared {
+                sensitivities.insert(declared);
+            }
+        } else {
+            sensitivities.insert(declared.unwrap_or(Sensitivity::Public));
+        }
+    }
+    if manifest.accepts_stdin {
+        sensitivities.insert(Sensitivity::Unknown);
+    }
+    match ports {
+        Some(ports) if !ports.outputs.is_empty() => {
+            for port in ports.outputs.values() {
+                sensitivities.insert(port.sensitivity);
+            }
+        }
+        _ => sensitivities.insert(Sensitivity::Unknown),
+    }
+    if let Some(ports) = ports {
+        for port in ports.events.values() {
+            sensitivities.insert(port.sensitivity);
+        }
+    }
+    if crate::security::applet_has_declared_secret_environment(registry, &manifest.name) {
+        sensitivities.insert(Sensitivity::Secret);
+    }
+}
+
+fn invocation_sensitivities(
+    call: &Invocation,
+    manifest: &Manifest,
+    registry: &Registry,
+) -> crate::security::SensitivitySet {
+    let mut sensitivities = crate::security::SensitivitySet::empty();
+    append_manifest_sensitivities(call, manifest, registry, &mut sensitivities);
+    if sensitivities.is_empty() {
+        sensitivities.insert(crate::contracts::Sensitivity::Unknown);
+    }
+    sensitivities
+}
+
+/// Resolve the finite program's actual applet references before effects and
+/// retain every declared source label as a run-scoped conservative floor.
+pub(crate) fn workflow_sensitivity_floor(
+    program: &Program,
+    registry: &Registry,
+    module_session: &crate::modules::ProgramModuleSession,
+) -> Result<crate::security::SensitivitySet> {
+    let mut sensitivities = crate::security::SensitivitySet::empty();
+    for step in &program.steps {
+        match &step.kind {
+            StepKind::Invoke { call, .. } => {
+                let manifest = registry.resolve_call(call)?;
+                if manifest.builtin.is_none() {
+                    append_manifest_sensitivities(call, manifest, registry, &mut sensitivities);
+                }
+            }
+            StepKind::TaskGroup { tasks, .. } => {
+                for call in tasks {
+                    append_invocation_sensitivities(call, registry, &mut sensitivities)?;
+                }
+            }
+            // Reusable calls are expanded into the step sequence before the
+            // runtime; scanning its actual Invoke steps avoids unused defs.
+            StepKind::CallProgram { .. }
+            | StepKind::Loop { .. }
+            | StepKind::EndLoop { .. }
+            | StepKind::If { .. }
+            | StepKind::Otherwise { .. }
+            | StepKind::EndIf
+            | StepKind::EndCall
+            | StepKind::BreakLoop
+            | StepKind::ContinueLoop
+            | StepKind::Return
+            | StepKind::Try { .. }
+            | StepKind::Catch { .. }
+            | StepKind::Finally
+            | StepKind::EndTry
+            | StepKind::UseFolder { .. }
+            | StepKind::Read { .. }
+            | StepKind::ReadStdin { .. }
+            | StepKind::ReadCallInput { .. }
+            | StepKind::ParseJson { .. }
+            | StepKind::TakeJson { .. }
+            | StepKind::TakeJsonDynamic { .. }
+            | StepKind::EncodeJson { .. }
+            | StepKind::Save { .. } => {}
+        }
+    }
+    if let Some(crate::ast::Trigger::Listen {
+        source: crate::ast::ListenSource::Applet(call),
+        ..
+    }) = &program.trigger
+    {
+        append_invocation_sensitivities(call, registry, &mut sensitivities)?;
+    }
+    if matches!(
+        program.trigger.as_ref(),
+        Some(crate::ast::Trigger::Listen {
+            source: crate::ast::ListenSource::Stdin,
+            ..
+        })
+    ) || program.steps.iter().any(|step| {
+        matches!(
+            &step.kind,
+            StepKind::Read { .. } | StepKind::ReadStdin { .. }
+        )
+    }) {
+        sensitivities.insert(crate::contracts::Sensitivity::Unknown);
+    }
+    for (scope, call) in module_session.scoped_body_invocations() {
+        append_invocation_sensitivities(call, scope, &mut sensitivities)?;
+    }
+    if sensitivities.is_empty() {
+        sensitivities.insert(crate::contracts::Sensitivity::Unknown);
+    }
+    Ok(sensitivities)
+}
+
+/// Invoke one applet with already-resolved typed parameters and raw stdin.
+/// This is the common dispatch hook for graph/runtime adapters; it keeps the
+/// applet backend transparent while returning the exact output, status, and
+/// declared outcome. Language-level commands still use their explicit binding
+/// syntax to decide whether a non-success outcome may continue.
+pub fn invoke_applet(
+    registry: &Registry,
+    name: &str,
+    parameters: BTreeMap<String, Value>,
+    input: Vec<u8>,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+) -> Result<AppletInvocationResult> {
+    let call = Invocation {
+        operation: name.to_owned(),
+        direct: false,
+        parameters,
+        binding: None,
+        cache: false,
+        status_binding: Some("__flow_internal_status".to_owned()),
+    };
+    let module_session = Arc::new(crate::modules::ProgramModuleSession::preload_invocations(
+        registry,
+        std::iter::once(&call),
+    )?);
+    invoke_applet_with_module_session(
+        registry,
+        name,
+        call.parameters.clone(),
+        input,
+        options,
+        cancelled,
+        module_session,
+    )
+}
+
+/// Invoke one applet using a module snapshot prepared by the enclosing
+/// program/task preflight. All sources are therefore fixed before sibling
+/// tasks or earlier workflow steps can produce effects.
+pub fn invoke_applet_with_module_session(
+    registry: &Registry,
+    name: &str,
+    parameters: BTreeMap<String, Value>,
+    input: Vec<u8>,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    module_session: Arc<crate::modules::ProgramModuleSession>,
+) -> Result<AppletInvocationResult> {
+    let call = Invocation {
+        operation: name.to_owned(),
+        direct: false,
+        parameters: parameters.clone(),
+        binding: None,
+        cache: false,
+        status_binding: Some("__flow_internal_status".to_owned()),
+    };
+    let manifest = registry.resolve_call(&call)?;
+    let sensitivities = invocation_sensitivities(&call, manifest, registry);
+    invoke_applet_with_module_session_and_sensitivity(
+        registry,
+        name,
+        parameters,
+        input,
+        options,
+        cancelled,
+        module_session,
+        sensitivities,
+    )
+}
+
+/// Invoke one applet with an explicit effective label set supplied by the
+/// enclosing finite workflow or graph, preserving producer provenance after
+/// parameter references have been resolved.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn invoke_applet_with_module_session_and_sensitivity(
+    registry: &Registry,
+    name: &str,
+    parameters: BTreeMap<String, Value>,
+    input: Vec<u8>,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    module_session: Arc<crate::modules::ProgramModuleSession>,
+    sensitivities: crate::security::SensitivitySet,
+) -> Result<AppletInvocationResult> {
+    let mut invocation_options = options.clone();
+    invocation_options.working_directory = fs::canonicalize(&options.working_directory)?;
+    let call = Invocation {
+        operation: name.to_owned(),
+        direct: false,
+        parameters,
+        binding: None,
+        cache: false,
+        status_binding: Some("__flow_internal_status".to_owned()),
+    };
+    let manifest = registry.resolve_call(&call)?;
+    manifest.validate(&call)?;
+    let program = Program {
+        definitions: Default::default(),
+        inputs: Vec::new(),
+        steps: vec![crate::ast::Step {
+            line: 1,
+            kind: StepKind::Invoke {
+                call: call.clone(),
+                connection: Connection::Start,
+            },
+        }],
+        trigger: None,
+    };
+    crate::capabilities::preflight(&program, registry, &invocation_options.working_directory)?;
+    if manifest.execution_backend() == AppletBackend::JsonLinesWorker
+        && !worker_backend::WorkerPool::supported()
+    {
+        bail!("json_lines_worker backend is unsupported on this platform");
+    }
+    let signals = Signals::with_cancellation_and_deadline(
+        cancelled,
+        true,
+        deadline_after(invocation_options.total_timeout, "total timeout")?,
+    )?;
+    signals.set_sensitivity_floor(sensitivities);
+    preflight_module_session(
+        &module_session,
+        registry,
+        &invocation_options.working_directory,
+    )?;
+    *signals
+        .program_modules
+        .lock()
+        .map_err(|_| anyhow!("program module session lock is poisoned"))? =
+        Some(Arc::clone(&module_session));
+    let bindings = BTreeMap::new();
+    let mut launched = 0;
+    let invoked = (|| -> Result<AppletInvocationResult> {
+        let completed = execute_call_group(
+            &[(&call, manifest, 1)],
+            Input::Bytes(input),
+            None,
+            &bindings,
+            &invocation_options.working_directory,
+            &invocation_options,
+            &mut launched,
+            &signals,
+            registry,
+        )?;
+        let status = completed
+            .status
+            .context("applet invocation finished without an exit status")?;
+        let outcome = manifest.outcome_for(status);
+        let value = if manifest.execution_contract().is_some()
+            && (outcome.kind == OutcomeKind::Success || manifest.result_envelope())
+        {
+            let decoded = manifest
+                .decode_output(&completed.bytes, status)
+                .map_err(|error| {
+                    execution_result::contract_decode_failure(
+                        &error,
+                        outcome.clone(),
+                        completed.stdout_captured.then(|| completed.bytes.clone()),
+                        captured_stage_stderr(manifest, &signals)
+                            .then(|| completed.diagnostic.clone()),
+                        completed.stages.clone(),
+                    )
+                })?;
+            match decoded {
+                AppletOutput::Value(value) => Some(value),
+                AppletOutput::Bytes(_) => None,
+            }
+        } else {
+            None
+        };
+        Ok(AppletInvocationResult {
+            output: completed.bytes,
+            status,
+            uncertain: outcome.effect_certainty == crate::contracts::EffectCertainty::Uncertain,
+            outcome,
+            value,
+            stderr: completed.diagnostic,
+            launched_processes: launched,
+        })
+    })();
+    invoked.map_err(|source| {
+        AppletInvocationError {
+            source,
+            launched_processes: launched,
+        }
+        .into()
+    })
 }
 
 fn run_finite(
@@ -931,6 +2586,13 @@ fn run_finite_state(
     state_out: Option<&mut live::NodeState>,
 ) -> Result<RunResult> {
     let mut cwd = fs::canonicalize(&options.working_directory)?;
+    let module_session = preload_program_modules(program, registry, signals, &cwd)?;
+    let mut sensitivity_floor = workflow_sensitivity_floor(program, registry, &module_session)?;
+    // Caller-provided initial bytes have no trusted provenance declaration.
+    if !matches!(&initial_input, Input::Empty) {
+        sensitivity_floor.insert(crate::contracts::Sensitivity::Unknown);
+    }
+    signals.set_sensitivity_floor(sensitivity_floor);
     let cache_override = options.cache_directory.as_ref().map(|path| cwd.join(path));
     // Component and managed handlers may supply values without `accept`
     // declarations. Validate their known loop inputs before earlier effects.
@@ -942,10 +2604,15 @@ fn run_finite_state(
         output: Vec::new(),
         cache_hits: 0,
         launched_processes: 0,
+        executions: Vec::new(),
+        dropped_executions: 0,
+        dropped_stages: 0,
     };
+    let mut execution_history = execution_result::ExecutionHistory::default();
     let mut index = 0;
     let mut call_frames: Vec<calls::Frame<'_>> = Vec::new();
     let mut loop_frames = loops::LoopStack::default();
+    let mut control_state = control_flow::RuntimeState::default();
     if let Some(journal) = journal.as_deref_mut() {
         if state_source == FiniteStateSource::Restore {
             let state = journal.take_restored_state()?;
@@ -983,9 +2650,61 @@ fn run_finite_state(
     let mut journal_end = None;
     let mut journal_uncertain = false;
     while index < program.steps.len() {
-        if signals.cancelled.load(Ordering::Relaxed) {
-            bail!("workflow cancelled by signal");
+        if signals.cancelled.load(Ordering::Relaxed) && !control_state.cleanup_active() {
+            let error = call_frames.iter().rev().fold(
+                anyhow!("workflow cancelled by signal"),
+                |error, frame| {
+                    error.context(format!(
+                        "program {:?}, called at line {}",
+                        frame.name, frame.line
+                    ))
+                },
+            );
+            let action = control_state.fail(error, true)?;
+            match apply_control_action(
+                action,
+                program,
+                &mut control_state,
+                &mut call_frames,
+                &mut loop_frames,
+                &mut bindings,
+                &mut cwd,
+            )? {
+                AppliedControl::Continue => {}
+                AppliedControl::Jump(target) => {
+                    index = target;
+                    continue;
+                }
+                AppliedControl::Rethrow(error) => {
+                    if let Some(journal) = journal.as_deref_mut() {
+                        if !journal.persistence_failed() {
+                            journal.fail(&format!("{error:#}"), true)?;
+                        }
+                    }
+                    return Err(error);
+                }
+            }
         }
+        let parent_signals = signals;
+        let was_cleanup = control_state.cleanup_active();
+        let cleanup_signals = if was_cleanup {
+            let deadline = match (parent_signals.deadline, control_state.cleanup_deadline()) {
+                (Some(parent), Some(cleanup)) => Some(parent.min(cleanup)),
+                (Some(parent), None) | (None, Some(parent)) => Some(parent),
+                (None, None) => None,
+            };
+            Some(Signals::with_cancellation_and_deadline(
+                Arc::new(AtomicBool::new(false)),
+                parent_signals.capture_diagnostics,
+                deadline,
+            )?)
+        } else {
+            None
+        };
+        if let Some(cleanup_signals) = cleanup_signals.as_ref() {
+            cleanup_signals.set_sensitivity_floor(parent_signals.sensitivity_floor());
+        }
+        let signals = cleanup_signals.as_ref().unwrap_or(parent_signals);
         let step = &program.steps[index];
         if let Some(journal) = journal.as_deref_mut().filter(|_| journal_end.is_none()) {
             let end = resume::node_end(program, index);
@@ -994,7 +2713,15 @@ fn run_finite_state(
                 step.kind,
                 StepKind::If { .. } | StepKind::CallProgram { .. } | StepKind::Loop { .. }
             ) || resume::uncertain_on_failure(program, index, end, registry)?;
-            let fingerprint = resume::node_fingerprint(program, index, end, registry, &cwd)?;
+            let module_session = current_module_session(signals)?;
+            let fingerprint = resume::node_fingerprint_with_modules(
+                program,
+                index,
+                end,
+                registry,
+                &cwd,
+                module_session.fingerprints(),
+            )?;
             journal.begin_node(
                 &fingerprint,
                 index,
@@ -1005,9 +2732,15 @@ fn run_finite_state(
             )?;
         }
         let mut jump_to = None;
+        let mut control_rethrow = None;
         let execution = (|| -> Result<()> {
+            if control_state.cleanup_active() {
+                control_state.charge_cleanup_step()?;
+                check_deadline(signals.deadline)?;
+            }
             match &step.kind {
                 StepKind::Loop { kind, end } => {
+                    control_state.enter_loop(index, index + end)?;
                     let entered = loop_frames
                         .header(index, kind, &mut bindings)
                         .with_context(|| format!("line {}", step.line))?;
@@ -1017,6 +2750,7 @@ fn run_finite_state(
                         || serde_json::json!({"event":"loop", "line":step.line, "entered":entered}),
                     )?;
                     if !entered {
+                        control_state.leave_loop(index)?;
                         jump_to = Some(index + end);
                     }
                 }
@@ -1049,11 +2783,12 @@ fn run_finite_state(
                     call,
                     inputs,
                     connection,
-                    ..
+                    end,
                 } => {
                     let child = calls::bind(call, inputs, &bindings).with_context(|| {
                         format!("program {:?}, called at line {}", call.operation, step.line)
                     })?;
+                    control_state.enter_call(index + end);
                     call_frames.push(calls::Frame {
                         name: &call.operation,
                         line: step.line,
@@ -1071,6 +2806,7 @@ fn run_finite_state(
                     )?;
                 }
                 StepKind::EndCall => {
+                    control_state.leave_call(index + 1)?;
                     let frame = call_frames.pop().context("program return without call")?;
                     bindings = frame.bindings;
                     cwd = frame.cwd;
@@ -1095,8 +2831,149 @@ fn run_finite_state(
                         || serde_json::json!({"event":"program_return", "program":frame.name, "line":frame.line}),
                     )?;
                 }
+                StepKind::BreakLoop => {
+                    let target = control_state.current_loop()?;
+                    let action = control_state.transfer(
+                        control_flow::TransferKind::Break,
+                        target.finish,
+                        control_flow::UnwindTo::new(control_state.call_depth(), target.depth - 1),
+                    )?;
+                    match apply_control_action(
+                        action,
+                        program,
+                        &mut control_state,
+                        &mut call_frames,
+                        &mut loop_frames,
+                        &mut bindings,
+                        &mut cwd,
+                    )? {
+                        AppliedControl::Continue => {}
+                        AppliedControl::Jump(target) => jump_to = Some(target),
+                        AppliedControl::Rethrow(error) => control_rethrow = Some(error),
+                    }
+                }
+                StepKind::ContinueLoop => {
+                    let target = control_state.current_loop()?;
+                    let action = control_state.transfer(
+                        control_flow::TransferKind::Continue,
+                        target.finish - 1,
+                        control_flow::UnwindTo::new(control_state.call_depth(), target.depth),
+                    )?;
+                    match apply_control_action(
+                        action,
+                        program,
+                        &mut control_state,
+                        &mut call_frames,
+                        &mut loop_frames,
+                        &mut bindings,
+                        &mut cwd,
+                    )? {
+                        AppliedControl::Continue => {}
+                        AppliedControl::Jump(target) => jump_to = Some(target),
+                        AppliedControl::Rethrow(error) => control_rethrow = Some(error),
+                    }
+                }
+                StepKind::Return => {
+                    let target = control_state.current_call()?;
+                    let action = control_state.transfer(
+                        control_flow::TransferKind::Return,
+                        target.end_marker,
+                        control_flow::UnwindTo::new(target.call_depth, target.loop_depth),
+                    )?;
+                    match apply_control_action(
+                        action,
+                        program,
+                        &mut control_state,
+                        &mut call_frames,
+                        &mut loop_frames,
+                        &mut bindings,
+                        &mut cwd,
+                    )? {
+                        AppliedControl::Continue => {}
+                        AppliedControl::Jump(target) => jump_to = Some(target),
+                        AppliedControl::Rethrow(error) => control_rethrow = Some(error),
+                    }
+                }
+                StepKind::Try {
+                    catch,
+                    finally,
+                    end,
+                } => {
+                    let catch = catch
+                        .map(|offset| {
+                            let marker = index + offset;
+                            let Some(crate::ast::Step {
+                                kind: StepKind::Catch { binding, .. },
+                                ..
+                            }) = program.steps.get(marker)
+                            else {
+                                bail!("invalid catch marker at line {}", step.line);
+                            };
+                            Ok((marker, binding.clone()))
+                        })
+                        .transpose()?;
+                    control_state.enter_try(
+                        index,
+                        catch,
+                        finally.map(|offset| index + offset),
+                        index + end,
+                    )?;
+                }
+                StepKind::Catch { .. } => {
+                    let action = control_state.catch_marker(index)?;
+                    match apply_control_action(
+                        action,
+                        program,
+                        &mut control_state,
+                        &mut call_frames,
+                        &mut loop_frames,
+                        &mut bindings,
+                        &mut cwd,
+                    )? {
+                        AppliedControl::Continue => {}
+                        AppliedControl::Jump(target) => jump_to = Some(target),
+                        AppliedControl::Rethrow(error) => control_rethrow = Some(error),
+                    }
+                }
+                StepKind::Finally => {
+                    let action = control_state.finally_marker(index)?;
+                    match apply_control_action(
+                        action,
+                        program,
+                        &mut control_state,
+                        &mut call_frames,
+                        &mut loop_frames,
+                        &mut bindings,
+                        &mut cwd,
+                    )? {
+                        AppliedControl::Continue => {}
+                        AppliedControl::Jump(target) => jump_to = Some(target),
+                        AppliedControl::Rethrow(error) => control_rethrow = Some(error),
+                    }
+                }
+                StepKind::EndTry => {
+                    // `Try.end` is a relative offset to the instruction after
+                    // EndTry, so the runtime marker uses the same half-open
+                    // boundary convention.
+                    let action = control_state.end_try(index + 1)?;
+                    match apply_control_action(
+                        action,
+                        program,
+                        &mut control_state,
+                        &mut call_frames,
+                        &mut loop_frames,
+                        &mut bindings,
+                        &mut cwd,
+                    )? {
+                        AppliedControl::Continue => {}
+                        AppliedControl::Jump(target) => jump_to = Some(target),
+                        AppliedControl::Rethrow(error) => control_rethrow = Some(error),
+                    }
+                }
                 StepKind::UseFolder { path } => {
-                    cwd = fs::canonicalize(path_value(path, &bindings, &cwd)?)?;
+                    let folder = path_value(path, &bindings, &cwd)?;
+                    crate::capabilities::authorize_host_path(registry, &folder, false, &cwd)?;
+                    cwd = fs::canonicalize(folder)?;
                     if !cwd.is_dir() {
                         bail!("line {}: use folder requires a directory", step.line);
                     }
@@ -1107,6 +2984,7 @@ fn run_finite_state(
                     data = match &step.kind {
                         StepKind::Read { path, .. } => {
                             let path = path_value(path, &bindings, &cwd)?;
+                            crate::capabilities::authorize_host_path(registry, &path, false, &cwd)?;
                             Input::File(File::open(&path).with_context(|| {
                                 format!("line {}: reading {}", step.line, path.display())
                             })?)
@@ -1165,6 +3043,27 @@ fn run_finite_state(
                         || serde_json::json!({"event":"structured", "operation":"take_json", "line":step.line, "type":kind.to_string()}),
                     )?;
                 }
+                StepKind::TakeJsonDynamic {
+                    pointer,
+                    source,
+                    kind,
+                    binding,
+                } => {
+                    let pointer = resolve(pointer, &bindings)?;
+                    let Value::String(pointer) = pointer else {
+                        bail!("line {}: dynamic JSON pointer must be text", step.line);
+                    };
+                    let source = structured_source(source, &bindings)?;
+                    let value = crate::structured::take(&pointer, &source, *kind, step.line)
+                        .with_context(|| format!("line {}", step.line))?
+                        .clone();
+                    bindings.insert(binding.clone(), value);
+                    lazy_event(
+                        options.trace,
+                        signals,
+                        || serde_json::json!({"event":"structured", "operation":"take_json", "line":step.line, "type":kind.to_string()}),
+                    )?;
+                }
                 StepKind::EncodeJson { source } => {
                     let source = structured_source(source, &bindings)?;
                     let bytes = crate::structured::encode(&source, options.max_output_bytes)
@@ -1176,6 +3075,46 @@ fn run_finite_state(
                     )?;
                     data = Input::Bytes(bytes);
                 }
+                StepKind::TaskGroup {
+                    mode,
+                    limit,
+                    binding,
+                    tasks,
+                } => {
+                    let group = tasks::run_group(
+                        *mode,
+                        *limit,
+                        tasks,
+                        registry,
+                        &bindings,
+                        options,
+                        Arc::clone(&signals.cancelled),
+                        current_module_session(signals)?,
+                        signals.sensitivity_floor(),
+                        signals.deadline,
+                    );
+                    let group = match group {
+                        Ok(group) => group,
+                        Err(error) => {
+                            if let Some(failure) = error.downcast_ref::<tasks::TaskGroupFailure>() {
+                                result.launched_processes += failure.launched_processes;
+                            }
+                            return Err(error)
+                                .with_context(|| format!("line {}: task group", step.line));
+                        }
+                    };
+                    result.launched_processes += group.launched_processes;
+                    let value = group.value;
+                    let bytes = crate::structured::encode(&value, options.max_output_bytes)
+                        .with_context(|| format!("line {}: task group output", step.line))?;
+                    bindings.insert(binding.clone(), value);
+                    lazy_event(
+                        options.trace,
+                        signals,
+                        || serde_json::json!({"event":"task_group","line":step.line,"mode":mode,"tasks":tasks.len(),"output_bytes":bytes.len()}),
+                    )?;
+                    data = Input::Bytes(bytes);
+                }
                 StepKind::Save { path, .. } => {
                     let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                         options.max_output_bytes,
@@ -1183,6 +3122,13 @@ fn run_finite_state(
                         options.command_timeout,
                     )?;
                     let destination = path_value(path, &bindings, &cwd)?;
+                    crate::capabilities::authorize_host_path(registry, &destination, true, &cwd)?;
+                    crate::security::authorize_persistence_set(
+                        registry,
+                        "workflow.save",
+                        crate::security::PersistenceKind::Save,
+                        &signals.sensitivity_floor(),
+                    )?;
                     atomic_write(&destination, &bytes)?;
                     if journal.is_some() {
                         File::open(destination.parent().unwrap_or(&cwd))?.sync_all()?;
@@ -1204,7 +3150,14 @@ fn run_finite_state(
                             .map(|(name, value)| Ok((name.clone(), resolve(value, &bindings)?)))
                             .collect::<Result<BTreeMap<_, _>>>()?;
                         let args = manifest.build_arguments(&parameters)?;
-                        cwd = fs::canonicalize(cwd.join(&args[0]))
+                        let destination = cwd.join(&args[0]);
+                        crate::capabilities::authorize_host_path(
+                            registry,
+                            &destination,
+                            false,
+                            &cwd,
+                        )?;
+                        cwd = fs::canonicalize(destination)
                             .with_context(|| format!("line {}: cd to {:?}", step.line, args[0]))?;
                         if !cwd.is_dir() {
                             bail!("line {}: cd requires a directory", step.line);
@@ -1224,52 +3177,214 @@ fn run_finite_state(
                                 calls.push((call, registry.resolve_call(call)?, next.line));
                             }
                         }
-                        let bytes = if call.cache {
+                        let output_call = calls.last().expect("invocation group is nonempty").0;
+                        let output_manifest = calls.last().expect("invocation group is nonempty").1;
+                        let (bytes, status, stdout_captured, stderr, stages) = if call.cache {
                             let input = input.materialize(
                                 options.max_output_bytes,
                                 signals,
                                 options.command_timeout,
                             )?;
                             let argv = arguments_for_call(call, manifest, &bindings)?;
-                            let executable = binary_path(manifest.binary_for(call), &cwd)?;
-                            let key = cache_key(manifest, &argv, &executable, &cwd, &input)?;
+                            let module_session =
+                                if manifest.execution_backend() == AppletBackend::ProgramModule {
+                                    Some(current_module_session(signals)?)
+                                } else {
+                                    None
+                                };
+                            let module_fingerprint = module_session
+                                .as_ref()
+                                .map(|session| {
+                                    session
+                                        .get_for_manifest(registry, manifest)
+                                        .context(
+                                            "program module cache key requires a preloaded module",
+                                        )
+                                        .map(|loaded| loaded.checkpoint_fingerprint.clone())
+                                })
+                                .transpose()?;
+                            let resolved_module_parameters = if module_fingerprint.is_some() {
+                                let parameters =
+                                    resolved_json_arguments(call, manifest, &bindings)?;
+                                Some(serde_json::to_vec(&parameters)?)
+                            } else {
+                                None
+                            };
+                            let module_cache_is_closed = module_session
+                                .as_deref()
+                                .map(program_module_cache_is_closed)
+                                .transpose()?
+                                .unwrap_or(true);
+                            // Program modules are already loaded and pinned by
+                            // the run-scoped module session; their sentinel
+                            // descriptor is not an executable identity.
+                            let executable = if module_fingerprint.is_some() {
+                                PathBuf::new()
+                            } else {
+                                binary_path(manifest.binary_for(call), &cwd)?
+                            };
                             let directory = cache_override
                                 .clone()
                                 .unwrap_or_else(|| cwd.join(".flow-cache"));
-                            match cache::open(&directory, &key)? {
-                                Some(file) => {
-                                    let bytes = capture(file, options.max_output_bytes)?;
-                                    result.cache_hits += 1;
-                                    lazy_event(
-                                        options.trace,
-                                        signals,
-                                        || serde_json::json!({"event":"cache_hit","line":step.line,"applet":manifest.name_for(call),"key":key,"bytes":bytes.len()}),
-                                    )?;
-                                    bytes
-                                }
-                                None => {
-                                    let bytes = execute_group(
-                                        &calls,
-                                        Input::Bytes(input),
-                                        Some((executable, argv)),
-                                        &bindings,
+                            let sensitivity = signals.sensitivity_floor();
+                            let cache_path_allowed =
+                                crate::capabilities::authorize_applet_host_path(
+                                    registry,
+                                    &manifest.name,
+                                    &directory,
+                                    false,
+                                    &cwd,
+                                )
+                                .is_ok()
+                                    && crate::capabilities::authorize_applet_host_path(
+                                        registry,
+                                        &manifest.name,
+                                        &directory,
+                                        true,
                                         &cwd,
-                                        options,
-                                        &mut result.launched_processes,
-                                        signals,
-                                    )?
-                                    .bytes;
-                                    cache::write(&directory, &key, &bytes)?;
-                                    lazy_event(
-                                        options.trace,
-                                        signals,
-                                        || serde_json::json!({"event":"cache_store","line":step.line,"applet":manifest.name_for(call),"key":key,"bytes":bytes.len()}),
-                                    )?;
-                                    bytes
+                                    )
+                                    .is_ok();
+                            let cache_allowed = module_cache_is_closed
+                                && cache_path_allowed
+                                && crate::security::authorize_cache_purity(registry, manifest)
+                                    .is_ok()
+                                && crate::security::authorize_persistence_set(
+                                    registry,
+                                    &manifest.name,
+                                    crate::security::PersistenceKind::Cache,
+                                    &sensitivity,
+                                )
+                                .is_ok();
+                            let dependencies_declared = !manifest.cache_dependencies().is_empty();
+                            let dependency_fingerprint = if !dependencies_declared {
+                                Some([0; 32])
+                            } else if cache_allowed {
+                                cache::dependency_fingerprint(manifest, &cwd)?
+                            } else {
+                                None
+                            };
+                            let mut key = match (cache_allowed, dependency_fingerprint) {
+                                (true, Some(fingerprint)) => {
+                                    let key = if let Some(module_fingerprint) =
+                                        module_fingerprint.as_deref()
+                                    {
+                                        cache_key_for_program_module(
+                                            registry,
+                                            manifest,
+                                            &argv,
+                                            resolved_module_parameters
+                                                .as_deref()
+                                                .context(
+                                                    "program module cache key requires resolved parameters",
+                                                )?,
+                                            &cwd,
+                                            &input,
+                                            module_fingerprint,
+                                        )?
+                                    } else {
+                                        cache_key_for_applet(
+                                            registry,
+                                            manifest,
+                                            &argv,
+                                            &executable,
+                                            &cwd,
+                                            &input,
+                                        )?
+                                    };
+                                    Some(if manifest.cache_dependencies().is_empty() {
+                                        key
+                                    } else {
+                                        key_with_dependency_fingerprint(&key, fingerprint)
+                                    })
                                 }
+                                _ => None,
+                            };
+                            let run_uncached = || {
+                                execute_call_group(
+                                    &calls,
+                                    Input::Bytes(input),
+                                    Some((executable, argv)),
+                                    &bindings,
+                                    &cwd,
+                                    options,
+                                    &mut result.launched_processes,
+                                    signals,
+                                    registry,
+                                )
+                            };
+                            let mut hit = if let Some(cache_key) = key.as_deref() {
+                                match cache::open(&directory, cache_key)? {
+                                    Some(file) => {
+                                        read_cached_output(manifest, file, options.max_output_bytes)
+                                            .ok()
+                                    }
+                                    None => None,
+                                }
+                            } else {
+                                None
+                            };
+                            if hit.is_some()
+                                && dependencies_declared
+                                && !dependency_fingerprint.is_some_and(|expected| {
+                                    dependency_fingerprint_matches(manifest, &cwd, expected)
+                                })
+                            {
+                                // Do not accept a result if any declared file
+                                // changed or became unsafe since the key was
+                                // first computed. Execute normally without
+                                // storing under the stale identity.
+                                hit = None;
+                                key = None;
+                            }
+                            if let Some((bytes, status)) = hit {
+                                result.cache_hits += 1;
+                                let cache_key = key.as_deref().expect("cache key for hit");
+                                lazy_event(
+                                    options.trace,
+                                    signals,
+                                    || serde_json::json!({"event":"cache_hit","line":step.line,"applet":manifest.name_for(call),"key":cache_key,"bytes":bytes.len()}),
+                                )?;
+                                // Cache entries retain terminal bytes/status,
+                                // not historical per-stage diagnostics.
+                                (bytes, status, true, None, Vec::new())
+                            } else {
+                                let completed = run_uncached()?;
+                                if let Some(cache_key) = key.take() {
+                                    let dependencies_unchanged = !dependencies_declared
+                                        || dependency_fingerprint.is_some_and(|expected| {
+                                            dependency_fingerprint_matches(manifest, &cwd, expected)
+                                        });
+                                    if dependencies_unchanged {
+                                        if let Ok(entry) = cache_output(
+                                            manifest,
+                                            &completed.bytes,
+                                            completed.status,
+                                        ) {
+                                            let stored =
+                                                cache::write(&directory, &cache_key, &entry)?;
+                                            lazy_event(
+                                                options.trace,
+                                                signals,
+                                                || serde_json::json!({"event":if stored {"cache_store"} else {"cache_skip"},"line":step.line,"applet":manifest.name_for(call),"key":cache_key,"bytes":completed.bytes.len()}),
+                                            )?;
+                                        }
+                                    }
+                                }
+                                let stderr = completed
+                                    .stages
+                                    .iter()
+                                    .rev()
+                                    .find_map(|stage| stage.stderr.clone());
+                                (
+                                    completed.bytes,
+                                    completed.status,
+                                    completed.stdout_captured,
+                                    stderr,
+                                    completed.stages,
+                                )
                             }
                         } else {
-                            let completed = execute_group(
+                            let completed = execute_call_group(
                                 &calls,
                                 input,
                                 None,
@@ -1278,23 +3393,68 @@ fn run_finite_state(
                                 options,
                                 &mut result.launched_processes,
                                 signals,
+                                registry,
                             )?;
-                            if let Some(name) = &call.status_binding {
-                                let code = completed
-                                    .status
-                                    .context("native command finished without an exit code")?;
-                                bindings.insert(name.clone(), Value::Integer(i64::from(code)));
-                            }
-                            completed.bytes
+                            let stderr = completed
+                                .stages
+                                .iter()
+                                .rev()
+                                .find_map(|stage| stage.stderr.clone());
+                            (
+                                completed.bytes,
+                                completed.status,
+                                completed.stdout_captured,
+                                stderr,
+                                completed.stages,
+                            )
                         };
-                        if let Some(name) = &calls.last().unwrap().0.binding {
-                            bindings.insert(
-                                name.clone(),
-                                Value::String(
-                                    String::from_utf8(bytes.clone())
-                                        .context("named results must be UTF-8 text")?,
-                                ),
+                        if let Some(name) = &call.status_binding {
+                            let code = status.context("applet finished without an exit code")?;
+                            bindings.insert(name.clone(), Value::Integer(i64::from(code)));
+                        }
+                        let output_value = if let Some(name) = &output_call.binding {
+                            Some(bind_call_output(
+                                name,
+                                output_manifest,
+                                calls.last().expect("invocation group is nonempty").2,
+                                &bytes,
+                                status,
+                                stdout_captured,
+                                stderr.clone(),
+                                stages.clone(),
+                                &mut bindings,
+                            )?)
+                        } else {
+                            None
+                        };
+                        if let Some(status) = status {
+                            let outcome = output_manifest.outcome_for(status);
+                            let execution = execution_result::ExecutionResult::from_outcome(
+                                outcome,
+                                stdout_captured.then(|| bytes.clone()),
+                                stderr,
+                                output_value,
+                                stages,
                             );
+                            execution_history.push(
+                                calls.last().expect("invocation group is nonempty").2,
+                                output_manifest.name_for(output_call),
+                                &execution,
+                            );
+                            let execution_value = crate::structured::to_json(
+                                &execution_result::ExecutionRecord::from_result(
+                                    calls.last().expect("invocation group is nonempty").2,
+                                    output_manifest.name_for(output_call),
+                                    &execution,
+                                )
+                                .to_value(),
+                            )?;
+                            lazy_event(options.trace, signals, || {
+                                serde_json::json!({
+                                    "event": "execution_result",
+                                    "execution": execution_value,
+                                })
+                            })?;
                         }
                         data = Input::Bytes(bytes);
                     }
@@ -1302,6 +3462,19 @@ fn run_finite_state(
             }
             Ok(())
         })();
+        if let Some(error) = control_rethrow {
+            if let Some(journal) = journal.as_deref_mut() {
+                if !journal.persistence_failed() {
+                    journal.fail(
+                        &format!("{error:#}"),
+                        parent_signals.cancelled.load(Ordering::Relaxed)
+                            || is_timeout_error(&error)
+                            || journal_uncertain,
+                    )?;
+                }
+            }
+            return Err(error);
+        }
         if let Err(error) = execution {
             let error = call_frames.iter().rev().fold(error, |error, frame| {
                 error.context(format!(
@@ -1309,17 +3482,34 @@ fn run_finite_state(
                     frame.name, frame.line
                 ))
             });
-            if let Some(journal) = journal.as_deref_mut() {
-                if !journal.persistence_failed() {
-                    journal.fail(
-                        &format!("{error:#}"),
-                        signals.cancelled.load(Ordering::Relaxed)
-                            || error.is::<CommandTimedOut>()
-                            || journal_uncertain,
-                    )?;
+            let cancellation = !was_cleanup && parent_signals.cancelled.load(Ordering::Relaxed);
+            let action = control_state.fail(error, cancellation)?;
+            match apply_control_action(
+                action,
+                program,
+                &mut control_state,
+                &mut call_frames,
+                &mut loop_frames,
+                &mut bindings,
+                &mut cwd,
+            )? {
+                AppliedControl::Continue => {}
+                AppliedControl::Jump(target) => jump_to = Some(target),
+                AppliedControl::Rethrow(error) => {
+                    if let Some(journal) = journal.as_deref_mut() {
+                        if !journal.persistence_failed() {
+                            journal.fail(
+                                &format!("{error:#}"),
+                                cancellation
+                                    || parent_signals.cancelled.load(Ordering::Relaxed)
+                                    || is_timeout_error(&error)
+                                    || journal_uncertain,
+                            )?;
+                        }
+                    }
+                    return Err(error);
                 }
             }
-            return Err(error);
         }
         index = jump_to.unwrap_or(index + 1);
         if let Some(journal) = journal
@@ -1328,6 +3518,7 @@ fn run_finite_state(
         {
             journal_end = None;
             journal_uncertain = false;
+            authorize_checkpoint_persistence(registry, &signals.sensitivity_floor())?;
             let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                 options.max_output_bytes,
                 signals,
@@ -1358,7 +3549,96 @@ fn run_finite_state(
             data: result.output.clone(),
         };
     }
+    result.executions = execution_history.executions;
+    result.dropped_executions = execution_history.dropped_executions;
+    result.dropped_stages = execution_history.dropped_stages;
     Ok(result)
+}
+
+enum AppliedControl {
+    Continue,
+    Jump(usize),
+    Rethrow(anyhow::Error),
+}
+
+fn apply_control_action<'a>(
+    action: control_flow::ControlAction,
+    program: &Program,
+    state: &mut control_flow::RuntimeState,
+    call_frames: &mut Vec<calls::Frame<'a>>,
+    loop_frames: &mut loops::LoopStack,
+    bindings: &mut BTreeMap<String, Value>,
+    cwd: &mut PathBuf,
+) -> Result<AppliedControl> {
+    fn remove_bindings(bindings: &mut BTreeMap<String, Value>, names: Vec<String>) {
+        for name in names {
+            bindings.remove(&name);
+        }
+    }
+    fn unwind(
+        unwind: control_flow::UnwindTo,
+        state: &mut control_flow::RuntimeState,
+        call_frames: &mut Vec<calls::Frame<'_>>,
+        loop_frames: &mut loops::LoopStack,
+        bindings: &mut BTreeMap<String, Value>,
+        cwd: &mut PathBuf,
+    ) -> Result<()> {
+        let control_flow::UnwindTo {
+            call_depth,
+            loop_depth,
+            drop_bindings,
+        } = unwind;
+        if call_depth > call_frames.len() {
+            bail!("control transfer targets an inactive program scope");
+        }
+        while call_frames.len() > call_depth {
+            let frame = call_frames.pop().expect("call depth checked");
+            *bindings = frame.bindings;
+            *cwd = frame.cwd;
+        }
+        loop_frames.unwind_to(loop_depth, bindings)?;
+        remove_bindings(bindings, drop_bindings);
+        state.apply_unwind(&control_flow::UnwindTo::new(call_depth, loop_depth));
+        Ok(())
+    }
+
+    match action {
+        control_flow::ControlAction::Continue { drop_bindings } => {
+            remove_bindings(bindings, drop_bindings);
+            Ok(AppliedControl::Continue)
+        }
+        control_flow::ControlAction::Jump {
+            target,
+            transfer,
+            unwind: target_scope,
+        } => {
+            let continuing = transfer == Some(control_flow::TransferKind::Continue);
+            unwind(target_scope, state, call_frames, loop_frames, bindings, cwd)?;
+            if continuing {
+                let Some(StepKind::EndLoop { back }) =
+                    program.steps.get(target).map(|step| &step.kind)
+                else {
+                    bail!("continue target is not an end-loop marker");
+                };
+                let header = target
+                    .checked_sub(*back)
+                    .context("invalid continue loop edge")?;
+                loop_frames.end_iteration(header, bindings)?;
+            }
+            Ok(AppliedControl::Jump(target))
+        }
+        control_flow::ControlAction::Catch {
+            target,
+            binding,
+            error,
+            unwind: target_scope,
+        } => {
+            unwind(target_scope, state, call_frames, loop_frames, bindings, cwd)?;
+            bindings.insert(binding, execution_result::error_value(&error));
+            Ok(AppliedControl::Jump(target))
+        }
+        control_flow::ControlAction::Rethrow(error) => Ok(AppliedControl::Rethrow(error)),
+    }
 }
 
 /// Execute a component worker using an explicit cancellation token and port values.
@@ -1373,6 +3653,13 @@ pub fn run_with_context(
     if program.trigger.is_some() {
         bail!("triggered programs require run_service");
     }
+    let cwd = fs::canonicalize(&options.working_directory)?;
+    crate::capabilities::preflight_with_cache_directory(
+        program,
+        registry,
+        &cwd,
+        options.cache_directory.as_deref(),
+    )?;
     if !options.inputs.is_empty() {
         crate::inputs::known_values(&program.inputs, &options.inputs)?;
     }
@@ -1382,13 +3669,20 @@ pub fn run_with_context(
         bindings.keys().cloned().collect(),
         !bindings.is_empty() || !input.is_empty(),
     )?;
+    #[cfg(not(target_arch = "wasm32"))]
+    validate_worker_support(program, registry)?;
     if !program.inputs.is_empty() {
         let mut supplied = options.inputs.clone();
         supplied.extend(bindings.clone());
         let values = crate::inputs::resolve(&program.inputs, &supplied, true)?;
         preflight_inputs(program, registry, &values)?;
     }
-    let signals = Signals::with_cancellation(cancelled, true)?;
+    let signals = Signals::with_cancellation_and_deadline(
+        cancelled,
+        true,
+        deadline_after(options.total_timeout, "total timeout")?,
+    )?;
+    preload_program_modules(program, registry, &signals, &cwd)?;
     run_finite_state(
         program,
         registry,
@@ -1800,7 +4094,11 @@ mod opt_manifest_path_cache_tests {
                 let elapsed = started.elapsed().as_nanos();
                 println!(
                     "opt_cache_key_sample mode={} batch={batch} iterations={iterations} total_ns={elapsed} ns_per_op={:.1}",
-                    if optimized { "reused_vec_sorted_env" } else { "to_vec_btreemap" },
+                    if optimized {
+                        "reused_vec_sorted_env"
+                    } else {
+                        "to_vec_btreemap"
+                    },
                     elapsed as f64 / iterations as f64,
                 );
             }

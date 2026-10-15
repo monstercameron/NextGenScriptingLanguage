@@ -8,7 +8,7 @@ impl BrowserSession {
         args: &[String],
         input: &[u8],
         cwd: &str,
-    ) -> Result<(Vec<u8>, i64)> {
+    ) -> Result<(Vec<u8>, i32)> {
         if !APPLETS.contains(&name) {
             bail!("{name:?} is unavailable in the browser; use native execute");
         }
@@ -17,7 +17,7 @@ impl BrowserSession {
         let output = match name {
             "true" | "false" => {
                 no_args(args)?;
-                status = i64::from(name == "false");
+                status = if name == "false" { 1 } else { 0 };
                 Vec::new()
             }
             "pwd" => {
@@ -156,7 +156,7 @@ impl BrowserSession {
                             .then_some(relative)
                         })
                         .collect();
-                    lines(names.into_iter())
+                    lines(names)
                 }
             }
             "sort" => {
@@ -295,7 +295,7 @@ impl BrowserSession {
                         out.push('\n');
                     }
                 }
-                status = i64::from(!matched);
+                status = if matched { 0 } else { 1 };
                 out.into_bytes()
             }
             _ => unreachable!(),

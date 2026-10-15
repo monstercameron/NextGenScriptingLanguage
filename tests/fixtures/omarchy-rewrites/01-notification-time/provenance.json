@@ -1,0 +1,20 @@
+{
+  "upstream_repository": "https://github.com/omacom/omarchy",
+  "upstream_commit": "c668141e9c42b13c80c9ca4ea108e11708c5e8a5",
+  "upstream_path": "bin/omarchy-notification-time",
+  "upstream_url": "https://github.com/omacom/omarchy/blob/c668141e9c42b13c80c9ca4ea108e11708c5e8a5/bin/omarchy-notification-time",
+  "copied_source": "upstream.sh",
+  "sha256": "91628c65ea319fdd3fe4cfc4bdd725e7053550faffa5f817c5ad1786bd5ed249",
+  "rewrite": "examples/omarchy-rewrites/01-notification-time.program",
+  "native_dependencies": ["date", "jq", "omarchy-notification-send"],
+  "mocked_boundaries": ["date", "omarchy-notification-send"],
+  "real_transformation": "jq -Rsj sub(\"\\n+$\"; \"\")",
+  "cases": ["success", "literal_summary_and_newlines", "empty_date", "date_failure_still_notifies", "notification_failure", "ignored_literal_arguments", "untouched_source"],
+  "limits": [
+    "jq is an added native text-normalization dependency",
+    "Execute appends a diagnostic on unhandled notification failure",
+    "Execute discards stdout from a failing notification command",
+    "Nonordinary date spawn/signal/timeout/output errors stop Execute",
+    "UTF-8 and NUL-free finite output contract"
+  ]
+}

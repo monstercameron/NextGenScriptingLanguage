@@ -31,9 +31,14 @@ impl Fixture {
         assert_eq!(output.stdout, b"OWNED INPUT\n");
         fixture.entry = fs::read_dir(fixture.root().join(".flow-cache"))
             .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .find(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "bin")
+            })
+            .expect("cache entry")
             .path();
         fs::remove_file(fixture.root().join("later-output")).unwrap();
         fixture
@@ -100,6 +105,11 @@ fn ordinary_existing_cache_is_reused_without_launching_or_changing_key_bytes() {
     assert_eq!(
         fs::read_dir(fixture.entry.parent().unwrap())
             .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "bin"))
             .count(),
         1
     );
@@ -144,14 +154,20 @@ fn caches_writable_by_other_users_fail_closed_without_permission_changes() {
     let fixture = Fixture::new();
     let cache = fixture.root().join(".flow-cache");
     fs::set_permissions(&cache, fs::Permissions::from_mode(0o777)).unwrap();
-    fixture.rejects(None, "not writable by other users");
+    fixture.rejects(
+        None,
+        "cache directory must be owned by the current user and private",
+    );
     assert_eq!(
         fs::metadata(&cache).unwrap().permissions().mode() & 0o777,
         0o777
     );
     fs::set_permissions(&cache, fs::Permissions::from_mode(0o700)).unwrap();
     fs::set_permissions(&fixture.entry, fs::Permissions::from_mode(0o666)).unwrap();
-    fixture.rejects(None, "not writable by other users");
+    fixture.rejects(
+        None,
+        "cached result must be owned by the current user and private",
+    );
     assert_eq!(
         fs::metadata(&fixture.entry).unwrap().permissions().mode() & 0o777,
         0o666

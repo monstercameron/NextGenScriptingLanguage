@@ -1,0 +1,64 @@
+{
+  "name": "path.basename",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true
+    },
+    "suffix": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "path.basename"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "path.inspect"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "suffix": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

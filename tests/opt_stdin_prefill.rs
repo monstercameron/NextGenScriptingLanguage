@@ -59,6 +59,7 @@ fn run(
             trace: false,
             max_output_bytes: 4 * 1024 * 1024,
             command_timeout: Some(timeout),
+            total_timeout: None,
         },
         BTreeMap::new(),
         input,
@@ -297,6 +298,7 @@ fn benchmark_run_with_context_cat_payloads() {
         trace: false,
         max_output_bytes: 4 * 1024 * 1024,
         command_timeout: Some(Duration::from_secs(10)),
+        total_timeout: None,
     };
     runtime::validate_with_inputs(&program, &registry, BTreeSet::new(), true).unwrap();
 

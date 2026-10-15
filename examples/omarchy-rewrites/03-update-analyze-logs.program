@@ -1,0 +1,11 @@
+#!/usr/bin/env -S execute --
+# Rewrite of omarchy/bin/omarchy-update-analyze-logs at c668141e9c42b13c80c9ca4ea108e11708c5e8a5.
+# The upstream path is fixed; --input update_log=... permits an isolated log.
+# Upstream ignores positional arguments, so retain them without interpreting them.
+accept update_log as text with default "/tmp/omarchy-update.log"
+accept ignored_arguments as list of text from arguments
+run "grep" with arguments ["-q", "Updating linux initcpios", update_log] and keep status as update_seen
+if update_seen is 0
+  run "grep" with arguments ["-q", "Initcpio image generation successful", update_log] and keep status as generation_ok
+  if generation_ok is not 0
+    run "printf" with arguments ["\u001b[31mError: Initramfs generation may have failed. Review logs before restart.\u001b[0m\n\n"]

@@ -5,7 +5,7 @@ NPM ?= npm
 PORT ?= 8080
 
 .DEFAULT_GOAL := help
-.PHONY: help setup format format-check docs-check check rust-check build proof-smoke unix-smoke playground-build playground-check playground-browser-check site-serve
+.PHONY: help setup format format-check docs-check applet-boundaries-harness-check check rust-check build omarchy-rewrite-check proof-smoke unix-smoke playground-build playground-check playground-browser-check site-serve
 
 help:
 	@printf '%s\n' \
@@ -14,7 +14,9 @@ help:
 	  '  make build                    Build native release executables' \
 	  '  make check                    Native Rust, documentation, Python and editor checks' \
 	  '  make rust-check               Native formatting, Clippy and release tests' \
+	  '  make omarchy-rewrite-check    Run isolated Omarchy replacement acceptance tests' \
 	  '  make docs-check               Check maintained local documentation links' \
+	  '  make applet-boundaries-harness-check Test benchmark wrappers without measuring' \
 	  '  make format                   Format owned Rust and playground source' \
 	  '  make format-check             Check formatting without modifying files' \
 	  '  make playground-build         Build native CLI and Rust/WASM playground assets' \
@@ -45,8 +47,12 @@ docs-check:
 	$(PYTHON) tests/docs.py
 	$(PYTHON) tools/check_docs.py
 
+applet-boundaries-harness-check:
+	$(PYTHON) tests/applet_boundaries.py
+	$(PYTHON) tests/omarchy_success_bench.py
+
 # Keep this sequence shared by local development and macOS/Linux CI.
-check: rust-check docs-check
+check: rust-check docs-check applet-boundaries-harness-check
 	$(PYTHON) tests/staged_rust.py
 	$(PYTHON) tests/releases.py
 	$(PYTHON) -O tests/releases.py
@@ -58,6 +64,7 @@ check: rust-check docs-check
 	$(PYTHON) tests/unix_matrix.py
 	$(PYTHON) -O tests/unix_matrix.py
 	EXECUTE_PROOF_BINARY="$(CURDIR)/target/release/execute" $(PYTHON) tests/replacement_proofs.py
+	EXECUTE_TEST_BINARY="$(CURDIR)/target/release/execute" EXECUTE_APPLET_BINARY="$(CURDIR)/target/release/execute-applet" $(PYTHON) -m unittest discover -s tests/omarchy_rewrites -p 'test_*.py' -v
 	EXECUTE_TEST_BINARY="$(CURDIR)/target/release/execute" $(NPM) --prefix editors/vscode test
 
 rust-check:
@@ -69,6 +76,10 @@ rust-check:
 
 build:
 	$(CARGO) build --locked --release
+
+# These fixtures use only owned HOME directories and mock desktop/service APIs.
+omarchy-rewrite-check: build
+	EXECUTE_TEST_BINARY="$(CURDIR)/target/release/execute" EXECUTE_APPLET_BINARY="$(CURDIR)/target/release/execute-applet" $(PYTHON) -m unittest discover -s tests/omarchy_rewrites -p 'test_*.py' -v
 
 playground-build: build
 	CARGO="$(CARGO)" NPM="$(NPM)" $(PYTHON) tools/build_playground.py

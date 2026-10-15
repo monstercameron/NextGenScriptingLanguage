@@ -40,12 +40,29 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
-/// Scalar equality; there is no shell expansion or implicit truthiness.
+/// A typed comparison. Equality supports JSON values; containment is limited to
+/// strings, arrays, and object keys and never performs implicit coercion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionOperator {
+    #[default]
+    Equals,
+    Contains,
+}
+
+/// Typed comparison; there is no shell expansion or implicit truthiness.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Condition {
     pub left: Value,
     pub right: Value,
     pub negated: bool,
+    /// Omitted from legacy serialized ASTs when it has the old equality meaning.
+    #[serde(default, skip_serializing_if = "is_equals_operator")]
+    pub operator: ConditionOperator,
+}
+
+fn is_equals_operator(operator: &ConditionOperator) -> bool {
+    *operator == ConditionOperator::Equals
 }
 
 /// A bounded loop; values resolve in the enclosing lexical scope.
@@ -56,8 +73,25 @@ pub enum LoopKind {
     While { condition: Condition },
 }
 
+/// How a finite task group combines independently invoked applets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskGroupMode {
+    /// Start every task subject to the configured bound and require success.
+    Join,
+    /// Return the first successful task and cancel/reap all remaining tasks.
+    Race,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StepKind {
+    /// Bounded, structured fan-out of independent named applet calls.
+    TaskGroup {
+        mode: TaskGroupMode,
+        limit: usize,
+        binding: String,
+        tasks: Vec<Invocation>,
+    },
     /// `end` is relative to the header and points just beyond EndLoop.
     Loop {
         kind: LoopKind,
@@ -86,6 +120,25 @@ pub enum StepKind {
         connection: Connection,
     },
     EndCall,
+    /// Exit the innermost active loop, restoring its outer lexical bindings.
+    BreakLoop,
+    /// End the current iteration of the innermost active loop.
+    ContinueLoop,
+    /// Exit the current reusable program call after unwinding its local scopes.
+    Return,
+    /// Structured error and cleanup block. Offsets are relative to this header;
+    /// catch/finally point at their marker steps and end points past EndTry.
+    Try {
+        catch: Option<usize>,
+        finally: Option<usize>,
+        end: usize,
+    },
+    Catch {
+        binding: String,
+        end: usize,
+    },
+    Finally,
+    EndTry,
     /// A reusable body's first `read from stdin` reads its call input.
     ReadCallInput {
         binding: Option<String>,
@@ -105,6 +158,14 @@ pub enum StepKind {
     },
     TakeJson {
         pointer: String,
+        source: Value,
+        kind: InputType,
+        binding: String,
+    },
+    /// Dynamic JSON pointer variant, used only when the pointer is a text result.
+    /// Keeping the literal variant above preserves serialized AST compatibility.
+    TakeJsonDynamic {
+        pointer: Value,
         source: Value,
         kind: InputType,
         binding: String,

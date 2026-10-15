@@ -1,0 +1,4 @@
+parallel at most 2 as results
+  run number.add with left 20 and right 22 as sum
+  run number.multiply with left 6 and right 7 as product
+then encode results as json

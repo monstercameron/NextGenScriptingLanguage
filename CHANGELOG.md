@@ -7,11 +7,41 @@ original version labels.
 
 ## Unreleased
 
+- Versioned applet contracts add typed inputs and outputs, explicit outcome
+  routing, result envelopes, named typed ports, per-applet environment changes,
+  and `capture`/`discard`/`inherit` stdio policies.
+  Command, in-process and persistent JSON-lines worker backends share the same
+  call syntax; see [applet contracts](docs/applet-contracts.md).
+  Envelopes include classified effect certainty so callers can route uncertain
+  outcomes without guessing from status codes.
+- New `execute-applet` helper and bundled generic path, text, numeric, color,
+  filesystem and JSONC operations. Single-file writes use content-hash compare
+  and swap, locking and atomic replacement. A separate bounded `fs.transaction`
+  applet retains a journal for file-only recovery; it applies files one by one,
+  so visibility is partial during the batch and external effects are not
+  covered. The helper is included by current source packaging scripts.
+- Optional strict v1 capability policy checks canonical applet grants, declared
+  capabilities and environment allowlists. `sandbox_required` separately opts
+  into fail-closed macOS/Linux command sandboxing; this is not implied by
+  metadata, and in-process operations cannot use the OS sandbox. See
+  [security boundaries](SECURITY.md#applet-contracts-and-optional-capability-policy).
 - Native and browser `repeat`, `for each` and `while` blocks, with typed outer
   updates, iteration-local names, bounded execution and whole-loop recovery.
   Includes three native utilities and a browser batch workflow; source builds only.
 - VS Code source package 0.2.2 highlights loop headers and adds three checked
   loop snippets.
+- Source builds provide a stdio LSP server for diagnostics, completion, local
+  reusable-program navigation/rename, applet discovery and typed-port matching;
+  see [language-server guide](docs/language-server.md).
+- Source builds accept typed applet graph files with preflighted ports, bounded
+  event queues and inspectable `check`/`inspect`/`explain`/`run` surfaces; see
+  [graph guide](docs/graph.md). The graph limits do not bound arbitrary applet
+  I/O or memory.
+- Optional `--data-flow-policy` controls labeled remote egress and plaintext
+  persistence separately from applet capabilities. Review-only
+  `execute service generate systemd|launchd` output is also available in source;
+  it never installs or starts a service. See the [data-flow guide](docs/security-dataflow.md)
+  and [service generation guide](docs/guide.md#generate-a-reviewable-service-definition).
 
 - Browser terminal playground on GitHub Pages, with the Rust/WASM language core,
   virtual files, seven runnable workflows, typed inputs, branches and cache traces.

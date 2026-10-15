@@ -36,7 +36,7 @@ fn listen(
     options: &RunOptions,
     limits: &ServiceLimits,
     signals: &Signals,
-    emit: &mut impl FnMut(&[u8], &AtomicBool) -> Result<()>,
+    emit: &mut impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
     result: &mut ServiceResult,
     mut journal: Option<&mut Journal>,
 ) -> Result<()> {
@@ -49,9 +49,15 @@ fn listen(
             let manifest = registry.resolve_call(call)?;
             let binary = binary_path(manifest.binary_for(call), &options.working_directory)?;
             let argv = arguments_for_call(call, manifest, &options.inputs)?;
-            let mut command = Command::new(&binary);
+            stopped(signals)?;
+            let mut command = crate::capabilities::command_for(
+                &binary,
+                argv,
+                registry,
+                &manifest.name,
+                &options.working_directory,
+            )?;
             command
-                .args(argv)
                 .current_dir(&options.working_directory)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
@@ -59,7 +65,6 @@ fn listen(
             let (mut child, job) = crate::platform::windows::Job::spawn(&mut command)
                 .with_context(|| format!("starting listener {:?}", manifest.name))?;
             let pid = child.id();
-            result.launched_processes += 1;
             let reader = child.stdout.take().expect("listener stdout");
             children.0.push(ManagedChild {
                 child,
@@ -68,6 +73,8 @@ fn listen(
                 stderr: None,
                 diagnostic: Vec::new(),
             });
+            stopped(signals)?;
+            result.launched_processes += 1;
             trace_event(
                 options.trace,
                 signals,
@@ -192,6 +199,7 @@ mod native_listener_tests {
             trace: false,
             max_output_bytes: 1024,
             command_timeout: Some(Duration::from_secs(1)),
+            total_timeout: None,
         };
         let started = Instant::now();
         let result = listen(

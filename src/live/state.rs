@@ -333,10 +333,39 @@ pub(crate) fn validate(doc: &Document, registry: &Registry, max_bytes: usize) ->
             || !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
             || name.as_bytes()[0].is_ascii_digit()
         {
-            bail!("invalid binding name {name:?}; use letters, digits and underscores, starting with a letter or underscore");
+            bail!(
+                "invalid binding name {name:?}; use letters, digits and underscores, starting with a letter or underscore"
+            );
         }
     }
     let plan = Plan::parse(&doc.source)?;
+    if registry
+        .host_state::<Option<crate::capabilities::CapabilityPolicy>>()
+        .is_some()
+    {
+        if let Some(screen) = &plan.screen {
+            let policy_program = Program {
+                definitions: Default::default(),
+                inputs: Vec::new(),
+                steps: screen
+                    .components
+                    .values()
+                    .flat_map(|component| &component.handlers)
+                    .flat_map(|handler| &handler.actions)
+                    .filter_map(|action| match action {
+                        crate::ui::syntax::Action::Native(step) => Some(step.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                trigger: None,
+            };
+            crate::capabilities::preflight(&policy_program, registry, &doc.cwd)?;
+        } else {
+            // `Plan::program` is the full prospective program, including
+            // definitions and service triggers, even when the cursor is later.
+            crate::capabilities::preflight(&plan.program, registry, &doc.cwd)?;
+        }
+    }
     crate::inputs::validate(&plan.program.inputs)?;
     let mut declared = BTreeMap::new();
     for input in &plan.program.inputs {
@@ -352,7 +381,9 @@ pub(crate) fn validate(doc: &Document, registry: &Registry, max_bytes: usize) ->
         crate::ui::syntax::validate(screen, registry)?;
         crate::ui::validate_live_state(screen, &doc.ui)?;
         if doc.cursor != 0 || !doc.bindings.is_empty() {
-            bail!("UI state uses component inputs/widgets; cursor must be 0 and root bindings must be empty");
+            bail!(
+                "UI state uses component inputs/widgets; cursor must be 0 and root bindings must be empty"
+            );
         }
         if !within_state_limit(doc)? {
             bail!("state exceeds 8 MiB");
@@ -554,7 +585,7 @@ impl State {
                     .ui
                     .pointer(&path.unwrap()[3..])
                     .cloned()
-                    .ok_or_else(|| fail("not_found", "path does not exist"))
+                    .ok_or_else(|| fail("not_found", "path does not exist"));
             }
             "source" => (json!(self.doc.source), 1),
             "cwd" => (json!(self.doc.cwd), 1),
@@ -685,10 +716,10 @@ fn mutate(root: &mut Json, op: &str, path: &str, value: Option<Json>) -> Result<
             let exists = map.contains_key(key);
             match op {
                 "create" if exists => {
-                    return Err(fail("already_exists", "create requires an absent path"))
+                    return Err(fail("already_exists", "create requires an absent path"));
                 }
                 "update" | "replace" | "remove" | "delete" | "test" if !exists => {
-                    return Err(fail("not_found", "path does not exist"))
+                    return Err(fail("not_found", "path does not exist"));
                 }
                 _ => {}
             }
@@ -823,7 +854,10 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                         ));
                     }
                     if state.uncertain && request.action.as_deref() != Some("retry") {
-                        return Err(fail("uncertain_effects","use retry to explicitly authorize re-execution, or edit cursor to skip the failed group"));
+                        return Err(fail(
+                            "uncertain_effects",
+                            "use retry to explicitly authorize re-execution, or edit cursor to skip the failed group",
+                        ));
                     }
                     validate(&state.doc, &shared.registry, shared.max_bytes)?;
                     state.uncertain = false;

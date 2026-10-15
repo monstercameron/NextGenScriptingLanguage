@@ -212,3 +212,5 @@ Start at the **[documentation index](docs/README.md)** for current guides,
 architecture, contribution paths and a separate map of historical evidence.
 
 Licensed under the [MIT License](LICENSE).
+
+Security boundaries and remaining isolation gaps are documented in [SECURITY.md](SECURITY.md).

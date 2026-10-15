@@ -781,6 +781,17 @@ optional file path or file list is therefore not declared cacheable. Eviction is
 so its generic binding is not cacheable; the fixed stdin-only `count.lines`
 adapter remains cacheable.
 
+Cache directories and entries must be real directories/regular files; symlinks,
+Windows reparse points, FIFOs, sockets and devices are rejected. Unix cache
+paths must belong to the effective user with no group/other write mode bits.
+New Unix cache directories are 0700 and result files are 0600. Rejected paths are not
+chmodded; use a real private directory instead of a symlink/shared writable cache.
+Unsafe cache state is an error, not a cache miss that repeats the applet. Parent
+directories and same-user cache writers remain trusted. These checks do not
+provide a command sandbox, authenticated cache contents, complete ancestor-race
+protection or Unix extended ACL/Windows cache ACL enforcement; see
+[security boundaries](../SECURITY.md).
+
 `--trace` emits JSON lifecycle events, cache events, interval lateness, calendar
 ticks, and handler timings. Applet diagnostics share stderr. Parameter values and
 environment contents are omitted from traces.

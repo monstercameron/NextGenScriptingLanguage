@@ -457,6 +457,10 @@ def main() -> int:
     parser.add_argument("--candidate", type=Path, required=True, help="candidate Execute executable")
     parser.add_argument("--seed", type=int, default=20261013)
     parser.add_argument("--record-size", type=int, choices=(8, 8192), default=8)
+    parser.add_argument(
+        "--shared-working-directory", action="store_true",
+        help="Use identical cwd/environment with isolated cache directories",
+    )
     parser.add_argument("--path-prefix-count", type=int, default=0)
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument("--command-timeout-ms", type=int, default=10_000)
@@ -475,6 +479,7 @@ def main() -> int:
         "blocks": BLOCK_COUNT,
         "records_per_block": RECORDS_PER_BLOCK,
         "path_prefix_count": args.path_prefix_count,
+        "shared_working_directory": args.shared_working_directory,
         "timeout_seconds": args.timeout_seconds,
         "command_timeout_ms": args.command_timeout_ms,
         "method": {
@@ -542,8 +547,10 @@ def main() -> int:
             program = root / "stdin listener Ω.program"
             program.write_text(PROGRAM, encoding="utf-8")
             for label, binary in binary_paths.items():
-                cwd = root / f"{label} work Ω"
-                cwd.mkdir()
+                cwd = root / (
+                    "common work Ω" if args.shared_working_directory else f"{label} work Ω"
+                )
+                cwd.mkdir(exist_ok=args.shared_working_directory)
                 cache = root / f"{label} private cache Ω"
                 cache.mkdir()
                 listeners[label] = Listener(

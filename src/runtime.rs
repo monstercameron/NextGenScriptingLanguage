@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod cache;
 mod calls;
 mod checkpoint;
 mod control;
@@ -1235,9 +1236,8 @@ fn run_finite_state(
                             let directory = cache_override
                                 .clone()
                                 .unwrap_or_else(|| cwd.join(".flow-cache"));
-                            let path = directory.join(format!("{key}.bin"));
-                            match File::open(&path) {
-                                Ok(file) => {
+                            match cache::open(&directory, &key)? {
+                                Some(file) => {
                                     let bytes = capture(file, options.max_output_bytes)?;
                                     result.cache_hits += 1;
                                     lazy_event(
@@ -1247,7 +1247,7 @@ fn run_finite_state(
                                     )?;
                                     bytes
                                 }
-                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                None => {
                                     let bytes = execute_group(
                                         &calls,
                                         Input::Bytes(input),
@@ -1259,8 +1259,7 @@ fn run_finite_state(
                                         signals,
                                     )?
                                     .bytes;
-                                    fs::create_dir_all(&directory)?;
-                                    atomic_write(&path, &bytes)?;
+                                    cache::write(&directory, &key, &bytes)?;
                                     lazy_event(
                                         options.trace,
                                         signals,
@@ -1268,7 +1267,6 @@ fn run_finite_state(
                                     )?;
                                     bytes
                                 }
-                                Err(error) => return Err(error).context("reading cached result"),
                             }
                         } else {
                             let completed = execute_group(

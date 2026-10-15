@@ -282,3 +282,14 @@ whole loop as one conservative recovery node. This closes the basic finite-loop
 gap; jobs, richer redirection and desktop acceptance remain separate proof gates.
 See the [language contract](language.md#loops-current-source). Published release
 artifacts remain unchanged.
+
+
+The later security focus additionally reproduces pure-cache symlink substitution
+and FIFO acceptance in private fixtures. The candidate rejects linked cache
+roots/entries and special files, checks opened file descriptors, and rejects
+Unix paths writable by other users or owned by another UID. New cache directories
+are private; existing raw cache bytes and key identities remain compatible.
+This is filesystem-state hardening, not cache authentication or a sandbox.
+Windows reparse rejection is implemented; Unix UID/mode checks do not establish
+Windows ACL enforcement. Parent-path races and same-user tampering remain open.
+See [security boundaries](../SECURITY.md) and the retained cache security evidence.

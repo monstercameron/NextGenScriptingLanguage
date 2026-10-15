@@ -312,7 +312,9 @@ then save to "service-names-normalized.txt"
 `and cache` reuses a pure transformation across fresh runs. Keys include exact
 input, arguments, manifest, executable identity, cwd, and environment. External
 files and network state are not tracked automatically: cacheability is a manifest
-author's contract. Cache eviction is not implemented.
+author's contract. Cache publication keeps at most 128 entries and 64 MiB of
+cached output and checksum data by evicting older entries. An output larger than
+the byte budget is returned but not retained.
 
 Checkpoints serve a different purpose: record completed nodes so a repaired
 program can continue after failure.

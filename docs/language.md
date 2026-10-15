@@ -387,7 +387,10 @@ before the next selection. Live failures retain the existing explicit `retry`
 control. Parsing and encoding are finite bounded operations, not streaming JSON
 queries; native stream stages remain native commands. The byte bound is not an
 RSS limit, and native command timeouts do not establish a JSON CPU deadline.
-CSV, record mapping and filtering remain future work. See
+CSV, arbitrary `jq`-style transformations and streaming JSON queries remain
+future work. The bounded `json.map` and `json.filter` applets provide JSON
+Pointer projection across an array and declarative array predicates; they are
+finite operations, not general-purpose transformation programs. See
 [github-repo-summary.program](../examples/github-repo-summary.program),
 [json-event-names.program](../examples/json-event-names.program) and
 [json-compact.program](../examples/json-compact.program).
@@ -863,7 +866,10 @@ environment, and exact input. Failed results are never published. Cache files us
 private temporary files and atomic renames. Default state is `.flow-cache` in the
 current program directory. External files, libraries, network state, and time
 aren't tracked automatically; `cacheable` is an author contract. `cat` with an
-optional file path or file list is therefore not declared cacheable. Eviction is not implemented.
+optional file path or file list is therefore not declared cacheable. Cache
+publication evicts older entries to keep at most 128 entries and 64 MiB of
+cached output and checksum data. A single output larger than the byte budget is
+returned to the caller but not retained.
 `wc` also permits arbitrary CLI arguments in `flags`, including file operands,
 so its generic binding is not cacheable; the fixed stdin-only `count.lines`
 adapter remains cacheable.

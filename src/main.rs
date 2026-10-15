@@ -255,17 +255,24 @@ fn execute_workflow(args: Args) -> Result<()> {
                 "graphs do not support resume, checkpoints, trigger limits, listener limits, or UI options"
             );
         }
-        if !args.inputs.is_empty() || !args.program_arguments.is_empty() {
-            bail!(
-                "graph node inputs are declared in the graph source; CLI program inputs are not supported"
-            );
-        }
         let registry = load_workflow_registry(
             args.manifest_dir,
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
         let graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
+        let supplied_inputs = flow::inputs::parse_cli_arguments(
+            graph.input_declarations(),
+            &args.inputs,
+            &args.program_arguments,
+        )?;
+        let inputs = if args.command == "run" {
+            flow::inputs::resolve(graph.input_declarations(), &supplied_inputs, false)?
+        } else {
+            supplied_inputs
+        };
+        let interface = flow::inputs::describe(graph.input_declarations(), &inputs)?;
+        let graph = graph.with_input_values(&inputs, false)?;
         graph.validate_with_registry(&registry)?;
         if capability_policy.is_some() {
             let cwd = fs::canonicalize(env::current_dir()?)?;
@@ -276,12 +283,13 @@ fn execute_workflow(args: Args) -> Result<()> {
             "inspect" => write_json(&serde_json::json!({
                 "protocol": "execute.graph/1",
                 "validation": "static",
+                "interface": interface,
                 "graph": serde_json::to_value(&graph)?
             })),
             "explain" => writeln!(io::stdout().lock(), "{}", graph.to_dot()).map_err(Into::into),
             "run" => {
                 let options = RunOptions {
-                    inputs: BTreeMap::new(),
+                    inputs,
                     working_directory: env::current_dir()?,
                     cache_directory: args.cache_dir,
                     trace: args.trace,

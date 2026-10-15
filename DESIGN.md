@@ -26,7 +26,7 @@ recorded versions.
 - Whole-program check/explain before execution, finite transformation caching,
   signal cancellation, process group ownership, traces, and isolated tests.
 - Direct quoted executable calls and typed CLI inputs in packaged 0.8.0.
-- Pending source primitives: finite inherited stdin, inspectable input interfaces,
+- Current source primitives: finite inherited stdin, inspectable input interfaces,
   structured check diagnostics, native exit-status bindings, scalar conditional
   blocks, finite JSON operations and same-file finite program calls. Calls lower
   into bounded, scoped instructions in the shared engine; conditions/calls are
@@ -35,7 +35,8 @@ recorded versions.
 A service loads the catalog and parses its body once. Each ordinary command is
 still a one-shot process. A `listen to` producer remains running between events;
 a `stream from` pipeline starts each native stage once for the whole stream.
-Persistent request/response worker protocols are a separate future feature.
+Current source also supports bounded persistent JSON-lines request/response
+workers on Unix; their pool belongs to the loaded catalog lifetime.
 
 macOS and Linux share process, descriptor, signal, and `poll` contracts. Native
 Windows supplies Job Objects, handle I/O, console cancellation and owner-checked
@@ -51,19 +52,19 @@ and enforce version/source agreement before publishing.
 The explicit stream mode supplies line-by-line final output where partial-result
 semantics are acceptable; finite capture still delays first-byte delivery.
 Keep byte sinks, record framing, and captured values explicit.
-Add cooperating worker manifests and a versioned framed request/response protocol
-when avoiding process startup per event is necessary. Keep ordinary binaries
+Use cooperating worker manifests and the versioned framed request/response
+protocol when avoiding process startup per event is necessary. Keep ordinary binaries
 supported; a pool cannot make an arbitrary one-shot command reusable.
 
-Extend finite JSON values toward CSV and structured streaming where justified.
-Add external modules, structured error results, bounded concurrency and explicit
-retry policies. Preserve readable canonical phrases and define scope/order before
+Finite typed CSV applets, external modules, structured execution results and
+bounded task groups are available in current source. Extend structured streaming
+and explicit retry policies where real programs justify them. Preserve readable canonical phrases and define scope/order before
 expanding the grammar. Native deadlines already exist; broader filesystem/CPU
 supervision needs separate evidence and contracts.
 
-Cache only transformations whose dependencies are declared. Add dependency
-fingerprints, binary/version pinning, cache eviction, and immutable artifact
-reuse. Effects such as commits, HTTP writes, and widget updates remain effects.
+Cache only transformations whose dependencies are declared. Current source
+includes dependency fingerprints, executable identities and bounded cache
+eviction; immutable artifact reuse remains a separate design question. Effects such as commits, HTTP writes, and widget updates remain effects.
 
 Use kqueue/epoll backends only when measured scale warrants replacing portable
 `poll`. Add launchd/systemd packaging when supervised installed mode is needed,

@@ -102,6 +102,55 @@ fn record_outputs_feed_existing_take_and_condition_syntax() {
 }
 
 #[test]
+fn finite_programs_can_use_typed_references_in_nested_record_parameters() {
+    let directory = tempfile::tempdir().unwrap();
+    let catalog = registry(&[json!({
+        "name": "record.echo",
+        "binary": "/usr/bin/printf",
+        "parameters": {
+            "config": {
+                "type": "record",
+                "required": true,
+                "fields": {
+                    "label": {"type": "string", "required": true},
+                    "settings": {
+                        "type": "record",
+                        "required": true,
+                        "fields": {"retry": {"type": "integer", "required": true}}
+                    }
+                }
+            }
+        },
+        "arguments": [{"literal": "%s\\n"}, {"json_parameter": "config"}],
+        "contract": {
+            "version": 1,
+            "output": {
+                "type": "record",
+                "encoding": "json",
+                "fields": {
+                    "label": {"type": "text"},
+                    "settings": {
+                        "type": "record",
+                        "fields": {"retry": {"type": "integer"}},
+                        "required": ["retry"]
+                    }
+                },
+                "required": ["label", "settings"]
+            }
+        }
+    })]);
+    let source = "accept label as text\naccept retry as integer\nrun record.echo with config {\"label\": label, \"settings\": {\"retry\": retry}} as result\ntake text at \"/label\" from result as returned_label\ntake integer at \"/settings/retry\" from result as returned_retry\nthen \"printf\" with arguments [\"%s:%s\", returned_label, returned_retry]\n";
+    let program = parser::parse(source).unwrap();
+    let mut run_options = options(directory.path());
+    run_options.inputs = BTreeMap::from([
+        ("label".into(), Value::String("Ada".into())),
+        ("retry".into(), Value::Integer(4)),
+    ]);
+    let result = runtime::run(&program, &catalog, &run_options).unwrap();
+    assert_eq!(result.output, b"Ada:4");
+}
+
+#[test]
 fn typed_path_outputs_are_semantically_checked_and_feed_path_operations() {
     let directory = tempfile::tempdir().unwrap();
     let child = directory.path().join("nested");

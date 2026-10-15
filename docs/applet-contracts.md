@@ -393,6 +393,7 @@ helper executable.
 | `number.parse_integer` | Parse UTF-8 decimal or explicitly based input in radix 2 through 36, with optional ASCII-whitespace trimming and signed 64-bit range checks. |
 | `color.rgb_to_hex`, `color.parse_rgb` | Convert three channels from 0 through 255 into `#rrggbb`, or parse a strict RGB triple with an explicit fallback color. |
 | `json.parse`, `json.stringify` | Parse strict UTF-8 JSON (up to 16 MiB and 128 nesting levels) or emit compact escaped JSON. Malformed or oversized input fails with status 2. |
+| `csv.parse`, `csv.stringify` | Parse UTF-8 RFC 4180-style CSV into a typed `{headers, rows}` string table or emit its deterministic CRLF form. Headers are optional; duplicate headers, ragged rows, malformed quoting, invalid UTF-8 and non-string cells fail. These are bounded finite transforms, not streaming operations. |
 | `json.get`, `json.set` | Select or replace a value using RFC 6901 JSON Pointer. `get` reports a missing target with status 1; `set` can add an object member, replace an array item or append at the array end, but does not create missing parents. |
 | `json.map`, `json.filter` | Project one JSON Pointer from each selected array item, or keep items matching up to 32 ANDed predicates, including `exists`, `equals`, `not_equals` and `type`. A missing projection or selected target reports absence; malformed pointers, predicates and wrong value types fail validation. |
 | `fs.read`, `fs.snapshot` | Read a regular UTF-8 file up to 16 MiB and return `{content,content_hash,snapshot,symlink,mode}`. The content hash is SHA-256 of file bytes; the snapshot also binds path, link/target identity and metadata. Missing files have the explicit absence outcome. |
@@ -452,6 +453,12 @@ before file mutation. Failures are nonzero with stable codes
 `transaction_rolled_back` (compensation completed), `manual_recovery` (a target
 is in a third state or a required target is missing during restoration) or
 `uncertain_effect`; diagnostics identify the journal to retain and recover.
+On Windows, the prepared journal is published before its journal and target
+locks are acquired. Apply verifies the same prepared intent under the journal
+lock and rechecks target contents under the target locks before writing.
+A conflict or lock failure in this phase can leave a `prepared` journal;
+the diagnostic names it for inspection and explicit recovery. Retrying with
+the same journal path requires settling that retained journal first.
 The transaction locks targets in sorted order, records checksummed private
 before/after state and durable intent/progress, then atomically replaces files
 one by one. On an error it attempts reverse compensation using hash checks.

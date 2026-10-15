@@ -9,14 +9,15 @@ use crate::parser;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Return true when the first source statement is a graph declaration.
+/// Return true when the first non-input source statement is a graph declaration.
 pub fn is_graph(source: &str) -> bool {
-    source
-        .lines()
-        .map(parser::strip_comment)
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .is_some_and(|line| line.starts_with("graph "))
+    for line in source.lines().map(parser::strip_comment).map(str::trim) {
+        if line.is_empty() || parser::is_input_header(line) {
+            continue;
+        }
+        return line.starts_with("graph ");
+    }
+    false
 }
 
 /// Parse a readable graph block and resolve applet port contracts without
@@ -25,6 +26,7 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
     let mut graph: Option<GraphPlan> = None;
     let mut saw_end = false;
     let mut pending_edges = Vec::new();
+    let mut inputs = Vec::new();
     let mut saw_node_or_edge = false;
     let lines = source.lines().collect::<Vec<_>>();
     let mut index = 0usize;
@@ -42,11 +44,25 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
             bail!("line {line_number}: tabs are not allowed in graph declarations");
         }
         if graph.is_none() {
+            if parser::is_input_header(line) {
+                let mut declaration = parser::parse(line)
+                    .map_err(|error| anyhow!("line {line_number}: {error:#}"))?;
+                if !declaration.steps.is_empty() || declaration.inputs.len() != 1 {
+                    bail!("line {line_number}: expected one top-level input declaration");
+                }
+                let mut input = declaration.inputs.remove(0);
+                input.line = line_number;
+                inputs.push(input);
+                continue;
+            }
             let words = line.split_whitespace().collect::<Vec<_>>();
             if words.len() != 2 || words[0] != "graph" || !identifier(words[1]) {
                 bail!("line {line_number}: expected `graph <name>`");
             }
-            graph = Some(GraphPlan::new(words[1]));
+            let mut plan = GraphPlan::new(words[1]);
+            plan.set_input_declarations(std::mem::take(&mut inputs))
+                .with_context(|| format!("line {line_number}: invalid graph input interface"))?;
+            graph = Some(plan);
             continue;
         }
         if saw_end {
@@ -99,6 +115,17 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
         if let Some(body) = line.strip_prefix("every ") {
             let (interval, id) =
                 split_graph_binding(body).with_context(|| format!("line {line_number}"))?;
+            if interval.split_whitespace().next().is_some_and(|value| {
+                graph.as_ref().is_some_and(|plan| {
+                    plan.input_declarations()
+                        .iter()
+                        .any(|input| input.name == value)
+                })
+            }) {
+                bail!(
+                    "line {line_number}: graph inputs can be used only in applet parameters; timer intervals must be literal"
+                );
+            }
             let interval_ms = parse_interval_ms(&interval, line_number)?;
             let node = timer_node(id, interval_ms, line_number);
             graph
@@ -206,6 +233,14 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
             }
             let stream = crate::stream::parse(&stream_source)
                 .with_context(|| format!("line {line_number}: parsing graph stream"))?;
+            if stream.pipeline.steps.iter().any(|step| match &step.kind {
+                StepKind::Invoke { call, .. } => call.parameters.values().any(value_has_reference),
+                _ => false,
+            }) {
+                bail!(
+                    "line {line_number}: graph inputs can be used only in `run` applet parameters; native stream parameters must be literal"
+                );
+            }
             crate::stream::validate(&stream, registry)
                 .with_context(|| format!("line {line_number}: validating graph stream"))?;
             let calls = stream
@@ -482,10 +517,24 @@ fn parse_renderer_source(source: &str, line: usize) -> Result<(String, Option<cr
     }
     let value = parser::parse_value_source(value_source)
         .map_err(|error| anyhow!("line {line}: invalid renderer properties: {error:#}"))?;
+    if value_has_reference(&value) {
+        bail!(
+            "line {line}: graph inputs can be used only in applet parameters; renderer properties must be literal"
+        );
+    }
     if !matches!(value, crate::ast::Value::Record(_)) {
         bail!("line {line}: renderer properties must be a record literal");
     }
     Ok((backend.to_owned(), Some(value)))
+}
+
+fn value_has_reference(value: &crate::ast::Value) -> bool {
+    match value {
+        crate::ast::Value::Reference(_) => true,
+        crate::ast::Value::List(items) => items.iter().any(value_has_reference),
+        crate::ast::Value::Record(fields) => fields.values().any(value_has_reference),
+        _ => false,
+    }
 }
 
 fn node_for_call(

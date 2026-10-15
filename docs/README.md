@@ -14,6 +14,7 @@ runs a bounded Rust/WASM host. The retained repository binary is historical 0.8.
 | [Language reference](language.md) | Exact syntax, type rules, stdin, status, JSON, scopes, cache and checkpoints. |
 | [Language server and applet discovery](language-server.md) | LSP diagnostics, completion/navigation, safe executable discovery and typed port matching. |
 | [Applet contracts](applet-contracts.md) | Manifest discovery, typed boundaries, explicit outcomes, execution lifetimes and security limits. |
+| [CSV applets](csv.md) | Finite UTF-8 CSV parsing and stringifying with typed table contracts. |
 | [Typed applet graphs](graph.md) | Validated applet nodes, typed event/record ports, bounded queues, runtime limits and renderer components. |
 | [Data-flow policy](security-dataflow.md) | Sensitivity labels, remote-origin grants, persistence controls, cache-purity checks and exact-value secret redaction. |
 | [Program modules](program-modules.md) | Versioned external program packages, dependency locks, source hashes, path rules and graph limits. |

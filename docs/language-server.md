@@ -86,9 +86,53 @@ and does not imply that the runtime can route every named port through every
 execution mode. Scores favor exact request matches and
 compatible pairs, then recursively similar record/list shapes; similarity is a
 ranking hint and never turns an incompatible pair into a compatible one.
-For an incompatible pair, `suggested_converters` can identify a one-step route
-through a declared in-process, one-shot applet with no declared effects, one
-output, a matching input, and no other required inputs. Each suggestion names
-the applet and its input/output ports. This checks declared interfaces; the
-applet may still reject particular values at runtime, and the matcher does not
-invent multi-step paths or infer semantics from executable help text.
+For an incompatible pair, `suggested_converters` identifies one-step routes
+through declared in-process, one-shot applets with no declared effects, one
+output, a matching input, and no other required inputs. The additive
+`suggested_conversion_plans` field can also contain ordered chains of two or
+three such applets:
+
+```json
+{
+  "suggested_conversion_plans": [
+    {
+      "steps": [
+        {
+          "applet": "path.basename",
+          "input_port": "path",
+          "output_port": "value",
+          "outcome": "contracts_match",
+          "score": 100
+        },
+        {
+          "applet": "number.parse_integer",
+          "input_port": "text",
+          "output_port": "value",
+          "outcome": "contracts_match",
+          "score": 100
+        }
+      ]
+    }
+  ]
+}
+```
+
+Plans are ordered by stage count and then by applet and port names. Multi-stage
+planning is bounded to three stages, five plans per endpoint pair, 512 expanded
+paths, 2,048 queued paths, and 8,192 candidate-edge checks per endpoint pair.
+Across a single match request, multi-stage planning examines at most 1,000,000
+schema/edge pairs, expands 8,192 paths, checks 65,536 candidate edges, and
+returns 256 plans. It retains at most four paths per typed state and stage
+count. These limits keep broad
+multi-stage routes bounded; a route beyond them may be omitted. Direct
+single-stage suggestions continue to scan the eligible converter catalog for
+each retained incompatible pair. Ranking still examines the source/target
+endpoint cross product, so its comparison time is O(source endpoints × target
+endpoints). It retains only the requested top matches (capped at 1,000) while
+ranking, rather than materializing that cross product. The planner connects
+stages only when the declared directional schemas are compatible and delivery
+modes agree, and skips paths that revisit a typed state. Similarity scores
+never establish compatibility. Contract version 1 declares no converter cost
+or losslessness, so plans make neither claim. They check interfaces only; an
+applet may still reject particular values at runtime. The matcher does not
+infer contracts or semantics from executable help text.

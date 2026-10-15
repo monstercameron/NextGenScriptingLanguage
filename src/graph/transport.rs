@@ -2333,6 +2333,7 @@ pub fn run(
         })
         .transpose()?;
     check_preflight_budget(&cancelled, deadline)?;
+    let plan = plan.with_input_values(&options.inputs, true)?;
     plan.validate_with_registry(registry)?;
     let cwd = std::fs::canonicalize(&options.working_directory)?;
     crate::capabilities::preflight_invocations(plan.invocations(), registry, &cwd)?;

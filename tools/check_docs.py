@@ -25,6 +25,7 @@ MAINTAINED = [
     "docs/language.md",
     "docs/language-server.md",
     "docs/applet-contracts.md",
+    "docs/csv.md",
     "docs/graph.md",
     "docs/security-dataflow.md",
     "docs/program-modules.md",

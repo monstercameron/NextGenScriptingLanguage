@@ -5,6 +5,7 @@
 //! operation to call.
 
 mod arithmetic;
+mod csv;
 mod filesystem;
 mod jsonc;
 mod path;
@@ -214,6 +215,8 @@ pub fn execute_with_context(
         "color.parse_rgb.result" => arithmetic::parse_rgb_result(args, input),
         "json.parse" => structured::parse(args, input, context),
         "json.stringify" => structured::stringify(args, context),
+        "csv.parse" => csv::parse(args, input, context),
+        "csv.stringify" => csv::stringify(args, context),
         "json.get" => structured::get(args, input, context),
         "json.set" => structured::set(args, input, context),
         "json.map" => structured::map(args, input, context),

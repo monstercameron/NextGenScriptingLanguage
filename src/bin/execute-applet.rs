@@ -210,7 +210,8 @@ fn help() -> &'static str {
      number.multiply, number.divide, number.compare, number.parse_integer,\n\
      number.parse_integer.result, number.to_text, color.rgb_to_hex, color.parse_rgb,\n\
      color.parse_rgb.result, json.parse, json.stringify, json.get, json.set,\n\
-     json.map, json.filter, jsonc.edit_content, fs.read, fs.snapshot,\n\
+     json.map, json.filter, csv.parse, csv.stringify, jsonc.edit_content,\n\
+     fs.read, fs.snapshot,\n\
      fs.write_atomic, fs.unlink_checked, fs.transaction, fs.transaction.recover,\n\
      jsonc.set,\n\
      jsonc.remove.\n\

@@ -1,4 +1,4 @@
-use crate::ast::{Invocation, Value};
+use crate::ast::{InputDeclaration, InputType, Invocation, Value};
 use crate::contracts::{
     AppletPort, OutputEncoding, OutputSchema, OutputType, PortDelivery, Sensitivity, ValueSchema,
 };
@@ -263,6 +263,8 @@ pub struct GraphPlan {
     pub name: String,
     nodes: Vec<GraphNode>,
     edges: Vec<EdgeSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    inputs: Vec<InputDeclaration>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     initial_inputs: BTreeMap<String, BTreeMap<String, Value>>,
 }
@@ -273,6 +275,7 @@ impl GraphPlan {
             name: name.into(),
             nodes: Vec::new(),
             edges: Vec::new(),
+            inputs: Vec::new(),
             initial_inputs: BTreeMap::new(),
         }
     }
@@ -283,6 +286,55 @@ impl GraphPlan {
 
     pub fn edges(&self) -> &[EdgeSpec] {
         &self.edges
+    }
+
+    /// The graph's ordinary top-level input interface.
+    pub fn input_declarations(&self) -> &[InputDeclaration] {
+        &self.inputs
+    }
+
+    /// Set the graph's top-level input interface after validating its schema.
+    pub fn set_input_declarations(&mut self, inputs: Vec<InputDeclaration>) -> Result<()> {
+        crate::inputs::validate(&inputs)?;
+        self.inputs = inputs;
+        Ok(())
+    }
+
+    /// Return a plan with supplied input references replaced by typed values.
+    /// Defaults are available in both modes. Partial mode leaves required
+    /// inputs unresolved so static inspection can proceed; complete mode also
+    /// reads declared environment inputs and requires every value.
+    pub fn with_input_values(
+        &self,
+        supplied: &BTreeMap<String, Value>,
+        require_complete: bool,
+    ) -> Result<Self> {
+        let values = if require_complete {
+            crate::inputs::resolve(&self.inputs, supplied, false)?
+        } else {
+            crate::inputs::known_values(&self.inputs, supplied)?
+        };
+        let mut plan = self.clone();
+        for node in &mut plan.nodes {
+            match &mut node.kind {
+                GraphNodeKind::Applet { call } => resolve_call_inputs(call, &values),
+                GraphNodeKind::Listener {
+                    source: crate::ast::ListenSource::Applet(call),
+                    ..
+                } => resolve_call_inputs(call, &values),
+                GraphNodeKind::NativeStream { calls, .. }
+                    if calls
+                        .iter()
+                        .any(|call| call.parameters.values().any(contains_reference)) =>
+                {
+                    bail!(
+                        "graph inputs can be used only in `run` applet parameters; native stream parameters must be literal"
+                    );
+                }
+                _ => {}
+            }
+        }
+        Ok(plan)
     }
 
     pub fn initial_inputs(&self) -> &BTreeMap<String, BTreeMap<String, Value>> {
@@ -416,8 +468,24 @@ impl GraphPlan {
     /// supplied any required dynamic parameter ports.
     pub fn validate_with_registry(&self, registry: &Registry) -> Result<()> {
         self.validate()?;
+        crate::inputs::validate(&self.inputs)?;
+        let input_types = self
+            .inputs
+            .iter()
+            .map(|input| (input.name.clone(), input.kind))
+            .collect::<BTreeMap<_, _>>();
         let sensitivity_labels = self.effective_sensitivity_labels(registry)?;
         for node in &self.nodes {
+            if matches!(&node.kind, GraphNodeKind::NativeStream { .. })
+                && node
+                    .invocations()
+                    .iter()
+                    .any(|call| call.parameters.values().any(contains_reference))
+            {
+                bail!(
+                    "graph inputs can be used only in `run` applet parameters; native stream parameters must be literal"
+                );
+            }
             for source_call in node.invocations() {
                 let mut call = source_call.clone();
                 if call.direct {
@@ -426,12 +494,7 @@ impl GraphPlan {
                         node.id
                     );
                 }
-                if call.parameters.values().any(contains_reference) {
-                    bail!(
-                        "graph node {:?} has an unresolved reference in `with`; use `bind` for graph inputs",
-                        node.id
-                    );
-                }
+                validate_input_references(&call, &input_types, &node.id)?;
                 if matches!(&node.kind, GraphNodeKind::Applet { .. }) {
                     if !node.events.is_empty() {
                         bail!(
@@ -491,7 +554,7 @@ impl GraphPlan {
                     .resolve_call(&call)
                     .map_err(|error| anyhow!("node {:?}: {error:#}", node.id))?;
                 manifest
-                    .validate(&call)
+                    .validate_with_types(&call, &input_types)
                     .map_err(|error| anyhow!("node {:?}: {error:#}", node.id))?;
 
                 if let GraphNodeKind::Listener { source, .. } = &node.kind {
@@ -1207,6 +1270,67 @@ fn contains_reference(value: &Value) -> bool {
         Value::Record(values) => values.values().any(contains_reference),
         _ => false,
     }
+}
+
+fn resolve_call_inputs(call: &mut Invocation, values: &BTreeMap<String, Value>) {
+    for value in call.parameters.values_mut() {
+        *value = resolve_known_references(value, values);
+    }
+}
+
+fn resolve_known_references(value: &Value, values: &BTreeMap<String, Value>) -> Value {
+    match value {
+        Value::Reference(name) => values.get(name).cloned().unwrap_or_else(|| value.clone()),
+        Value::List(items) => Value::List(
+            items
+                .iter()
+                .map(|item| resolve_known_references(item, values))
+                .collect(),
+        ),
+        Value::Record(fields) => Value::Record(
+            fields
+                .iter()
+                .map(|(name, value)| (name.clone(), resolve_known_references(value, values)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+fn validate_input_references(
+    call: &Invocation,
+    input_types: &BTreeMap<String, InputType>,
+    node: &str,
+) -> Result<()> {
+    fn visit(
+        value: &Value,
+        parameter: &str,
+        input_types: &BTreeMap<String, InputType>,
+        node: &str,
+    ) -> Result<()> {
+        match value {
+            Value::Reference(name) if !input_types.contains_key(name) => bail!(
+                "graph node {node:?} parameter {parameter:?} references undeclared graph input {name:?}"
+            ),
+            Value::List(items) => {
+                for item in items {
+                    visit(item, parameter, input_types, node)?;
+                }
+            }
+            Value::Record(fields) => {
+                for value in fields.values() {
+                    visit(value, parameter, input_types, node)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    for (parameter, value) in &call.parameters {
+        visit(value, parameter, input_types, node)?;
+    }
+    Ok(())
 }
 
 fn placeholder_value(schema: &ValueSchema) -> Result<Value> {

@@ -787,21 +787,7 @@ impl Manifest {
             let spec = &self.parameters[name];
             if let Value::Reference(reference) = value {
                 let kind = bindings.get(reference).copied().unwrap_or(InputType::Text);
-                let compatible = matches!(
-                    (spec.kind, kind),
-                    (ParameterType::String, InputType::Text)
-                        | (ParameterType::Path, InputType::Text)
-                        | (ParameterType::Integer, InputType::Integer)
-                        | (ParameterType::Boolean, InputType::Boolean)
-                        | (ParameterType::Json, _)
-                        | (ParameterType::Record, InputType::Json)
-                ) || (spec.kind == ParameterType::List
-                    && kind == InputType::TextList
-                    && matches!(
-                        spec.item_type,
-                        Some(ParameterType::String | ParameterType::Path | ParameterType::Scalar)
-                    ));
-                if !compatible {
+                if !parameter_accepts_reference(spec.kind, spec.item_type, kind) {
                     bail!(
                         "parameter {name:?} expects {}, but reference {reference:?} contains {kind}; named results contain text",
                         spec.kind,
@@ -810,7 +796,7 @@ impl Manifest {
                 if self
                     .ports()
                     .and_then(|ports| ports.inputs.get(name))
-                    .is_some_and(|port| !schema_accepts_input_kind(&port.schema, kind))
+                    .is_some_and(|port| !schema_accepts_reference(&port.schema, kind))
                 {
                     bail!(
                         "parameter {name:?} contract port does not accept reference {reference:?} of type {kind}"
@@ -821,24 +807,22 @@ impl Manifest {
             if let Value::List(items) = value {
                 for item in items {
                     if let Value::Reference(reference) = item {
-                        if bindings.get(reference).is_some_and(|kind| {
-                            (matches!(
-                                spec.item_type,
-                                Some(ParameterType::String | ParameterType::Path)
-                            ) && *kind != InputType::Text)
-                                || matches!(kind, InputType::TextList | InputType::Json)
-                        }) {
+                        let kind = bindings.get(reference).copied().unwrap_or(InputType::Text);
+                        if !list_item_accepts_reference(spec.item_type, kind) {
                             bail!(
-                                "parameter {name:?} requires text list items, but {reference:?} contains {}",
-                                bindings[reference]
+                                "parameter {name:?} requires {} list items, but reference {reference:?} contains {kind}",
+                                spec.item_type.expect("list parameter has an item type")
                             );
                         }
                     }
                 }
             }
-            validate_value(name, value, spec, true)?;
-            if !contains_parameter_reference(value) {
-                if let Some(port) = self.ports().and_then(|ports| ports.inputs.get(name)) {
+            validate_value(name, value, spec, true, bindings)?;
+            if let Some(port) = self.ports().and_then(|ports| ports.inputs.get(name)) {
+                if contains_parameter_reference(value) {
+                    validate_port_value_with_references(&port.schema, value, bindings)
+                        .with_context(|| format!("validating input port {name:?}"))?;
+                } else {
                     port.schema
                         .validate_value(value)
                         .with_context(|| format!("validating input port {name:?}"))?;
@@ -927,7 +911,7 @@ impl Manifest {
                 }
                 None => {}
                 Some(value) => {
-                    validate_value(name, value, spec, false)?;
+                    validate_value(name, value, spec, false, &BTreeMap::new())?;
                     if let Some(port) = self.ports().and_then(|ports| ports.inputs.get(name)) {
                         port.schema
                             .validate_value(value)
@@ -981,11 +965,64 @@ fn parameter_field_schema(field: &ParameterFieldSpec) -> serde_json::Value {
     parameter_schema(field.kind, field.fields.as_ref())
 }
 
+/// Check whether a typed reference can satisfy an applet parameter. JSON is
+/// deliberately deferred: its runtime value may satisfy any parameter type,
+/// but a partial JSON input is not itself proof of that value's shape. Runtime
+/// validation checks the resolved value before invocation.
+fn parameter_accepts_reference(
+    expected: ParameterType,
+    item_type: Option<ParameterType>,
+    actual: InputType,
+) -> bool {
+    if actual == InputType::Json {
+        return true;
+    }
+    matches!(
+        (expected, actual),
+        (ParameterType::String | ParameterType::Path, InputType::Text)
+            | (ParameterType::Integer, InputType::Integer)
+            | (ParameterType::Boolean, InputType::Boolean)
+            | (ParameterType::Json, _)
+            | (ParameterType::Record, InputType::Json)
+    ) || (expected == ParameterType::List
+        && actual == InputType::TextList
+        && matches!(
+            item_type,
+            Some(ParameterType::String | ParameterType::Path | ParameterType::Scalar)
+        ))
+}
+
+/// A reference used as one list item must resolve to a single scalar of the
+/// declared item type. Whole-list JSON references are handled by
+/// `parameter_accepts_reference`; list-valued references inside a list are
+/// intentionally unsupported.
+fn list_item_accepts_reference(item_type: Option<ParameterType>, actual: InputType) -> bool {
+    if actual == InputType::Json {
+        // A JSON reference is an aggregate at this boundary. Whole-list JSON
+        // references may defer their shape check, but a scalar list item must
+        // have a statically scalar input type.
+        return false;
+    }
+    matches!(
+        (item_type, actual),
+        (
+            Some(ParameterType::String | ParameterType::Path),
+            InputType::Text
+        ) | (Some(ParameterType::Integer), InputType::Integer)
+            | (Some(ParameterType::Boolean), InputType::Boolean)
+            | (
+                Some(ParameterType::Scalar),
+                InputType::Text | InputType::Integer | InputType::Boolean
+            )
+    )
+}
+
 fn validate_value(
     name: &str,
     value: &Value,
     spec: &ParameterSpec,
     allow_reference_items: bool,
+    bindings: &BTreeMap<String, InputType>,
 ) -> Result<()> {
     let valid = matches!(
         (spec.kind, value),
@@ -1027,6 +1064,8 @@ fn validate_value(
             name,
             values,
             spec.fields.as_ref().expect("record schema validated"),
+            allow_reference_items,
+            bindings,
         )?;
     }
     if let (ParameterType::List, Value::List(items)) = (spec.kind, value) {
@@ -1037,7 +1076,11 @@ fn validate_value(
                 && !(allow_reference_items
                     && matches!(
                         item_type,
-                        ParameterType::String | ParameterType::Path | ParameterType::Scalar
+                        ParameterType::String
+                            | ParameterType::Path
+                            | ParameterType::Integer
+                            | ParameterType::Boolean
+                            | ParameterType::Scalar
                     )
                     && matches!(item, Value::Reference(_)))
             {
@@ -1069,6 +1112,8 @@ fn validate_record_parameter(
     name: &str,
     values: &BTreeMap<String, Value>,
     fields: &BTreeMap<String, ParameterFieldSpec>,
+    allow_references: bool,
+    bindings: &BTreeMap<String, InputType>,
 ) -> Result<()> {
     for (field_name, field) in fields {
         match values.get(field_name) {
@@ -1076,7 +1121,13 @@ fn validate_record_parameter(
                 bail!("parameter {name:?} is missing required field {field_name:?}")
             }
             None => {}
-            Some(value) => validate_parameter_field(&format!("{name}.{field_name}"), value, field)?,
+            Some(value) => validate_parameter_field(
+                &format!("{name}.{field_name}"),
+                value,
+                field,
+                allow_references,
+                bindings,
+            )?,
         }
     }
     for field_name in values.keys() {
@@ -1087,7 +1138,25 @@ fn validate_record_parameter(
     Ok(())
 }
 
-fn validate_parameter_field(name: &str, value: &Value, field: &ParameterFieldSpec) -> Result<()> {
+fn validate_parameter_field(
+    name: &str,
+    value: &Value,
+    field: &ParameterFieldSpec,
+    allow_references: bool,
+    bindings: &BTreeMap<String, InputType>,
+) -> Result<()> {
+    if let Value::Reference(reference) = value {
+        if allow_references {
+            let kind = bindings.get(reference).copied().unwrap_or(InputType::Text);
+            if !parameter_accepts_reference(field.kind, None, kind) {
+                bail!(
+                    "record field {name:?} expects {}, but reference {reference:?} contains {kind}",
+                    field.kind
+                );
+            }
+            return Ok(());
+        }
+    }
     let valid = match field.kind {
         ParameterType::String | ParameterType::Path => matches!(value, Value::String(_)),
         ParameterType::Integer => matches!(value, Value::Integer(_)),
@@ -1131,6 +1200,8 @@ fn validate_parameter_field(name: &str, value: &Value, field: &ParameterFieldSpe
                 .fields
                 .as_ref()
                 .expect("record field schema validated"),
+            allow_references,
+            bindings,
         )?;
     }
     Ok(())
@@ -1759,6 +1830,69 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
                         matches!(item.kind, OutputType::Text | OutputType::Path)
                     }))
         }
+    }
+}
+
+fn schema_accepts_reference(schema: &ValueSchema, kind: InputType) -> bool {
+    if kind == InputType::Json {
+        // JSON may resolve to any structured value except raw bytes. Defer the
+        // value-shape check until inputs have been resolved.
+        return schema.kind != OutputType::Bytes;
+    }
+    schema_accepts_input_kind(schema, kind)
+}
+
+/// Validate the known shape around unresolved references. Literal siblings
+/// still receive their normal schema checks, while JSON references defer the
+/// concrete value check until runtime resolution.
+fn validate_port_value_with_references(
+    schema: &ValueSchema,
+    value: &Value,
+    bindings: &BTreeMap<String, InputType>,
+) -> Result<()> {
+    if schema.kind == OutputType::Json {
+        // JSON accepts all literal values and every declared input type; the
+        // unresolved references cannot violate a narrower JSON schema.
+        return Ok(());
+    }
+    match (schema.kind, value) {
+        (_, Value::Reference(reference)) => {
+            let kind = bindings.get(reference).copied().unwrap_or(InputType::Text);
+            if !schema_accepts_reference(schema, kind) {
+                bail!(
+                    "reference {reference:?} of type {kind} does not satisfy {:?} schema",
+                    schema.kind
+                );
+            }
+            Ok(())
+        }
+        (OutputType::Record, Value::Record(fields)) => {
+            for name in &schema.required {
+                if !fields.contains_key(name) {
+                    bail!("record is missing required field {name:?}");
+                }
+            }
+            for (name, value) in fields {
+                let Some(field_schema) = schema.fields.get(name) else {
+                    bail!("record contains undeclared field {name:?}");
+                };
+                validate_port_value_with_references(field_schema, value, bindings)
+                    .with_context(|| format!("validating record field {name:?}"))?;
+            }
+            Ok(())
+        }
+        (OutputType::List, Value::List(items)) => {
+            let item_schema = schema
+                .items
+                .as_deref()
+                .ok_or_else(|| anyhow!("list schema is missing items"))?;
+            for (index, value) in items.iter().enumerate() {
+                validate_port_value_with_references(item_schema, value, bindings)
+                    .with_context(|| format!("validating list item {index}"))?;
+            }
+            Ok(())
+        }
+        _ => schema.validate_value(value),
     }
 }
 

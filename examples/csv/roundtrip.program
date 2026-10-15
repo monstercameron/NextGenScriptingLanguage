@@ -1,0 +1,5 @@
+# Read CSV text as a typed input, then emit its canonical CRLF form.
+accept contents as text
+run csv.parse with text contents as table
+run csv.stringify with table table as rendered
+then encode rendered as json

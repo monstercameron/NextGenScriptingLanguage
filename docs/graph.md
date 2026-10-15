@@ -3,8 +3,9 @@
 Current source accepts a `graph` block as a workflow file. Use the ordinary
 `execute check`, `inspect`, `explain` and `run` commands; `inspect` returns an
 `execute.graph/1` topology, `explain` prints Graphviz DOT, and `run` returns
-terminal port events as JSON. Graph node inputs are declared in the graph file,
-so `--input` and positional workflow arguments do not apply. Graphs do not
+terminal port events as JSON. Graphs can declare the same typed top-level inputs
+as finite programs, then use those names in applet parameters. `--input` and
+declared positional arguments follow the ordinary workflow rules. Graphs do not
 support checkpoints/resume, trigger/run limits or UI options. The small example
 is [`examples/graph/composition.program`](../examples/graph/composition.program).
 
@@ -34,6 +35,38 @@ graph greeting
   bind joined.value to cleaned.text with capacity 1 lossless
 end graph
 ~~~
+
+## Top-level inputs
+
+Put ordinary `accept` declarations before the graph header. They support the
+same types, defaults, environment sources and positional argument sources as a
+finite program. Use a declared name as a typed reference in an applet's `with`
+parameters:
+
+~~~text
+accept greeting as text from argument 1
+accept separator as text with default " "
+graph greeting
+  run text.concat with parts [greeting, "graph"] and separator separator as joined
+  run text.trim_final_lf as cleaned
+  bind joined.value to cleaned.text with capacity 1 lossless
+end graph
+~~~
+
+For example, `execute run greeting.program -- "Hello"` supplies the positional
+input, while `execute run greeting.program --input greeting=Hello` supplies it
+by name. List parameters may mix literal items with compatible references, and
+JSON inputs can supply a record parameter as a whole. Input names in `with` are
+resolved as typed values and preserved as literal argv elements at the process
+boundary.
+
+`check`, `inspect` and `explain` validate supplied values and defaults while
+allowing required values to remain unset, as they do for ordinary programs.
+`inspect` includes the graph input declarations and any known values. `run`
+resolves every required input and validates the resulting applet parameters,
+ports and graph topology before starting nodes. Graph inputs apply to applet
+parameters; graph topology, timer intervals, native stream parameters and
+renderer seed properties remain literal declarations.
 
 `run` creates a named applet node. Graph nodes use named applets rather than
 direct executable commands. `every 10 seconds as ticker` creates a timer whose

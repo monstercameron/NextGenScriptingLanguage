@@ -90,6 +90,44 @@ lifecycle smoke probes. Raw pairs, exact output oracles, source/binary hashes,
 rejected experiments and scope limits remain in the indexed reports and local
 session evidence. No universal Bash advantage or production completeness is claimed.
 
+## Paired source revisions
+
+[`source_pair.py`](source_pair.py) compares a preserved Execute build and its
+catalog with an already-built candidate. It covers fresh CLI checks with
+different literal argument counts, native byte pipelines, a finite typed graph,
+a 1,000-manifest discovery catalog, and an existing isolated Omarchy log utility.
+The generated discovery catalog measures metadata matching; it does not prove
+interoperability among 1,000 independently implemented applets.
+
+```sh
+python3 benchmarks/source_pair.py \
+  --baseline-binary /path/to/baseline/execute \
+  --baseline-manifest-dir /path/to/baseline/manifests \
+  --baseline-revision BASELINE_COMMIT \
+  --candidate-binary target/release/execute \
+  --candidate-manifest-dir manifests \
+  --candidate-revision CANDIDATE_COMMIT \
+  --report benchmarks/source-pair-HOST-REVISION.json \
+  --samples 30 --warmups 5 \
+  --candidate-build-confirmed --measurement-window-idle
+```
+
+Build and run correctness tests before entering the measurement window. The
+harness never builds either executable and refuses to overwrite a report.
+Independent byte, status and effect oracles precede timing and check every
+warmup and sample. The graph oracle checks its protocol, typed terminal ports,
+identity, sensitivity metadata and ordered sequence numbers; paired parity
+compares payloads by port because valid actor scheduling can change the global
+event order. Each invocation still retains its raw output size and hash.
+
+Reports retain alternating raw samples, medians and nearest-rank p95, excluded
+warmups, source/catalog/executable hashes, inputs and environment. Measurements
+include fresh interpreter startup and the named workload. They compare two
+Execute revisions on the recorded host; cold-cache behavior, process-tree RSS,
+other operating systems and Bash/Nushell parity need separate measurements.
+`tests/source_pair_bench.py` checks the harness without collecting performance
+data. No source-pair result is recorded yet.
+
 # Native stream framing
 
 The [stream-framing report](performance-2026-10-14-stream-framing.json) compares

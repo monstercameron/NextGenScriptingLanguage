@@ -7,6 +7,17 @@ original version labels.
 
 ## Unreleased
 
+- Graphs accept ordinary typed `accept` declarations, named CLI inputs and
+  positional arguments. Static checks and inspection describe unresolved
+  inputs; runtime inputs resolve before graph effects. See [typed graphs](docs/graph.md).
+- Typed applet discovery suggests bounded multi-stage converter plans and
+  retains only the requested top-ranked endpoint pairs. Plans describe declared
+  compatibility, not conversion costs or losslessness. See [discovery](docs/language-server.md).
+- Bounded finite `csv.parse` and `csv.stringify` applets preserve UTF-8 fields
+  as text and expose a typed `{headers, rows}` contract. Malformed quoting,
+  duplicate headers and ragged records fail. See [CSV applets](docs/csv.md).
+- Repair Windows process/listener API mismatches and target-specific compiler
+  diagnostics, and update the Linux graph stress fixture for enum schemas.
 - In-process applets now cooperatively check cancellation, the per-call command
   timeout and the parent total deadline during bounded JSON transforms, text
   transforms and JSONC scanning. Synchronous OS calls and parser/serializer

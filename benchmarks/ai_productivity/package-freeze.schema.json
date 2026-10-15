@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/ai-productivity-package-freeze-1.json",
+  "title": "Immutable commitment to an external AI productivity task package",
+  "type": "object",
+  "required": ["schema", "package_sha256", "preregistration_sha256", "randomization_seed", "frozen_utc", "task_count", "family_counts", "claim"],
+  "properties": {
+    "schema": {"const": "execute.ai-productivity.package-freeze/1"},
+    "package_sha256": {"$ref": "#/$defs/sha256"},
+    "preregistration_sha256": {"$ref": "#/$defs/sha256"},
+    "randomization_seed": {"type": "integer"},
+    "frozen_utc": {"type": "string", "format": "date-time"},
+    "task_count": {"type": "integer", "minimum": 1},
+    "family_counts": {
+      "type": "object",
+      "required": ["development", "calibration", "held_out"],
+      "properties": {
+        "development": {"$ref": "#/$defs/strata"},
+        "calibration": {"$ref": "#/$defs/strata"},
+        "held_out": {"$ref": "#/$defs/strata"}
+      },
+      "additionalProperties": false
+    },
+    "claim": {"const": "none"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "strata": {
+      "type": "object",
+      "required": ["workflow_cli", "desktop_composition", "maintenance_change"],
+      "properties": {
+        "workflow_cli": {"type": "integer", "minimum": 0},
+        "desktop_composition": {"type": "integer", "minimum": 0},
+        "maintenance_change": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

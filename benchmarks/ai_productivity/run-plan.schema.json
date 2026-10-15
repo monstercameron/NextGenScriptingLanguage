@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/ai-productivity-run-plan-1.json",
+  "title": "Deterministic randomized schedule for an external blinded evaluation",
+  "type": "object",
+  "required": ["schema", "status", "claim", "package_sha256", "freeze_sha256", "preregistration_sha256", "arms_sha256", "randomization_seed", "task_arm_replicate_count", "created_utc", "schedule", "provider_runs", "note"],
+  "properties": {
+    "schema": {"const": "execute.ai-productivity.run-plan/1"},
+    "status": {"const": "schedule_only_trials_pending"},
+    "claim": {"const": "none"},
+    "package_sha256": {"$ref": "#/$defs/sha256"},
+    "freeze_sha256": {"$ref": "#/$defs/sha256"},
+    "preregistration_sha256": {"$ref": "#/$defs/sha256"},
+    "arms_sha256": {"$ref": "#/$defs/sha256"},
+    "randomization_seed": {"type": "integer"},
+    "task_arm_replicate_count": {"type": "integer", "minimum": 1},
+    "created_utc": {"type": "string", "format": "date-time"},
+    "schedule": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/slot"}},
+    "provider_runs": {"const": "not_run_by_this_tool"},
+    "note": {"type": "string"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "slot": {
+      "type": "object",
+      "required": ["order_index", "run_id", "task_id", "family_id", "split", "stratum", "comparison_block", "blind_arm_id", "replicate", "variant_order_index", "prompt_sha256", "oracle_sha256", "execution_state"],
+      "properties": {
+        "order_index": {"type": "integer", "minimum": 1},
+        "run_id": {"type": "string", "format": "uuid"},
+        "task_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,80}$"},
+        "family_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,80}$"},
+        "split": {"enum": ["development", "calibration", "held_out"]},
+        "stratum": {"enum": ["workflow_cli", "desktop_composition", "maintenance_change"]},
+        "comparison_block": {"type": "string", "minLength": 1},
+        "blind_arm_id": {"type": "string", "pattern": "^arm_[a-z0-9]{8,32}$"},
+        "replicate": {"const": 1},
+        "variant_order_index": {"type": "integer", "minimum": 1},
+        "prompt_sha256": {"$ref": "#/$defs/sha256"},
+        "oracle_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_state": {"const": "pending_external_provider_runner"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

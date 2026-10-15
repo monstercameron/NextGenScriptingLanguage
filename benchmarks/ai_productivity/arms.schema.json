@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/ai-productivity-arms-1.json",
+  "title": "Sealed mapping from blind AI-evaluation arms to model and language settings",
+  "type": "object",
+  "required": ["schema", "arms"],
+  "properties": {
+    "schema": {"const": "execute.ai-productivity.arms/1"},
+    "arms": {
+      "type": "object",
+      "patternProperties": {
+        "^arm_[a-z0-9]{8,32}$": {"$ref": "#/$defs/arm"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "arm": {
+      "type": "object",
+      "required": [
+        "variant",
+        "provider",
+        "model_snapshot",
+        "comparison_block",
+        "generation_parameters",
+        "api_version",
+        "language_version",
+        "system_prompt_sha256",
+        "tool_config_sha256"
+      ],
+      "properties": {
+        "variant": {"enum": ["bash", "nushell", "execute_program", "bash+qml", "nushell+qml", "execute_program+qml"]},
+        "provider": {"type": "string", "minLength": 1},
+        "model_snapshot": {"type": "string", "minLength": 1},
+        "comparison_block": {"type": "string", "minLength": 1},
+        "generation_parameters": {
+          "type": "object",
+          "description": "Record supported sampling settings and explicit null values for unavailable/provider-default settings.",
+          "properties": {
+            "temperature": {"type": ["number", "null"]},
+            "top_p": {"type": ["number", "null"]},
+            "seed": {"type": ["integer", "null"]},
+            "max_output_tokens": {"type": ["integer", "null"]},
+            "tool_choice": {"type": ["string", "null"]},
+            "parallel_tool_calls": {"type": ["boolean", "null"]}
+          },
+          "additionalProperties": true
+        },
+        "api_version": {"type": "string", "minLength": 1},
+        "language_version": {"type": "string", "minLength": 1},
+        "system_prompt_sha256": {"$ref": "#/$defs/sha256"},
+        "tool_config_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

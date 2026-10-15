@@ -1,0 +1,4 @@
+accept events_path as text
+run "cat" with arguments [events_path]
+then "jq" with arguments ["-c", "{event_id: .id, occurred_at: .at, kind: .type, source: .source, actor: (.actor // null)}"]
+then save to "reports/normalized.jsonl"

@@ -1,0 +1,88 @@
+{
+  "schema": "execute.ai-productivity.preregistration/1",
+  "benchmark_id": "execute-ai-productivity-v1",
+  "status": "protocol_frozen_task_roster_and_trials_pending",
+  "version": 1,
+  "primary_question": "For the same frozen tasks and model snapshots, does producing a correct, maintainable workflow in .program change functional success or generation cost compared with Bash and Nushell?",
+  "comparators": ["bash", "nushell", "execute_program"],
+  "task_strata": ["workflow_cli", "desktop_composition", "maintenance_change"],
+  "splits": {
+    "development": {
+      "purpose": "Tune the evaluator and instructions. Never included in confirmatory results.",
+      "minimum_independent_families_per_stratum": 10
+    },
+    "calibration": {
+      "purpose": "Freeze runner images, prompts, test oracles, scoring and model settings before held-out generation.",
+      "minimum_independent_families_per_stratum": 10
+    },
+    "held_out": {
+      "purpose": "Confirmatory evaluation. Keep prompt bodies and oracle bundles sealed until all candidate artifacts are submitted.",
+      "minimum_independent_families_per_stratum": 30
+    }
+  },
+  "holdout_rules": [
+    "Assign a task family wholly to one split; no family, scenario seed, oracle, prompt, or material variant may cross splits.",
+    "Hash and timestamp the sealed task package, prompts, hidden oracles, and container images before the first model call.",
+    "Authors of candidate-language instructions and model operators must not see held-out task bodies or oracle contents before generation is locked.",
+    "Use identical task requirements, available reference material, tool access, time limits, and repair-feedback policy for each language arm.",
+    "Randomize arm order within task and model block; use a fresh conversation for every task, language, model snapshot, and replicate.",
+    "Run each arm with the same model snapshot and supported decoding parameters. Record unavailable or provider-default parameters explicitly; do not infer them.",
+    "For desktop_composition tasks, each workflow language is paired with the same declared QML/Quickshell target and acceptance criteria. QML-only rendering work is not treated as a Bash or Nushell equivalent. Do not score this stratum until a real supported runner exists.",
+    "Infrastructure errors are retained as a separate outcome. Exclusions and reruns must follow a rule written here before unblinding and retain the original record."
+  ],
+  "trial_policy": {
+    "one_generation_attempt": true,
+    "maximum_repair_attempts": 2,
+    "fresh_context_per_task_language_model_replicate": true,
+    "repair_feedback": "A fixed, language-neutral summary of compiler/runtime/oracle criterion failures; never reveal hidden test inputs, expected values, or source oracle text.",
+    "replicates_per_cell": 1,
+    "required_record_fields": [
+      "provider and immutable model snapshot",
+      "API and system/developer prompt hashes",
+      "temperature, top_p, seed, token limits, and tool configuration (or explicit unavailable/default values)",
+      "provider-reported input, output, cached and reasoning tokens where available",
+      "provider-reported billed cost, currency, and whether it is measured or estimated",
+      "generation time, execution/test time, repair count, every attempt's artifact hash and outcome"
+    ]
+  },
+  "scoring": {
+    "maintainability_rubric_sha256": "71753f9a633202b7ecfe73146fdca02adaeeb34f7520316c3507d9c704b268e5",
+    "primary_outcome": "A task-arm trial succeeds only when every roster-declared mandatory black-box criterion passes on the final artifact within the fixed attempt budget.",
+    "mandatory_criterion_examples": [
+      "parses_or_builds",
+      "expected_stdout_and_exit_status",
+      "exact_expected_state_delta",
+      "forbidden_side_effects_absent",
+      "timeout_and_resource_limits_respected"
+    ],
+    "secondary_outcomes": [
+      "first-generation success",
+      "repairs required and repair success",
+      "reported input/output/reasoning tokens and total tokens",
+      "provider-reported billed cost; price-sheet estimates remain separately labeled",
+      "generation latency and execution/test latency",
+      "blinded maintainability rubric scores from two independent raters",
+      "desktop visual and lifecycle criteria for the paired workflow+QML stratum"
+    ],
+    "human_rubric": "The exact rubric is benchmarks/ai_productivity/rubric.json with the recorded SHA-256 above. Two blinded raters score each submitted artifact independently on requirement coverage, clarity, and changeability. If any dimension differs, a third blinded rater scores all dimensions; preserve all scores and use the third rater as adjudicator.",
+    "claim_rule": "Report each outcome and uncertainty separately. Do not claim general AI superiority from one task, one model, development/calibration data, unpaired summaries, or fixture tests. Any confirmatory language must name task strata, model snapshots, sample counts, and paired uncertainty."
+  },
+  "analysis": {
+    "randomization_seed": 20261014,
+    "unit": "task-family cluster within a matched model-snapshot and replicate block",
+    "primary_comparison": "Paired held-out final-success difference for execute_program versus each shell comparator on the same task family and model block.",
+    "uncertainty": "Family-cluster paired bootstrap, 10000 resamples with fixed seed 20261014; show interval and raw paired counts. Treat the two comparator contrasts as a family and use 97.5% intervals (Bonferroni) for confirmatory wording.",
+    "efficiency": "Report paired differences in cumulative reported tokens, provider-reported cost, repairs, and generation time. Do not replace failures with zero cost or report cost estimates as billed cost.",
+    "missingness": "Keep provider refusal, timeout, invalid artifact, infrastructure failure, and missing usage as distinct states. No silent pairwise deletion."
+  },
+  "evaluation_state": {
+    "public_development_fixtures": "available_and_harness_fixture_tested_not_trial_data",
+    "task_roster": "pending_independent_sealed_roster",
+    "external_package_freeze": "not_created",
+    "randomized_provider_schedule": "not_created",
+    "provider_runs": "not_run",
+    "independent_scoring": "not_run",
+    "result_import": "empty",
+    "claim": "none"
+  }
+}

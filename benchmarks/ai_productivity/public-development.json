@@ -1,0 +1,98 @@
+{
+  "schema": "execute.ai-productivity.public-development/1",
+  "fixture_only": true,
+  "purpose": "Exercise the task packaging, isolated fixture setup, candidate runner, effect oracle, and report schema. These public examples are not confirmatory trials.",
+  "tasks": [
+    {
+      "task_id": "filesystem_inventory",
+      "family_id": "public_filesystem_inventory",
+      "split": "development",
+      "stratum": "workflow_cli",
+      "prompt": "Inventory the immediate regular files in the selected directory, sorted by bytewise C-locale name order. Ignore subdirectories and their contents. Write the newline-terminated names to reports/inventory.txt and emit exactly the same bytes to stdout. Read the selected path from EVAL_TARGET in Bash/Nushell; the .program arm accepts target_path as text.",
+      "inputs": [{"environment": "EVAL_TARGET", "program_input": "target_path", "default": "fixtures/selected"}],
+      "output_path": "reports/inventory.txt",
+      "oracle": {"kind": "utf8_exact"},
+      "criteria": ["expected_stdout_and_exit_status", "exact_expected_state_delta", "forbidden_side_effects_absent", "timeout_and_resource_limits_respected"],
+      "cases": [
+        {
+          "case_id": "names_with_spaces_and_hidden_files",
+          "files": {
+            "fixtures/selected/.env": "TOKEN=fixture\n",
+            "fixtures/selected/alpha.txt": "alpha\n",
+            "fixtures/selected/notes final.md": "notes\n",
+            "fixtures/selected/nested/ignored.txt": "nested\n"
+          },
+          "expected": ".env\nalpha.txt\nnotes final.md\n"
+        },
+        {
+          "case_id": "second_directory_and_different_names",
+          "inputs": {"target_path": "fixtures/batch two"},
+          "files": {
+            "fixtures/batch two/A.txt": "upper\n",
+            "fixtures/batch two/b.txt": "lower\n",
+            "fixtures/batch two/z-last.log": "last\n",
+            "fixtures/batch two/subdir/not-immediate.txt": "nested\n"
+          },
+          "expected": "A.txt\nb.txt\nz-last.log\n"
+        }
+      ]
+    },
+    {
+      "task_id": "layered_config_merge",
+      "family_id": "public_config_merge",
+      "split": "development",
+      "stratum": "workflow_cli",
+      "prompt": "Read a JSON document with an ordered layers array and recursively merge its object layers from left to right. Later scalar and array values replace earlier ones; nested objects merge recursively. Emit the effective JSON value and write it to reports/effective.json. Bash/Nushell receive the source path in EVAL_SETTINGS; the .program arm accepts settings_path as text.",
+      "inputs": [{"environment": "EVAL_SETTINGS", "program_input": "settings_path", "default": "fixtures/settings.json"}],
+      "output_path": "reports/effective.json",
+      "oracle": {"kind": "json_value"},
+      "criteria": ["expected_stdout_and_exit_status", "exact_expected_state_delta", "forbidden_side_effects_absent", "timeout_and_resource_limits_respected"],
+      "cases": [
+        {
+          "case_id": "nested_object_and_array_replacement",
+          "files": {
+            "fixtures/settings.json": "{\"layers\":[{\"base\":{\"theme\":\"night\",\"font\":\"mono\"},\"refresh\":30,\"servers\":[\"a\"]},{\"base\":{\"accent\":\"blue\"},\"refresh\":60,\"servers\":[\"b\"]}]}\n"
+          },
+          "expected": {"base": {"accent": "blue", "font": "mono", "theme": "night"}, "refresh": 60, "servers": ["b"]}
+        },
+        {
+          "case_id": "empty_layers_are_an_empty_object",
+          "files": {"fixtures/settings.json": "{\"layers\":[]}\n"},
+          "expected": {}
+        }
+      ]
+    },
+    {
+      "task_id": "typed_event_normalizer",
+      "family_id": "public_typed_events",
+      "split": "development",
+      "stratum": "workflow_cli",
+      "prompt": "Consume JSON Lines event records in input order. For each record emit one compact JSON object with event_id from id, occurred_at from at, kind from type, source from source, and actor from actor (use JSON null when actor is absent). Write the same newline-delimited output to reports/normalized.jsonl. Bash/Nushell receive the source path in EVAL_EVENTS; the .program arm accepts events_path as text.",
+      "inputs": [{"environment": "EVAL_EVENTS", "program_input": "events_path", "default": "fixtures/events.jsonl"}],
+      "output_path": "reports/normalized.jsonl",
+      "oracle": {"kind": "json_lines"},
+      "criteria": ["expected_stdout_and_exit_status", "exact_expected_state_delta", "forbidden_side_effects_absent", "timeout_and_resource_limits_respected"],
+      "cases": [
+        {
+          "case_id": "mixed_optional_actor_fields",
+          "files": {
+            "fixtures/events.jsonl": "{\"id\":\"e1\",\"at\":\"2026-10-01T12:00:00Z\",\"type\":\"push\",\"source\":\"ci\",\"actor\":\"sam\"}\n{\"id\":\"e2\",\"at\":\"2026-10-01T12:01:00Z\",\"type\":\"release\",\"source\":\"registry\"}\n"
+          },
+          "expected": [
+            {"event_id": "e1", "occurred_at": "2026-10-01T12:00:00Z", "kind": "push", "source": "ci", "actor": "sam"},
+            {"event_id": "e2", "occurred_at": "2026-10-01T12:01:00Z", "kind": "release", "source": "registry", "actor": null}
+          ]
+        },
+        {
+          "case_id": "different_event_content",
+          "files": {
+            "fixtures/events.jsonl": "{\"id\":\"e9\",\"at\":\"2026-10-14T00:00:00Z\",\"type\":\"alert\",\"source\":\"health\",\"actor\":\"monitor\"}\n"
+          },
+          "expected": [
+            {"event_id": "e9", "occurred_at": "2026-10-14T00:00:00Z", "kind": "alert", "source": "health", "actor": "monitor"}
+          ]
+        }
+      ]
+    }
+  ]
+}

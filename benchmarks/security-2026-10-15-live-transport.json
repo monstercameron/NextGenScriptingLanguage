@@ -1,0 +1,846 @@
+{
+  "schema": "execute.security-live-transport/1",
+  "recorded_at_utc": "2026-10-15T00:15:54.015672+00:00",
+  "baseline_commit": "94fc9d13c43a754f999be202c364685c7f2a563a",
+  "scope": "Same-user local live-control availability and cleanup hardening,not privilege escalation or a separate same-user authorization boundary",
+  "change": "Enforce fixed monotonic wire I/O budgets instead of renewing timeouts on each successful syscall. Server request read/response write and CLI request write:2seconds each; CLI response read:12seconds. Recompute remaining socket timeout before each operation and reject expiry after reads/writes. Keep handler wait up to10seconds separate. Peer checks remain before data transfer; LF/EOF framing and byte caps remain. CLI appends LF to the same request buffer before its bounded write.",
+  "environment": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "rustc": "1.99.0(b940084d7 2026-09-28)",
+    "release": "thinLTO,stripped",
+    "measurement": "Serial preserved baseline/candidate release programs,three alternating warm-server rounds per repeat,20reads/variant/round,three warmups. Identical source,cwd,explicit nonsecret child env,catalog and request; independent full reply/state hashes,zero native launches and clean owned exits. No timing concurrent with builds/tests/stress. Uncontrolled background activity.",
+    "providers": "None; full model suite uses local fixtures"
+  },
+  "source_sha256": {
+    "baseline_live": "7140697fae274df91146c946f311503d33a8dbf7beec0049cad012e942efcda5",
+    "candidate_live": "6d75247bbfd6734271da0257e821767b3be9c70e895996fecc180d7bd0ce8022",
+    "deadline_transport": "1bdd717784e080eefafb0337f9abf5992b8e42e739866659786d207f15a16c05",
+    "CLI_regressions": "603c888650784cc29bd1e688fefa1c000e6787967acd8fb2393e9879aa9ac697",
+    "repro_harness": "e3defc626c68bb7785ce8ce314d7ca5fb87e7dc57300b5624849531104d7428a",
+    "RPC_first_harness": "c659213a877a1ee329594056c5f09e08418d3fb12f9b58691f6f60a596185621",
+    "RPC_final_harness": "8a6937e72a8792453e3256ec9e2ce671d9e4f8cbd0667ba543b3ed9f37628a83"
+  },
+  "catalog_files_sha256": {
+    "awk.json": "e32db563605d84a0873bc51088579825f56ed182b895208278d46d96131e30a6",
+    "cat.json": "483117c32690b423ab88e9443cc7ce0787545f07833576d678b1d0472f19ab3a",
+    "cd.json": "8c4e620938ddea3864a46a53238bb1c30c6e95e2cf144e3ab762cdc4c461fb3a",
+    "comm.json": "a0df36e3df87572400171ad0745dde3f4d1bf841aba734ac066aaaf0cb4907ab",
+    "count.lines.json": "9e8c2e8b0a096004a90754c4604b6873e04535f2817cc38b28fdab9631959349",
+    "cut.json": "2eb43493685ece1d739fb1225e40743178cbcb361dc2676470ac22c4bf4eb350",
+    "false.json": "5bf291319570f954bcf54b2847243eaca0c214c6d844c3f4fc5816ec005c6338",
+    "gh.repo.json": "821dd80054f78029446e963d5ee30375a8c2ec5dc8dab0c8411bafcea837a2bc",
+    "git.commit.json": "70e8272197c5974bd76d41e57ea0dde8046927487629fc4cd6a498fa23ff023a",
+    "grep.json": "aa8192ddb8685b19f4a9e49ad87d489d6dcfc946331037328e00721f16869a74",
+    "head.json": "3dcacca6166792ff647dc52a7273f0c102683cb012cad8b1f05fc2a2325f5b07",
+    "jev.classify.json": "098e97d987b9bfc81bdad8227ce14528209f11506b4d8d649a5351f9c2bd9423",
+    "jev.judge.json": "bd5dccd3153a503af5c59963a52676969bc9d5793de3c43268249c653fc88127",
+    "jev.score.json": "76601821cf98022a7003028bb7185cb116b53fb101857777403d91001b4d55f3",
+    "join.json": "949355922238c8acdd020aef386d560aa9f61f8d2a773c959edd2957770e22d8",
+    "jq.json": "2f6585cff672a91e630833a4b3fc7bc61c9a59d82e5478d926a509d5154f1792",
+    "jq.ps.json": "9097df3bdb45dd6c9724acb3377ea0cb8bd068aacd0c55257f95c0f02037c50e",
+    "llm.ask.json": "652f07f014c12e04892d773e7812812dd95b7c5ebf790571d0d405c3c5a0f13d",
+    "llm.extract.json": "58b9b9afada23d708c3e3f382d0952faf3c9065c13b732f0ea171c9b72164155",
+    "ls.json": "3c193cb2c0f1397e6600ddf3de9b8219110a26d5ae5661281c5263f50b74d17d",
+    "mkdir.json": "05ff3c97d1b4c03994f3f3d1d3cf0cf868c6b865cf1722501cc240c25a4ec61a",
+    "paste.json": "955fd7e57a08fe72518dcb58d2087e2ec005c8ddbdc9145212a9ca927cf59e09",
+    "printf.json": "abe61c4481c94396e230406897d253ff8ba0f9c854fb09ecc098b85870b0237e",
+    "ps.json": "b245d02a68d61d316bd67cdc0b2c01225ed4b36c0257767f31e627dc50136475",
+    "pwd.json": "c7b13a3ffd7b935da4d2b79b9c971ac3e979e43f8d6417c4d917a498217bb50c",
+    "sed.json": "68e5079957c0da4370e423db3afdc0e799e34f6c2d47603fa37213ce99df8397",
+    "sort.json": "6d953c33eed06e702c5781290d76929b8e19d62d283b999321e42de19d779b50",
+    "tail.follow.json": "2529d2e3820b04ee7593562dd1aad88e891c256056089f368df5141a6ffcf401",
+    "tail.json": "85587f636af5879c435e51eb46fb302f51f0475701ce4c7374a58e27d3678f8d",
+    "tr.json": "b093a6aa91b7657ea4890279f9c3e97e2738114d31f9232ed0501b780ca78c5e",
+    "uniq.json": "157054ba866d610e03826a7f652bac52529195ccffca9b26f60a041e74f9b246",
+    "upper.json": "40f30b92942374f4694d90a33b24a856de99e79f875261b3e9a2f83c563ad0b5",
+    "wc.json": "be82bb3ac877a6eb53d3b2c699b1de84dcc6fd1d7cb9b05b784edc45d7786579"
+  },
+  "binaries": {
+    "baseline-execute": {
+      "sha256": "6188362099df3a7d1a9dbd8b490d69d23e1d2884cec8bd6cb179b24bbbcd4d21",
+      "bytes": 2903600
+    },
+    "candidate-execute": {
+      "sha256": "04ad204bb8ae06c80ef5a3b31ed77bc3acb34b057465b8b46409758ac498f760",
+      "bytes": 2920224
+    }
+  },
+  "baseline_reproduction": {
+    "binary_sha256": "6188362099df3a7d1a9dbd8b490d69d23e1d2884cec8bd6cb179b24bbbcd4d21",
+    "method": "One owned paused pure JSON program,no native applets/providers. Same-user socket sends incomplete JSON followed by150ms whitespace progress. Separate normal CLI stop command must acknowledge. Observe2.5s,then close/reap only owned clients/server. Availability/cleanup repro within same-user control trust,not privilege escalation or cross-user authentication bypass.",
+    "result": {
+      "stop_ack_ok": true,
+      "still_running_after_2_5s": true,
+      "observed_stop_seconds": 2.512197875,
+      "partial_request_progress_bytes": 17,
+      "server_status": 0,
+      "stdout_after_ready": "{\"event\":\"stopped\",\"ok\":true}\n",
+      "stderr": "",
+      "owned_server_reaped": true
+    }
+  },
+  "candidate_reproduction": {
+    "binary_sha256": "04ad204bb8ae06c80ef5a3b31ed77bc3acb34b057465b8b46409758ac498f760",
+    "method": "One owned paused pure JSON program,no native applets/providers. Same-user socket sends incomplete JSON followed by150ms whitespace progress. Separate normal CLI stop command must acknowledge. Observe2.5s,then close/reap only owned clients/server. Availability/cleanup repro within same-user control trust,not privilege escalation or cross-user authentication bypass.",
+    "result": {
+      "stop_ack_ok": true,
+      "still_running_after_2_5s": false,
+      "observed_stop_seconds": 1.6993435,
+      "partial_request_progress_bytes": 12,
+      "server_status": 0,
+      "stdout_after_ready": "{\"event\":\"stopped\",\"ok\":true}\n",
+      "stderr": "",
+      "owned_server_reaped": true
+    }
+  },
+  "paired_RPC": [
+    {
+      "recorded_at_utc": "2026-10-15T00:09:34.631645+00:00",
+      "binary_sha256": {
+        "baseline": "6188362099df3a7d1a9dbd8b490d69d23e1d2884cec8bd6cb179b24bbbcd4d21",
+        "candidate": "04ad204bb8ae06c80ef5a3b31ed77bc3acb34b057465b8b46409758ac498f760"
+      },
+      "harness_sha256": "c659213a877a1ee329594056c5f09e08418d3fb12f9b58691f6f60a596185621",
+      "source": "then encode 42 as json\n",
+      "source_sha256": "1bc8bc34c22458c16e41f33c5c6041b855d66625656f2a9a72c1c55a26d5b43e",
+      "method": "Three alternating serial paired warm live server rounds; same source/cwd/explicit nonsecret environment/catalog/input,20 measured reads after3warmups. Socket connect,write,full reply read and close timed; server setup/state loading,Python JSON decoding and exact full reply/state hashes excluded. No native executions/providers. All owned server exits and socket cleanup verified. Background activity uncontrolled; not CLI startup,network throughput or cold/RSS measurement.",
+      "results": {
+        "0": {
+          "raw_round_ns": {
+            "baseline": [
+              [
+                49625,
+                44417,
+                47875,
+                43625,
+                48833,
+                46334,
+                47375,
+                44083,
+                40500,
+                38708,
+                41708,
+                43042,
+                44583,
+                39833,
+                40125,
+                40709,
+                39500,
+                38709,
+                40583,
+                40583
+              ],
+              [
+                100917,
+                84542,
+                84333,
+                79500,
+                77083,
+                79875,
+                74083,
+                77167,
+                73792,
+                72542,
+                76792,
+                73375,
+                72333,
+                85292,
+                81500,
+                79584,
+                80125,
+                74417,
+                76333,
+                75375
+              ],
+              [
+                82750,
+                78667,
+                78292,
+                84459,
+                85125,
+                81334,
+                76375,
+                80458,
+                76666,
+                74750,
+                73291,
+                81541,
+                75584,
+                73209,
+                72542,
+                72625,
+                77208,
+                76250,
+                73292,
+                72625
+              ]
+            ],
+            "candidate": [
+              [
+                73417,
+                73250,
+                64667,
+                67292,
+                63875,
+                67042,
+                64334,
+                64125,
+                65500,
+                64292,
+                68000,
+                64250,
+                63083,
+                62417,
+                64000,
+                61875,
+                63125,
+                61417,
+                62167,
+                62292
+              ],
+              [
+                75208,
+                74208,
+                72333,
+                70666,
+                70250,
+                72250,
+                78458,
+                217000,
+                81375,
+                103750,
+                99791,
+                83667,
+                95833,
+                104250,
+                91042,
+                72708,
+                62417,
+                81250,
+                73333,
+                72833
+              ],
+              [
+                105250,
+                95000,
+                122083,
+                107833,
+                100709,
+                105959,
+                119625,
+                103541,
+                80583,
+                93834,
+                107125,
+                84584,
+                82292,
+                91417,
+                88916,
+                88500,
+                73959,
+                98916,
+                74041,
+                104167
+              ]
+            ]
+          },
+          "round_p50_ns": {
+            "baseline": [
+              42375.0,
+              77125.0,
+              76520.5
+            ],
+            "candidate": [
+              64187.5,
+              76833.0,
+              96958.0
+            ]
+          },
+          "median_of_round_p50_ns": {
+            "baseline": 76520.5,
+            "candidate": 76833.0
+          },
+          "candidate_change_percent": 0.40838729490790815,
+          "full_reply_sha256": "f4463b1279c83427c47c82bb21642e292e71fdad93c3ced14676b58b1999e35f",
+          "expected_result_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "round_order": [
+            [
+              "baseline",
+              "candidate"
+            ],
+            [
+              "candidate",
+              "baseline"
+            ],
+            [
+              "baseline",
+              "candidate"
+            ]
+          ]
+        },
+        "4194304": {
+          "raw_round_ns": {
+            "baseline": [
+              [
+                7515583,
+                6763791,
+                6596417,
+                6549542,
+                6896583,
+                6989083,
+                6628667,
+                6682083,
+                6686667,
+                6532709,
+                6533125,
+                6717834,
+                6785500,
+                6628875,
+                6495916,
+                6777167,
+                6606625,
+                6593125,
+                6771000,
+                6646250
+              ],
+              [
+                6806166,
+                6620375,
+                6512375,
+                6607875,
+                6646125,
+                6486625,
+                6425458,
+                6688625,
+                6608708,
+                6568292,
+                6636667,
+                6605334,
+                6615000,
+                6604000,
+                6523917,
+                6603792,
+                6573916,
+                6558875,
+                6543666,
+                6620708
+              ],
+              [
+                6786459,
+                6726917,
+                6662500,
+                6641625,
+                6601917,
+                6558666,
+                6622208,
+                6719083,
+                6582333,
+                6693583,
+                6616125,
+                6485000,
+                6572958,
+                6585708,
+                6580291,
+                6645500,
+                6445084,
+                6742583,
+                6629500,
+                6552500
+              ]
+            ],
+            "candidate": [
+              [
+                6588833,
+                6558083,
+                6613375,
+                6512208,
+                6683167,
+                6536000,
+                6566333,
+                6727792,
+                6575416,
+                6616292,
+                6483500,
+                6634875,
+                6644792,
+                6464667,
+                6579375,
+                7443292,
+                6873167,
+                6587708,
+                6572458,
+                6555334
+              ],
+              [
+                6619750,
+                6590375,
+                6554458,
+                6572375,
+                7416666,
+                6727792,
+                6796417,
+                6727417,
+                6448833,
+                6558666,
+                6737584,
+                6586250,
+                6471834,
+                6573459,
+                6641917,
+                6466000,
+                6623750,
+                6615291,
+                6571000,
+                6560916
+              ],
+              [
+                6583250,
+                6623250,
+                6867209,
+                7284625,
+                6678625,
+                6700208,
+                6688584,
+                6730667,
+                6678167,
+                6412041,
+                6515541,
+                6605625,
+                6566875,
+                6552792,
+                6559833,
+                6588625,
+                6525250,
+                6574000,
+                6504334,
+                6528833
+              ]
+            ]
+          },
+          "round_p50_ns": {
+            "baseline": [
+              6664166.5,
+              6604667.0,
+              6619166.5
+            ],
+            "candidate": [
+              6583541.5,
+              6588312.5,
+              6585937.5
+            ]
+          },
+          "median_of_round_p50_ns": {
+            "baseline": 6619166.5,
+            "candidate": 6585937.5
+          },
+          "candidate_change_percent": -0.5020118469598822,
+          "full_reply_sha256": "41651f0ffb0ca170e5ac6ce724fe6ffafdc0aef9e61d1f60619e71cdcf876370",
+          "expected_result_sha256": "002136891dd361a3a2d4d3dd7b77e288eb518e324a59bec2f13415ab503169d4",
+          "round_order": [
+            [
+              "baseline",
+              "candidate"
+            ],
+            [
+              "candidate",
+              "baseline"
+            ],
+            [
+              "baseline",
+              "candidate"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "recorded_at_utc": "2026-10-15T00:11:00.000910+00:00",
+      "binary_sha256": {
+        "baseline": "6188362099df3a7d1a9dbd8b490d69d23e1d2884cec8bd6cb179b24bbbcd4d21",
+        "candidate": "04ad204bb8ae06c80ef5a3b31ed77bc3acb34b057465b8b46409758ac498f760"
+      },
+      "harness_sha256": "8a6937e72a8792453e3256ec9e2ce671d9e4f8cbd0667ba543b3ed9f37628a83",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "samples_per_round": 20,
+      "warmups_per_round": 3,
+      "request_sha256": "4e4bc98949228d4ddcfeedda863ddeca45823a0184f4629e198c67b14e4ea058",
+      "source": "then encode 42 as json\n",
+      "source_sha256": "1bc8bc34c22458c16e41f33c5c6041b855d66625656f2a9a72c1c55a26d5b43e",
+      "method": "Three alternating serial paired warm live server rounds; same source/cwd/explicit nonsecret environment/catalog/input; configured measured reads after3warmups. Socket connect,write,full reply read and close timed; server setup/state loading,Python JSON decoding and exact full reply/state hashes excluded. No native executions/providers. All owned server exits and socket cleanup verified. Background activity uncontrolled; not CLI startup,network throughput or cold/RSS measurement.",
+      "results": {
+        "0": {
+          "raw_round_ns": {
+            "baseline": [
+              [
+                51084,
+                46375,
+                48417,
+                43792,
+                45625,
+                44958,
+                42750,
+                42166,
+                42625,
+                43500,
+                41708,
+                43125,
+                42167,
+                41458,
+                41625,
+                40959,
+                40375,
+                42416,
+                41417,
+                47167
+              ],
+              [
+                79834,
+                75875,
+                75417,
+                78959,
+                80000,
+                87000,
+                109500,
+                90666,
+                76334,
+                65084,
+                66167,
+                81250,
+                63459,
+                64833,
+                65417,
+                66000,
+                66084,
+                72708,
+                72792,
+                74708
+              ],
+              [
+                87208,
+                81084,
+                93667,
+                93167,
+                80709,
+                78542,
+                77625,
+                91708,
+                74792,
+                78291,
+                79959,
+                85125,
+                76125,
+                97250,
+                83583,
+                75958,
+                72042,
+                75625,
+                77166,
+                76917
+              ]
+            ],
+            "candidate": [
+              [
+                48459,
+                46375,
+                46917,
+                42709,
+                45791,
+                43625,
+                43458,
+                45041,
+                45792,
+                40666,
+                44791,
+                40833,
+                43292,
+                40167,
+                43250,
+                42458,
+                44125,
+                45250,
+                40708,
+                46042
+              ],
+              [
+                75416,
+                83208,
+                64334,
+                78125,
+                78250,
+                73958,
+                72458,
+                67917,
+                67500,
+                68042,
+                70291,
+                71333,
+                71208,
+                69250,
+                66917,
+                66416,
+                66375,
+                65875,
+                66000,
+                66375
+              ],
+              [
+                90500,
+                88042,
+                86750,
+                89042,
+                88666,
+                86958,
+                83750,
+                81584,
+                82458,
+                82500,
+                84250,
+                81792,
+                87125,
+                81125,
+                81750,
+                80584,
+                89334,
+                91583,
+                87667,
+                88542
+              ]
+            ]
+          },
+          "round_p50_ns": {
+            "baseline": [
+              42687.5,
+              75062.5,
+              79250.5
+            ],
+            "candidate": [
+              43875.0,
+              68646.0,
+              86854.0
+            ]
+          },
+          "median_of_round_p50_ns": {
+            "baseline": 75062.5,
+            "candidate": 68646.0
+          },
+          "candidate_change_percent": -8.548209825145713,
+          "full_reply_sha256": "f4463b1279c83427c47c82bb21642e292e71fdad93c3ced14676b58b1999e35f",
+          "expected_result_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "round_order": [
+            [
+              "baseline",
+              "candidate"
+            ],
+            [
+              "candidate",
+              "baseline"
+            ],
+            [
+              "baseline",
+              "candidate"
+            ]
+          ]
+        },
+        "4194304": {
+          "raw_round_ns": {
+            "baseline": [
+              [
+                7002709,
+                6598083,
+                6622750,
+                6615584,
+                6599875,
+                6520750,
+                6558667,
+                6555875,
+                6520458,
+                6691959,
+                6541167,
+                6523708,
+                6517041,
+                6687916,
+                6792000,
+                6627500,
+                7322167,
+                6943959,
+                6611708,
+                7021125
+              ],
+              [
+                6644916,
+                6726791,
+                6521500,
+                6898542,
+                6592375,
+                6499417,
+                6686125,
+                6578083,
+                6609667,
+                6765542,
+                6642917,
+                6802959,
+                6516166,
+                7189791,
+                7283667,
+                7714125,
+                7026833,
+                8221750,
+                7004583,
+                6599958
+              ],
+              [
+                6481125,
+                6626625,
+                6721792,
+                6586875,
+                6605541,
+                6527125,
+                6602709,
+                6571000,
+                6581167,
+                6573250,
+                6698666,
+                6513209,
+                6629708,
+                6628667,
+                6470000,
+                6617833,
+                6466458,
+                6650833,
+                6643708,
+                5181667
+              ]
+            ],
+            "candidate": [
+              [
+                6907250,
+                6585833,
+                7058125,
+                6806458,
+                7010458,
+                8122500,
+                5956792,
+                5503791,
+                5996791,
+                6896375,
+                6805250,
+                6565875,
+                6738833,
+                7165708,
+                6682375,
+                6791166,
+                6573000,
+                6613750,
+                6549000,
+                6974042
+              ],
+              [
+                6575542,
+                6519250,
+                6665500,
+                6595333,
+                7014834,
+                6653625,
+                6688041,
+                6777541,
+                6525583,
+                6573333,
+                6797916,
+                6552541,
+                6569625,
+                6542666,
+                6515292,
+                6647583,
+                6594125,
+                6545666,
+                6554208,
+                6599375
+              ],
+              [
+                6588500,
+                6579334,
+                6555500,
+                6562375,
+                5183541,
+                6596750,
+                6623708,
+                6514875,
+                6640208,
+                7372667,
+                6910500,
+                7541709,
+                6700292,
+                6605459,
+                6613417,
+                6510459,
+                6513500,
+                6550625,
+                6539584,
+                6614458
+              ]
+            ]
+          },
+          "round_p50_ns": {
+            "baseline": [
+              6613646.0,
+              6706458.0,
+              6594792.0
+            ],
+            "candidate": [
+              6764999.5,
+              6584833.5,
+              6592625.0
+            ]
+          },
+          "median_of_round_p50_ns": {
+            "baseline": 6613646.0,
+            "candidate": 6592625.0
+          },
+          "candidate_change_percent": -0.3178428358578622,
+          "full_reply_sha256": "41651f0ffb0ca170e5ac6ce724fe6ffafdc0aef9e61d1f60619e71cdcf876370",
+          "expected_result_sha256": "002136891dd361a3a2d4d3dd7b77e288eb518e324a59bec2f13415ab503169d4",
+          "round_order": [
+            [
+              "baseline",
+              "candidate"
+            ],
+            [
+              "candidate",
+              "baseline"
+            ],
+            [
+              "baseline",
+              "candidate"
+            ]
+          ]
+        }
+      }
+    }
+  ],
+  "verification": {
+    "make_check": "passed",
+    "Rust_passed": 459,
+    "Rust_ignored": 24,
+    "live_python_scenarios": 61,
+    "Node_WASM_contracts": 34,
+    "editor_tests": 22,
+    "targeted_transport_unit_tests": 3,
+    "new_live_CLI_regressions": 3,
+    "partial_request_state_unchanged": true,
+    "stop_with_progressing_client": "normal stop acknowledgement; exact owned server exits0 and removes socket before2.5s observation; about1.7s after stop in this fixture",
+    "CLI_wait_2200ms": "passed beyond2s wire budget; separate handler wait intact",
+    "Windows_x64_ARM64": "alltargets compile passed locally; new slow-client probes Unix only,Windows dynamic coverage awaits CI",
+    "measured_native_binary_matches_full_build": true,
+    "WASM_byte_identical": true,
+    "framing": "LF/EOF acceptance,ignored trailing frames and limit+1 overflow detection preserved",
+    "backpressure": "owned4MiB unread socket writes terminate with TimedOut in the80ms unit budget; no hard real-time claim"
+  },
+  "fixture_correction": "The first partial-mutation regression required a timeout JSON frame. Unix may reset a peer that continues sending unread bytes on close. Final regression accepts a timeout error or connection closure,then requires unchanged full document,zero native launches,and a healthy server. Initial failed test log retained; no product correction was needed for this fixture assumption.",
+  "interpretation": [
+    "Baseline acknowledged stop but stayed alive beyond2.5seconds while a client sent incomplete JSON/150ms progress. Closing that exact owned client allowed normal shutdown. Candidate exits0 about1.7seconds after acknowledgement despite continuing progress,within its original2second request-read budget.",
+    "Two paired healthy RPC repeats:4MiBstate replies within0.6% (about6.6ms). Empty replies vary+0.4%/-8.5% (about69\u201377us),not a repeatable gain; all exact full reply hashes match. These measure Python/socket+server RPC,not CLI performance,native execution,allocations,RSS,cold startup or Linux/Windows performance.",
+    "The timeout covers established-connection wire reads/writes. It does not bound connection setup,CPU/mutex processing,filesystem operations,native commands or the separate valid wait handler. Scheduled OS delays remain possible; no hard real-time guarantee.",
+    "Timeout error frames are best effort if the client keeps writing. An incomplete expired request never reaches state mutation. A complete mutation followed by response loss can still have an uncertain acknowledgement; no exactly-once claim.",
+    "Same-user control remains powerful and trusted; socket peers of another user remain rejected. No new grammar,application control logic,capability sandbox,release publishing or installed-release change."
+  ]
+}

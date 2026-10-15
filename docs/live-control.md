@@ -295,7 +295,15 @@ only. Limits are 1 MiB/request,
 8 MiB/editable state, 64 KiB/source, 128 queued records, 16 simultaneous clients,
 64 retained events, and 10 seconds per long poll. Live node/record output defaults
 to 256 KiB and can be raised to 1 MiB with `--max-output-bytes`. Native groups
-support `--command-timeout-ms`. Slow clients have read/write deadlines. Each socket connection carries one
+support `--command-timeout-ms`. Established connections have absolute two-second
+budgets for request reads and
+response writes. The CLI also bounds request writes to two seconds and response
+reads to twelve seconds. Progress does not reset these budgets. The separate
+`wait` handler may run for up to ten seconds before its response write begins.
+Connection setup, CPU/mutex work and filesystem operations do not acquire these
+transport deadlines. Expired incomplete requests do not mutate state; a peer
+still sending may observe connection closure instead of an error frame. Each
+socket connection carries one
 newline-terminated JSON request and one JSON response, then closes.
 
 The pending source candidate enforces the document budget when a stream installs

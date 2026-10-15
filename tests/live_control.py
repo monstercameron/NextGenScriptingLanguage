@@ -914,6 +914,77 @@ define a program named panel
                 os.close(master)
                 os.close(slave)
 
+    def test_partial_request_progress_cannot_renew_read_deadline_or_mutate_state(self):
+        with Session('then encode 42 as json\n') as app:
+            before = app.read()['state']
+            with socket.socket(socket.AF_UNIX) as client:
+                client.settimeout(2)
+                client.connect(str(app.socket))
+                client.sendall(b'{"op":"create","path":"/user/late","value":"')
+                deadline = time.monotonic() + 4
+                next_byte = time.monotonic()
+                response = None
+                rejected = False
+                while time.monotonic() < deadline:
+                    try:
+                        if select.select([client], [], [], .02)[0]:
+                            with client.makefile('rb') as reader:
+                                wire = reader.readline()
+                            if wire:
+                                response = json.loads(wire)
+                            rejected = True
+                            break
+                        if time.monotonic() >= next_byte:
+                            client.sendall(b'x')
+                            next_byte = time.monotonic() + .1
+                    except (BrokenPipeError, ConnectionResetError):
+                        # Closing a peer with unread inbound bytes may reset it;
+                        # the timeout error frame is best effort in this case.
+                        rejected = True
+                        break
+                self.assertTrue(rejected, 'progress renewed the request deadline')
+                if response is not None:
+                    self.assertFalse(response['ok'])
+                    self.assertIn('deadline', response['error']['message'])
+            self.assertEqual(app.read()['state'], before)
+            self.assertEqual(app.read()['runtime']['completed_native_launches'], 0)
+
+    def test_stop_reaps_clients_even_while_partial_json_keeps_arriving(self):
+        with Session('then encode 42 as json\n') as app:
+            client = socket.socket(socket.AF_UNIX)
+            client.settimeout(1)
+            client.connect(str(app.socket))
+            client.sendall(b'{"op":"read" ')
+            quit = threading.Event()
+            def drip():
+                while not quit.wait(.1):
+                    try:
+                        client.sendall(b' ')
+                    except OSError:
+                        return
+            sender = threading.Thread(target=drip)
+            sender.start()
+            try:
+                app.action('stop')
+                self.assertEqual(app.child.wait(timeout=4), 0)
+                self.assertFalse(app.socket.exists())
+            finally:
+                quit.set()
+                client.close()
+                sender.join(timeout=2)
+                self.assertFalse(sender.is_alive())
+
+    def test_cli_wait_handler_has_a_separate_budget_from_wire_io(self):
+        with Session('then encode 42 as json\n') as app:
+            app.until(lambda state: state['runtime']['status'] == 'paused')
+            revision = app.ok('read')['revision']
+            response = subprocess.run([
+                str(BINARY), 'live', 'wait', '/runtime/status', '--socket', str(app.socket),
+                '--after', str(revision), '--timeout-ms', '2200',
+            ], capture_output=True, timeout=8)
+            self.assertEqual(response.returncode, 0, response.stderr)
+            self.assertFalse(json.loads(response.stdout)['result']['changed'])
+
     def test_malformed_oversized_requests_wait_and_existing_socket_path(self):
         with Session('run printf with message "probe"\n') as app:
             revision = app.ok('read')['revision']

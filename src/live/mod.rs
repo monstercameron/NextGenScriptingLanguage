@@ -1,5 +1,6 @@
 //! Local, opt-in JSON control plane for real program execution state.
 pub(crate) mod state;
+mod transport;
 #[cfg(windows)]
 mod windows_transport;
 mod worker;
@@ -13,7 +14,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
-use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
@@ -73,7 +74,7 @@ fn schema() -> Json {
         "state":{"source":".program text, <=64 KiB; replace source and cursor atomically to change the pending workflow","cwd":"existing absolute working directory","bindings":"real named values; string/bool/integer/list map to native parameters; objects/null/floats become JSON text in argv","input":"next pipeline input: {text:UTF8} or {bytes:[0..255]}","cursor":"zero-based next statement; native pipeline groups, conditionals, reusable calls and whole loops are indivisible","inbox":"bounded listener input queue; listen to stdin uses this queue in managed mode","user":"arbitrary JSON metadata object","ui":"live component inputs, widget state, focus, and queued UI events for a screen program"},
         "read_only":["/runtime","/events"],"runtime_fields":["status","in_flight","active_node","effects_may_be_incomplete","error","runs_completed","nodes_completed","completed_native_launches","cache_hits","last_output","frame","ui_applied_revision","ui_errors"],
         "semantics":{"revision":"monotonic; if_revision protects atomic writes against concurrent edits and execution","create":"requires absent object key; arrays insert at index or -","update":"requires existing path","delete":"requires existing path; required document fields cannot be removed","patch":"atomic RFC 6902 add/replace/remove/test operations; all changes validate before commit","pause":"finish the current native group, then pause; streams pause at their next emitted record","cancel":"cancel/reap the active native group; retry explicitly acknowledges possibly incomplete effects","source":"in-memory replacement only; source file is not rewritten; changing the native listener source/cwd restarts its producer and may replay input; handler-only edits preserve it","reset":"reset cursor/cwd/input and local result bindings; preserves external bindings and user metadata; does not undo effects","restart":"reset and run; may repeat effects","completed":"the control server remains alive for inspection and edits until stop","stream":"native argv is fixed for the lifetime of a stream; cancel and wait before editing/restarting its pipeline","ui":"actual renderer state under /ui/programs/NAME/widgets/ID; edit text, items/selection, table rows, bars, chart series and focus; component input changes invoke .program handlers; event dispatch supports press/submit/choose/open; source replacement changes layout and widget identities","durability":"ephemeral live state; separate from durable checkpoints; completed effects are never rolled back"},
-        "limits":{"request_bytes":MAX_MESSAGE,"state_bytes":MAX_STATE,"inbox_records":MAX_QUEUE,"event_history":64,"concurrent_clients":16,"wait_timeout_ms":10000},
+        "limits":{"request_bytes":MAX_MESSAGE,"state_bytes":MAX_STATE,"inbox_records":MAX_QUEUE,"event_history":64,"concurrent_clients":16,"wait_timeout_ms":10000,"request_read_timeout_ms":2000,"response_write_timeout_ms":2000,"client_response_timeout_ms":12000},
         "supported":["finite","interval","calendar","stdin listener via send/inbox","native applet listener","persistent native stream","interactive TUI","persistent headless TUI"]})
 }
 
@@ -470,7 +471,7 @@ fn dispatch(
     {
         bail!("this command does not take a JSON value");
     }
-    let encoded = serde_json::to_vec(&request)?;
+    let mut encoded = serde_json::to_vec(&request)?;
     if encoded.len() >= MAX_MESSAGE {
         bail!("request exceeds 1 MiB");
     }
@@ -478,14 +479,9 @@ fn dispatch(
     if !peer_is_owner(&stream) {
         bail!("live session peer does not match the current user");
     }
-    stream.set_read_timeout(Some(Duration::from_secs(12)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-    stream.write_all(&encoded)?;
-    stream.write_all(b"\n")?;
-    let mut bytes = Vec::new();
-    BufReader::new(stream)
-        .take((MAX_STATE * 2 + 1) as u64)
-        .read_until(b'\n', &mut bytes)?;
+    encoded.push(b'\n');
+    transport::write_message(&mut stream, &encoded, transport::IO_TIMEOUT)?;
+    let bytes = transport::read_message(&mut stream, MAX_STATE * 2, transport::RESPONSE_TIMEOUT)?;
     if bytes.len() > MAX_STATE * 2 {
         bail!("response exceeds byte limit");
     }
@@ -654,12 +650,7 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
         return;
     }
     let result = (|| -> Result<Json> {
-        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-        let mut bytes = Vec::new();
-        BufReader::new(&stream)
-            .take((MAX_MESSAGE + 1) as u64)
-            .read_until(b'\n', &mut bytes)?;
+        let bytes = transport::read_message(&mut stream, MAX_MESSAGE, transport::IO_TIMEOUT)?;
         if bytes.len() > MAX_MESSAGE {
             bail!("request exceeds 1 MiB");
         }
@@ -712,7 +703,7 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
     });
     if let Ok(mut bytes) = serde_json::to_vec(&response) {
         bytes.push(b'\n');
-        let _ = stream.write_all(&bytes);
+        let _ = transport::write_message(&mut stream, &bytes, transport::IO_TIMEOUT);
     }
 }
 

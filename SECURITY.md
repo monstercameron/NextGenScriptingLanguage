@@ -14,8 +14,8 @@ reparse points are rejected. Unix cache opens use no-follow, nonblocking flags
 and check the opened file again, so a FIFO or device cannot become a cache
 stream. Cache directories and entries on Unix must belong to the effective
 user and their mode bits must not grant group/other writes. New Unix cache
-directories use mode 0700; new result files use mode 0600. Existing valid cache keys and raw
-result bytes remain compatible. Unsafe state fails closed rather than silently
+directories use mode 0700; new result files use mode 0600. Existing valid cache
+keys and raw result bytes remain compatible. Unsafe state fails closed rather than silently
 executing the cached applet again. Cache publication retains its private
 temporary file, file sync and atomic rename.
 
@@ -29,8 +29,7 @@ Cache/checkpoint parent directories must be trusted. These checks do not pin
 every ancestor against concurrent replacement, authenticate data against another
 process of the same user, provide cache integrity envelopes, or enforce Windows
 cache ownership/ACL policy. Unix extended ACLs are not inspected. Windows cache
-reparse checks are implemented; Unix
-UID/mode checks have no claimed Windows equivalent. Ordinary explicitly requested
+reparse checks are implemented; Unix UID/mode checks have no claimed Windows equivalent. Ordinary explicitly requested
 file reads, saves and executable aliases retain their normal path semantics.
 
 ## Live control and model applets
@@ -40,6 +39,15 @@ user identity before accepting control data; requests, documents and queues are
 bounded. Access grants powerful state and source replacement, including native
 execution as that user. This is a same-user control plane, not an authorization
 system separating applications or agents of that user.
+
+Established live connections have absolute wire-I/O budgets: two seconds for
+server request reads and response writes, and CLI request writes; twelve seconds
+for CLI response reads. Byte progress does not renew them. Expired incomplete
+requests are rejected before state mutation; error replies are best effort when
+the peer keeps writing. Handler `wait` time remains separate, up to ten seconds.
+These are transport budgets, not connect, mutex/CPU, filesystem or native-command
+deadlines. The [live transport evidence](benchmarks/security-2026-10-15-live-transport.json)
+retains the owned partial-request/shutdown reproduction and regressions.
 
 Model operations require an explicit invocation. Transport uses HTTPS, with HTTP
 allowed only for loopback endpoints; redirects and environment proxies are

@@ -293,3 +293,12 @@ This is filesystem-state hardening, not cache authentication or a sandbox.
 Windows reparse rejection is implemented; Unix UID/mode checks do not establish
 Windows ACL enforcement. Parent-path races and same-user tampering remain open.
 See [security boundaries](../SECURITY.md) and the retained cache security evidence.
+
+
+Live transport hardening reproduces a partial-request client that keeps a server
+alive after an acknowledged stop by renewing per-syscall timeouts. The candidate
+uses fixed elapsed read/write budgets for established connections while keeping
+valid handler waits separate. LF/EOF framing and byte limits remain; expired
+incomplete requests cannot mutate state. This addresses the demonstrated same-user
+availability fault without claiming connect/CPU/filesystem deadlines or a separate
+application authorization boundary.

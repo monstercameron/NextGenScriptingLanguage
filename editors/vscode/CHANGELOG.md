@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Highlight `try`/`catch`/`finally`, loop transfers, bounded parallel/race tasks,
+  JSON null/decimal/object literals, dynamic JSON pointers and typed graph syntax.
+- Pair JSON object braces, indent new block headers and add complete validated
+  snippets for the new source constructs.
+
 ## 0.2.2
 
 - Highlight and indent current-source `repeat`, `for each` and `while` blocks.

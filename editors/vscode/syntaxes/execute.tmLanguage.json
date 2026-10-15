@@ -10,6 +10,15 @@
       "include": "#strings"
     },
     {
+      "include": "#control-flow"
+    },
+    {
+      "include": "#task-group"
+    },
+    {
+      "include": "#graph"
+    },
+    {
       "include": "#condition"
     },
     {
@@ -154,7 +163,18 @@
           "include": "#lists"
         },
         {
-          "match": "(?<![\\w.])[+-]?[0-9]+(?![\\w.])",
+          "include": "#objects"
+        },
+        {
+          "match": "\\bnull\\b",
+          "name": "constant.language.null.execute"
+        },
+        {
+          "match": "(?<![\\w.+-])-?[0-9]+(?:\\.[0-9]+)?[eE][+-]?[0-9]+(?![\\w.])|(?<![\\w.+-])-?[0-9]+\\.[0-9]+(?![\\w.])",
+          "name": "constant.numeric.float.execute"
+        },
+        {
+          "match": "(?<![\\w.+-])-?[0-9]+(?![\\w.])",
           "name": "constant.numeric.integer.execute"
         },
         {
@@ -164,6 +184,34 @@
         {
           "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
           "name": "variable.other.readwrite.execute"
+        }
+      ]
+    },
+    "objects": {
+      "name": "meta.mapping.json.execute",
+      "begin": "\\{",
+      "end": "\\}|(?=$)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.mapping.begin.execute"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.mapping.end.execute"
+        }
+      },
+      "patterns": [
+        {
+          "match": ",",
+          "name": "punctuation.separator.sequence.execute"
+        },
+        {
+          "match": ":",
+          "name": "punctuation.separator.key-value.execute"
+        },
+        {
+          "include": "#values"
         }
       ]
     },
@@ -232,8 +280,221 @@
       ]
     },
     "unsupported": {
-      "match": "^[ \\t]*(?:else|for|while|loop)\\b",
+      "match": "^[ \\t]*(?:else|for|loop)\\b",
       "name": "invalid.illegal.unsupported-control.execute"
+    },
+    "control-flow": {
+      "patterns": [
+        {
+          "match": "^[ \\t]*(try)(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.exception.execute"
+            }
+          }
+        },
+        {
+          "match": "^[ \\t]*(catch)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.exception.execute"
+            },
+            "2": {
+              "name": "variable.other.definition.execute"
+            }
+          }
+        },
+        {
+          "match": "^[ \\t]*(finally)(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.exception.execute"
+            }
+          }
+        },
+        {
+          "match": "^[ \\t]*(break|continue|return)(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.transfer.execute"
+            }
+          }
+        }
+      ]
+    },
+    "task-group": {
+      "match": "^[ \\t]*(parallel|race)[ \\t]+(at[ \\t]+most)[ \\t]+([0-9]+)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.task-group.execute"
+        },
+        "2": {
+          "name": "keyword.other.task-group.execute"
+        },
+        "3": {
+          "name": "constant.numeric.integer.execute"
+        },
+        "4": {
+          "name": "keyword.operator.binding.execute"
+        },
+        "5": {
+          "name": "variable.other.definition.execute"
+        }
+      }
+    },
+    "graph": {
+      "patterns": [
+        {
+          "match": "^[ \\t]*(graph)[ \\t]+([A-Za-z_][A-Za-z0-9_-]*)(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.graph.execute"
+            },
+            "2": {
+              "name": "entity.name.type.graph.execute"
+            }
+          }
+        },
+        {
+          "match": "^[ \\t]*(end)[ \\t]+(graph)(?=[ \\t]*(?:#.*)?$)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.graph.execute"
+            },
+            "2": {
+              "name": "keyword.control.graph.execute"
+            }
+          }
+        },
+        {
+          "include": "#graph-edge"
+        },
+        {
+          "include": "#graph-timer"
+        },
+        {
+          "include": "#graph-listener"
+        },
+        {
+          "include": "#graph-render"
+        }
+      ]
+    },
+    "graph-edge": {
+      "name": "meta.graph-edge.execute",
+      "begin": "^[ \\t]*(bind)[ \\t]+([A-Za-z_][A-Za-z0-9_-]*)(\\.)([A-Za-z_][A-Za-z0-9_-]*)[ \\t]+(to)[ \\t]+([A-Za-z_][A-Za-z0-9_-]*)(\\.)([A-Za-z_][A-Za-z0-9_-]*)",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.graph.execute"
+        },
+        "2": {
+          "name": "variable.other.graph-node.execute"
+        },
+        "3": {
+          "name": "punctuation.accessor.execute"
+        },
+        "4": {
+          "name": "variable.other.graph-port.execute"
+        },
+        "5": {
+          "name": "keyword.operator.connection.execute"
+        },
+        "6": {
+          "name": "variable.other.graph-node.execute"
+        },
+        "7": {
+          "name": "punctuation.accessor.execute"
+        },
+        "8": {
+          "name": "variable.other.graph-port.execute"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\bwith[ \\t]+capacity\\b",
+          "name": "keyword.other.graph-edge.execute"
+        },
+        {
+          "match": "\\b[0-9]+\\b",
+          "name": "constant.numeric.integer.execute"
+        },
+        {
+          "match": "\\b(?:lossless|latest)\\b|\\bdrop[ \\t]+(?:newest|oldest)\\b",
+          "name": "constant.language.graph-policy.execute"
+        },
+        {
+          "include": "#comments"
+        }
+      ]
+    },
+    "graph-timer": {
+      "match": "^[ \\t]*(every)[ \\t]+([0-9]+)[ \\t]+(milliseconds?|seconds?|minutes?|hours?)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_-]*)(?=[ \\t]*(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.timer.execute"
+        },
+        "2": {
+          "name": "constant.numeric.integer.execute"
+        },
+        "3": {
+          "name": "support.type.duration.execute"
+        },
+        "4": {
+          "name": "keyword.operator.binding.execute"
+        },
+        "5": {
+          "name": "variable.other.graph-node.execute"
+        }
+      }
+    },
+    "graph-listener": {
+      "match": "^[ \\t]*(listen[ \\t]+to)[ \\t]+(stdin)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_-]*)(?=[ \\t]*(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.listen.execute"
+        },
+        "2": {
+          "name": "constant.language.stdin.execute"
+        },
+        "3": {
+          "name": "keyword.operator.binding.execute"
+        },
+        "4": {
+          "name": "variable.other.graph-node.execute"
+        }
+      }
+    },
+    "graph-render": {
+      "name": "meta.graph-render.execute",
+      "begin": "^[ \\t]*(render)[ \\t]+(quickshell|tui)(:)(text|button)\\b",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.graph.execute"
+        },
+        "2": {
+          "name": "support.type.renderer.execute"
+        },
+        "3": {
+          "name": "punctuation.separator.colon.execute"
+        },
+        "4": {
+          "name": "support.type.renderer-component.execute"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\bwith[ \\t]+properties\\b",
+          "name": "keyword.other.property.execute"
+        },
+        {
+          "include": "#bindings"
+        },
+        {
+          "include": "#values"
+        }
+      ]
     },
     "stdin": {
       "match": "^[ \\t]*(listen[ \\t]+to)[ \\t]+(stdin)(?=[ \\t]*(?:#|$))",

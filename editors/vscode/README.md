@@ -31,20 +31,23 @@ picker. The language ID is `execute-program`; TextMate scope is `source.execute`
 ## Included
 
 - Typed CLI inputs and defaults, including JSON and text-list inputs.
-- Context-aware token scopes for direct executable names, named applets, parameters,
-  bindings, literals, comments, status, conditional and loop blocks, and cache modifiers.
+- Context-aware token scopes for applet calls, bindings, JSON object/array/scalar
+  values, comments, status, conditionals, loops, transfers, try/catch/finally,
+  parallel/race task groups, typed graph declarations, and cache modifiers.
 - Finite stdin, JSON selection, same-file reusable programs, listeners, schedules,
-  persistent streams and implemented TUI vocabulary.
-- Folding, `#` comments, bracket/quote pairing and two-space indentation defaults.
+  persistent streams, typed applet graphs and implemented TUI vocabulary.
+- Folding, `#` comments, list/object bracket pairing and two-space indentation defaults.
 - Complete-program and statement snippets using prefixes such as `program-input`,
-  `program-pipeline`, `program-condition`, `program-listener` and `program-screen`.
+  `program-pipeline`, `program-condition`, `program-try`, `program-parallel`,
+  `program-json-pointer`, `program-graph`, `program-listener` and `program-screen`.
 - Standard scopes that inherit the active color theme.
 
 A keyword-shaped applet stays an applet: `then false` highlights `false` as a
 command. In strings, `#`, `$HOME`, backticks and `$(...)` remain literal text.
-An unterminated string resets at the next line. Unsupported statement forms such
-as `else`, malformed `for`/`while` headers and `loop` are marked; an applet with one of those names
-can still be invoked explicitly with `run`.
+An unterminated string resets at the next line. Unsupported standalone forms such
+as `else`, `for` and `loop` are marked; valid `while` headers and applets with any
+of those names retain their ordinary scopes. Lexical highlighting does not check
+whether a `break`, `continue` or `return` occurs in a valid semantic context.
 
 ## Scope
 
@@ -65,7 +68,8 @@ npm --prefix editors/vscode test
 npm --prefix editors/vscode run package
 ```
 
-Tests select `target/release/execute` (`execute.exe` on Windows) or the explicit
+Tests prefer `target/debug/execute` when it exists, otherwise select
+`target/release/execute` (`execute.exe` on Windows), or use the explicit
 `EXECUTE_TEST_BINARY` override. The retained historical `bin/execute` cannot
 validate current manifests and is not a development default. A target-specific
 build can be selected with the override.

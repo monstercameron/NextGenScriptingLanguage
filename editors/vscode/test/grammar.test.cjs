@@ -115,11 +115,11 @@ test('comments and malformed single-line strings never leak into subsequent code
   }
 });
 test('numbers, booleans and list punctuation use distinct scopes', () => {
-  const line = 'run sample with flags ["-n", 0, -42, +7, true, false, name]';
+  const line = 'run sample with flags ["-n", 0, -42, 7, true, false, name]';
   scope(line, '[', 'punctuation.section.brackets.begin');
   scope(line, ',', 'punctuation.separator.sequence');
   scope(line, ']', 'punctuation.section.brackets.end');
-  for (const value of ['0', '-42', '+7']) scope(line, value, 'constant.numeric.integer');
+  for (const value of ['0', '-42', '7']) scope(line, value, 'constant.numeric.integer');
   for (const value of ['true', 'false']) scope(line, value, 'constant.language.boolean');
   scope(line, 'name', 'variable.other.readwrite');
 });
@@ -147,15 +147,17 @@ test('highlights components, all nine widget types, ports, and UI event actions'
   scope('    then show the result as rows in records', 'the result', 'keyword.other.action');
   scope('    run ps with flags ["-A"]', 'ps', 'entity.name.function.applet');
 });
-test('unsupported control blocks are not advertised as implemented syntax', () => {
-  for (const keyword of ['else', 'for', 'while', 'loop']) {
+test('only unsupported block headers are marked invalid; while is supported', () => {
+  for (const keyword of ['else', 'for', 'loop']) {
     scope(`${keyword} something`, keyword, 'invalid.illegal.unsupported-control');
     scope(`run ${keyword}`, keyword, 'entity.name.function.applet');
   }
+  scope('while status is 0', 'while', 'keyword.control.condition');
+  scope('run while', 'while', 'entity.name.function.applet');
 });
-test('editor configuration uses two-space blocks and only real syntactic brackets', () => {
+test('editor configuration uses two-space blocks and list/object delimiters', () => {
   assert.equal(configuration.comments.lineComment, '#');
-  assert.deepEqual(configuration.brackets, [['[', ']']]);
+  assert.deepEqual(configuration.brackets, [['[', ']'], ['{', '}']]);
   assert.equal(configuration.folding.offSide, true);
   assert.equal(manifest.contributes.configurationDefaults['[execute-program]']['editor.tabSize'], 2);
   const indent = new RegExp(configuration.onEnterRules[0].beforeText);
@@ -184,10 +186,13 @@ function expand(body) {
 }
 test('complete snippet defaults pass the actual execute check without running commands', () => {
   const snippets = JSON.parse(fs.readFileSync(path.join(extension, 'snippets/execute.code-snippets'), 'utf8'));
-  assert.equal(Object.keys(snippets).length, 26);
+  assert.equal(Object.keys(snippets).length, 34);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'execute-vscode-'));
-  const binary = process.env.EXECUTE_TEST_BINARY || path.join(project, 'target/release', process.platform === 'win32' ? 'execute.exe' : 'execute');
-  assert.ok(fs.existsSync(binary), 'Build the current runtime with cargo build --locked --release, or set EXECUTE_TEST_BINARY');
+  const executable = process.platform === 'win32' ? 'execute.exe' : 'execute';
+  const debugBinary = path.join(project, 'target/debug', executable);
+  const releaseBinary = path.join(project, 'target/release', executable);
+  const binary = process.env.EXECUTE_TEST_BINARY || (fs.existsSync(debugBinary) ? debugBinary : releaseBinary);
+  assert.ok(fs.existsSync(binary), 'Build the current runtime with cargo build, or set EXECUTE_TEST_BINARY');
   try {
     let checked = 0;
     for (const [name, snippet] of Object.entries(snippets)) {
@@ -201,7 +206,7 @@ test('complete snippet defaults pass the actual execute check without running co
       assert.equal(result.status, 0, `${name}: ${result.stderr || result.error}`);
       checked++;
     }
-    assert.equal(checked, 18);
+    assert.equal(checked, 26);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
 
@@ -304,4 +309,71 @@ test('process input sources distinguish environment and positional argv', () => 
     scope(line, 'from', 'keyword.operator.source');
     scope(line, source.split(' ')[0], 'support.type.input-source');
   }
+});
+
+test('try clauses, lexical transfers, and bounded task groups match current source', () => {
+  scope('try', 'try', 'keyword.control.exception');
+  scope('catch failure', 'catch', 'keyword.control.exception');
+  scope('catch failure', 'failure', 'variable.other.definition');
+  scope('finally', 'finally', 'keyword.control.exception');
+  for (const transfer of ['break', 'continue', 'return']) {
+    scope(transfer, transfer, 'keyword.control.transfer');
+  }
+  const header = 'parallel at most 3 as results';
+  scope(header, 'parallel', 'keyword.control.task-group');
+  scope(header, 'at most', 'keyword.other.task-group');
+  scope(header, '3', 'constant.numeric.integer');
+  scope(header, 'as', 'keyword.operator.binding');
+  scope(header, 'results', 'variable.other.definition');
+  scope('race at most 2 as winner', 'race', 'keyword.control.task-group');
+  scope('  run number.add with left 1 and right 2 as sum', 'number.add', 'entity.name.function.applet');
+  const indent = new RegExp(configuration.onEnterRules[0].beforeText);
+  for (const line of ['try', 'catch failure', 'finally', 'parallel at most 2 as results', 'race at most 2 as winner']) {
+    assert.ok(indent.test(line), line);
+  }
+});
+
+test('JSON values highlight null, signed decimals, nested objects and dynamic pointers', () => {
+  const line = 'then encode {"name": "Ada", "profile": {"nickname": "Ada"}, "score": -1.25, "ratio": 6e+4, "items": [true, null, 07]} as json';
+  scope(line, '{', 'punctuation.section.mapping.begin');
+  scope(line, '{', 'punctuation.section.mapping.begin', 1);
+  scope(line, ':', 'punctuation.separator.key-value');
+  scope(line, '-1.25', 'constant.numeric.float');
+  scope(line, '6e+4', 'constant.numeric.float');
+  scope(line, 'null', 'constant.language.null');
+  scope(line, '07', 'constant.numeric.integer');
+  scope(line, '}', 'punctuation.section.mapping.end');
+  scope(line, '}', 'punctuation.section.mapping.end', 1);
+  assert.ok(!scopesAt('run sample with value +7', '7').some(name => name.startsWith('constant.numeric.')));
+  const pointer = 'take text at pointer from document as selected';
+  scope(pointer, 'take', 'keyword.control.structured');
+  scope(pointer, 'at', 'keyword.operator.structured');
+  scope(pointer, 'pointer', 'variable.other.readwrite');
+  scope(pointer, 'document', 'variable.other.readwrite');
+  scope(pointer, 'selected', 'variable.other.definition');
+});
+
+test('graph declarations, typed node bindings and queue policies have dedicated scopes', () => {
+  scope('graph greeting', 'graph', 'keyword.declaration.graph');
+  scope('graph greeting', 'greeting', 'entity.name.type.graph');
+  scope('  every 10 seconds as ticker', 'every', 'keyword.control.timer');
+  scope('  every 10 seconds as ticker', 'seconds', 'support.type.duration');
+  scope('  every 10 seconds as ticker', 'ticker', 'variable.other.graph-node');
+  scope('  listen to stdin as lines', 'listen to', 'keyword.control.listen');
+  scope('  listen to stdin as lines', 'stdin', 'constant.language.stdin');
+  scope('  listen to stdin as lines', 'lines', 'variable.other.graph-node');
+  scope('  render tui:text with properties {"text": "Ready"} as output', 'render', 'keyword.control.graph');
+  scope('  render tui:text with properties {"text": "Ready"} as output', 'tui', 'support.type.renderer');
+  scope('  render tui:text with properties {"text": "Ready"} as output', 'text', 'support.type.renderer-component');
+  const edge = '  bind joined.value to cleaned.text with capacity 1 drop oldest';
+  scope(edge, 'bind', 'keyword.control.graph');
+  scope(edge, 'joined', 'variable.other.graph-node');
+  scope(edge, 'value', 'variable.other.graph-port');
+  scope(edge, 'cleaned', 'variable.other.graph-node');
+  scope(edge, 'text', 'variable.other.graph-port');
+  scope(edge, 'drop oldest', 'constant.language.graph-policy');
+  scope('end graph', 'end', 'keyword.control.graph');
+  scope('end graph', 'graph', 'keyword.control.graph');
+  const indent = new RegExp(configuration.onEnterRules[0].beforeText);
+  assert.ok(indent.test('graph greeting'));
 });

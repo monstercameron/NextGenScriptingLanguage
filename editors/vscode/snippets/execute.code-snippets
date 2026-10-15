@@ -238,7 +238,7 @@
   },
   "Typed JSON field": {
     "prefix": "program-json",
-    "description": "Read JSON, select a typed field using a JSON pointer and pass it to a native command. Pending source candidate.",
+    "description": "Read JSON, select a typed field using a JSON pointer and pass it to a native command.",
     "isFileTemplate": true,
     "body": [
       "accept path as text",
@@ -250,7 +250,7 @@
   },
   "Reusable finite program": {
     "prefix": "program-reuse",
-    "description": "Define a same-file finite program with explicit inputs, local variables and stdout output. Pending source candidate.",
+    "description": "Define a same-file finite program with explicit inputs, local variables and stdout output.",
     "isFileTemplate": true,
     "body": [
       "define a program named greet",
@@ -300,6 +300,107 @@
       "run \"true\" and keep status as status",
       "while status is 0",
       "  run \"false\" and keep status as status"
+    ]
+  },
+  "Catch failures and always clean up": {
+    "prefix": "program-try",
+    "description": "Catch an ordinary failure and run a final cleanup block.",
+    "isFileTemplate": true,
+    "body": [
+      "try",
+      "  run \"${1:tool}\" with arguments [\"${2:--check}\"]",
+      "catch failure",
+      "  then encode failure as json",
+      "finally",
+      "  run \"printf\" with arguments [\"${3:cleanup}\\n\"]",
+      "$0"
+    ]
+  },
+  "Break or continue a loop": {
+    "prefix": "program-loop-transfer",
+    "description": "Use loop-local break and continue transfers.",
+    "isFileTemplate": true,
+    "body": [
+      "accept files as list of text with default [\"first\", \"stop\", \"last\"]",
+      "for each file in files",
+      "  if file is \"stop\"",
+      "    break",
+      "  continue",
+      "$0"
+    ]
+  },
+  "Return from a reusable program": {
+    "prefix": "program-return",
+    "description": "Exit a reusable program early while keeping the current result.",
+    "isFileTemplate": true,
+    "body": [
+      "define a program named lookup",
+      "  accept name as text",
+      "  if name is \"skip\"",
+      "    then \"printf\" with arguments [\"skipped\\n\"]",
+      "    return",
+      "  then \"printf\" with arguments [\"%s\\n\", name]",
+      "accept query as text with default \"example\"",
+      "run program lookup with name query",
+      "$0"
+    ]
+  },
+  "Run independent tasks in parallel": {
+    "prefix": "program-parallel",
+    "description": "Join the named results from a bounded parallel task group.",
+    "isFileTemplate": true,
+    "body": [
+      "parallel at most ${1:2} as results",
+      "  run number.add with left ${2:20} and right ${3:22} as sum",
+      "  run number.multiply with left ${4:6} and right ${5:7} as product",
+      "then encode results as json",
+      "$0"
+    ]
+  },
+  "Return the first successful task": {
+    "prefix": "program-race",
+    "description": "Race independent tasks and keep the first successful result.",
+    "isFileTemplate": true,
+    "body": [
+      "race at most ${1:2} as winner",
+      "  run number.divide with left ${2:20} and right ${3:4} as quotient",
+      "  run number.add with left ${4:8} and right ${5:9} as sum",
+      "then encode winner as json",
+      "$0"
+    ]
+  },
+  "Select JSON with a dynamic pointer": {
+    "prefix": "program-json-pointer",
+    "description": "Select a typed JSON value using a text binding as its JSON pointer.",
+    "isFileTemplate": true,
+    "body": [
+      "accept document as json with default {\"items\": [{\"name\": \"Ada\"}]}",
+      "accept pointer as text with default \"/items/0/name\"",
+      "take text at pointer from document as name",
+      "then encode name as json",
+      "$0"
+    ]
+  },
+  "Encode an inline JSON value": {
+    "prefix": "program-json-literal",
+    "description": "Build nested JSON directly from object, array, scalar and null literals.",
+    "isFileTemplate": true,
+    "body": [
+      "then encode {\"name\": \"${1:Ada}\", \"active\": true, \"scores\": [10, 9.5], \"optional\": null} as json",
+      "$0"
+    ]
+  },
+  "Typed applet graph": {
+    "prefix": "program-graph",
+    "description": "Connect typed applet ports with a bounded graph edge.",
+    "isFileTemplate": true,
+    "body": [
+      "graph ${1:greeting}",
+      "  run text.concat with parts [\"hello\", \"graph\"] and separator \" \" as joined",
+      "  run text.trim_final_lf as cleaned",
+      "  bind joined.value to cleaned.text with capacity ${2:1} lossless",
+      "end graph",
+      "$0"
     ]
   }
 }

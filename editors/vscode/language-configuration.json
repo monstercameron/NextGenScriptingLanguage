@@ -6,12 +6,24 @@
     [
       "[",
       "]"
+    ],
+    [
+      "{",
+      "}"
     ]
   ],
   "autoClosingPairs": [
     {
       "open": "[",
       "close": "]",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "{",
+      "close": "}",
       "notIn": [
         "string",
         "comment"
@@ -32,6 +44,10 @@
       "]"
     ],
     [
+      "{",
+      "}"
+    ],
+    [
       "\"",
       "\""
     ]
@@ -42,7 +58,7 @@
   },
   "onEnterRules": [
     {
-      "beforeText": "^\\s*(?:(?:if|while)\\b[^\\n]*|repeat\\s+[^\\n]+\\s+times|for\\s+each\\s+[A-Za-z_][A-Za-z0-9_]*\\s+in\\s+[^\\n]+|otherwise|define\\s+a\\s+program\\s+named\\s+[A-Za-z][A-Za-z0-9_]*|whenever\\b[^\\n]*|every\\s+[0-9]+\\s+(?:milliseconds?|seconds?|minutes?|hours?)|show\\s+a\\s+(?:list|table|bar\\s+chart)\\s+named\\s+[A-Za-z][A-Za-z0-9_]*)\\s*(?:#.*)?$",
+      "beforeText": "^\\s*(?:(?:if|while)\\b[^\\n]*|repeat\\s+[^\\n]+\\s+times|for\\s+each\\s+[A-Za-z_][A-Za-z0-9_]*\\s+in\\s+[^\\n]+|(?:try|finally)|catch\\s+[A-Za-z_][A-Za-z0-9_]*|(?:parallel|race)\\s+at\\s+most\\s+[^\\n]+|graph\\s+[A-Za-z_][A-Za-z0-9_-]*|otherwise|define\\s+a\\s+program\\s+named\\s+[A-Za-z][A-Za-z0-9_]*|whenever\\b[^\\n]*|every\\s+[0-9]+\\s+(?:milliseconds?|seconds?|minutes?|hours?)|show\\s+a\\s+(?:list|table|bar\\s+chart)\\s+named\\s+[A-Za-z][A-Za-z0-9_]*)\\s*(?:#.*)?$",
       "action": {
         "indent": "indent"
       }

@@ -685,6 +685,25 @@ impl Manifest {
         }
     }
 
+    pub(crate) fn has_json_encoded_output_schema(&self) -> bool {
+        self.contract
+            .as_ref()
+            .and_then(|contract| contract.output.as_ref())
+            .is_some_and(|schema| schema.encoding == OutputEncoding::Json)
+    }
+
+    pub(crate) fn decode_json_output_value(
+        &self,
+        value: serde_json::Value,
+        bytes: &[u8],
+        status: i32,
+    ) -> Result<AppletOutput> {
+        self.contract
+            .as_ref()
+            .context("predecoded JSON output requires an execution contract")?
+            .decode_json_output_value(value, bytes, status)
+    }
+
     /// Describe the validated callable interface without executing or locating
     /// its binary. This is deliberately separate from Serialize: checkpoint
     /// identities retain their existing representation.

@@ -133,6 +133,7 @@ pub(super) fn execute(
         .with_context(|| format!("line {line}: validating program module output"))?;
     Ok(GroupOutput {
         bytes: child.output,
+        typed_json: None,
         status: Some(status),
         diagnostic: Vec::new(),
         stdout_captured: true,

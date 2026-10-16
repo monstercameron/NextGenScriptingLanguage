@@ -417,6 +417,7 @@ fn execute_group_with_sink(
                                     )?;
                                     return Ok(GroupOutput {
                                         bytes: output,
+                                        typed_json: None,
                                         status,
                                         diagnostic: children
                                             .0
@@ -476,6 +477,7 @@ fn execute_group_with_sink(
                 }
                 return Ok(GroupOutput {
                     bytes: output,
+                    typed_json: None,
                     status,
                     diagnostic: children
                         .0

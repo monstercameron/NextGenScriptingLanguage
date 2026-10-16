@@ -463,6 +463,33 @@ pub struct OutputSchema {
     pub trim_final_lf: bool,
 }
 
+// This is only a fast-path eligibility bound. Deeper values go through the
+// original strict byte parser, which remains authoritative for recursion
+// limits and therefore preserves acceptance and error behavior.
+const MAX_PREDECODED_JSON_CONTAINER_DEPTH: usize = 64;
+
+fn predecoded_json_depth_is_safe(value: &serde_json::Value) -> bool {
+    fn visit(value: &serde_json::Value, depth: usize) -> bool {
+        match value {
+            serde_json::Value::Array(items) => {
+                if depth >= MAX_PREDECODED_JSON_CONTAINER_DEPTH {
+                    return false;
+                }
+                items.iter().all(|item| visit(item, depth + 1))
+            }
+            serde_json::Value::Object(fields) => {
+                if depth >= MAX_PREDECODED_JSON_CONTAINER_DEPTH {
+                    return false;
+                }
+                fields.values().all(|field| visit(field, depth + 1))
+            }
+            _ => true,
+        }
+    }
+
+    visit(value, 0)
+}
+
 /// Types supported at an applet output boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -973,38 +1000,24 @@ impl OutputSchema {
     pub fn decode(&self, bytes: &[u8]) -> Result<AppletOutput> {
         match self.kind {
             OutputType::Bytes => Ok(AppletOutput::Bytes(bytes.to_vec())),
-            OutputType::Text | OutputType::Path => {
-                let value = match self.encoding {
-                    OutputEncoding::Raw => {
-                        let end = if self.trim_final_lf && bytes.last() == Some(&b'\n') {
-                            bytes.len() - 1
-                        } else {
-                            bytes.len()
-                        };
-                        std::str::from_utf8(&bytes[..end])
-                            .context("decoding applet output as UTF-8")?
-                            .to_owned()
-                    }
-                    OutputEncoding::Json => {
-                        let value = parse_json_strict(bytes)
-                            .context("decoding applet output as JSON string")?;
-                        value
-                            .as_str()
-                            .ok_or_else(|| anyhow!("expected JSON string output"))?
-                            .to_owned()
-                    }
-                };
-                if self.kind == OutputType::Path {
-                    if value.is_empty() {
-                        bail!("path output must be nonempty");
-                    }
-                    if value.contains('\0') {
-                        bail!("path output contains a NUL byte");
-                    }
+            OutputType::Text | OutputType::Path => match self.encoding {
+                OutputEncoding::Raw => {
+                    let end = if self.trim_final_lf && bytes.last() == Some(&b'\n') {
+                        bytes.len() - 1
+                    } else {
+                        bytes.len()
+                    };
+                    let value = std::str::from_utf8(&bytes[..end])
+                        .context("decoding applet output as UTF-8")?
+                        .to_owned();
+                    self.decode_string_value(value)
                 }
-                validate_enum_value(self.enum_values.as_deref(), &value)?;
-                Ok(AppletOutput::Value(Value::String(value)))
-            }
+                OutputEncoding::Json => {
+                    let value = parse_json_strict(bytes)
+                        .context("decoding applet output as JSON string")?;
+                    self.decode_json_value(value)
+                }
+            },
             OutputType::Integer
             | OutputType::Number
             | OutputType::Boolean
@@ -1012,6 +1025,32 @@ impl OutputSchema {
             | OutputType::Record
             | OutputType::List => {
                 let json = parse_json_strict(bytes).context("decoding applet output as JSON")?;
+                self.decode_json_value(json)
+            }
+        }
+    }
+
+    /// Decode JSON that an in-process applet already produced as a typed
+    /// value. This applies the same output-schema checks as the byte decoder
+    /// without serializing and parsing the JSON a second time.
+    pub(crate) fn decode_json_value(&self, json: serde_json::Value) -> Result<AppletOutput> {
+        if self.encoding != OutputEncoding::Json {
+            bail!("predecoded JSON output requires json encoding");
+        }
+        match self.kind {
+            OutputType::Text | OutputType::Path => {
+                let value = json
+                    .as_str()
+                    .ok_or_else(|| anyhow!("expected JSON string output"))?
+                    .to_owned();
+                self.decode_string_value(value)
+            }
+            OutputType::Integer
+            | OutputType::Number
+            | OutputType::Boolean
+            | OutputType::Json
+            | OutputType::Record
+            | OutputType::List => {
                 validate_json_value(
                     self.kind,
                     self.items.as_deref(),
@@ -1023,7 +1062,33 @@ impl OutputSchema {
                 )?;
                 Ok(AppletOutput::Value(crate::structured::from_json(json)))
             }
+            OutputType::Bytes => bail!("bytes output requires raw encoding"),
         }
+    }
+
+    pub(crate) fn decode_json_value_or_bytes(
+        &self,
+        json: serde_json::Value,
+        bytes: &[u8],
+    ) -> Result<AppletOutput> {
+        if self.encoding == OutputEncoding::Json && predecoded_json_depth_is_safe(&json) {
+            self.decode_json_value(json)
+        } else {
+            self.decode(bytes)
+        }
+    }
+
+    fn decode_string_value(&self, value: String) -> Result<AppletOutput> {
+        if self.kind == OutputType::Path {
+            if value.is_empty() {
+                bail!("path output must be nonempty");
+            }
+            if value.contains('\0') {
+                bail!("path output contains a NUL byte");
+            }
+        }
+        validate_enum_value(self.enum_values.as_deref(), &value)?;
+        Ok(AppletOutput::Value(Value::String(value)))
     }
 
     pub fn json_schema(&self) -> serde_json::Value {
@@ -1815,6 +1880,32 @@ impl AppletContract {
     }
 
     pub fn decode_output(&self, bytes: &[u8], status: i32) -> Result<AppletOutput> {
+        self.decode_output_with(
+            status,
+            |schema| schema.decode(bytes),
+            || Ok(AppletOutput::Bytes(bytes.to_vec())),
+        )
+    }
+
+    pub(crate) fn decode_json_output_value(
+        &self,
+        value: serde_json::Value,
+        bytes: &[u8],
+        status: i32,
+    ) -> Result<AppletOutput> {
+        self.decode_output_with(
+            status,
+            |schema| schema.decode_json_value_or_bytes(value, bytes),
+            || bail!("typed JSON output requires a declared output schema"),
+        )
+    }
+
+    fn decode_output_with(
+        &self,
+        status: i32,
+        decode_success: impl FnOnce(&OutputSchema) -> Result<AppletOutput>,
+        decode_without_schema: impl FnOnce() -> Result<AppletOutput>,
+    ) -> Result<AppletOutput> {
         let outcome = self.outcome_for(status);
         if outcome.kind != OutcomeKind::Success && !self.result_envelope {
             bail!(
@@ -1825,8 +1916,8 @@ impl AppletContract {
         }
         let decoded = if outcome.kind == OutcomeKind::Success {
             match &self.output {
-                Some(schema) => schema.decode(bytes)?,
-                None => AppletOutput::Bytes(bytes.to_vec()),
+                Some(schema) => decode_success(schema)?,
+                None => decode_without_schema()?,
             }
         } else {
             AppletOutput::Value(Value::Null)
@@ -1903,4 +1994,140 @@ where
     T: Deserialize<'de>,
 {
     T::deserialize(deserializer).map(Some)
+}
+
+#[cfg(test)]
+mod typed_json_decode_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn predecoded_json_uses_the_same_schema_validation_as_bytes() {
+        let cases = [
+            (
+                json!({"type":"text","encoding":"json","enum":["ready"]}),
+                json!("ready"),
+            ),
+            (json!({"type":"path","encoding":"json"}), json!("/tmp/item")),
+            (json!({"type":"integer","encoding":"json"}), json!(7)),
+            (json!({"type":"number","encoding":"json"}), json!(1.25)),
+            (json!({"type":"json","encoding":"json"}), json!(u64::MAX)),
+            (json!({"type":"json","encoding":"json"}), json!(-0.0)),
+            (json!({"type":"json","encoding":"json"}), json!(1e100)),
+            (json!({"type":"boolean","encoding":"json"}), json!(true)),
+            (
+                json!({"type":"json","encoding":"json"}),
+                json!({"x":[null,2]}),
+            ),
+            (
+                json!({
+                    "type":"record","encoding":"json",
+                    "fields":{"count":{"type":"integer"}},"required":["count"]
+                }),
+                json!({"count":4}),
+            ),
+            (
+                json!({"type":"list","encoding":"json","items":{"type":"integer"}}),
+                json!([1, 2, 3]),
+            ),
+        ];
+
+        for (schema, value) in cases {
+            let schema: OutputSchema = serde_json::from_value(schema).unwrap();
+            let bytes = serde_json::to_vec(&value).unwrap();
+            assert_eq!(
+                schema.decode(&bytes).unwrap(),
+                schema.decode_json_value(value).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn predecoded_json_keeps_schema_errors_and_result_envelope_semantics() {
+        let invalid_cases = [
+            (
+                json!({"type":"text","encoding":"json","enum":["ready"]}),
+                json!("waiting"),
+            ),
+            (json!({"type":"path","encoding":"json"}), json!("")),
+            (json!({"type":"integer","encoding":"json"}), json!("four")),
+            (
+                json!({
+                    "type":"record","encoding":"json",
+                    "fields":{"count":{"type":"integer"}},"required":["count"]
+                }),
+                json!({"count":"four"}),
+            ),
+        ];
+        for (schema, invalid) in invalid_cases {
+            let schema: OutputSchema = serde_json::from_value(schema).unwrap();
+            let bytes = serde_json::to_vec(&invalid).unwrap();
+            assert_eq!(
+                format!("{:#}", schema.decode(&bytes).unwrap_err()),
+                format!(
+                    "{:#}",
+                    schema
+                        .decode_json_value_or_bytes(invalid, &bytes)
+                        .unwrap_err()
+                )
+            );
+        }
+
+        let contract: AppletContract = serde_json::from_value(json!({
+            "version":1,
+            "output":{
+                "type":"record","encoding":"json",
+                "fields":{"count":{"type":"integer"}},"required":["count"]
+            },
+            "result_envelope":true
+        }))
+        .unwrap();
+        let value = json!({"count":5});
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert_eq!(
+            contract.decode_output(&bytes, 0).unwrap(),
+            contract.decode_json_output_value(value, &bytes, 0).unwrap()
+        );
+        let non_success = json!({"count":"ignored for declared non-success"});
+        let bytes = serde_json::to_vec(&non_success).unwrap();
+        assert_eq!(
+            contract.decode_output(&bytes, 7).unwrap(),
+            contract
+                .decode_json_output_value(non_success, &bytes, 7)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn predecoded_json_falls_back_to_bytes_at_the_strict_parser_depth_boundary() {
+        let schema: OutputSchema =
+            serde_json::from_value(json!({"type":"json","encoding":"json"})).unwrap();
+        let mut parser_limit_depth = None;
+        for depth in 0..=256 {
+            let value = (0..depth).fold(json!(null), |nested, _| json!([nested]));
+            let fast_path_safe = predecoded_json_depth_is_safe(&value);
+            let bytes = serde_json::to_vec(&value).unwrap();
+            let byte_result = schema.decode(&bytes);
+            let parser_limit_rejected = byte_result
+                .as_ref()
+                .err()
+                .is_some_and(|error| format!("{error:#}").contains("recursion limit"));
+            let carried_result = schema.decode_json_value_or_bytes(value, &bytes);
+            assert_eq!(describe(byte_result), describe(carried_result));
+
+            if parser_limit_rejected {
+                assert!(!fast_path_safe);
+                parser_limit_depth = Some(depth);
+                break;
+            }
+        }
+        assert!(
+            parser_limit_depth.is_some(),
+            "expected serde_json's strict parser to reject deeply nested arrays"
+        );
+    }
+
+    fn describe(result: Result<AppletOutput>) -> std::result::Result<AppletOutput, String> {
+        result.map_err(|error| format!("{error:#}"))
+    }
 }

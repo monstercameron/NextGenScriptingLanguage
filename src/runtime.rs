@@ -984,6 +984,7 @@ impl std::error::Error for CommandFailed {}
 #[derive(Clone)]
 struct GroupOutput {
     bytes: Vec<u8>,
+    typed_json: Option<serde_json::Value>,
     status: Option<i32>,
     diagnostic: Vec<u8>,
     stdout_captured: bool,
@@ -1549,6 +1550,7 @@ fn execute_group_with_sink(
                                 // killed upstream stages do not become native failures.
                                 return Ok(GroupOutput {
                                     bytes: output,
+                                    typed_json: None,
                                     status: None,
                                     diagnostic: children
                                         .0
@@ -1685,6 +1687,7 @@ fn execute_group_with_sink(
         .and_then(|stage| stage.status);
     Ok(GroupOutput {
         bytes: output,
+        typed_json: None,
         status,
         diagnostic: children
             .0
@@ -1995,6 +1998,7 @@ fn bind_call_output(
     stderr: Option<&[u8]>,
     stages: &[execution_result::StageResult],
     retain_value: bool,
+    typed_json: Option<serde_json::Value>,
     bindings: &mut BTreeMap<String, Value>,
 ) -> Result<Option<Value>> {
     let value = decode_call_output(
@@ -2005,6 +2009,7 @@ fn bind_call_output(
         stdout_captured,
         stderr,
         stages,
+        typed_json,
     )?;
     if retain_value {
         bindings.insert(name.to_owned(), value.clone());
@@ -2024,6 +2029,7 @@ fn decode_call_output(
     stdout_captured: bool,
     stderr: Option<&[u8]>,
     stages: &[execution_result::StageResult],
+    typed_json: Option<serde_json::Value>,
 ) -> Result<Value> {
     let decode_failure = |error: anyhow::Error, outcome: Option<crate::contracts::Outcome>| {
         let error = error.context(format!("line {line}: decoding applet output"));
@@ -2054,9 +2060,14 @@ fn decode_call_output(
             let outcome = manifest.outcome_for(status);
             decode_failure(error, Some(outcome))
         };
-        let decoded = manifest
-            .decode_output(bytes, status)
-            .map_err(decode_failure_for_status)?;
+        let decoded = match typed_json {
+            Some(value) if manifest.has_json_encoded_output_schema() => manifest
+                .decode_json_output_value(value, bytes, status)
+                .map_err(decode_failure_for_status)?,
+            _ => manifest
+                .decode_output(bytes, status)
+                .map_err(decode_failure_for_status)?,
+        };
         match decoded {
             AppletOutput::Value(value) => value,
             AppletOutput::Bytes(bytes) => Value::String(
@@ -2231,6 +2242,13 @@ fn execute_in_process(
             }
             Ok(GroupOutput {
                 bytes,
+                typed_json: if (call.binding.is_some() || call.result_binding.is_some())
+                    && manifest.has_json_encoded_output_schema()
+                {
+                    Some(value)
+                } else {
+                    None
+                },
                 status: Some(0),
                 diagnostic: Vec::new(),
                 stdout_captured: true,
@@ -2263,6 +2281,7 @@ fn execute_in_process(
             )?;
             Ok(GroupOutput {
                 bytes: Vec::new(),
+                typed_json: None,
                 status: Some(status),
                 diagnostic: diagnostic.as_bytes().to_vec(),
                 stdout_captured: true,
@@ -2387,6 +2406,7 @@ fn execute_json_lines_worker(
     )?;
     Ok(GroupOutput {
         bytes: response.output,
+        typed_json: None,
         status: Some(response.status),
         diagnostic: response.stderr.clone(),
         stdout_captured: true,
@@ -2692,6 +2712,7 @@ fn execute_remote_applet(
     let diagnostic_bytes = diagnostic.into_bytes();
     Ok(GroupOutput {
         bytes: output_bytes,
+        typed_json: None,
         status: Some(status),
         diagnostic: diagnostic_bytes.clone(),
         stdout_captured: true,
@@ -3975,7 +3996,7 @@ fn run_finite_state(
                         }
                         let output_call = calls.last().expect("invocation group is nonempty").0;
                         let output_manifest = calls.last().expect("invocation group is nonempty").1;
-                        let (bytes, status, stdout_captured, stages) = if call.cache {
+                        let (bytes, status, stdout_captured, stages, typed_json) = if call.cache {
                             let input = input.materialize(
                                 options.max_output_bytes,
                                 signals,
@@ -4142,7 +4163,7 @@ fn run_finite_state(
                                 )?;
                                 // Cache entries retain terminal bytes/status,
                                 // not historical per-stage diagnostics.
-                                (bytes, status, true, Vec::new())
+                                (bytes, status, true, Vec::new(), None)
                             } else {
                                 let completed = run_uncached()?;
                                 if let Some(cache_key) = key.take() {
@@ -4171,6 +4192,7 @@ fn run_finite_state(
                                     completed.status,
                                     completed.stdout_captured,
                                     completed.stages,
+                                    completed.typed_json,
                                 )
                             }
                         } else {
@@ -4190,6 +4212,7 @@ fn run_finite_state(
                                 completed.status,
                                 completed.stdout_captured,
                                 completed.stages,
+                                completed.typed_json,
                             )
                         };
                         let stderr = stages
@@ -4220,6 +4243,7 @@ fn run_finite_state(
                                 stderr,
                                 &stages,
                                 output_call.result_binding.is_some(),
+                                typed_json,
                                 &mut bindings,
                             )?
                         } else if output_call.result_binding.is_some()
@@ -4239,6 +4263,7 @@ fn run_finite_state(
                                 stdout_captured,
                                 stderr,
                                 &stages,
+                                typed_json,
                             )?)
                         } else {
                             None

@@ -6,7 +6,7 @@ use flow::{parser, runtime};
 use serde_json::{json, Value as JsonValue};
 use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
@@ -201,6 +201,105 @@ fn typed_path_outputs_are_semantically_checked_and_feed_path_operations() {
         result.output,
         format!("{}\nnested", expected_parent.display()).as_bytes()
     );
+}
+
+#[test]
+fn in_process_json_output_binding_preserves_result_envelope_and_stdout_bytes() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut manifest: JsonValue =
+        serde_json::from_str(include_str!("../manifests/core.number_add.json")).unwrap();
+    manifest["contract"]["result_envelope"] = json!(true);
+    manifest["contract"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ports");
+    let catalog = registry(&[manifest]);
+    let program = parser::parse(
+        "run number.add with left 2 and right 3 as wrapped and keep result as execution\ntake integer at \"/value\" from wrapped as answer\nthen encode execution as json\n",
+    )
+    .unwrap();
+
+    let result = runtime::run(&program, &catalog, &options(directory.path())).unwrap();
+    let execution: JsonValue = serde_json::from_slice(&result.output).unwrap();
+    assert_eq!(execution["value"]["value"], json!(5));
+    assert_eq!(execution["stdout"], json!(b"5\n"));
+    assert_eq!(execution["stdout_bytes"], json!(2));
+}
+
+#[test]
+fn cli_deep_in_process_json_binding_matches_cache_hit_byte_decoding() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest_directory = directory.path().join("manifests");
+    let mut manifest_builder = fs::DirBuilder::new();
+    manifest_builder
+        .mode(0o700)
+        .create(&manifest_directory)
+        .unwrap();
+    let cache_directory = directory.path().join("cache");
+    let mut cache_builder = fs::DirBuilder::new();
+    cache_builder.mode(0o700).create(&cache_directory).unwrap();
+    let mut manifest: JsonValue =
+        serde_json::from_str(include_str!("../manifests/core.json_get.json")).unwrap();
+    manifest["cacheable"] = json!(true);
+    assert_eq!(manifest["binary"], "@execute-applet");
+    assert_eq!(manifest["contract"]["backend"], "in_process");
+    fs::write(
+        manifest_directory.join("json_get.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let workflow = directory.path().join("workflow.program");
+    fs::write(
+        &workflow,
+        "accept payload as json\nrun json.get with document payload and pointer \"\" as result and cache\nthen encode result as json\n",
+    )
+    .unwrap();
+    let payload = (0..70).fold(JsonValue::Null, |nested, _| JsonValue::Array(vec![nested]));
+    let payload_argument = format!("payload={}", serde_json::to_string(&payload).unwrap());
+    let expected_output = serde_json::to_vec(&payload).unwrap();
+
+    let run = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_execute"))
+            .current_dir(directory.path())
+            .arg("run")
+            .arg(&workflow)
+            .arg("--manifest-dir")
+            .arg(&manifest_directory)
+            .arg("--cache-dir")
+            .arg(&cache_directory)
+            .arg("--input")
+            .arg(&payload_argument)
+            .arg("--trace")
+            .output()
+            .unwrap()
+    };
+
+    let cache_miss = run();
+    assert!(
+        cache_miss.status.success(),
+        "first CLI run failed: {}",
+        String::from_utf8_lossy(&cache_miss.stderr)
+    );
+    assert_eq!(cache_miss.stdout, expected_output);
+    let miss_trace = String::from_utf8_lossy(&cache_miss.stderr);
+    assert!(
+        miss_trace.contains("\"event\":\"cache_store\""),
+        "first CLI run did not store the cache entry: {miss_trace}"
+    );
+    assert!(!miss_trace.contains("\"event\":\"cache_hit\""));
+    assert!(!miss_trace.contains("\"event\":\"spawn\""));
+
+    let cache_hit = run();
+    assert!(
+        cache_hit.status.success(),
+        "second CLI run failed: {}",
+        String::from_utf8_lossy(&cache_hit.stderr)
+    );
+    assert_eq!(cache_hit.stdout, expected_output);
+    let hit_trace = String::from_utf8_lossy(&cache_hit.stderr);
+    assert_eq!(hit_trace.matches("\"event\":\"cache_hit\"").count(), 1);
+    assert!(!hit_trace.contains("\"event\":\"spawn\""));
 }
 
 #[test]

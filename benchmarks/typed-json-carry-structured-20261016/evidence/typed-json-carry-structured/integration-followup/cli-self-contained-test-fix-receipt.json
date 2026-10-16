@@ -1,0 +1,29 @@
+{
+  "cargo_build_or_test": "not run; root owns build/test gate",
+  "fixture_delta_file": "tests/typed_contracts.rs",
+  "fixture_only_patch": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/cli-self-contained-test-fix/typed_contracts-cli-fixture-only.patch",
+  "fixture_only_patch_sha256": "853b6b7a6266c1eddae752f9cab56be8d6576146b0a791927bb2799802773ced",
+  "fixture_patch_validation": "git apply --check and git apply in a temporary directory reproduced the updated test bytes exactly from the preserved pre-fixture snapshot",
+  "measured_product_patch_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+  "pre_fixture_snapshot": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/cli-self-contained-test-fix/typed_contracts.rs.pre-fixture-fix",
+  "pre_fixture_snapshot_sha256": "a219a927f132e25e5b1edd7b4d0f9e5fcb73ad6e59c757a0a4b1c19c97b54eee",
+  "product_runtime_execution": "not run by this agent",
+  "review_note": "The patch is a derivative change to the regression-test fixture only, applied on top of the already-measured product patch. It does not alter the runtime source or benchmark workload.",
+  "rustfmt": {
+    "command": "rustfmt --edition 2021 tests/typed_contracts.rs",
+    "result": "passed"
+  },
+  "schema": "execute.typed_json_carry_cli_self_contained_test_fix/1",
+  "scope": "Fixture/test-only correction for the deep typed JSON cache regression; changes the test from runtime::run on the integration-test process to two owned CLI executions through CARGO_BIN_EXE_execute. The test still selects the unchanged bundled @execute-applet manifest with backend=in_process, uses an owned 0700 cache directory, verifies the 70-level JSON output bytes, and checks cache_store on miss and cache_hit on the second run.",
+  "updated_test_sha256": "f00d7a21d14c6ea38a25d5f65cf2bbaa3a6286cf801c18c23ca7258179421cc0",
+  "worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-integration-7ce98bf",
+  "worktree_head": "7ce98bfbbba025f4c07f1bee991d32ff5d958e60",
+  "worktree_status_after_edit": [
+    " M src/contracts.rs",
+    " M src/manifest.rs",
+    " M src/runtime.rs",
+    " M src/runtime/program_backend.rs",
+    " M src/runtime/windows_process.rs",
+    " M tests/typed_contracts.rs"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "claim": "Draft preservation only; failed run produced no timing attempts.",
+  "failed_run_id": "38872584428",
+  "failure": "Both source arms built, but the frozen paired runner could not read evidence/graph-transport-e2e/build-environment-attempt-1.json because the helper had written that receipt under evidence/graph-transport-e2e/build/.",
+  "label": "05ab086-before-provenance-path-fix",
+  "preserved_files": {
+    "build_graph_e2e_pair.py": "b11a86fc0c0438a671c20bb4e12d2e62ee12374fe584391ef95ba12cdb0e3765",
+    "bundle-sha256sums.txt": "5c5c8ce93abb38ad601b84dc607e6a3568e618cd134ddc073fbf42af6be604d5",
+    "evidence/hosted-linux-38872584428-failed.log": "50d8be1e3d11d1d087672e1028a58f78661faf1469fb459928462f2aa6ad54f6",
+    "graph-collector-e2e-hosted-replication.yml": "55f34c41658469fc0c7b5e48b8e894b847806bc3aaa74e014249aea903ae9fa5"
+  }
+}

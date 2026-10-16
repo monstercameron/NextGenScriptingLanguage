@@ -1,0 +1,393 @@
+{
+  "schema": "typed-json-carry-structured-publication-source-map/1",
+  "trial": "structured_csv_parse_1000 paired-run attempt 1",
+  "publication_state": "frozen; adversarial review passed with exact median precision audit attempt 2",
+  "base_commit": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+  "source_fingerprints": {
+    "path": "evidence/typed-json-carry-structured/source-fingerprints.json",
+    "sha256": "dc9fc282efbcf2cb791eb2e1fba5a5e4b72d2c638bd97ef0eee5e9c300a04dd6",
+    "baseline_tree_sha256": "df3a6289eb57752cb333e586e2a8edf02c1c7e65acd231518d2c4d00d49b0160",
+    "candidate_tree_sha256": "a101955dfcd72460662211fa3db621ba07628d1c482ff46ff69ff3e075765807",
+    "file_count_per_arm": 2197
+  },
+  "source_freeze": {
+    "path": "evidence/typed-json-carry-structured/source-freeze.json",
+    "sha256": "50a334034a000cd860d1cc65d66bcd67a454f0822b5e073750a64fae7911e7b4"
+  },
+  "product_patch": {
+    "path": "evidence/typed-json-carry-structured/typed_json_carry_product_v3.patch",
+    "sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9"
+  },
+  "harness_patch": {
+    "path": "evidence/typed-json-carry-structured/typed_json_carry_structured_harness.patch",
+    "sha256": "732a1926e71033ce5d73ed070e99a58c6a60db2a2b9ea316f5f65fd84a44b2d0"
+  },
+  "harness_source": {
+    "path": "work/typed-json-carry-structured-baseline-e5fa516/tests/typed_json_carry_structured.rs",
+    "sha256": "bac676768a6bf6e748f3cd0590c200ccaa58e1afe712ab99679f35ff29d5ddf3",
+    "same_in_candidate": true
+  },
+  "build_driver": {
+    "path": "work/build_typed_json_carry_structured_pair.py",
+    "sha256": "72b67e06ca7d658bf01b5166f2d6312cdbd6c21e62ae982f4b97b23ccc05ebaa"
+  },
+  "paired_runner": {
+    "path": "work/typed-json-carry-structured-paired-runner/typed_json_carry_structured_pair.py",
+    "sha256": "8fb1f0b624179d9fd62c0aa2f538b08c75aa44a826466592022e4d922bb3136c"
+  },
+  "paired_runner_tests": {
+    "path": "work/typed-json-carry-structured-paired-runner/test_typed_json_carry_structured_pair.py",
+    "sha256": "ddedf0d24c8d76ca115860d33cd47e47bce3094db21064eae72024643612dbb5"
+  },
+  "preregistration": {
+    "path": "evidence/typed-json-carry-structured/preregistration-attempt-1.json",
+    "sha256": "b2425cfd8a798da4a5269f60b97e8d66faa1fb243caaa1a7e2edbfd24bcecf11"
+  },
+  "build_pair_receipt": {
+    "path": "evidence/typed-json-carry-structured/build-attempt-1/build-pair-receipt.json",
+    "sha256": "a5fac6167c0be1c2a79b57c3f253b4767227b39cfb7a6a86fff23a4d5d3ddab6"
+  },
+  "paired_report": {
+    "path": "evidence/typed-json-carry-structured/paired-run-attempt-1/paired-report.json",
+    "sha256": "82c9b545187b57c40e42820812d1ec0bf547fe6b4f94f83728114f1f5f8e3146"
+  },
+  "independent_audit_attempt_1": {
+    "path": "evidence/typed-json-carry-structured/independent-audit-attempt-1/audit.json",
+    "sha256": "0e7f8d32e5d120f861496b778fc851678bd0dc3a092b35bbf7ae7413836db622",
+    "script_sha256": "f8863789691322ba82802a59cbf4d1a6fa0d2e4d9d043897c2f632d7c9cc4749",
+    "checks_passed": 3916
+  },
+  "arms": {
+    "baseline": {
+      "head": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+      "tree_sha256": "df3a6289eb57752cb333e586e2a8edf02c1c7e65acd231518d2c4d00d49b0160",
+      "file_count": 2197,
+      "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "files": [
+        {
+          "source_path": "src/contracts.rs",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/src/contracts.rs",
+          "sha256": "6ba02aa3df712d3f43fb10ea97412cda532b8a63eadabad3ce2c039f4e51d8fa"
+        },
+        {
+          "source_path": "src/manifest.rs",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/src/manifest.rs",
+          "sha256": "1c894eab0aeaa4a52f04e4f945dd94f4dfb347f6e114451d84c31e6ed4a77726"
+        },
+        {
+          "source_path": "src/runtime.rs",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/src/runtime.rs",
+          "sha256": "9159b5028ae0680f9d15943453365f60b7a84e9d061bb1ddb278972fc42cb038"
+        },
+        {
+          "source_path": "src/runtime/program_backend.rs",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/src/runtime/program_backend.rs",
+          "sha256": "45be335cb33c50e3748c9ea9e2f0625d8f09c21c8b401a012a08fa97f3d0ca14"
+        },
+        {
+          "source_path": "src/runtime/windows_process.rs",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/src/runtime/windows_process.rs",
+          "sha256": "c69f48347e53e94346c6ee2ad8a98013f3bcd206d64c366e9ada0276e63ae235"
+        },
+        {
+          "source_path": "tests/typed_contracts.rs",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/tests/typed_contracts.rs",
+          "sha256": "ba93af3ed326c7e1a03e09881e40f4582b3f3cf0c0bddbcf10782f3d8a74d887"
+        },
+        {
+          "source_path": "Cargo.toml",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/Cargo.toml",
+          "sha256": "2e2cd88356201ac07b3b8d68be1af9379d7c307bf2c5b67765a13d0f8e040874"
+        },
+        {
+          "source_path": "Cargo.lock",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/Cargo.lock",
+          "sha256": "2be0aa74e5bfe3e4897ea9ca9121efce663a94a4df7850958dc2cf511c6f427c"
+        },
+        {
+          "source_path": ".cargo/config.toml",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/.cargo/config.toml",
+          "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771"
+        },
+        {
+          "source_path": "tests/typed_json_carry_structured.rs",
+          "snapshot_path": "work/typed-json-carry-structured-baseline-e5fa516/tests/typed_json_carry_structured.rs",
+          "sha256": "bac676768a6bf6e748f3cd0590c200ccaa58e1afe712ab99679f35ff29d5ddf3"
+        }
+      ],
+      "build_receipt_path": "evidence/typed-json-carry-structured/build-attempt-1/baseline/build-receipt.json",
+      "saved_binary_path": "evidence/typed-json-carry-structured/build-attempt-1/baseline/binaries/typed_json_carry_structured",
+      "saved_binary_sha256": "c70284638621cca747626fb71783550cb5b619c8b8bfd3c0aad148f4f54edf65",
+      "build_receipt_sha256": "451c682584e4bdb4fc291d9362acbb053ccfb7b7c45d20dcdeca1beb01243c20"
+    },
+    "candidate": {
+      "head": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+      "tree_sha256": "a101955dfcd72460662211fa3db621ba07628d1c482ff46ff69ff3e075765807",
+      "file_count": 2197,
+      "tracked_diff_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+      "files": [
+        {
+          "source_path": "src/contracts.rs",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/src/contracts.rs",
+          "sha256": "e026b070c32b8dcbfeadf6bb470c981bf21a32bcc92c3e9bfc1b8cc297212299"
+        },
+        {
+          "source_path": "src/manifest.rs",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/src/manifest.rs",
+          "sha256": "25ff965d5d0566321d460ebd99b918fdce03767abb98299544fc0f1a4c8ca514"
+        },
+        {
+          "source_path": "src/runtime.rs",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/src/runtime.rs",
+          "sha256": "51a81ea5194bb3b94ede8d421880e48067c286a3fbf4009244e5b405ffb27a77"
+        },
+        {
+          "source_path": "src/runtime/program_backend.rs",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/src/runtime/program_backend.rs",
+          "sha256": "697224d23f1e9b091886582c33c1477436a287f0ae90fc5d277539ef2943437e"
+        },
+        {
+          "source_path": "src/runtime/windows_process.rs",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/src/runtime/windows_process.rs",
+          "sha256": "82e26e7008655194f1f44d6cf1304e71ba6c78c25f839294f1951c09486f53a8"
+        },
+        {
+          "source_path": "tests/typed_contracts.rs",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/tests/typed_contracts.rs",
+          "sha256": "a219a927f132e25e5b1edd7b4d0f9e5fcb73ad6e59c757a0a4b1c19c97b54eee"
+        },
+        {
+          "source_path": "Cargo.toml",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/Cargo.toml",
+          "sha256": "2e2cd88356201ac07b3b8d68be1af9379d7c307bf2c5b67765a13d0f8e040874"
+        },
+        {
+          "source_path": "Cargo.lock",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/Cargo.lock",
+          "sha256": "2be0aa74e5bfe3e4897ea9ca9121efce663a94a4df7850958dc2cf511c6f427c"
+        },
+        {
+          "source_path": ".cargo/config.toml",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/.cargo/config.toml",
+          "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771"
+        },
+        {
+          "source_path": "tests/typed_json_carry_structured.rs",
+          "snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/tests/typed_json_carry_structured.rs",
+          "sha256": "bac676768a6bf6e748f3cd0590c200ccaa58e1afe712ab99679f35ff29d5ddf3"
+        }
+      ],
+      "build_receipt_path": "evidence/typed-json-carry-structured/build-attempt-1/candidate/build-receipt.json",
+      "saved_binary_path": "evidence/typed-json-carry-structured/build-attempt-1/candidate/binaries/typed_json_carry_structured",
+      "saved_binary_sha256": "f10cc55ab16331b355fbf395395033155a1f1e3cb31327b876d0b766cd5a82b0",
+      "build_receipt_sha256": "4ddeef9e6119759494d284a86af151c88998108d46daed2ab8416d1bfa00c608"
+    }
+  },
+  "scalar_context": {
+    "bundle_relative_path": "../typed-json-carry-scalar-mixed-20261016",
+    "result": "27 wins / 21 losses; median paired ratio 0.9756797487; median delta -42,875 ns; AB order regressed and BA order improved.",
+    "interpretation": "Separate scalar workload; no pooling, combined percentage, or broad speedup inference."
+  },
+  "audit_script_attempt_1": {
+    "path": "work/audit_typed_json_carry_structured_trial_attempt_1.py",
+    "sha256": "f8863789691322ba82802a59cbf4d1a6fa0d2e4d9d043897c2f632d7c9cc4749"
+  },
+  "audit_script_attempt_2": {
+    "path": "work/audit_typed_json_carry_structured_trial.py",
+    "sha256": "dbe38c38557cda980682e724ca709504bea793a3fe573a650b7e4d45cf01e815"
+  },
+  "independent_audit_attempt_2": {
+    "path": "evidence/typed-json-carry-structured/independent-audit-attempt-2/audit.json",
+    "sha256": "36b8eec7645b98f836e1f00c9655135f6ecd9e653f7097de0c42b71b31d89b0f",
+    "script_sha256": "dbe38c38557cda980682e724ca709504bea793a3fe573a650b7e4d45cf01e815",
+    "checks_passed": 3916,
+    "paired_report_sha256": "82c9b545187b57c40e42820812d1ec0bf547fe6b4f94f83728114f1f5f8e3146",
+    "median_delta_ns_exact": "-14221270.5",
+    "baseline_invocation_median_ns_exact": "54809833.5",
+    "candidate_invocation_median_ns_exact": "40102312.5"
+  },
+  "adversarial_review_attempt_1": {
+    "path": "evidence/typed-json-carry-structured/adversarial-review-attempt-1.json",
+    "sha256": "e7ef1e136ef833eefbbfbce0b50eb8c4105bd4c603482f5f50b6adad04aa18f4",
+    "superseded": true,
+    "reason": "scope-language phrase checker failure; preserved verbatim"
+  },
+  "adversarial_review_attempt_2": {
+    "path": "evidence/typed-json-carry-structured/adversarial-review-attempt-2.json",
+    "sha256": "8678f0456d12f345efe1eb8ce143b486bb37c645056b89436027f9bfceedf94f",
+    "result": "pass; no material blocker",
+    "checks_passed": 10,
+    "audit_attempt_2_sha256": "36b8eec7645b98f836e1f00c9655135f6ecd9e653f7097de0c42b71b31d89b0f"
+  },
+  "integration_followup": {
+    "measurement_scope": {
+      "base_commit": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+      "candidate_product_patch_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+      "warning": "Later integration commits are not the measured benchmark arm; the paired timing claim remains bound to this exact source/patch/workload."
+    },
+    "commits": {
+      "integration_base_commit": "7ce98bfbbba025f4c07f1bee991d32ff5d958e60",
+      "typed_json_carry_integration_commit": "97df47ce127b97149306ba9f3e3dfd24c9712681",
+      "platform_cfg_followup_commit": "c719653b52dcfa54db541763721391dba3c9a00c",
+      "preexisting_literal_json_argument_borrow_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "integration_relation": "97df applies typed JSON carry on 7ce; c719 adds cfg attributes on 97df."
+    },
+    "prior_literal_argument_benchmark": {
+      "r_benchmarks_relative_path": "../resolved-json-arguments-positive/README.md",
+      "darwin_arm64": "47 wins / 1 loss; median paired ratio 0.8239204161",
+      "linux_x86_64": "48 wins / 0 losses; median paired ratio 0.8265255155",
+      "interpretation": "Separate measured workload; no pooling or combined speedup claim."
+    },
+    "source_file_comparison": {
+      "measured_candidate_source_hashes": {
+        "src/contracts.rs": "e026b070c32b8dcbfeadf6bb470c981bf21a32bcc92c3e9bfc1b8cc297212299",
+        "src/manifest.rs": "25ff965d5d0566321d460ebd99b918fdce03767abb98299544fc0f1a4c8ca514",
+        "src/runtime.rs": "51a81ea5194bb3b94ede8d421880e48067c286a3fbf4009244e5b405ffb27a77",
+        "src/runtime/program_backend.rs": "697224d23f1e9b091886582c33c1477436a287f0ae90fc5d277539ef2943437e",
+        "src/runtime/windows_process.rs": "82e26e7008655194f1f44d6cf1304e71ba6c78c25f839294f1951c09486f53a8"
+      },
+      "at_97df": [
+        {
+          "source_path": "src/contracts.rs",
+          "sha256": "e026b070c32b8dcbfeadf6bb470c981bf21a32bcc92c3e9bfc1b8cc297212299",
+          "matches_measured_candidate": true,
+          "evidence_snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/97df/src/contracts.rs"
+        },
+        {
+          "source_path": "src/manifest.rs",
+          "sha256": "25ff965d5d0566321d460ebd99b918fdce03767abb98299544fc0f1a4c8ca514",
+          "matches_measured_candidate": true,
+          "evidence_snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/97df/src/manifest.rs"
+        },
+        {
+          "source_path": "src/runtime.rs",
+          "sha256": "b99ca0ee09a1563f2e36331c6158d474f1ef4f104192630ac1939c4b06a47f3e",
+          "matches_measured_candidate": false,
+          "evidence_snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/97df/src/runtime.rs"
+        },
+        {
+          "source_path": "src/runtime/program_backend.rs",
+          "sha256": "697224d23f1e9b091886582c33c1477436a287f0ae90fc5d277539ef2943437e",
+          "matches_measured_candidate": true,
+          "evidence_snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/97df/src/runtime/program_backend.rs"
+        },
+        {
+          "source_path": "src/runtime/windows_process.rs",
+          "sha256": "82e26e7008655194f1f44d6cf1304e71ba6c78c25f839294f1951c09486f53a8",
+          "matches_measured_candidate": true,
+          "evidence_snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/97df/src/runtime/windows_process.rs"
+        }
+      ],
+      "at_c719653": [
+        {
+          "source_path": "src/contracts.rs",
+          "sha256": "a969c3b323a2fb33febcdf6613400805f8f192d7cadbc19adfbb65c7f94ca1f5",
+          "matches_measured_candidate": false,
+          "snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/c719653/src/contracts.rs"
+        },
+        {
+          "source_path": "src/manifest.rs",
+          "sha256": "328258c77b1a037a96f8df6fec093d7c84504d2bf28a67973dc8e4d5fbb858ff",
+          "matches_measured_candidate": false,
+          "snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/c719653/src/manifest.rs"
+        },
+        {
+          "source_path": "src/runtime.rs",
+          "sha256": "b99ca0ee09a1563f2e36331c6158d474f1ef4f104192630ac1939c4b06a47f3e",
+          "matches_measured_candidate": false,
+          "snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/c719653/src/runtime.rs"
+        },
+        {
+          "source_path": "src/runtime/program_backend.rs",
+          "sha256": "697224d23f1e9b091886582c33c1477436a287f0ae90fc5d277539ef2943437e",
+          "matches_measured_candidate": true,
+          "snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/c719653/src/runtime/program_backend.rs"
+        },
+        {
+          "source_path": "src/runtime/windows_process.rs",
+          "sha256": "82e26e7008655194f1f44d6cf1304e71ba6c78c25f839294f1951c09486f53a8",
+          "matches_measured_candidate": true,
+          "snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/c719653/src/runtime/windows_process.rs"
+        }
+      ],
+      "base_7ce_runtime_rs": {
+        "path": "evidence/typed-json-carry-structured/integration-followup/source/7ce98bf/src/runtime.rs",
+        "sha256": "10f3c1be7d1b5a7c9016f8f19de5a07b959ed42a11c69b19e5fdcc351c2b7c0e",
+        "same_as_a884_literal_argument_commit_file": true,
+        "a884_runtime_sha256": "10f3c1be7d1b5a7c9016f8f19de5a07b959ed42a11c69b19e5fdcc351c2b7c0e",
+        "literal_argument_change_preexisted_typed_carry_integration": true,
+        "a884_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944"
+      },
+      "interpretation": "At 97df, four of five measured production files match exact bytes; runtime.rs differs from the measured e5fa candidate because integration is layered onto 7ce, whose runtime bytes already equal the separately audited a884 literal-JSON argument-borrow implementation. 97df did not introduce that borrow path; it integrated typed JSON carry on top of it. At c719, the only additional source differences from 97df are six cfg attributes in contracts.rs and manifest.rs. No claim of whole-tree byte identity."
+    },
+    "fixture_only_followup": {
+      "patch": {
+        "path": "evidence/typed-json-carry-structured/integration-followup/cli-self-contained-test-fix.patch",
+        "sha256": "853b6b7a6266c1eddae752f9cab56be8d6576146b0a791927bb2799802773ced"
+      },
+      "receipt": {
+        "path": "evidence/typed-json-carry-structured/integration-followup/cli-self-contained-test-fix-receipt.json",
+        "sha256": "7b0de657a972a9a55b4035154d6e89a6787d9055737082ebeea8fe4ab1d35f6f"
+      },
+      "patch_sha256_expected": "853b6b7a6266c1eddae752f9cab56be8d6576146b0a791927bb2799802773ced",
+      "updated_test_sha256": "f00d7a21d14c6ea38a25d5f65cf2bbaa3a6286cf801c18c23ca7258179421cc0",
+      "pre_fixture_snapshot_sha256": "a219a927f132e25e5b1edd7b4d0f9e5fcb73ad6e59c757a0a4b1c19c97b54eee",
+      "updated_test_snapshot_path": "evidence/typed-json-carry-structured/integration-followup/source/97df/tests/typed_contracts.rs",
+      "scope": "Fixture/test-only correction for the deep typed JSON cache regression; changes the test from runtime::run on the integration-test process to two owned CLI executions through CARGO_BIN_EXE_execute. The test still selects the unchanged bundled @execute-applet manifest with backend=in_process, uses an owned 0700 cache directory, verifies the 70-level JSON output bytes, and checks cache_store on miss and cache_hit on the second run.",
+      "updated_test_sha256_actual": "f00d7a21d14c6ea38a25d5f65cf2bbaa3a6286cf801c18c23ca7258179421cc0",
+      "pre_fixture_snapshot_path": "work/typed-json-carry-structured-candidate-e5fa516/tests/typed_contracts.rs",
+      "pre_fixture_snapshot_sha256_actual": "a219a927f132e25e5b1edd7b4d0f9e5fcb73ad6e59c757a0a4b1c19c97b54eee"
+    },
+    "cfg_only_followup": {
+      "patch": {
+        "path": "evidence/typed-json-carry-structured/integration-followup/cfg-only.patch",
+        "sha256": "628cd937b7c1e8df11848af0bbd4843c7c66ce36d72c69ff63a6c508ce3884f5"
+      },
+      "receipt": {
+        "path": "evidence/typed-json-carry-structured/integration-followup/cfg-only-receipt.json",
+        "sha256": "158e1e445d2a1e43df06c0b66cd00019d542266a75b6a03e42b41175489115ea"
+      },
+      "scope": "Only six cfg attributes were added to fast-path helpers/constants. No executable logic, test source, Cargo files, or runtime output behavior changed.",
+      "changed_files": {
+        "contracts.rs": {
+          "before_sha256": "e026b070c32b8dcbfeadf6bb470c981bf21a32bcc92c3e9bfc1b8cc297212299",
+          "after_sha256": "a969c3b323a2fb33febcdf6613400805f8f192d7cadbc19adfbb65c7f94ca1f5"
+        },
+        "manifest.rs": {
+          "before_sha256": "25ff965d5d0566321d460ebd99b918fdce03767abb98299544fc0f1a4c8ca514",
+          "after_sha256": "328258c77b1a037a96f8df6fec093d7c84504d2bf28a67973dc8e4d5fbb858ff"
+        }
+      }
+    },
+    "validation": {
+      "reported_results": {
+        "library_tests_passed": 313,
+        "selected_integration_tests_passed": 35,
+        "typed_contract_tests_after_cli_fixture_fix": "9 passed, 0 failed",
+        "formatting": "passed",
+        "strict_native_clippy": "passed",
+        "staged_native_and_wasm_hook": "passed"
+      },
+      "artifacts": [
+        {
+          "path": "evidence/typed-json-carry-structured/integration-followup/pre-fixture-full-test.log",
+          "sha256": "6645d6bd0f6d956c73b1783c7c344ed85b6b4d64c368f705b3330c6f4041fb1c"
+        },
+        {
+          "path": "evidence/typed-json-carry-structured/integration-followup/typed-contracts-after-fixture-fix.log",
+          "sha256": "cb4606ed8c2cef2ba4f235ffd744bff2eb3ed92bc69f4fea774f048685997247"
+        },
+        {
+          "path": "evidence/typed-json-carry-structured/integration-followup/commit-97df-hook.log",
+          "sha256": "016c1ac0e9a2f74268694035fb346b51923efb7073029b556568c3822ff1fba8"
+        },
+        {
+          "path": "evidence/typed-json-carry-structured/integration-followup/commit-c719653-hook.log",
+          "sha256": "87c9e619179bc5b0bbf731e1337069014f46759748cded8d978707aa65d33e3d"
+        }
+      ],
+      "interpretation": "The preserved pre-fixture full run records a helper-discovery failure in the prior test harness; the fixture-only patch makes the test use the CLI and the post-fix typed-contract rerun passes 9/9. The root integration gate reports 313 library plus 35 selected integration tests passing."
+    },
+    "integration_relation": "97df has parent/base 7ce; the 7ce runtime file is byte-identical to the separately audited a884 literal-JSON argument-borrow runtime file. c719 adds only cfg attributes on top of 97df."
+  }
+}

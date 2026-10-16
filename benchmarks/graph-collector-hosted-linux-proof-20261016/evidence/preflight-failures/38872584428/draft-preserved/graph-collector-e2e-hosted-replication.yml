@@ -1,0 +1,116 @@
+name: Graph collector E2E hosted Linux replication
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  graph-collector-paired-e2e:
+    name: Fixed 48-pair graph transport E2E comparison
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Verify frozen inputs and run offline Python contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$GITHUB_WORKSPACE/work/graph-transport-e2e-paired-runner"
+          helper="$GITHUB_WORKSPACE/work/build_graph_e2e_pair.py"
+          evidence="$GITHUB_WORKSPACE/evidence/graph-transport-e2e"
+          mkdir -p "$evidence"
+          printf '%s  %s\n' '8d39ec34c761f5a186ea45d8978c9a8a66e0cadf37149d3d4bb8dbcb9cfbd1b8' "$package/graph_transport_e2e_pair.py" | sha256sum --check
+          printf '%s  %s\n' '62f3047bf52fb72c1e49dd526bdad14d6779c7c706f3794be21599429c5f8585' "$package/test_graph_transport_e2e_pair.py" | sha256sum --check
+          printf '%s  %s\n' 'e3a8c29881fe904b6b68b9e4a97485704a919dcac03aff0be2cc1998456b0d1e' "$package/graph_transport_e2e_bench.rs" | sha256sum --check
+          printf '%s  %s\n' 'ac1a15348ab47a7b102eb61be74042f265b8fcebf9b11278f84af1525aedcac0' "$package/graph-collector-candidate.patch.xz" | sha256sum --check
+          printf '%s  %s\n' 'b11a86fc0c0438a671c20bb4e12d2e62ee12374fe584391ef95ba12cdb0e3765' "$helper" | sha256sum --check
+          printf '%s  %s\n' '90acf3923aea9c2cd541337f1c4dee94cdbc0775c85e787265f773b0f97e4f1a' "$package/test_build_graph_e2e_pair.py" | sha256sum --check
+          python3 -B "$helper" verify-inputs --evidence-root "$evidence" > "$evidence/input-verification-command.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s "$package" -p 'test_graph_transport_e2e_pair.py'
+          PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s "$package" -p 'test_build_graph_e2e_pair.py'
+          {
+            printf 'purpose=fixed hosted Linux replication of the audited finite graph transport E2E collector change\n'
+            printf 'base_commit=81bf9ba766a775cccf059007b19f5def9b9bfb03\nwarmup_pairs=3\nmeasured_pairs=48\n'
+            printf 'samples_per_invocation=3\ninvocation_timeout_seconds=120\nno_retries=true\n'
+            printf 'run_id=%s\nrun_attempt=%s\nworkflow_commit=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA"
+          } > "$evidence/hosted-request.txt"
+          python3 --version > "$evidence/build/host-tool-versions.txt"
+          cargo --version >> "$evidence/build/host-tool-versions.txt"
+          rustc --version --verbose >> "$evidence/build/host-tool-versions.txt"
+          uname -a > "$evidence/build/host-info.txt"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout frozen base for baseline source
+        with:
+          ref: 81bf9ba766a775cccf059007b19f5def9b9bfb03
+          path: work/graph-optimizations-integrated-81bf9ba
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout frozen base for candidate source
+        with:
+          ref: 81bf9ba766a775cccf059007b19f5def9b9bfb03
+          path: work/graph-collector-sleep-candidate
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - name: Apply the frozen collector patch and shared harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -B "$GITHUB_WORKSPACE/work/build_graph_e2e_pair.py" stage-sources \
+            --campaign-root "$GITHUB_WORKSPACE" \
+            --evidence-root "$GITHUB_WORKSPACE/evidence/graph-transport-e2e" \
+            > "$GITHUB_WORKSPACE/evidence/graph-transport-e2e/source-stage-command.json"
+
+      - name: Build both optimized integration test binaries once
+        shell: bash
+        timeout-minutes: 95
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -B "$GITHUB_WORKSPACE/work/build_graph_e2e_pair.py" build-pair \
+            --campaign-root "$GITHUB_WORKSPACE" \
+            --evidence-root "$GITHUB_WORKSPACE/evidence/graph-transport-e2e" \
+            --target-parent "$RUNNER_TEMP/graph-transport-e2e-targets" \
+            > "$GITHUB_WORKSPACE/evidence/graph-transport-e2e/build/build-pair-command.json"
+
+      - name: Freeze receipts and run the one fixed paired sequence
+        shell: bash
+        timeout-minutes: 75
+        run: |
+          set -euo pipefail
+          package="$GITHUB_WORKSPACE/work/graph-transport-e2e-paired-runner"
+          evidence="$GITHUB_WORKSPACE/evidence/graph-transport-e2e"
+          python3 -B "$package/graph_transport_e2e_pair.py" prepare \
+            --candidate-root "$GITHUB_WORKSPACE/work/graph-collector-sleep-candidate" \
+            --baseline-receipt "$evidence/baseline-binary-receipt.json" \
+            --candidate-receipt "$evidence/candidate-binary-receipt.json" \
+            --harness-source "$evidence/graph_transport_e2e_bench.rs" \
+            --preregistration "$evidence/paired-preregistration.json" \
+            > "$evidence/prepare-command.json"
+          python3 -B "$package/graph_transport_e2e_pair.py" run \
+            --preregistration "$evidence/paired-preregistration.json" \
+            --report-dir "$evidence/paired-runs/run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: graph-collector-e2e-hosted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/graph-transport-e2e
+          if-no-files-found: warn
+          retention-days: 90
+          compression-level: 6

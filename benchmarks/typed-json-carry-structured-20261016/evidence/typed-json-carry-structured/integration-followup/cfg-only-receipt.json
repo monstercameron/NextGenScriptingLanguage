@@ -1,0 +1,26 @@
+{
+  "change": "WASM dead_code cleanup for native typed-JSON fast-path helpers; cfg attributes only.",
+  "worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-integration-7ce98bf",
+  "worktree_head": "7ce98bfbbba025f4c07f1bee991d32ff5d958e60",
+  "platform_predicate": "any(not(target_arch = \"wasm32\"), test), matching src/lib.rs native runtime module selection while preserving test fixtures.",
+  "files": {
+    "contracts.rs": {
+      "before_sha256": "e026b070c32b8dcbfeadf6bb470c981bf21a32bcc92c3e9bfc1b8cc297212299",
+      "after_sha256": "a969c3b323a2fb33febcdf6613400805f8f192d7cadbc19adfbb65c7f94ca1f5"
+    },
+    "manifest.rs": {
+      "before_sha256": "25ff965d5d0566321d460ebd99b918fdce03767abb98299544fc0f1a4c8ca514",
+      "after_sha256": "328258c77b1a037a96f8df6fec093d7c84504d2bf28a67973dc8e4d5fbb858ff"
+    }
+  },
+  "patch": {
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/wasm-cfg-cleanup/fast-path-platform-cfg-only.patch",
+    "sha256": "628cd937b7c1e8df11848af0bbd4843c7c66ce36d72c69ff63a6c508ce3884f5"
+  },
+  "validation": {
+    "diff_check": "passed",
+    "applies_to_preserved_before_copies": "passed",
+    "reproduces_current_files": "passed"
+  },
+  "scope": "Only six cfg attributes were added to fast-path helpers/constants. No executable logic, test source, Cargo files, or runtime output behavior changed."
+}

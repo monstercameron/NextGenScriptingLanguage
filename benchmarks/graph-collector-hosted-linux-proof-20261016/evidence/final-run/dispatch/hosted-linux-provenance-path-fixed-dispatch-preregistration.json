@@ -1,0 +1,31 @@
+{
+  "utc": "2026-10-16T09:07:39.342303+00:00",
+  "workflow_head": "7ce98bfbbba025f4c07f1bee991d32ff5d958e60",
+  "verified_remote_main": "7ce98bfbbba025f4c07f1bee991d32ff5d958e60",
+  "prior_failed_runs": [
+    38871182433,
+    38872584428
+  ],
+  "prior_timing_attempts": 0,
+  "correction": "helpermetadataAPI thenfrozenenvironmentpath; frozenrunnerandharnessunchanged",
+  "protocol": {
+    "warmup_pairs": 3,
+    "measured_pairs": 48,
+    "samples": 3,
+    "timeout_seconds": 120,
+    "no_retries": true
+  },
+  "pins": {
+    ".github/workflows/graph-collector-e2e-hosted-replication.yml": "546caafe8d8508e63ce7eed531726089ec0e0c85a0994e8d802d0ae937aaed92",
+    "work/build_graph_e2e_pair.py": "c2db1b86eaa046d0a9f1280faa92d44bbc380f122d98644c0c0eef7c69cf6b6b",
+    "work/graph-transport-e2e-paired-runner/graph_transport_e2e_pair.py": "8d39ec34c761f5a186ea45d8978c9a8a66e0cadf37149d3d4bb8dbcb9cfbd1b8"
+  },
+  "command": [
+    "gh",
+    "workflow",
+    "run",
+    "graph-collector-e2e-hosted-replication.yml",
+    "--ref",
+    "main"
+  ]
+}

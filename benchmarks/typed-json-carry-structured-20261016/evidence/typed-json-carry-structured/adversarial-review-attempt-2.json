@@ -1,0 +1,53 @@
+{
+  "attempt2_precision_change": "The exact strings for delta and baseline/candidate invocation medians match recomputation from the 48 raw pair deltas and all 96 measured invocation medians. Attempt 1 remains preserved. Attempt 2 otherwise has byte-identical evidence pins, source provenance, checks, invocation records, pair records, and order counts. The initial adversarial-review-attempt-1 receipt is also preserved; it had one overly literal scope-phrase checker typo and is superseded by this receipt.",
+  "check_count": 10,
+  "checks": {
+    "all evidence/source provenance/checks/raw invocations/pairs/order unchanged_vs_attempt1": true,
+    "all_3916_audit_checks_pass": true,
+    "attempt2_receipt_hash_matches_README": true,
+    "attempt2_script_hash_matches": true,
+    "build_source_pins_match": true,
+    "exact_median_fields_recomputed_from_raw": true,
+    "paired_ratio_and_delta_summaries_recomputed": true,
+    "raw_report_and_preregistration_hashes_match": true,
+    "raw_sample_schedule_and_success_counts_match": true,
+    "scope_language_correctly_restricts_claim": true
+  },
+  "failed_checks": [],
+  "inputs": {
+    "attempt_1_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/independent-audit-attempt-1/audit.json",
+    "attempt_1_sha256": "0e7f8d32e5d120f861496b778fc851678bd0dc3a092b35bbf7ae7413836db622",
+    "attempt_2_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/independent-audit-attempt-2/audit.json",
+    "attempt_2_sha256": "36b8eec7645b98f836e1f00c9655135f6ecd9e653f7097de0c42b71b31d89b0f",
+    "audit_script_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/audit_typed_json_carry_structured_trial.py",
+    "audit_script_sha256": "dbe38c38557cda980682e724ca709504bea793a3fe573a650b7e4d45cf01e815",
+    "build_driver_sha256": "72b67e06ca7d658bf01b5166f2d6312cdbd6c21e62ae982f4b97b23ccc05ebaa",
+    "build_pair_receipt_sha256": "a5fac6167c0be1c2a79b57c3f253b4767227b39cfb7a6a86fff23a4d5d3ddab6",
+    "preregistration_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/preregistration-attempt-1.json",
+    "preregistration_sha256": "b2425cfd8a798da4a5269f60b97e8d66faa1fb243caaa1a7e2edbfd24bcecf11",
+    "report_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/paired-run-attempt-1/paired-report.json",
+    "report_sha256": "82c9b545187b57c40e42820812d1ec0bf547fe6b4f94f83728114f1f5f8e3146",
+    "runner_sha256": "8fb1f0b624179d9fd62c0aa2f538b08c75aa44a826466592022e4d922bb3136c",
+    "source_bindings_sha256": "dc9fc282efbcf2cb791eb2e1fba5a5e4b72d2c638bd97ef0eee5e9c300a04dd6"
+  },
+  "recomputed_result": {
+    "attempts": 102,
+    "baseline_invocation_median_ns_exact": "54809833.5",
+    "candidate_invocation_median_ns_exact": "40102312.5",
+    "interpretation": "This is one narrow in-process 1,000-call structured csv.parse workload. All 1,000 distinct result bindings stay live as required by the DSL. It is not CLI startup, default catalog loading, or a general runtime-performance claim.",
+    "losses": 0,
+    "measured_order_counts": {
+      "AB": 24,
+      "BA": 24
+    },
+    "measured_pairs": 48,
+    "median_delta_ns_exact": "-14221270.5",
+    "median_paired_ratio": 0.7371399228927586,
+    "ties": 0,
+    "warmups": 3,
+    "wins": 48
+  },
+  "review": "pass; no material blocker",
+  "review_scope": "Independent source review of the audit implementation and attempt-2 receipt, plus raw report recomputation and separate verification of the source/build/preregistration pins. No Cargo build, product execution, or timing was performed.",
+  "schema": "execute.typed-json-carry-structured-adversarial-review/1"
+}

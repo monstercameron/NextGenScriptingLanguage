@@ -1,0 +1,10 @@
+{
+  "status": "raw_audit_pending",
+  "wins": 48,
+  "losses": 0,
+  "median_paired_ratio": 0.7371399228927586,
+  "arm_medians_ns": [
+    54809833.5,
+    40102312.5
+  ]
+}

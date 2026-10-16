@@ -1,0 +1,15 @@
+{
+  "campaign_platform": "macOS arm64",
+  "canonical_repo_relative_path": "benchmarks/graph-collector-queue-macos-arm64-20261016/collector-e2e/evidence/paired-run-attempt-1/independent-audit.json",
+  "canonical_repo_relative_readme_path": "benchmarks/graph-collector-queue-macos-arm64-20261016/README.md",
+  "historical_absolute_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-integration-7ce98bf/benchmarks/graph-collector-queue-macos-arm64-20261016/collector-e2e/evidence/paired-run-attempt-1/independent-audit.json",
+  "historical_campaign_relative_path": "work/typed-json-carry-integration-7ce98bf/benchmarks/graph-collector-queue-macos-arm64-20261016/collector-e2e/evidence/paired-run-attempt-1/independent-audit.json",
+  "historical_path_note": "Historical staging/worktree location from the original campaign; canonical repository paths above are the installed-package references.",
+  "losses": 0,
+  "measured_pairs": 48,
+  "median_paired_ratio": 0.05308331719777229,
+  "relationship": "separate replication on a different host and architecture; not pooled or combined with the hosted Linux run",
+  "sha256": "1d6dd5c1635f0debab45bcf2ac21e0a6e85639019a84f6addaff5df3ecbd34aa",
+  "ties": 0,
+  "wins": 48
+}

@@ -1,0 +1,40 @@
+{
+  "arms": {
+    "baseline": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-structured-baseline-e5fa516",
+    "candidate": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-structured-candidate-e5fa516"
+  },
+  "artifact_target": "typed_json_carry_structured",
+  "build_command_per_arm": [
+    "cargo",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "execute",
+    "--test",
+    "typed_json_carry_structured",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "build_driver": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/build_typed_json_carry_structured_pair.py",
+  "build_driver_sha256": "72b67e06ca7d658bf01b5166f2d6312cdbd6c21e62ae982f4b97b23ccc05ebaa",
+  "cargo_configuration_fingerprint_before_sha256": "fcdbe5c6b4c01b9111c02fef53daa85663057346a99ebd781a1bbc238a16805c",
+  "clean_command_per_arm": [
+    "cargo",
+    "clean",
+    "--release",
+    "-p",
+    "execute"
+  ],
+  "created_before_builds": true,
+  "harness_patch_sha256": "732a1926e71033ce5d73ed070e99a58c6a60db2a2b9ea316f5f65fd84a44b2d0",
+  "harness_source_sha256": "bac676768a6bf6e748f3cd0590c200ccaa58e1afe712ab99679f35ff29d5ddf3",
+  "product_patch_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+  "schema": "typed_json_carry_structured_build_pair_command/1",
+  "shared_target_directory": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+  "source_bindings": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/source-fingerprints.json",
+  "source_bindings_sha256": "dc9fc282efbcf2cb791eb2e1fba5a5e4b72d2c638bd97ef0eee5e9c300a04dd6",
+  "tests_executed": false,
+  "tool_environment": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/build-attempt-1/tool-environment.json",
+  "tool_environment_sha256": "7f04ef1385a7e58b0b7e563405d1008a284b0e4f64f5e2233740520d975b10d5"
+}

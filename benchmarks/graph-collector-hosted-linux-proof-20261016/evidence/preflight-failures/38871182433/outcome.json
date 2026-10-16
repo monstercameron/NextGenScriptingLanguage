@@ -1,0 +1,11 @@
+{
+  "binary_artifacts_omitted_from_this_package": "The failed-run uploaded test binaries remain in the source campaign evidence; the original successful raw ZIP is included in full. Build and source metadata are preserved here.",
+  "classification": "preflight failure; no benchmark timing attempts",
+  "failed_job_log": "failure.log",
+  "failure": "The run failed after the baseline build, before any timed attempt. The helper called nonexistent graph_transport_e2e_pair._validate_build_metadata; the frozen runner defines _validated_build_metadata.",
+  "label": "0a5f1c5-before-metadata-fix",
+  "preservation_receipt": "draft-preserved/preservation-receipt.json",
+  "run_id": "38871182433",
+  "timing_attempts": 0,
+  "workflow_commit": "0a5f1c572ef14689a13ac66e712b8b681ead4701"
+}

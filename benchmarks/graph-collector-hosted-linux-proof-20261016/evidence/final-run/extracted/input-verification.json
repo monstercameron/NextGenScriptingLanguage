@@ -1,0 +1,17 @@
+{
+  "base_commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+  "canonical_harness_copy": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/graph-transport-e2e/graph_transport_e2e_bench.rs",
+  "canonical_harness_sha256": "e3a8c29881fe904b6b68b9e4a97485704a919dcac03aff0be2cc1998456b0d1e",
+  "claim": "static input identity only; no build or timed invocation",
+  "decoded_patch_hashes": {
+    "graph-collector-candidate.patch.xz": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4"
+  },
+  "hashes": {
+    "graph-collector-candidate.patch.xz": "ac1a15348ab47a7b102eb61be74042f265b8fcebf9b11278f84af1525aedcac0",
+    "graph_transport_e2e_bench.rs": "e3a8c29881fe904b6b68b9e4a97485704a919dcac03aff0be2cc1998456b0d1e",
+    "graph_transport_e2e_pair.py": "8d39ec34c761f5a186ea45d8978c9a8a66e0cadf37149d3d4bb8dbcb9cfbd1b8",
+    "test_graph_transport_e2e_pair.py": "62f3047bf52fb72c1e49dd526bdad14d6779c7c706f3794be21599429c5f8585"
+  },
+  "schema": "execute.graph.transport-e2e.hosted-inputs/1",
+  "verified_at": "2026-10-16T09:08:03Z"
+}

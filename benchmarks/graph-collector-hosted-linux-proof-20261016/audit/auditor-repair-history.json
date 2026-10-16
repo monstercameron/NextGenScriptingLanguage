@@ -1,0 +1,48 @@
+{
+  "classification": "retrospective auditor repair history; the final audit source and tests are included separately. Original intermediate source snapshots and full terminal transcripts were not present in the campaign filesystem at packaging time, so this record does not pretend to be those files.",
+  "final_auditor_sha256": "0f22aa3c8c25075d3aa15552e7a9b57c6995b9d44300d4d442924bb757415c5c",
+  "final_test_log": "final-offline-tests.log",
+  "final_tests": "8 offline auditor tests passed from the published package layout. The earlier 5-test log is retained as final-offline-tests-attempt-1-stale-layout.log; it predates the complete 8-test source/package-path setup.",
+  "final_tests_sha256": "c38a3d4bf310ea0ee4aa629666d9d5a2b4c9262dcf22ae72403a2e41dd7f5231",
+  "package_layout_validation": {
+    "result": "Ran 8 tests; OK",
+    "runner_path": "work/graph-transport-e2e-paired-runner/graph_transport_e2e_pair.py",
+    "sample_oracle_path": "evidence/graph-transport-e2e/audit_graph_transport_e2e.py",
+    "test_command": "PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s work/graph-collector-hosted-replication-audit -p 'test_*.py'"
+  },
+  "repairs": [
+    {
+      "attempt": "initial ZIP-layout preflight",
+      "executed_source_sha256": "cb6a747434a34282d3ae161cb9b366c765768d996c32ce8a3ffa61d0cf007f11",
+      "observed_error": "expected one ZIP member ending in 'build/baseline/build-result.json', found 0",
+      "repair": "Changed path expectation to the artifact layout verified from a selected ZIP member; added a ZIP-layout fixture test.",
+      "result": "failed before full audit",
+      "test_source_sha256": "a77f7903da9e10020ace9f80fddc32c0452b3d9acbf819635e9069acfe15eca1"
+    },
+    {
+      "attempt": "attempt timestamp audit",
+      "executed_source_sha256": "not recorded in the available original output",
+      "observed_error": "warmup-01-1-baseline start timestamp is missing",
+      "reconstructed_pre-fix_source_sha256": "72f4132d95d65023aca4742942d71cf0086a59bebd324a210f1d4979b89f8ef7",
+      "reconstruction_status": "hash was calculated from a reconstructed pre-fix source and was not independently verified as the exact source that executed; not represented as an original draft pin",
+      "repair": "Validate start times from the separate started.json and completion times from finished.json; added mutation coverage.",
+      "result": "failed during early full validation",
+      "test_source_sha256": "24282cab17595fbb21e25b45c3bfaf86b1a9a8582a8f7be9f25f687a5a7597d9"
+    },
+    {
+      "attempt": "late host-tool check",
+      "executed_source_sha256": "not recorded in the available output",
+      "observed_error": "NameError caused by referring to base_meta outside the function that created it; full original traceback was not retained in campaign files",
+      "repair": "Passed the baseline build metadata explicitly to validate_host_tool_versions and added an actual-shape mutation test.",
+      "result": "full raw audit reached a late code error after validating the attempt evidence"
+    },
+    {
+      "attempt": "published-layout offline test rerun",
+      "observed_error": "The earlier packaged 5-test log did not represent all eight test methods and package discovery lacked the campaign-relative frozen runner path.",
+      "repair": "Added byte-identical campaign-relative auditor, runner, build helper, harness, patch and sample-oracle source paths. Ran the exact eight-test unittest discovery command from the package root; all eight tests passed. Preserved the earlier 5-test output separately as stale-layout history.",
+      "result": "passed"
+    }
+  ],
+  "retention_limit": "The bundle preserves final audit source/tests/log and this repair register. The exact intermediate auditor source copies/full original failure logs could not be located; no reconstructed source is claimed as an exact retained draft.",
+  "schema_version": 1
+}

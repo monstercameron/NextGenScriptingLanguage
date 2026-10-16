@@ -1,0 +1,210 @@
+{
+  "captured_at": "2026-10-16T08:04:10Z",
+  "claim": "presence, path, symlink-target, and SHA-256 only; configuration contents are not recorded",
+  "fingerprint": {
+    "cargo_home": {
+      "config_files": [
+        {
+          "path": "/home/runner/.cargo/config",
+          "present": false,
+          "resolved_path": null,
+          "sha256": null,
+          "symlink_target": null
+        },
+        {
+          "path": "/home/runner/.cargo/config.toml",
+          "present": false,
+          "resolved_path": null,
+          "sha256": null,
+          "symlink_target": null
+        }
+      ],
+      "path": "/home/runner/.cargo"
+    },
+    "schema": "execute.graph.transport-e2e.cargo-configuration-fingerprint/1",
+    "sha256": "dd6dbf5ffbb99f56065f6dc8a2641549efea886db8b3a878a66fc325f942d441",
+    "source_roots": {
+      "baseline": {
+        "config_files": [
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-optimizations-integrated-81bf9ba/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-optimizations-integrated-81bf9ba/.cargo/config.toml",
+            "present": true,
+            "resolved_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-optimizations-integrated-81bf9ba/.cargo/config.toml",
+            "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/.cargo/config.toml",
+            "present": true,
+            "resolved_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/.cargo/config.toml",
+            "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          }
+        ],
+        "home_is_ancestor": true,
+        "root": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-optimizations-integrated-81bf9ba"
+      },
+      "candidate": {
+        "config_files": [
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-collector-sleep-candidate/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-collector-sleep-candidate/.cargo/config.toml",
+            "present": true,
+            "resolved_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-collector-sleep-candidate/.cargo/config.toml",
+            "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/.cargo/config.toml",
+            "present": true,
+            "resolved_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/.cargo/config.toml",
+            "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/NextGenScriptingLanguage/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/work/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/home/runner/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          }
+        ],
+        "home_is_ancestor": true,
+        "root": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-collector-sleep-candidate"
+      }
+    }
+  },
+  "shared_environment_sha256": "4154e28baef86bdc7d61d9c9b1945377cb949d67af4394a47a4d9afeeeced3d5"
+}

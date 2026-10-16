@@ -1,0 +1,495 @@
+{
+  "artifact_sha256": {
+    "build_driver": "72b67e06ca7d658bf01b5166f2d6312cdbd6c21e62ae982f4b97b23ccc05ebaa",
+    "harness_baseline": "bac676768a6bf6e748f3cd0590c200ccaa58e1afe712ab99679f35ff29d5ddf3",
+    "harness_candidate": "bac676768a6bf6e748f3cd0590c200ccaa58e1afe712ab99679f35ff29d5ddf3",
+    "harness_patch": "732a1926e71033ce5d73ed070e99a58c6a60db2a2b9ea316f5f65fd84a44b2d0",
+    "offline_tests": "ddedf0d24c8d76ca115860d33cd47e47bce3094db21064eae72024643612dbb5",
+    "paired_runner": "8fb1f0b624179d9fd62c0aa2f538b08c75aa44a826466592022e4d922bb3136c",
+    "product_patch": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+    "readme": "0db0a78084dd070cf215c3f3b80c3ab932aff6b666fbbb13d279a993567d6c3f",
+    "source_bindings": "dc9fc282efbcf2cb791eb2e1fba5a5e4b72d2c638bd97ef0eee5e9c300a04dd6"
+  },
+  "base_commit": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+  "boundaries": [
+    "No product, CLI, catalog, packaging, or default-workload changes.",
+    "The DSL requires unique result names, so all 1,000 tables remain live; memory retention is included in the workload.",
+    "This trial compares the same source workload across baseline and the exact typed-carry product patch only."
+  ],
+  "build_driver_sha256": "72b67e06ca7d658bf01b5166f2d6312cdbd6c21e62ae982f4b97b23ccc05ebaa",
+  "cargo_build_or_benchmark_run_by_agent": false,
+  "checks": {
+    "cargo": "not run",
+    "offline_unittest": "13 passed; 1 build-receipt test skipped until root build",
+    "python_compile": "AST parse passed for driver, runner, and offline tests",
+    "runtime_benchmark": "not run",
+    "rustfmt_check": "passed for identical baseline/candidate harness"
+  },
+  "full_tree_file_count_each_arm": 2197,
+  "full_tree_sha256": {
+    "baseline": "df3a6289eb57752cb333e586e2a8edf02c1c7e65acd231518d2c4d00d49b0160",
+    "candidate": "a101955dfcd72460662211fa3db621ba07628d1c482ff46ff69ff3e075765807"
+  },
+  "harness_patch_sha256": "732a1926e71033ce5d73ed070e99a58c6a60db2a2b9ea316f5f65fd84a44b2d0",
+  "harness_source_sha256": "bac676768a6bf6e748f3cd0590c200ccaa58e1afe712ab99679f35ff29d5ddf3",
+  "offline_test_sha256": "ddedf0d24c8d76ca115860d33cd47e47bce3094db21064eae72024643612dbb5",
+  "paired_runner_sha256": "8fb1f0b624179d9fd62c0aa2f538b08c75aa44a826466592022e4d922bb3136c",
+  "prior_scalar_trial_context": {
+    "attempt": "../typed-json-carry-bench/paired-run-v3-attempt-1",
+    "candidate_losses": 21,
+    "candidate_minus_baseline_median_ns": -42875,
+    "candidate_wins": 27,
+    "interpretation": "mixed direction; retained as separate narrow scalar evidence, not a general speedup claim",
+    "measured_pairs": 48,
+    "successful_invocations": 102
+  },
+  "product_patch_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+  "protocol": {
+    "case": "structured_csv_parse_1000",
+    "correctness": "strict raw report schema, exact independent 64-row CSV/table JSON bytes and hashes, 1,000 calls, zero child/cache, 256 successful status-0 retained records with exact per-call stdout bytes, 744 dropped execution records and stages, identical catalog/workload across arms",
+    "environment": {
+      "LC_ALL": "C",
+      "OPT_BENCH_REPORT": "fresh absolute path per invocation",
+      "TZ": "UTC"
+    },
+    "interpretation_limit": "mechanistic public-runtime structured-output case; all 1,000 result tables remain bound as required by the DSL. This is not CLI startup or a general runtime-performance claim.",
+    "invocation": [
+      "--exact",
+      "structured_csv_parse_1000",
+      "--ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "invocation_samples": 3,
+    "invocation_timeout_seconds": 120,
+    "invocation_warmups": 0,
+    "measured_metric": "median of three in-process runtime::run durations per invocation; paired candidate-minus-baseline delta across 48 measured pairs",
+    "measured_pairs": 48,
+    "pair_order": "global pairs alternate AB/BA beginning AB; after three warmup pairs, measurements begin BA and contain 24 pairs of each order",
+    "retry_policy": "none; retain each outcome and continue the fixed schedule",
+    "test_name": "structured_csv_parse_1000",
+    "warmup_pairs": 3
+  },
+  "provenance_hardening": {
+    "cargo_jsonl_binding": "Hash the build JSONL, parse every nonblank line strictly, require exactly one compiler-artifact row for the benchmark target, validate it, and require full row equality with the nested receipt artifact.",
+    "python_identity": "Build receipt tool environment records interpreter/version/flags; runner preregistration records and rechecks interpreter/version/flags. Driver and runner refuse Python optimization mode.",
+    "runtime_environment": "Preregistration binds the exact environment template and SHA-256; every invocation and started/result record contains the exact child environment map and canonical SHA-256. No host variables are inherited.",
+    "scope": "Harness, product patch, source fingerprints, workload, and measured protocol are unchanged; no Cargo/build/runtime/timing was run for this review fix."
+  },
+  "schema": "typed_json_carry_structured_source_freeze/1",
+  "source_bindings_sha256": "dc9fc282efbcf2cb791eb2e1fba5a5e4b72d2c638bd97ef0eee5e9c300a04dd6",
+  "source_only_by_agent": true,
+  "source_roots": {
+    "baseline": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-structured-baseline-e5fa516",
+    "candidate": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-structured-candidate-e5fa516"
+  },
+  "status": "source_prepared_waiting_for_root_build_review",
+  "workload": {
+    "applet": "csv.parse",
+    "binding_pattern": "table0000 through table0999 (distinct bindings required by the DSL)",
+    "calls": 1000,
+    "columns": 4,
+    "expected_headers": [
+      "identifier",
+      "label",
+      "category",
+      "note"
+    ],
+    "expected_output_bytes": 4733,
+    "expected_output_hex": "7b2268656164657273223a5b226964656e746966696572222c226c6162656c222c2263617465676f7279222c226e6f7465225d2c22726f7773223a5b5b227265636f72642d303030222c226c6162656c2d303030222c2267726f75702d3030222c226e6f74652d3030302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303031222c226c6162656c2d303031222c2267726f75702d3031222c226e6f74652d3030312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303032222c226c6162656c2d303032222c2267726f75702d3032222c226e6f74652d3030322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303033222c226c6162656c2d303033222c2267726f75702d3033222c226e6f74652d3030332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303034222c226c6162656c2d303034222c2267726f75702d3034222c226e6f74652d3030342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303035222c226c6162656c2d303035222c2267726f75702d3035222c226e6f74652d3030352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303036222c226c6162656c2d303036222c2267726f75702d3036222c226e6f74652d3030362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303037222c226c6162656c2d303037222c2267726f75702d3037222c226e6f74652d3030372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303038222c226c6162656c2d303038222c2267726f75702d3030222c226e6f74652d3030382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303039222c226c6162656c2d303039222c2267726f75702d3031222c226e6f74652d3030392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303130222c226c6162656c2d303130222c2267726f75702d3032222c226e6f74652d3031302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303131222c226c6162656c2d303131222c2267726f75702d3033222c226e6f74652d3031312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303132222c226c6162656c2d303132222c2267726f75702d3034222c226e6f74652d3031322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303133222c226c6162656c2d303133222c2267726f75702d3035222c226e6f74652d3031332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303134222c226c6162656c2d303134222c2267726f75702d3036222c226e6f74652d3031342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303135222c226c6162656c2d303135222c2267726f75702d3037222c226e6f74652d3031352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303136222c226c6162656c2d303136222c2267726f75702d3030222c226e6f74652d3031362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303137222c226c6162656c2d303137222c2267726f75702d3031222c226e6f74652d3031372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303138222c226c6162656c2d303138222c2267726f75702d3032222c226e6f74652d3031382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303139222c226c6162656c2d303139222c2267726f75702d3033222c226e6f74652d3031392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303230222c226c6162656c2d303230222c2267726f75702d3034222c226e6f74652d3032302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303231222c226c6162656c2d303231222c2267726f75702d3035222c226e6f74652d3032312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303232222c226c6162656c2d303232222c2267726f75702d3036222c226e6f74652d3032322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303233222c226c6162656c2d303233222c2267726f75702d3037222c226e6f74652d3032332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303234222c226c6162656c2d303234222c2267726f75702d3030222c226e6f74652d3032342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303235222c226c6162656c2d303235222c2267726f75702d3031222c226e6f74652d3032352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303236222c226c6162656c2d303236222c2267726f75702d3032222c226e6f74652d3032362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303237222c226c6162656c2d303237222c2267726f75702d3033222c226e6f74652d3032372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303238222c226c6162656c2d303238222c2267726f75702d3034222c226e6f74652d3032382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303239222c226c6162656c2d303239222c2267726f75702d3035222c226e6f74652d3032392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303330222c226c6162656c2d303330222c2267726f75702d3036222c226e6f74652d3033302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303331222c226c6162656c2d303331222c2267726f75702d3037222c226e6f74652d3033312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303332222c226c6162656c2d303332222c2267726f75702d3030222c226e6f74652d3033322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303333222c226c6162656c2d303333222c2267726f75702d3031222c226e6f74652d3033332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303334222c226c6162656c2d303334222c2267726f75702d3032222c226e6f74652d3033342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303335222c226c6162656c2d303335222c2267726f75702d3033222c226e6f74652d3033352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303336222c226c6162656c2d303336222c2267726f75702d3034222c226e6f74652d3033362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303337222c226c6162656c2d303337222c2267726f75702d3035222c226e6f74652d3033372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303338222c226c6162656c2d303338222c2267726f75702d3036222c226e6f74652d3033382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303339222c226c6162656c2d303339222c2267726f75702d3037222c226e6f74652d3033392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303430222c226c6162656c2d303430222c2267726f75702d3030222c226e6f74652d3034302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303431222c226c6162656c2d303431222c2267726f75702d3031222c226e6f74652d3034312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303432222c226c6162656c2d303432222c2267726f75702d3032222c226e6f74652d3034322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303433222c226c6162656c2d303433222c2267726f75702d3033222c226e6f74652d3034332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303434222c226c6162656c2d303434222c2267726f75702d3034222c226e6f74652d3034342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303435222c226c6162656c2d303435222c2267726f75702d3035222c226e6f74652d3034352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303436222c226c6162656c2d303436222c2267726f75702d3036222c226e6f74652d3034362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303437222c226c6162656c2d303437222c2267726f75702d3037222c226e6f74652d3034372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303438222c226c6162656c2d303438222c2267726f75702d3030222c226e6f74652d3034382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303439222c226c6162656c2d303439222c2267726f75702d3031222c226e6f74652d3034392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303530222c226c6162656c2d303530222c2267726f75702d3032222c226e6f74652d3035302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303531222c226c6162656c2d303531222c2267726f75702d3033222c226e6f74652d3035312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303532222c226c6162656c2d303532222c2267726f75702d3034222c226e6f74652d3035322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303533222c226c6162656c2d303533222c2267726f75702d3035222c226e6f74652d3035332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303534222c226c6162656c2d303534222c2267726f75702d3036222c226e6f74652d3035342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303535222c226c6162656c2d303535222c2267726f75702d3037222c226e6f74652d3035352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303536222c226c6162656c2d303536222c2267726f75702d3030222c226e6f74652d3035362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303537222c226c6162656c2d303537222c2267726f75702d3031222c226e6f74652d3035372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303538222c226c6162656c2d303538222c2267726f75702d3032222c226e6f74652d3035382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303539222c226c6162656c2d303539222c2267726f75702d3033222c226e6f74652d3035392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303630222c226c6162656c2d303630222c2267726f75702d3034222c226e6f74652d3036302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303631222c226c6162656c2d303631222c2267726f75702d3035222c226e6f74652d3036312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303632222c226c6162656c2d303632222c2267726f75702d3036222c226e6f74652d3036322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303633222c226c6162656c2d303633222c2267726f75702d3037222c226e6f74652d3036332d66697865642d737472756374757265642d6f7574707574225d5d7d",
+    "expected_output_sha256": "ff92237bfbeaa81064bc565b39157e532424a62d6b441743ef0f29d9e0491d82",
+    "expected_per_call_stdout_bytes_including_lf": 4734,
+    "expected_rows": [
+      [
+        "record-000",
+        "label-000",
+        "group-00",
+        "note-000-fixed-structured-output"
+      ],
+      [
+        "record-001",
+        "label-001",
+        "group-01",
+        "note-001-fixed-structured-output"
+      ],
+      [
+        "record-002",
+        "label-002",
+        "group-02",
+        "note-002-fixed-structured-output"
+      ],
+      [
+        "record-003",
+        "label-003",
+        "group-03",
+        "note-003-fixed-structured-output"
+      ],
+      [
+        "record-004",
+        "label-004",
+        "group-04",
+        "note-004-fixed-structured-output"
+      ],
+      [
+        "record-005",
+        "label-005",
+        "group-05",
+        "note-005-fixed-structured-output"
+      ],
+      [
+        "record-006",
+        "label-006",
+        "group-06",
+        "note-006-fixed-structured-output"
+      ],
+      [
+        "record-007",
+        "label-007",
+        "group-07",
+        "note-007-fixed-structured-output"
+      ],
+      [
+        "record-008",
+        "label-008",
+        "group-00",
+        "note-008-fixed-structured-output"
+      ],
+      [
+        "record-009",
+        "label-009",
+        "group-01",
+        "note-009-fixed-structured-output"
+      ],
+      [
+        "record-010",
+        "label-010",
+        "group-02",
+        "note-010-fixed-structured-output"
+      ],
+      [
+        "record-011",
+        "label-011",
+        "group-03",
+        "note-011-fixed-structured-output"
+      ],
+      [
+        "record-012",
+        "label-012",
+        "group-04",
+        "note-012-fixed-structured-output"
+      ],
+      [
+        "record-013",
+        "label-013",
+        "group-05",
+        "note-013-fixed-structured-output"
+      ],
+      [
+        "record-014",
+        "label-014",
+        "group-06",
+        "note-014-fixed-structured-output"
+      ],
+      [
+        "record-015",
+        "label-015",
+        "group-07",
+        "note-015-fixed-structured-output"
+      ],
+      [
+        "record-016",
+        "label-016",
+        "group-00",
+        "note-016-fixed-structured-output"
+      ],
+      [
+        "record-017",
+        "label-017",
+        "group-01",
+        "note-017-fixed-structured-output"
+      ],
+      [
+        "record-018",
+        "label-018",
+        "group-02",
+        "note-018-fixed-structured-output"
+      ],
+      [
+        "record-019",
+        "label-019",
+        "group-03",
+        "note-019-fixed-structured-output"
+      ],
+      [
+        "record-020",
+        "label-020",
+        "group-04",
+        "note-020-fixed-structured-output"
+      ],
+      [
+        "record-021",
+        "label-021",
+        "group-05",
+        "note-021-fixed-structured-output"
+      ],
+      [
+        "record-022",
+        "label-022",
+        "group-06",
+        "note-022-fixed-structured-output"
+      ],
+      [
+        "record-023",
+        "label-023",
+        "group-07",
+        "note-023-fixed-structured-output"
+      ],
+      [
+        "record-024",
+        "label-024",
+        "group-00",
+        "note-024-fixed-structured-output"
+      ],
+      [
+        "record-025",
+        "label-025",
+        "group-01",
+        "note-025-fixed-structured-output"
+      ],
+      [
+        "record-026",
+        "label-026",
+        "group-02",
+        "note-026-fixed-structured-output"
+      ],
+      [
+        "record-027",
+        "label-027",
+        "group-03",
+        "note-027-fixed-structured-output"
+      ],
+      [
+        "record-028",
+        "label-028",
+        "group-04",
+        "note-028-fixed-structured-output"
+      ],
+      [
+        "record-029",
+        "label-029",
+        "group-05",
+        "note-029-fixed-structured-output"
+      ],
+      [
+        "record-030",
+        "label-030",
+        "group-06",
+        "note-030-fixed-structured-output"
+      ],
+      [
+        "record-031",
+        "label-031",
+        "group-07",
+        "note-031-fixed-structured-output"
+      ],
+      [
+        "record-032",
+        "label-032",
+        "group-00",
+        "note-032-fixed-structured-output"
+      ],
+      [
+        "record-033",
+        "label-033",
+        "group-01",
+        "note-033-fixed-structured-output"
+      ],
+      [
+        "record-034",
+        "label-034",
+        "group-02",
+        "note-034-fixed-structured-output"
+      ],
+      [
+        "record-035",
+        "label-035",
+        "group-03",
+        "note-035-fixed-structured-output"
+      ],
+      [
+        "record-036",
+        "label-036",
+        "group-04",
+        "note-036-fixed-structured-output"
+      ],
+      [
+        "record-037",
+        "label-037",
+        "group-05",
+        "note-037-fixed-structured-output"
+      ],
+      [
+        "record-038",
+        "label-038",
+        "group-06",
+        "note-038-fixed-structured-output"
+      ],
+      [
+        "record-039",
+        "label-039",
+        "group-07",
+        "note-039-fixed-structured-output"
+      ],
+      [
+        "record-040",
+        "label-040",
+        "group-00",
+        "note-040-fixed-structured-output"
+      ],
+      [
+        "record-041",
+        "label-041",
+        "group-01",
+        "note-041-fixed-structured-output"
+      ],
+      [
+        "record-042",
+        "label-042",
+        "group-02",
+        "note-042-fixed-structured-output"
+      ],
+      [
+        "record-043",
+        "label-043",
+        "group-03",
+        "note-043-fixed-structured-output"
+      ],
+      [
+        "record-044",
+        "label-044",
+        "group-04",
+        "note-044-fixed-structured-output"
+      ],
+      [
+        "record-045",
+        "label-045",
+        "group-05",
+        "note-045-fixed-structured-output"
+      ],
+      [
+        "record-046",
+        "label-046",
+        "group-06",
+        "note-046-fixed-structured-output"
+      ],
+      [
+        "record-047",
+        "label-047",
+        "group-07",
+        "note-047-fixed-structured-output"
+      ],
+      [
+        "record-048",
+        "label-048",
+        "group-00",
+        "note-048-fixed-structured-output"
+      ],
+      [
+        "record-049",
+        "label-049",
+        "group-01",
+        "note-049-fixed-structured-output"
+      ],
+      [
+        "record-050",
+        "label-050",
+        "group-02",
+        "note-050-fixed-structured-output"
+      ],
+      [
+        "record-051",
+        "label-051",
+        "group-03",
+        "note-051-fixed-structured-output"
+      ],
+      [
+        "record-052",
+        "label-052",
+        "group-04",
+        "note-052-fixed-structured-output"
+      ],
+      [
+        "record-053",
+        "label-053",
+        "group-05",
+        "note-053-fixed-structured-output"
+      ],
+      [
+        "record-054",
+        "label-054",
+        "group-06",
+        "note-054-fixed-structured-output"
+      ],
+      [
+        "record-055",
+        "label-055",
+        "group-07",
+        "note-055-fixed-structured-output"
+      ],
+      [
+        "record-056",
+        "label-056",
+        "group-00",
+        "note-056-fixed-structured-output"
+      ],
+      [
+        "record-057",
+        "label-057",
+        "group-01",
+        "note-057-fixed-structured-output"
+      ],
+      [
+        "record-058",
+        "label-058",
+        "group-02",
+        "note-058-fixed-structured-output"
+      ],
+      [
+        "record-059",
+        "label-059",
+        "group-03",
+        "note-059-fixed-structured-output"
+      ],
+      [
+        "record-060",
+        "label-060",
+        "group-04",
+        "note-060-fixed-structured-output"
+      ],
+      [
+        "record-061",
+        "label-061",
+        "group-05",
+        "note-061-fixed-structured-output"
+      ],
+      [
+        "record-062",
+        "label-062",
+        "group-06",
+        "note-062-fixed-structured-output"
+      ],
+      [
+        "record-063",
+        "label-063",
+        "group-07",
+        "note-063-fixed-structured-output"
+      ]
+    ],
+    "input_bytes": 4063,
+    "input_sha256": "536147cdc605b8e1d6e4a6181415c400eea3198e43a0426870452eca1849cf3d",
+    "retained_parsed_tables": 1000,
+    "rows": 64,
+    "source_bytes": 62049,
+    "source_sha256": "ee111d6589e23e4704533c1dd55234bc9ea36ffbd8eb406dbbf740c668d5722b"
+  }
+}

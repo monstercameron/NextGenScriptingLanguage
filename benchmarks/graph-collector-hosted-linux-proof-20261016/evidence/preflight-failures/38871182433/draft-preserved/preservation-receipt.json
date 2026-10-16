@@ -1,0 +1,12 @@
+{
+  "claim": "Draft preservation only; failed run did not produce timed benchmark results.",
+  "failed_run_id": "38871182433",
+  "failure": "Hosted job stopped after the baseline build because the helper called nonexistent graph_transport_e2e_pair._validate_build_metadata; runner defines _validated_build_metadata.",
+  "label": "0a5f1c5-before-metadata-fix",
+  "preserved_files": {
+    "build_graph_e2e_pair.py": "947eb04f41e482a6d9225fb715a00d8d113632891430dbd966b3068adcce9cf8",
+    "bundle-sha256sums.txt": "c7652b0822b49b7b46c7f1ecfdef10bd57d541ead934a20e74bdf77209d7d615",
+    "evidence/hosted-linux-38871182433-failed.log": "cd5c4f0df743a38c1c015b7bea57528bc0b3af9b08aa4ea72e34a084ee1b125c",
+    "graph-collector-e2e-hosted-replication.yml": "0236e6e46fdbb122be9dfb06491c0611b1e239470738ada35f5e9eb13aa9fb2d"
+  }
+}

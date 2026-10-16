@@ -1,0 +1,58 @@
+{
+  "artifact": {
+    "executable": "/home/runner/work/_temp/graph-transport-e2e-targets/graph-transport-e2e-baseline/release/deps/graph_transport_e2e_bench-f6c3280fa61691fe",
+    "features": [],
+    "filenames": [
+      "/home/runner/work/_temp/graph-transport-e2e-targets/graph-transport-e2e-baseline/release/deps/graph_transport_e2e_bench-f6c3280fa61691fe"
+    ],
+    "fresh": false,
+    "manifest_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-optimizations-integrated-81bf9ba/Cargo.toml",
+    "package_id": "path+file:///home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-optimizations-integrated-81bf9ba#execute@0.9.0-rc.5",
+    "profile": {
+      "debug_assertions": false,
+      "debuginfo": 0,
+      "opt_level": "3",
+      "overflow_checks": false,
+      "test": true
+    },
+    "reason": "compiler-artifact",
+    "target": {
+      "crate_types": [
+        "bin"
+      ],
+      "doc": false,
+      "doctest": false,
+      "edition": "2021",
+      "kind": [
+        "test"
+      ],
+      "name": "graph_transport_e2e_bench",
+      "src_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-optimizations-integrated-81bf9ba/tests/graph_transport_e2e_bench.rs",
+      "test": true
+    }
+  },
+  "attempt": 1,
+  "build_metadata": {
+    "captured_before_clean_and_build": true,
+    "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)\n",
+    "rustc_vv": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+    "selected_build_environment": {
+      "CARGO_BUILD_JOBS": "4",
+      "CARGO_HOME": "/home/runner/.cargo",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_TARGET_DIR": "/home/runner/work/_temp/graph-transport-e2e-targets/graph-transport-e2e-baseline",
+      "EXECUTE_CARGO_CONFIG_FINGERPRINT_SHA256": "4154e28baef86bdc7d61d9c9b1945377cb949d67af4394a47a4d9afeeeced3d5",
+      "HOME": "/home/runner",
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C",
+      "PATH": "/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+      "RUSTUP_HOME": "/home/runner/.rustup",
+      "RUSTUP_TOOLCHAIN": "stable",
+      "TZ": "UTC"
+    }
+  },
+  "saved_binary": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/graph-transport-e2e/baseline-test-binary",
+  "sha256": "9f3a8f072449fd6b9db4b2b8b38e5f7d10eda07899c18c788bac8183f2a8df14",
+  "source_sha256": "049b2b13a6c82ba0c98f20b57a44e76c420d631815f1b673ba70d7902f24610c",
+  "source_stable": true
+}

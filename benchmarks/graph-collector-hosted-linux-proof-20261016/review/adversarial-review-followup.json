@@ -1,0 +1,54 @@
+{
+  "current_manifest_sha256_before_followup_receipt": "bd68a12b3a025992217d66a00355096b9433b812b422f5de2db3f85d71636a14",
+  "package": "graph-collector-hosted-linux-proof-20261016",
+  "package_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/publication/graph-collector-hosted-linux-proof-20261016",
+  "prior_findings": [
+    {
+      "evidence": [
+        "The current final-offline-tests.log records 8 passing tests; the previous five-test output is retained separately as final-offline-tests-attempt-1-stale-layout.log and is identified as stale in repair history.",
+        "The campaign-relative auditor, test, runner, build helper, harness, patch and sample-oracle source copies are present in the package layout.",
+        "I independently ran the documented eight-test unittest discovery from package root; all 8 passed.",
+        "The byte-identical mirrors match their canonical workflow/audit copies and expected SHA-256 pins."
+      ],
+      "finding": "Offline test count/log mismatch and package-layout test failure",
+      "status": "resolved"
+    },
+    {
+      "evidence": [
+        "evidence/graph-transport-e2e/audit_graph_transport_e2e.py is present and hashes to the pinned sample_auditor_sha256 bc5e3f4435a3da723242e8ad9b9b78b5f99031bcef2bf15a91012055130a11c3.",
+        "verify_bundle.py now enforces both the sample-auditor pin and the mirrored source pins.",
+        "README.md explicitly says reproducing the full independent audit requires the two complete pinned source checkouts, which are not bundled."
+      ],
+      "finding": "Sample-oracle source was not included, preventing a self-contained semantic re-audit",
+      "status": "resolved_for_source_provenance; full_build_replay_still_requires_external_source_checkouts"
+    }
+  ],
+  "prior_review_receipt": {
+    "path": "review/adversarial-review.json",
+    "preserved_unchanged": true,
+    "sha256": "64814160e3bf4f01780d0fbd29b6b070ee60cb98c6b9e4a177fd155d14dbb72c"
+  },
+  "remaining_material_blockers": [],
+  "review_conclusion": "The two findings from the first review are closed in this package snapshot. The package verifier and eight-test audit suite pass; the published claim remains appropriately narrow. The manifest verified here predates this follow-up receipt by design and should be regenerated after receipt addition.",
+  "review_type": "independent_adversarial_package_review_followup",
+  "reviewed_at": "2026-10-16",
+  "schema_version": 1,
+  "unchanged_scope_and_claims": {
+    "hosted_zip_and_audit_receipt_hashes_match_prior_review": true,
+    "repair_history_intermediate_source_and_log_gap_remains_explicit": true,
+    "result": "The result remains limited to the fixed 4096-record Linux x86_64 workload; the two preflight failures each have zero timed attempts; macOS arm64 remains a separate, non-pooled trial."
+  },
+  "verification": {
+    "hosted_zip_members_streamed": 757,
+    "hosted_zip_sha256": "8ac90ccb74df38a94aff688223bd6b4851af29925d79b4e7990819a96a40ef0e",
+    "independent_audit_json_sha256": "30bc7056a4860e81d0ec028156d942e0802e702247959ace3405cc668019e021",
+    "manifest_sha256_file_verified": true,
+    "offline_test_command": "PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s work/graph-collector-hosted-replication-audit -p 'test_*.py'",
+    "offline_test_result": "PASS: Ran 8 tests; OK",
+    "package_files_checked": 157,
+    "package_total_regular_file_bytes_before_followup_receipt": 33801546,
+    "package_under_60_mb": true,
+    "portable_verifier_command": "python3 verify_bundle.py",
+    "portable_verifier_result": "PASS"
+  }
+}

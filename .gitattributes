@@ -42,3 +42,11 @@ benchmarks/graph-collector-queue-macos-arm64-20261016/collector-e2e/audit/audit_
 benchmarks/typed-json-carry-scalar-mixed-20261016/** -text
 benchmarks/typed-json-carry-scalar-mixed-20261016/**/*.log binary
 benchmarks/typed-json-carry-scalar-mixed-20261016/**/*.diff binary
+
+# Immutable structured JSON and hosted collector evidence retain exact bytes.
+benchmarks/typed-json-carry-structured-20261016/** -text
+benchmarks/typed-json-carry-structured-20261016/**/*.log binary
+benchmarks/typed-json-carry-structured-20261016/**/*.diff binary
+benchmarks/graph-collector-hosted-linux-proof-20261016/** -text
+benchmarks/graph-collector-hosted-linux-proof-20261016/**/*.log binary
+benchmarks/graph-collector-hosted-linux-proof-20261016/**/*.diff binary

@@ -1,0 +1,10 @@
+{
+  "artifact_selected": true,
+  "cargo_exit_status": 0,
+  "error": null,
+  "receipt_written": true,
+  "side": "candidate",
+  "source_stable": true,
+  "target_directory_fresh": true,
+  "timed_out": false
+}

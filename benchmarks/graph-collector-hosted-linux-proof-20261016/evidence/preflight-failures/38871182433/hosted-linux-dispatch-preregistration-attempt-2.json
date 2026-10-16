@@ -1,0 +1,15 @@
+{
+  "utc": "2026-10-16T08:03:43.277252+00:00",
+  "workflow_head": "0a5f1c572ef14689a13ac66e712b8b681ead4701",
+  "remote_main_verified": "0a5f1c572ef14689a13ac66e712b8b681ead4701",
+  "reason": "GitHub workflow dispatch rejected raw SHA ref with422 before anyrun; usemain andrequireexacthead inreturnedrun",
+  "command": [
+    "gh",
+    "workflow",
+    "run",
+    "graph-collector-e2e-hosted-replication.yml",
+    "--ref",
+    "main"
+  ],
+  "protocol_unchanged": true
+}

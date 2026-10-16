@@ -1,0 +1,2 @@
+$ git -C /home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-collector-sleep-candidate apply --check --whitespace=error
+$ git -C /home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/graph-collector-sleep-candidate apply --whitespace=error

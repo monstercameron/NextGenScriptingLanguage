@@ -1,0 +1,11 @@
+{
+  "binary_artifacts_omitted_from_this_package": "The failed-run uploaded test binaries remain in the source campaign evidence; the original successful raw ZIP is included in full. Build and source metadata are preserved here.",
+  "classification": "preflight failure; no benchmark timing attempts",
+  "failed_job_log": "failure.log",
+  "failure": "Both arms built, but the run failed before any timed attempt because the paired runner expected build-environment-attempt-1.json at the campaign evidence root while the helper wrote it under build/.",
+  "label": "05ab086-before-provenance-path-fix",
+  "preservation_receipt": "draft-preserved/preservation-receipt.json",
+  "run_id": "38872584428",
+  "timing_attempts": 0,
+  "workflow_commit": "05ab086d69c91f28d88af5d822dff77dcc5b5bdc"
+}

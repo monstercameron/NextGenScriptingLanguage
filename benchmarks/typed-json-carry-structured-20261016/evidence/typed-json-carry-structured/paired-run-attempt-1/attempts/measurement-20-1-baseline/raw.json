@@ -1,0 +1,461 @@
+{
+  "measured_samples": 3,
+  "method": "Public runtime::run API; 1,000 uncached in-process csv.parse calls over one fixed 64-row, four-column CSV input. The language requires distinct result names, so calls bind table0000 through table0999 and all 1,000 tables remain live; the final table is encoded as compact JSON. Includes repeated in-process parsing, typed output validation/carry, binding retention, and runtime result construction; excludes registry/program/fixture setup, hashing, report writing, and RunResult destruction. No child processes.",
+  "results": {
+    "structured_csv_parse_1000": {
+      "p50_ns": 56741041,
+      "p95_ns": 58138375,
+      "raw_sample_ns": [
+        58138375,
+        54052625,
+        56741041
+      ],
+      "semantic_oracles": [
+        {
+          "cache_hits": 0,
+          "dropped_execution_records": 744,
+          "dropped_stages": 744,
+          "launched_processes": 0,
+          "output_bytes": 4733,
+          "output_sha256": "ff92237bfbeaa81064bc565b39157e532424a62d6b441743ef0f29d9e0491d82",
+          "retained_all_success_status_0": true,
+          "retained_execution_records": 256,
+          "retained_stdout_bytes_per_call": 4734
+        },
+        {
+          "cache_hits": 0,
+          "dropped_execution_records": 744,
+          "dropped_stages": 744,
+          "launched_processes": 0,
+          "output_bytes": 4733,
+          "output_sha256": "ff92237bfbeaa81064bc565b39157e532424a62d6b441743ef0f29d9e0491d82",
+          "retained_all_success_status_0": true,
+          "retained_execution_records": 256,
+          "retained_stdout_bytes_per_call": 4734
+        },
+        {
+          "cache_hits": 0,
+          "dropped_execution_records": 744,
+          "dropped_stages": 744,
+          "launched_processes": 0,
+          "output_bytes": 4733,
+          "output_sha256": "ff92237bfbeaa81064bc565b39157e532424a62d6b441743ef0f29d9e0491d82",
+          "retained_all_success_status_0": true,
+          "retained_execution_records": 256,
+          "retained_stdout_bytes_per_call": 4734
+        }
+      ]
+    }
+  },
+  "schema": "typed_json_carry_public_runtime_structured_bench/v1",
+  "warmup_runs": 0,
+  "workload": {
+    "applet": "csv.parse",
+    "binding_pattern": "table0000 through table0999 (distinct bindings required by the DSL)",
+    "calls": 1000,
+    "catalog_sha256": "66b19b10aea5b14f37a5230ed72db4109b2419f5cf4cb8e3cbe9a6be1c1d4138",
+    "columns": 4,
+    "expected_headers": [
+      "identifier",
+      "label",
+      "category",
+      "note"
+    ],
+    "expected_output_bytes": 4733,
+    "expected_output_hex": "7b2268656164657273223a5b226964656e746966696572222c226c6162656c222c2263617465676f7279222c226e6f7465225d2c22726f7773223a5b5b227265636f72642d303030222c226c6162656c2d303030222c2267726f75702d3030222c226e6f74652d3030302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303031222c226c6162656c2d303031222c2267726f75702d3031222c226e6f74652d3030312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303032222c226c6162656c2d303032222c2267726f75702d3032222c226e6f74652d3030322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303033222c226c6162656c2d303033222c2267726f75702d3033222c226e6f74652d3030332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303034222c226c6162656c2d303034222c2267726f75702d3034222c226e6f74652d3030342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303035222c226c6162656c2d303035222c2267726f75702d3035222c226e6f74652d3030352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303036222c226c6162656c2d303036222c2267726f75702d3036222c226e6f74652d3030362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303037222c226c6162656c2d303037222c2267726f75702d3037222c226e6f74652d3030372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303038222c226c6162656c2d303038222c2267726f75702d3030222c226e6f74652d3030382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303039222c226c6162656c2d303039222c2267726f75702d3031222c226e6f74652d3030392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303130222c226c6162656c2d303130222c2267726f75702d3032222c226e6f74652d3031302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303131222c226c6162656c2d303131222c2267726f75702d3033222c226e6f74652d3031312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303132222c226c6162656c2d303132222c2267726f75702d3034222c226e6f74652d3031322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303133222c226c6162656c2d303133222c2267726f75702d3035222c226e6f74652d3031332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303134222c226c6162656c2d303134222c2267726f75702d3036222c226e6f74652d3031342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303135222c226c6162656c2d303135222c2267726f75702d3037222c226e6f74652d3031352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303136222c226c6162656c2d303136222c2267726f75702d3030222c226e6f74652d3031362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303137222c226c6162656c2d303137222c2267726f75702d3031222c226e6f74652d3031372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303138222c226c6162656c2d303138222c2267726f75702d3032222c226e6f74652d3031382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303139222c226c6162656c2d303139222c2267726f75702d3033222c226e6f74652d3031392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303230222c226c6162656c2d303230222c2267726f75702d3034222c226e6f74652d3032302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303231222c226c6162656c2d303231222c2267726f75702d3035222c226e6f74652d3032312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303232222c226c6162656c2d303232222c2267726f75702d3036222c226e6f74652d3032322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303233222c226c6162656c2d303233222c2267726f75702d3037222c226e6f74652d3032332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303234222c226c6162656c2d303234222c2267726f75702d3030222c226e6f74652d3032342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303235222c226c6162656c2d303235222c2267726f75702d3031222c226e6f74652d3032352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303236222c226c6162656c2d303236222c2267726f75702d3032222c226e6f74652d3032362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303237222c226c6162656c2d303237222c2267726f75702d3033222c226e6f74652d3032372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303238222c226c6162656c2d303238222c2267726f75702d3034222c226e6f74652d3032382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303239222c226c6162656c2d303239222c2267726f75702d3035222c226e6f74652d3032392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303330222c226c6162656c2d303330222c2267726f75702d3036222c226e6f74652d3033302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303331222c226c6162656c2d303331222c2267726f75702d3037222c226e6f74652d3033312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303332222c226c6162656c2d303332222c2267726f75702d3030222c226e6f74652d3033322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303333222c226c6162656c2d303333222c2267726f75702d3031222c226e6f74652d3033332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303334222c226c6162656c2d303334222c2267726f75702d3032222c226e6f74652d3033342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303335222c226c6162656c2d303335222c2267726f75702d3033222c226e6f74652d3033352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303336222c226c6162656c2d303336222c2267726f75702d3034222c226e6f74652d3033362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303337222c226c6162656c2d303337222c2267726f75702d3035222c226e6f74652d3033372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303338222c226c6162656c2d303338222c2267726f75702d3036222c226e6f74652d3033382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303339222c226c6162656c2d303339222c2267726f75702d3037222c226e6f74652d3033392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303430222c226c6162656c2d303430222c2267726f75702d3030222c226e6f74652d3034302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303431222c226c6162656c2d303431222c2267726f75702d3031222c226e6f74652d3034312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303432222c226c6162656c2d303432222c2267726f75702d3032222c226e6f74652d3034322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303433222c226c6162656c2d303433222c2267726f75702d3033222c226e6f74652d3034332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303434222c226c6162656c2d303434222c2267726f75702d3034222c226e6f74652d3034342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303435222c226c6162656c2d303435222c2267726f75702d3035222c226e6f74652d3034352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303436222c226c6162656c2d303436222c2267726f75702d3036222c226e6f74652d3034362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303437222c226c6162656c2d303437222c2267726f75702d3037222c226e6f74652d3034372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303438222c226c6162656c2d303438222c2267726f75702d3030222c226e6f74652d3034382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303439222c226c6162656c2d303439222c2267726f75702d3031222c226e6f74652d3034392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303530222c226c6162656c2d303530222c2267726f75702d3032222c226e6f74652d3035302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303531222c226c6162656c2d303531222c2267726f75702d3033222c226e6f74652d3035312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303532222c226c6162656c2d303532222c2267726f75702d3034222c226e6f74652d3035322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303533222c226c6162656c2d303533222c2267726f75702d3035222c226e6f74652d3035332d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303534222c226c6162656c2d303534222c2267726f75702d3036222c226e6f74652d3035342d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303535222c226c6162656c2d303535222c2267726f75702d3037222c226e6f74652d3035352d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303536222c226c6162656c2d303536222c2267726f75702d3030222c226e6f74652d3035362d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303537222c226c6162656c2d303537222c2267726f75702d3031222c226e6f74652d3035372d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303538222c226c6162656c2d303538222c2267726f75702d3032222c226e6f74652d3035382d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303539222c226c6162656c2d303539222c2267726f75702d3033222c226e6f74652d3035392d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303630222c226c6162656c2d303630222c2267726f75702d3034222c226e6f74652d3036302d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303631222c226c6162656c2d303631222c2267726f75702d3035222c226e6f74652d3036312d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303632222c226c6162656c2d303632222c2267726f75702d3036222c226e6f74652d3036322d66697865642d737472756374757265642d6f7574707574225d2c5b227265636f72642d303633222c226c6162656c2d303633222c2267726f75702d3037222c226e6f74652d3036332d66697865642d737472756374757265642d6f7574707574225d5d7d",
+    "expected_output_sha256": "ff92237bfbeaa81064bc565b39157e532424a62d6b441743ef0f29d9e0491d82",
+    "expected_per_call_stdout_bytes_including_lf": 4734,
+    "expected_rows": [
+      [
+        "record-000",
+        "label-000",
+        "group-00",
+        "note-000-fixed-structured-output"
+      ],
+      [
+        "record-001",
+        "label-001",
+        "group-01",
+        "note-001-fixed-structured-output"
+      ],
+      [
+        "record-002",
+        "label-002",
+        "group-02",
+        "note-002-fixed-structured-output"
+      ],
+      [
+        "record-003",
+        "label-003",
+        "group-03",
+        "note-003-fixed-structured-output"
+      ],
+      [
+        "record-004",
+        "label-004",
+        "group-04",
+        "note-004-fixed-structured-output"
+      ],
+      [
+        "record-005",
+        "label-005",
+        "group-05",
+        "note-005-fixed-structured-output"
+      ],
+      [
+        "record-006",
+        "label-006",
+        "group-06",
+        "note-006-fixed-structured-output"
+      ],
+      [
+        "record-007",
+        "label-007",
+        "group-07",
+        "note-007-fixed-structured-output"
+      ],
+      [
+        "record-008",
+        "label-008",
+        "group-00",
+        "note-008-fixed-structured-output"
+      ],
+      [
+        "record-009",
+        "label-009",
+        "group-01",
+        "note-009-fixed-structured-output"
+      ],
+      [
+        "record-010",
+        "label-010",
+        "group-02",
+        "note-010-fixed-structured-output"
+      ],
+      [
+        "record-011",
+        "label-011",
+        "group-03",
+        "note-011-fixed-structured-output"
+      ],
+      [
+        "record-012",
+        "label-012",
+        "group-04",
+        "note-012-fixed-structured-output"
+      ],
+      [
+        "record-013",
+        "label-013",
+        "group-05",
+        "note-013-fixed-structured-output"
+      ],
+      [
+        "record-014",
+        "label-014",
+        "group-06",
+        "note-014-fixed-structured-output"
+      ],
+      [
+        "record-015",
+        "label-015",
+        "group-07",
+        "note-015-fixed-structured-output"
+      ],
+      [
+        "record-016",
+        "label-016",
+        "group-00",
+        "note-016-fixed-structured-output"
+      ],
+      [
+        "record-017",
+        "label-017",
+        "group-01",
+        "note-017-fixed-structured-output"
+      ],
+      [
+        "record-018",
+        "label-018",
+        "group-02",
+        "note-018-fixed-structured-output"
+      ],
+      [
+        "record-019",
+        "label-019",
+        "group-03",
+        "note-019-fixed-structured-output"
+      ],
+      [
+        "record-020",
+        "label-020",
+        "group-04",
+        "note-020-fixed-structured-output"
+      ],
+      [
+        "record-021",
+        "label-021",
+        "group-05",
+        "note-021-fixed-structured-output"
+      ],
+      [
+        "record-022",
+        "label-022",
+        "group-06",
+        "note-022-fixed-structured-output"
+      ],
+      [
+        "record-023",
+        "label-023",
+        "group-07",
+        "note-023-fixed-structured-output"
+      ],
+      [
+        "record-024",
+        "label-024",
+        "group-00",
+        "note-024-fixed-structured-output"
+      ],
+      [
+        "record-025",
+        "label-025",
+        "group-01",
+        "note-025-fixed-structured-output"
+      ],
+      [
+        "record-026",
+        "label-026",
+        "group-02",
+        "note-026-fixed-structured-output"
+      ],
+      [
+        "record-027",
+        "label-027",
+        "group-03",
+        "note-027-fixed-structured-output"
+      ],
+      [
+        "record-028",
+        "label-028",
+        "group-04",
+        "note-028-fixed-structured-output"
+      ],
+      [
+        "record-029",
+        "label-029",
+        "group-05",
+        "note-029-fixed-structured-output"
+      ],
+      [
+        "record-030",
+        "label-030",
+        "group-06",
+        "note-030-fixed-structured-output"
+      ],
+      [
+        "record-031",
+        "label-031",
+        "group-07",
+        "note-031-fixed-structured-output"
+      ],
+      [
+        "record-032",
+        "label-032",
+        "group-00",
+        "note-032-fixed-structured-output"
+      ],
+      [
+        "record-033",
+        "label-033",
+        "group-01",
+        "note-033-fixed-structured-output"
+      ],
+      [
+        "record-034",
+        "label-034",
+        "group-02",
+        "note-034-fixed-structured-output"
+      ],
+      [
+        "record-035",
+        "label-035",
+        "group-03",
+        "note-035-fixed-structured-output"
+      ],
+      [
+        "record-036",
+        "label-036",
+        "group-04",
+        "note-036-fixed-structured-output"
+      ],
+      [
+        "record-037",
+        "label-037",
+        "group-05",
+        "note-037-fixed-structured-output"
+      ],
+      [
+        "record-038",
+        "label-038",
+        "group-06",
+        "note-038-fixed-structured-output"
+      ],
+      [
+        "record-039",
+        "label-039",
+        "group-07",
+        "note-039-fixed-structured-output"
+      ],
+      [
+        "record-040",
+        "label-040",
+        "group-00",
+        "note-040-fixed-structured-output"
+      ],
+      [
+        "record-041",
+        "label-041",
+        "group-01",
+        "note-041-fixed-structured-output"
+      ],
+      [
+        "record-042",
+        "label-042",
+        "group-02",
+        "note-042-fixed-structured-output"
+      ],
+      [
+        "record-043",
+        "label-043",
+        "group-03",
+        "note-043-fixed-structured-output"
+      ],
+      [
+        "record-044",
+        "label-044",
+        "group-04",
+        "note-044-fixed-structured-output"
+      ],
+      [
+        "record-045",
+        "label-045",
+        "group-05",
+        "note-045-fixed-structured-output"
+      ],
+      [
+        "record-046",
+        "label-046",
+        "group-06",
+        "note-046-fixed-structured-output"
+      ],
+      [
+        "record-047",
+        "label-047",
+        "group-07",
+        "note-047-fixed-structured-output"
+      ],
+      [
+        "record-048",
+        "label-048",
+        "group-00",
+        "note-048-fixed-structured-output"
+      ],
+      [
+        "record-049",
+        "label-049",
+        "group-01",
+        "note-049-fixed-structured-output"
+      ],
+      [
+        "record-050",
+        "label-050",
+        "group-02",
+        "note-050-fixed-structured-output"
+      ],
+      [
+        "record-051",
+        "label-051",
+        "group-03",
+        "note-051-fixed-structured-output"
+      ],
+      [
+        "record-052",
+        "label-052",
+        "group-04",
+        "note-052-fixed-structured-output"
+      ],
+      [
+        "record-053",
+        "label-053",
+        "group-05",
+        "note-053-fixed-structured-output"
+      ],
+      [
+        "record-054",
+        "label-054",
+        "group-06",
+        "note-054-fixed-structured-output"
+      ],
+      [
+        "record-055",
+        "label-055",
+        "group-07",
+        "note-055-fixed-structured-output"
+      ],
+      [
+        "record-056",
+        "label-056",
+        "group-00",
+        "note-056-fixed-structured-output"
+      ],
+      [
+        "record-057",
+        "label-057",
+        "group-01",
+        "note-057-fixed-structured-output"
+      ],
+      [
+        "record-058",
+        "label-058",
+        "group-02",
+        "note-058-fixed-structured-output"
+      ],
+      [
+        "record-059",
+        "label-059",
+        "group-03",
+        "note-059-fixed-structured-output"
+      ],
+      [
+        "record-060",
+        "label-060",
+        "group-04",
+        "note-060-fixed-structured-output"
+      ],
+      [
+        "record-061",
+        "label-061",
+        "group-05",
+        "note-061-fixed-structured-output"
+      ],
+      [
+        "record-062",
+        "label-062",
+        "group-06",
+        "note-062-fixed-structured-output"
+      ],
+      [
+        "record-063",
+        "label-063",
+        "group-07",
+        "note-063-fixed-structured-output"
+      ]
+    ],
+    "input_bytes": 4063,
+    "input_sha256": "536147cdc605b8e1d6e4a6181415c400eea3198e43a0426870452eca1849cf3d",
+    "retained_parsed_tables": 1000,
+    "rows": 64,
+    "source_bytes": 62049,
+    "source_sha256": "ee111d6589e23e4704533c1dd55234bc9ea36ffbd8eb406dbbf740c668d5722b"
+  }
+}

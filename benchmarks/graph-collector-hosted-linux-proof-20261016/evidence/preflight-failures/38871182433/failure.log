@@ -1,0 +1,28 @@
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	﻿2026-10-16T08:04:10.3060641Z ##[group]Run set -euo pipefail
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3060905Z ^[[36;1mset -euo pipefail^[[0m
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3061287Z ^[[36;1mPYTHONDONTWRITEBYTECODE=1 python3 -B "$GITHUB_WORKSPACE/work/build_graph_e2e_pair.py" build-pair \^[[0m
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3061733Z ^[[36;1m  --campaign-root "$GITHUB_WORKSPACE" \^[[0m
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3062077Z ^[[36;1m  --evidence-root "$GITHUB_WORKSPACE/evidence/graph-transport-e2e" \^[[0m
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3062456Z ^[[36;1m  --target-parent "$RUNNER_TEMP/graph-transport-e2e-targets" \^[[0m
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3062870Z ^[[36;1m  > "$GITHUB_WORKSPACE/evidence/graph-transport-e2e/build/build-pair-command.json"^[[0m
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3116573Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3116853Z env:
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3117026Z   CARGO_HOME: /home/runner/.cargo
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3117238Z   CARGO_INCREMENTAL: 0
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3117421Z   CARGO_TERM_COLOR: always
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:04:10.3117606Z ##[endgroup]
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8672212Z Traceback (most recent call last):
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8672960Z   File "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/build_graph_e2e_pair.py", line 709, in <module>
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8673446Z     raise SystemExit(main())
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8673698Z                      ^^^^^^
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8674244Z   File "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/build_graph_e2e_pair.py", line 697, in main
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8674719Z     value = args.function(args)
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8674911Z             ^^^^^^^^^^^^^^^^^^^
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8675482Z   File "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/build_graph_e2e_pair.py", line 690, in <lambda>
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8676428Z     build.set_defaults(function=lambda args: build_pair(Path(args.campaign_root), Path(args.evidence_root), Path(args.target_parent)))
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8677124Z                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8677923Z   File "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/work/build_graph_e2e_pair.py", line 559, in build_pair
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8679112Z     pair._validate_build_metadata(metadata[side], "candidate")
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8680081Z     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8680762Z AttributeError: module 'graph_transport_e2e_pair' has no attribute '_validate_build_metadata'. Did you mean: '_validated_build_metadata'?
+Fixed 48-pair graph transport E2E comparison	Build both optimized integration test binaries once	2026-10-16T08:07:22.8815222Z ##[error]Process completed with exit code 1.

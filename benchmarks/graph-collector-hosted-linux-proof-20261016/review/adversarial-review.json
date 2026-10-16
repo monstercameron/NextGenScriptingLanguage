@@ -1,0 +1,91 @@
+{
+  "findings": [
+    {
+      "detail": "The repair history says eight offline tests passed and pins the current test source, which defines eight test methods. The packaged final-offline-tests.log instead says 'Ran 5 tests'. A fresh discovery from the published package finds eight tests but fails one because the test resolves the frozen runner under publication/work/graph-transport-e2e-paired-runner, which is absent in this package layout. This does not undermine the archived run or the portable verifier, but the package does not substantiate its stated eight-pass final test result as currently recorded.",
+      "path": "audit/final-offline-tests.log; audit/auditor-repair-history.json; audit/auditor-repair-history.md; audit/test_audit_hosted_graph_transport_e2e_zip.py",
+      "recommended_action": "Before final manifest regeneration, refresh the offline test log from the exact pinned suite in its intended campaign layout and include the matching output, or correct the test-count claim and document the required external campaign layout. If standalone package tests are intended, make the test locate the bundled workflow runner.",
+      "severity": "material_package_evidence_mismatch"
+    },
+    {
+      "detail": "The packaged ZIP auditor references a separate per-sample oracle source by an external campaign path and pins its hash, but that source is not included. verify_bundle.py verifies the packaged ledger, all ZIP content, and source pins; it does not rerun the per-sample semantic oracle. audit/README.md discloses the external prerequisite, so this is not a contradiction in the narrow verification claim, but full semantic re-audit is not self-contained from this package alone.",
+      "path": "audit/audit_hosted_graph_transport_e2e_zip.py; audit/README.md; README.md",
+      "severity": "documented_reproducibility_limit"
+    }
+  ],
+  "independent_raw_crosscheck": {
+    "attempts": 102,
+    "attempts_with_raw_fixture_journal_hash_and_duration_match": 102,
+    "baseline_binary_sha256": "9f3a8f072449fd6b9db4b2b8b38e5f7d10eda07899c18c788bac8183f2a8df14",
+    "baseline_median_of_invocation_medians_ns": 8451007088.5,
+    "binary_hashes_match_archived_build_receipts_and_report": true,
+    "candidate_binary_sha256": "467786aedfeeb1d1f8edf70cc5d8efd60d43af1f3821360b33707907e828bdbf",
+    "candidate_median_of_invocation_medians_ns": 327505723.5,
+    "measured_pairs": 48,
+    "measured_wins_losses_ties": {
+      "losses": 0,
+      "ties": 0,
+      "wins": 48
+    },
+    "median_candidate_minus_baseline_ns": -8123707880.5,
+    "median_candidate_over_baseline": 0.038756924889937844,
+    "order": "Alternating AB/BA; verified each pair order, including first measured BA and exact raw duration arrays.",
+    "pairs_including_warmups": 51,
+    "scope": "Raw report durations and pair math were recomputed from the ZIP; the report's full payload/order/metadata oracle results are recorded as true, but the separate per-sample oracle source is not present in this package.",
+    "warmup_pairs": 3
+  },
+  "manifest_listed_files": 147,
+  "manifest_listed_payload_bytes": 33498478,
+  "manifest_sha256": "1378d8099f4e5637c47ed45e83eec148d23b4f5908230b433625c93f7053c768",
+  "package": "graph-collector-hosted-linux-proof-20261016",
+  "package_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/publication/graph-collector-hosted-linux-proof-20261016",
+  "package_size_bytes_before_receipt": 33529671,
+  "portable_verifier": {
+    "checks": [
+      "manifest checksum and exact inventory (147 package files)",
+      "no symlinks and all package file SHA-256/size entries",
+      "hosted ZIP byte hash and size",
+      "all 757 ZIP member names, sizes, CRCs, types and streamed content hashes",
+      "extracted evidence byte-for-byte against ZIP member map",
+      "baseline/candidate source snapshots, direct workflow/build/runner/harness/test/auditor/preregistration/patch pins and decoded patch hash"
+    ],
+    "command": "python3 verify_bundle.py",
+    "exit_code": 0,
+    "hosted_zip_bytes": 31262576,
+    "hosted_zip_sha256": "8ac90ccb74df38a94aff688223bd6b4851af29925d79b4e7990819a96a40ef0e",
+    "result": "PASS"
+  },
+  "provenance_and_scope": {
+    "baseline_commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+    "candidate_base_commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+    "candidate_patch_decoded_sha256": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4",
+    "candidate_transport_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c",
+    "changed_tracked_build_inputs": [
+      "src/graph/transport.rs"
+    ],
+    "claim_assessment": "The README's narrow fixed-workload Linux claim is supported by the packaged provenance and recomputed pair summary. It does not establish broad workload or whole-application performance.",
+    "harness_sha256": "e3a8c29881fe904b6b68b9e4a97485704a919dcac03aff0be2cc1998456b0d1e",
+    "macos_arm64": {
+      "pointer_sha256": "5c72a42bc0d5b0366e1804ae458cc18690a4e4a36f00d316a938817244e5e5a4",
+      "referenced_receipt_sha256_verified_at_campaign_relative_path": "1d6dd5c1635f0debab45bcf2ac21e0a6e85639019a84f6addaff5df3ecbd34aa",
+      "status": "separate trial, not pooled with Linux metrics"
+    },
+    "platform": "Linux x86_64 (x86_64-unknown-linux-gnu)",
+    "preflight_failures": [
+      {
+        "run_id": "38871182433",
+        "timed_attempts": 0
+      },
+      {
+        "run_id": "38872584428",
+        "timed_attempts": 0
+      }
+    ],
+    "run_id": "38878319193",
+    "workflow_commit": "7ce98bfbbba025f4c07f1bee991d32ff5d958e60",
+    "workload": "One fixed 4096-record, 256-byte-text NativeStream (/bin/cat) fanout to two consumers over capacity-8 lossless edges; three raw samples per invocation; timer spans GraphSession::start through run_to_completion."
+  },
+  "repair_history_assessment": "The repair-history files accurately characterize themselves as retrospective and state that intermediate auditor snapshots/full logs were unavailable; no issue is raised for that explicitly disclosed gap.",
+  "review_type": "independent_adversarial_package_review",
+  "reviewed_at": "2026-10-16",
+  "schema_version": 1
+}

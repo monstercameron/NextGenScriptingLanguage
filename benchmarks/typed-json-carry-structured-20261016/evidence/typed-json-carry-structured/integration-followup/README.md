@@ -1,0 +1,9 @@
+# Integration follow-up evidence
+
+This folder records later integration provenance and validation for the structured typed-JSON candidate. The original measurement remains at base `e5fa5162b9bdca608f7f3c9d0d273db40a93c17b` with product patch `99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9`.
+
+Commit `97df47ce127b97149306ba9f3e3dfd24c9712681` integrated typed JSON carry on base `7ce98bfbbba025f4c07f1bee991d32ff5d958e60`. The `7ce` runtime source is byte-identical to the literal-JSON argument-borrow implementation at commit `a884f6561fd43f45e43b25a3cc2233be17ee3944`, which has a separate two-platform benchmark. This records that the borrow path predated `97df`; the structured trial does not measure it. Commit `c719653b52dcfa54db541763721391dba3c9a00c` adds six platform `cfg` attributes to the contracts and manifest fast-path helpers. The receipts and source snapshots here make the file-level differences auditable.
+
+At `97df`, the measured candidate files `src/contracts.rs`, `src/manifest.rs`, `src/runtime/program_backend.rs`, and `src/runtime/windows_process.rs` have exact byte matches. `src/runtime.rs` differs: the newer base has the same runtime bytes as `a884`, including its separately measured literal-argument path, and typed carry was integrated into that runtime. Commit `97df` did not introduce literal-argument borrowing. At `c719653`, the runtime file remains unchanged from `97df`; contracts and manifest change only through the cfg-only patch. The performance claim remains limited to the exact measured candidate and workload.
+
+The CLI fixture patch changes only `tests/typed_contracts.rs`. The preserved pre-fix full test log includes the helper-discovery failure; the corrected typed-contract rerun passes all 9 tests. The combined integration validation recorded 313 library tests and 35 selected integration tests passing. The commit-hook logs record formatting, strict native Clippy, and the staged native/WASM checks.

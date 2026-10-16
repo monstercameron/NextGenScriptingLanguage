@@ -1,0 +1,36 @@
+[
+  {
+    "side": "baseline",
+    "command": [
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/build-attempt-1/baseline/binaries/typed_json_carry_structured",
+      "--ignored",
+      "--exact",
+      "structured_csv_parse_1000",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "environment": {
+      "LC_ALL": "C",
+      "TZ": "UTC",
+      "OPT_BENCH_REPORT": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/correctness-smokes-attempt-1/baseline-raw.json"
+    },
+    "returncode": 0
+  },
+  {
+    "side": "candidate",
+    "command": [
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/build-attempt-1/candidate/binaries/typed_json_carry_structured",
+      "--ignored",
+      "--exact",
+      "structured_csv_parse_1000",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "environment": {
+      "LC_ALL": "C",
+      "TZ": "UTC",
+      "OPT_BENCH_REPORT": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-structured/correctness-smokes-attempt-1/candidate-raw.json"
+    },
+    "returncode": 0
+  }
+]

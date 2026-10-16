@@ -1,0 +1,22 @@
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	﻿2026-10-16T08:25:04.1218758Z ##[group]Run set -euo pipefail
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1219103Z ^[[36;1mset -euo pipefail^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1219482Z ^[[36;1mpackage="$GITHUB_WORKSPACE/work/graph-transport-e2e-paired-runner"^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1220014Z ^[[36;1mevidence="$GITHUB_WORKSPACE/evidence/graph-transport-e2e"^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1220481Z ^[[36;1mpython3 -B "$package/graph_transport_e2e_pair.py" prepare \^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1220985Z ^[[36;1m  --candidate-root "$GITHUB_WORKSPACE/work/graph-collector-sleep-candidate" \^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1221515Z ^[[36;1m  --baseline-receipt "$evidence/baseline-binary-receipt.json" \^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1221999Z ^[[36;1m  --candidate-receipt "$evidence/candidate-binary-receipt.json" \^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1222788Z ^[[36;1m  --harness-source "$evidence/graph_transport_e2e_bench.rs" \^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1223254Z ^[[36;1m  --preregistration "$evidence/paired-preregistration.json" \^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1223643Z ^[[36;1m  > "$evidence/prepare-command.json"^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1224037Z ^[[36;1mpython3 -B "$package/graph_transport_e2e_pair.py" run \^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1224470Z ^[[36;1m  --preregistration "$evidence/paired-preregistration.json" \^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1224965Z ^[[36;1m  --report-dir "$evidence/paired-runs/run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"^[[0m
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1288464Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1289027Z env:
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1289357Z   CARGO_HOME: /home/runner/.cargo
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1289804Z   CARGO_INCREMENTAL: 0
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1290188Z   CARGO_TERM_COLOR: always
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.1290573Z ##[endgroup]
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.2566733Z paired graph E2E benchmark failed: FileNotFoundError: [Errno 2] No such file or directory: '/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/graph-transport-e2e/build-environment-attempt-1.json'
+Fixed 48-pair graph transport E2E comparison	Freeze receipts and run the one fixed paired sequence	2026-10-16T08:25:04.2656454Z ##[error]Process completed with exit code 1.

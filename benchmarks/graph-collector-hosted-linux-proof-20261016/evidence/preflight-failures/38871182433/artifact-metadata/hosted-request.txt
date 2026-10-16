@@ -1,0 +1,10 @@
+purpose=fixed hosted Linux replication of the audited finite graph transport E2E collector change
+base_commit=81bf9ba766a775cccf059007b19f5def9b9bfb03
+warmup_pairs=3
+measured_pairs=48
+samples_per_invocation=3
+invocation_timeout_seconds=120
+no_retries=true
+run_id=38871182433
+run_attempt=1
+workflow_commit=0a5f1c572ef14689a13ac66e712b8b681ead4701

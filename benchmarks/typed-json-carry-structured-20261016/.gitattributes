@@ -1,0 +1,5 @@
+# Preserve evidence and measurement bytes exactly across Git platforms.
+*.bin -text -diff
+*.log -text
+evidence/** -text
+evidence/typed-json-carry-structured/build-attempt-1/**/binaries/** -text -diff

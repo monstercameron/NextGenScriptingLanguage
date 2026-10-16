@@ -1,0 +1,27 @@
+{
+  "utc": "2026-10-16T08:16:20.872555+00:00",
+  "head": "05ab086d69c91f28d88af5d822dff77dcc5b5bdc",
+  "remote_main_verified": "05ab086d69c91f28d88af5d822dff77dcc5b5bdc",
+  "prior_run": 38871182433,
+  "prior_outcome": "build metadata helperAttributeError before timing; all logs/artifacts retained",
+  "protocol_unchanged": {
+    "warmup_pairs": 3,
+    "measured_pairs": 48,
+    "samples": 3,
+    "timeout_seconds": 120,
+    "no_retries": true
+  },
+  "files": {
+    ".github/workflows/graph-collector-e2e-hosted-replication.yml": "55f34c41658469fc0c7b5e48b8e894b847806bc3aaa74e014249aea903ae9fa5",
+    "work/build_graph_e2e_pair.py": "b11a86fc0c0438a671c20bb4e12d2e62ee12374fe584391ef95ba12cdb0e3765",
+    "work/graph-transport-e2e-paired-runner/graph_transport_e2e_pair.py": "8d39ec34c761f5a186ea45d8978c9a8a66e0cadf37149d3d4bb8dbcb9cfbd1b8"
+  },
+  "command": [
+    "gh",
+    "workflow",
+    "run",
+    "graph-collector-e2e-hosted-replication.yml",
+    "--ref",
+    "main"
+  ]
+}

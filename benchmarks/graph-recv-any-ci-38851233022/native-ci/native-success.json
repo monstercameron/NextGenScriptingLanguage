@@ -1,0 +1,68 @@
+{
+  "repository": "monstercameron/NextGenScriptingLanguage",
+  "head_sha": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+  "head_branch": "codex/perf-graph-input-cursors",
+  "event": "workflow_dispatch",
+  "workflow": {
+    "id": 38849295457,
+    "name": "Native checks",
+    "status": "completed",
+    "conclusion": "success",
+    "attempt": 1,
+    "created_at": "2026-10-16T04:11:06Z",
+    "updated_at": "2026-10-16T04:33:27Z",
+    "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38849295457",
+    "jobs": [
+      {
+        "id": 116806717816,
+        "name": "Release contracts and workflow lint",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38849295457/job/116806717816"
+      },
+      {
+        "id": 116806718040,
+        "name": "Unix (macos-15)",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-16T04:11:14Z",
+        "completed_at": "2026-10-16T04:33:26Z",
+        "make_check": {
+          "status": "success",
+          "started_at": "2026-10-16T04:11:34Z",
+          "completed_at": "2026-10-16T04:33:15Z",
+          "elapsed": "21m41s"
+        },
+        "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38849295457/job/116806718040"
+      },
+      {
+        "id": 116806718057,
+        "name": "Native Windows (windows-11-arm)",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-16T04:11:10Z",
+        "completed_at": "2026-10-16T04:16:30Z",
+        "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38849295457/job/116806718057"
+      },
+      {
+        "id": 116806718070,
+        "name": "Native Windows (windows-2022)",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-16T04:11:10Z",
+        "completed_at": "2026-10-16T04:18:21Z",
+        "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38849295457/job/116806718070"
+      },
+      {
+        "id": 116806718108,
+        "name": "Unix (ubuntu-24.04)",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-16T04:11:10Z",
+        "completed_at": "2026-10-16T04:30:26Z",
+        "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38849295457/job/116806718108"
+      }
+    ]
+  },
+  "scope_note": "Workflow-dispatch native run for the graph candidate. This receipt records hosted workflow/job metadata only; it does not claim package or Pages validation."
+}

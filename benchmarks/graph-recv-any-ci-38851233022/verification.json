@@ -1,0 +1,45 @@
+{
+  "adversarial_audit": {
+    "attempts": 102,
+    "comparisons": 288,
+    "losses": 0,
+    "ties": 0
+  },
+  "adversarial_original_manifest_entries_verified": 531,
+  "archive": {
+    "archive": "raw-artifacts.tar.gz",
+    "archive_format": "gzip-compressed PAX tar; gzip mtime=0; sorted POSIX paths; uid/gid and mtime normalized",
+    "archive_members_including_directories": 637,
+    "archive_sha256": "3e240630116fdcfe60408de26c9c01af283538b8b82e6f60b5bae28f2912473d",
+    "archive_size_bytes": 226951,
+    "baseline_commit": "b78693294169c22892bb4f78539348a5755992ad",
+    "candidate_commit": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+    "lossless_source_member_hashes_verified": true,
+    "no_duplicate_paths": true,
+    "original_SHA256SUMS_entries_verified": 528,
+    "regular_file_bytes": 2354420,
+    "regular_file_count": 529,
+    "run_id": "38851233022",
+    "safe_relative_paths": true
+  },
+  "baseline_commit": "b78693294169c22892bb4f78539348a5755992ad",
+  "benchmark_run_id": 38851233022,
+  "candidate_commit": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+  "main_integration_commit": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+  "native_ci": {
+    "head_sha": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+    "run_id": 38849295457,
+    "successful_jobs": 5
+  },
+  "pinned_source_sha256_verified": {
+    "graph-perf-benchmark-final.rs": "87eb3b72e27757d3f71977fa9d47d6adf5ff028504c3cb3da858656c350ce891",
+    "graph_recv_any_benchmark.patch": "749f639c07957e20966981ca43ea824c078781d7f1a588264fa9252ff0162efe"
+  },
+  "preregistration_pair_counts": {
+    "measured_pairs": 48,
+    "warmup_pairs": 3
+  },
+  "raw_artifact_original_SHA256SUMS_entries_verified": 528,
+  "status": "verified",
+  "verification_method": "offline SHA-256 checks of original manifests, archive members, pinned source, preregistration, audit totals, and native job receipt"
+}

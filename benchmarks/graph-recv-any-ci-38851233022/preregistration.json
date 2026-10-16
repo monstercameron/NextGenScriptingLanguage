@@ -1,0 +1,20 @@
+{
+  "registered_at": "2026-10-16T04:33:22.760260+00:00",
+  "workflow_commit": "eda8065b837d9d0516874a92aa9a6ec70d8f3df2",
+  "baseline_commit": "b78693294169c22892bb4f78539348a5755992ad",
+  "candidate_commit": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+  "measured_pairs": 48,
+  "warmup_pairs": 3,
+  "invocation_timeout_seconds": 12,
+  "cases": 6,
+  "raw_samples_per_case_per_invocation": 3,
+  "order": "fixed alternating AB/BA",
+  "retention": "all attempts including failed, timed out and performance losses",
+  "retry_policy": "no result-dependent retries; any infrastructure repair is a separately retained run",
+  "claim_scope": "preloaded bounded graph recv_any only, not end-to-end runtime speedup",
+  "files": {
+    ".github/workflows/graph-recv-any-hosted-paired.yml": "e350154742d21f82a7b89cba6d8056dd5d1b640b35ee430f9ea49cda561d5f0f",
+    "benchmarks/graph_recv_any_pair.py": "abae841662216ebeff716b917f722dbf52951d589cead1f14b84f48f33983b29",
+    "benchmarks/graph_recv_any_benchmark.patch": "749f639c07957e20966981ca43ea824c078781d7f1a588264fa9252ff0162efe"
+  }
+}

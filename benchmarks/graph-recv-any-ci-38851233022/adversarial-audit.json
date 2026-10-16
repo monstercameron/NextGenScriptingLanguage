@@ -1,0 +1,117 @@
+{
+  "aggregate": {
+    "candidate_losses": 0,
+    "candidate_wins": 288,
+    "case_pair_comparisons": 288,
+    "ties": 0
+  },
+  "attempt_audit": {
+    "all_raw_cases_validated": 612,
+    "all_started_finished_raw_stdout_stderr_present_and_hash_matched": true,
+    "captured_test_stdout_reports_exactly_one_test_pass_each": true,
+    "events_per_case_per_sample": 54208,
+    "exact_invocation": "[binary, --exact, pinned test name, --ignored, --nocapture, --test-threads=1] on every attempt",
+    "failed": 0,
+    "fixed_environment": {
+      "LC_ALL": "C",
+      "TZ": "UTC"
+    },
+    "max_attempt_wall_ns": 1090491490,
+    "measured_order": "odd pairs baseline\u2192candidate; even pairs candidate\u2192baseline",
+    "measurement_attempts": 96,
+    "measurement_pairs": 48,
+    "order_and_checksum_oracles_match_each_sample": true,
+    "samples_per_case_per_attempt": 3,
+    "stderr_diagnostics_match_raw_samples_and_case_p50s": true,
+    "successful": 102,
+    "timed_out": 0,
+    "total_attempts": 102,
+    "total_raw_samples_validated": 1836,
+    "warmup_attempts": 6
+  },
+  "audit": "independent raw-artifact and summary audit",
+  "build_verification": {
+    "both_fresh_target_dirs_reported_by_workflow": true,
+    "both_release_no_run_builds_succeeded": true,
+    "distinct_target_dirs": [
+      "/home/runner/work/_temp/graph-recv-any-baseline-target",
+      "/home/runner/work/_temp/graph-recv-any-candidate-target"
+    ],
+    "only_source_file_differing": "src/graph/transport.rs",
+    "post_run_identity_stable_both_sides": true,
+    "source_file_count_each": 124
+  },
+  "checksum_manifest": {
+    "covers": "all original downloaded files under graph-recv-hosted-38851233022 plus the exact benchmark patch and pinned harness source; excludes this audit JSON and the checksum manifest itself",
+    "entries": 531,
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-recv-hosted-38851233022/adversarial-SHA256SUMS.txt",
+    "sha256": "1158954b2c343bc058519499ef91111ae6ce71c30ada6ebd667e59b59abebb56"
+  },
+  "claim_scope": "The candidate reduces recv_any per-event p50 in this x86_64 Linux hosted, in-process microbenchmark over 54,208 preloaded bounded-queue events per case and the six listed source/input topologies. Setup, expected-order construction, output allocation, exact event validation, and EOF are outside the timed region. This is not an end-to-end graph/runtime, producer-contention, workload, cross-platform, or general application speed claim.",
+  "independent_recomputed_summary": {
+    "sources=1,inputs=1": {
+      "losses": 0,
+      "median_candidate_over_baseline": 0.8058957092717474,
+      "median_improvement_percent": 19.410429072825263,
+      "median_paired_delta_ns_per_event": -88.63308921192444,
+      "ties": 0,
+      "wins": 48
+    },
+    "sources=1,inputs=8": {
+      "losses": 0,
+      "median_candidate_over_baseline": 0.7286822377328075,
+      "median_improvement_percent": 27.13177622671925,
+      "median_paired_delta_ns_per_event": -181.00447350944512,
+      "ties": 0,
+      "wins": 48
+    },
+    "sources=16,inputs=1": {
+      "losses": 0,
+      "median_candidate_over_baseline": 0.8014310402485263,
+      "median_improvement_percent": 19.85689597514737,
+      "median_paired_delta_ns_per_event": -95.88547815820544,
+      "ties": 0,
+      "wins": 48
+    },
+    "sources=16,inputs=8": {
+      "losses": 0,
+      "median_candidate_over_baseline": 0.6362265034324397,
+      "median_improvement_percent": 36.37734965675603,
+      "median_paired_delta_ns_per_event": -223.209941337072,
+      "ties": 0,
+      "wins": 48
+    },
+    "sources=847,inputs=1": {
+      "losses": 0,
+      "median_candidate_over_baseline": 0.8485299070285457,
+      "median_improvement_percent": 15.14700929714543,
+      "median_paired_delta_ns_per_event": -90.12086776859505,
+      "ties": 0,
+      "wins": 48
+    },
+    "sources=847,inputs=8": {
+      "losses": 0,
+      "median_candidate_over_baseline": 0.698290625896185,
+      "median_improvement_percent": 30.170937410381505,
+      "median_paired_delta_ns_per_event": -223.5087809917355,
+      "ties": 0,
+      "wins": 48
+    }
+  },
+  "merge_assessment": "No artifact, oracle, pairing, summary, or benchmark-scope blocker found for the c6f77a0 receive cursor optimization. This is positive evidence for the narrow helper-level change; it does not replace the separate product test/Clippy/WASM/CI gates or justify a broader performance claim.",
+  "pins": {
+    "baseline_binary_sha256": "b39e97054c7f0cf2b1b76746a5a688fca4f134d16804be338724dba8f9ef49ee",
+    "baseline_commit": "b78693294169c22892bb4f78539348a5755992ad",
+    "benchmark_harness_file": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-perf/graph-perf-benchmark-final.rs",
+    "benchmark_harness_file_sha256": "87eb3b72e27757d3f71977fa9d47d6adf5ff028504c3cb3da858656c350ce891",
+    "benchmark_harness_source_sha256": "87eb3b72e27757d3f71977fa9d47d6adf5ff028504c3cb3da858656c350ce891",
+    "benchmark_patch_file": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/runtime-perf-hosted-plan/graph_recv_any_benchmark.patch",
+    "benchmark_patch_sha256": "749f639c07957e20966981ca43ea824c078781d7f1a588264fa9252ff0162efe",
+    "candidate_binary_sha256": "55ca791ea3734920ed831d9018909cc78b62e914931d1611f48028e4bc7c77e2",
+    "candidate_commit": "c6f77a0cb199aedec564440a6a5b4b6170317831"
+  },
+  "report_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-recv-hosted-38851233022/graph-recv-any-paired-38851233022/paired-runs/paired-report.json",
+  "report_sha256": "f2cc4174309e7506e85b557d79032124d4c1dfcc20d8857beddbc0a849e8bf21",
+  "review_method": "Read only. No Cargo, build, benchmark, or timing command was run by the auditor; summaries were recomputed from the saved raw JSON samples.",
+  "run_id": "38851233022"
+}

@@ -1303,7 +1303,7 @@ impl QuickShellRenderer {
         let frame = String::from_utf8(bytes).expect("serde_json emits UTF-8");
         let mut command = policy_command(
             &self.binary,
-            ipc_arguments(&self.ipc_target, &frame),
+            ipc_arguments(&self.config, &self.ipc_target, &frame),
             &self.registry,
         )?;
         let output = run_bounded(&mut command, self.protocol.max_frame_bytes, self.timeout)?;
@@ -2165,7 +2165,7 @@ fn preflight_renderer_commands(
     )?);
     drop(capabilities::command_for(
         binary,
-        ipc_arguments("executeDesktop-preflight", "{}"),
+        ipc_arguments(config, "executeDesktop-preflight", "{}"),
         registry,
         POLICY_APPLET,
         &cwd,
@@ -2186,14 +2186,16 @@ fn launch_arguments(config: &Path) -> Vec<OsString> {
     vec![OsString::from("--path"), config.as_os_str().to_owned()]
 }
 
-fn ipc_arguments(target: &str, frame: &str) -> Vec<OsString> {
-    vec![
-        OsString::from("ipc"),
+fn ipc_arguments(config: &Path, target: &str, frame: &str) -> Vec<OsString> {
+    let mut arguments = vec![OsString::from("ipc")];
+    arguments.extend(launch_arguments(config));
+    arguments.extend([
         OsString::from("call"),
         OsString::from(target),
         OsString::from(IPC_FUNCTION),
         OsString::from(frame),
-    ]
+    ]);
+    arguments
 }
 
 fn resolve_executable(binary: &Path) -> Result<PathBuf> {
@@ -2377,6 +2379,37 @@ fn run_bounded(command: &mut Command, max_bytes: usize, timeout: Duration) -> Re
         bail!("Quickshell IPC command exited with status {status}");
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod renderer_argument_tests {
+    use super::{ipc_arguments, launch_arguments, IPC_FUNCTION};
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    #[test]
+    fn ipc_uses_the_same_private_config_path_as_renderer_launch() {
+        let config = Path::new("/run/user/1000/execute-omarchy-test/shell.qml");
+        let launch = launch_arguments(config);
+        let ipc = ipc_arguments(config, "executeDesktop-test", "{\"frame\":1}");
+
+        assert_eq!(
+            launch,
+            vec![OsString::from("--path"), config.as_os_str().to_owned()]
+        );
+        assert_eq!(
+            ipc,
+            vec![
+                OsString::from("ipc"),
+                OsString::from("--path"),
+                config.as_os_str().to_owned(),
+                OsString::from("call"),
+                OsString::from("executeDesktop-test"),
+                OsString::from(IPC_FUNCTION),
+                OsString::from("{\"frame\":1}"),
+            ]
+        );
+    }
 }
 
 #[cfg(test)]

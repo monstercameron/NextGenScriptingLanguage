@@ -440,13 +440,36 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
     });
     let command = flow::capabilities::command_for(
         binary,
-        ["ipc", "call", "executeDesktop-test", "request", "{}"],
+        [
+            "ipc",
+            "--path",
+            "config.qml",
+            "call",
+            "executeDesktop-test",
+            "request",
+            "{}",
+        ],
         &registry,
         "desktop.quickshell",
         &cwd,
     )
     .unwrap();
-    assert_eq!(command.get_args().count(), 5);
+    assert_eq!(
+        command
+            .get_args()
+            .map(|argument| argument.to_os_string())
+            .collect::<Vec<_>>(),
+        [
+            "ipc",
+            "--path",
+            "config.qml",
+            "call",
+            "executeDesktop-test",
+            "request",
+            "{}",
+        ]
+        .map(std::ffi::OsString::from)
+    );
 
     let denied_registry = flow::manifest::Registry::load(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests"),

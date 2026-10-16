@@ -40,6 +40,18 @@ WIDGET_LIMIT = 256
 EVENT_LIMIT = 256
 COMMAND_TIMEOUT = 3.0
 RENDERER_LOG_TAIL_BYTES = 64 * 1024
+IPC_DIAGNOSTIC_TAIL_BYTES = 8 * 1024
+
+
+def capture_command_output_tail(payload: bytes) -> dict[str, Any]:
+    tail = payload[-IPC_DIAGNOSTIC_TAIL_BYTES:]
+    return {
+        "status": "captured",
+        "total_bytes": len(payload),
+        "captured_bytes": len(tail),
+        "truncated": len(payload) > len(tail),
+        "tail_utf8": tail.decode("utf-8", "replace"),
+    }
 
 
 def sha256_file(path: Path) -> str | None:
@@ -469,16 +481,19 @@ def pending_report(binary: Path, reason: str, *, opted_in: bool) -> dict[str, An
 
 
 class RendererClient:
-    def __init__(self, binary: str, process: subprocess.Popen[bytes], session_id: str):
+    def __init__(self, binary: str, process: subprocess.Popen[bytes], session_id: str, config_path: Path):
         self.binary = binary
         self.process = process
         self.session_id = session_id
+        self.config_path = config_path
         self.ipc_target = f"executeDesktop-{session_id}"
         self.generation = 1
         self.version = 0
         self.request_id = 0
         self.revision = 0
         self.cursor = 0
+        self.ipc_diagnostics: dict[str, Any] | None = None
+        self._ipc_inventory_captured = False
 
     def frame(self, body: dict[str, Any], *, negotiation: bool = False, revision: int | None = None) -> dict[str, Any]:
         self.request_id += 1
@@ -498,9 +513,19 @@ class RendererClient:
         encoded = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
         if len(encoded.encode("utf-8")) > FRAME_LIMIT:
             raise RuntimeError("request exceeds frame size limit")
+        command = [
+            self.binary,
+            "ipc",
+            "--path",
+            str(self.config_path),
+            "call",
+            self.ipc_target,
+            "request",
+            encoded,
+        ]
         try:
             completed = subprocess.run(
-                [self.binary, "ipc", "call", self.ipc_target, "request", encoded],
+                command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -509,11 +534,28 @@ class RendererClient:
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise RuntimeError(f"Quickshell IPC failed: {error}") from error
+        if completed.returncode != 0:
+            if self.ipc_diagnostics is None:
+                self.ipc_diagnostics = {}
+            self.ipc_diagnostics["call"] = {
+                "argv": command,
+                "returncode": completed.returncode,
+                "stdout": capture_command_output_tail(completed.stdout),
+                "stderr": capture_command_output_tail(completed.stderr),
+            }
+            if request.get("body", {}).get("kind") != "negotiate":
+                self.capture_ipc_inventory()
+            stderr = self.ipc_diagnostics["call"]["stderr"]["tail_utf8"]
+            stdout = self.ipc_diagnostics["call"]["stdout"]["tail_utf8"]
+            details = []
+            if stderr:
+                details.append(f"stderr: {stderr[-1000:]}")
+            if stdout:
+                details.append(f"stdout: {stdout[-1000:]}")
+            detail = "; ".join(details) if details else "stdout and stderr were empty"
+            raise RuntimeError(f"Quickshell IPC exited {completed.returncode}: {detail}")
         if len(completed.stdout) > FRAME_LIMIT:
             raise RuntimeError("renderer response exceeds frame size limit")
-        if completed.returncode != 0:
-            detail = completed.stderr.decode("utf-8", "replace")[:1000]
-            raise RuntimeError(f"Quickshell IPC exited {completed.returncode}: {detail}")
         try:
             response = json.loads(completed.stdout.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -562,7 +604,46 @@ class RendererClient:
             except Exception as error:  # startup retries are restricted to idempotent negotiation
                 last_error = error
                 time.sleep(0.08)
+        if self.ipc_diagnostics is not None:
+            self.capture_ipc_inventory()
         raise RuntimeError(f"Quickshell IPC did not become ready: {last_error}")
+
+    def capture_ipc_inventory(self) -> None:
+        if self._ipc_inventory_captured or self.ipc_diagnostics is None:
+            return
+        self._ipc_inventory_captured = True
+        command = [self.binary, "ipc", "--path", str(self.config_path), "show"]
+        try:
+            completed = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=COMMAND_TIMEOUT,
+                check=False,
+            )
+            inventory: dict[str, Any] = {
+                "status": "captured",
+                "argv": command,
+                "returncode": completed.returncode,
+                "stdout": capture_command_output_tail(completed.stdout),
+                "stderr": capture_command_output_tail(completed.stderr),
+            }
+        except (OSError, subprocess.TimeoutExpired) as error:
+            inventory = {
+                "status": "command_error",
+                "argv": command,
+                "error": {
+                    "type": type(error).__name__,
+                    "message": str(error),
+                },
+            }
+            if isinstance(error, subprocess.TimeoutExpired):
+                if isinstance(error.stdout, bytes):
+                    inventory["stdout"] = capture_command_output_tail(error.stdout)
+                if isinstance(error.stderr, bytes):
+                    inventory["stderr"] = capture_command_output_tail(error.stderr)
+        self.ipc_diagnostics["inventory"] = inventory
 
     def mutation(self, body: dict[str, Any]) -> tuple[dict[str, Any], int]:
         revision = self.revision + 1
@@ -745,6 +826,7 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
     run_id = uuid.uuid4().hex
     temp_path: Path | None = None
     process: subprocess.Popen[bytes] | None = None
+    client: RendererClient | None = None
     process_logs: list[Any] = []
     renderer_log_paths: list[tuple[str, Path, Path]] = []
     outcomes: dict[str, Any] = {}
@@ -795,7 +877,7 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
         )
         process, stdout_log, stderr_log = start_quickshell(qs_path, qml_copy, logs / "renderer", isolated_env)
         process_logs.extend((stdout_log, stderr_log))
-        client = RendererClient(qs_path, process, renderer_session_id)
+        client = RendererClient(qs_path, process, renderer_session_id, qml_copy)
         client.negotiate()
         outcomes["protocol_negotiation"] = {"status": "pass", "version": client.version, "generation": client.generation}
 
@@ -966,6 +1048,8 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
                 for stage, stdout_path, stderr_path in renderer_log_paths
             ],
         }
+        if client is not None and client.ipc_diagnostics is not None:
+            report["renderer_ipc_diagnostics"] = client.ipc_diagnostics
         if temp_path is not None:
             try:
                 parent = temp_path.parent.resolve(strict=True)

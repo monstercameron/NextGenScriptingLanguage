@@ -184,6 +184,78 @@ class RendererLogDiagnosticsTests(unittest.TestCase):
             self.assertEqual(unreadable["error"]["type"], "PermissionError")
 
 
+class RendererIpcDiagnosticsTests(unittest.TestCase):
+    def test_ipc_failure_selects_the_launched_path_and_captures_bounded_inventory(self) -> None:
+        process = SimpleNamespace(poll=lambda: None, returncode=None)
+        config = pathlib.Path("/run/user/1000/execute-omarchy-test/shell.qml")
+        client = ACCEPTANCE.RendererClient("/usr/bin/qs", process, "accept-test", config)
+        request = client.frame({"kind": "create"})
+        limit = ACCEPTANCE.IPC_DIAGNOSTIC_TAIL_BYTES
+        stdout_payload = b"x" * (limit + 4) + b"TARGET"
+        stderr_payload = b"y" * (limit - 1) + b"\xff!"
+        inventory_payload = b"target executeDesktop-accept-test\n  function request(frame: string): string\n"
+        responses = [
+            SimpleNamespace(returncode=255, stdout=stdout_payload, stderr=stderr_payload),
+            SimpleNamespace(returncode=0, stdout=inventory_payload, stderr=b""),
+        ]
+
+        with mock.patch.object(ACCEPTANCE.subprocess, "run", side_effect=responses) as run:
+            with self.assertRaisesRegex(RuntimeError, "Quickshell IPC exited 255") as raised:
+                client.call(request)
+
+        self.assertIn("stderr:", str(raised.exception))
+        self.assertIn("stdout:", str(raised.exception))
+        calls = [invocation.args[0] for invocation in run.call_args_list]
+        prefix = ["/usr/bin/qs", "ipc", "--path", str(config)]
+        self.assertEqual(calls[0][:4], prefix)
+        self.assertEqual(calls[0][4:7], ["call", "executeDesktop-accept-test", "request"])
+        self.assertEqual(json.loads(calls[0][7]), request)
+        self.assertEqual(calls[1], prefix + ["show"])
+
+        diagnostics = client.ipc_diagnostics
+        self.assertIsNotNone(diagnostics)
+        self.assertEqual(diagnostics["call"]["returncode"], 255)
+        for stream_name, expected_total, expected_suffix in (
+            ("stdout", len(stdout_payload), "TARGET"),
+            ("stderr", len(stderr_payload), "\ufffd!"),
+        ):
+            stream = diagnostics["call"][stream_name]
+            self.assertEqual(stream["total_bytes"], expected_total)
+            self.assertEqual(stream["captured_bytes"], limit)
+            self.assertTrue(stream["truncated"])
+            self.assertTrue(stream["tail_utf8"].endswith(expected_suffix))
+        inventory = diagnostics["inventory"]
+        self.assertEqual(inventory["returncode"], 0)
+        self.assertIn("executeDesktop-accept-test", inventory["stdout"]["tail_utf8"])
+
+    def test_later_ipc_failure_preserves_inventory_without_recapturing(self) -> None:
+        process = SimpleNamespace(poll=lambda: None, returncode=None)
+        config = pathlib.Path("/run/user/1000/execute-omarchy-test/shell.qml")
+        client = ACCEPTANCE.RendererClient("/usr/bin/qs", process, "accept-test", config)
+        first_request = client.frame({"kind": "create"})
+        second_request = client.frame({"kind": "patch"})
+        inventory_payload = b"target executeDesktop-accept-test\n  function request(frame: string): string\n"
+        responses = [
+            SimpleNamespace(returncode=255, stdout=b"first failure", stderr=b"first error"),
+            SimpleNamespace(returncode=0, stdout=inventory_payload, stderr=b""),
+            SimpleNamespace(returncode=127, stdout=b"second failure", stderr=b"second error"),
+        ]
+
+        with mock.patch.object(ACCEPTANCE.subprocess, "run", side_effect=responses) as run:
+            with self.assertRaisesRegex(RuntimeError, "Quickshell IPC exited 255"):
+                client.call(first_request)
+            with self.assertRaisesRegex(RuntimeError, "Quickshell IPC exited 127"):
+                client.call(second_request)
+
+        self.assertEqual(run.call_count, 3)
+        diagnostics = client.ipc_diagnostics
+        self.assertIsNotNone(diagnostics)
+        self.assertEqual(diagnostics["call"]["returncode"], 127)
+        self.assertEqual(diagnostics["call"]["stderr"]["tail_utf8"], "second error")
+        self.assertEqual(diagnostics["inventory"]["returncode"], 0)
+        self.assertIn("executeDesktop-accept-test", diagnostics["inventory"]["stdout"]["tail_utf8"])
+
+
 class DesktopAcceptanceHarnessTests(unittest.TestCase):
     def run_harness(self, *arguments: str) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
         environment = os.environ.copy()

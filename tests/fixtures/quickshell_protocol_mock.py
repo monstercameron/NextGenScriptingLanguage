@@ -11,9 +11,15 @@ def main() -> int:
     if arguments[:1] == ["--path"]:
         while True:
             time.sleep(1)
-    if len(arguments) != 5 or arguments[:2] != ["ipc", "call"] or arguments[3] != "request":
+    if (
+        len(arguments) != 7
+        or arguments[:2] != ["ipc", "--path"]
+        or not arguments[2]
+        or arguments[3] != "call"
+        or arguments[5] != "request"
+    ):
         return 2
-    request = json.loads(arguments[4])
+    request = json.loads(arguments[6])
     body = request["body"]
     if body["kind"] == "negotiate":
         reply = {

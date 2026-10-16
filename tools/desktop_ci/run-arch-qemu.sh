@@ -491,7 +491,7 @@ if [[ "$GUEST_JOURNAL_CAPTURE_STATUS" != "complete" ]]; then
 fi
 cp "$ARTIFACT_DIR/guest-system-journal.log" "$ARTIFACT_DIR/guest/system-journal.log" 2>/dev/null || true
 
-python3 - "$ARTIFACT_DIR/guest/evidence.json" "$ARTIFACT_DIR/guest/quickshell-session.png" "$ARTIFACT_DIR/guest/login-session.txt" <<'PY'
+python3 - "$ARTIFACT_DIR/guest/evidence.json" "$ARTIFACT_DIR/guest/quickshell-session.png" "$ARTIFACT_DIR/guest/login-session.txt" "$ARTIFACT_DIR/guest/graph-evidence.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -499,7 +499,15 @@ from pathlib import Path
 report_path = Path(sys.argv[1])
 screenshot_path = Path(sys.argv[2])
 login_session_path = Path(sys.argv[3])
+graph_report_path = Path(sys.argv[4])
 report = json.loads(report_path.read_text(encoding="utf-8"))
+graph_report = json.loads(graph_report_path.read_text(encoding="utf-8"))
+graph_checks = graph_report.get("checks")
+if not isinstance(graph_checks, dict):
+    graph_checks = {}
+graph_scenarios = graph_report.get("scenarios")
+if not isinstance(graph_scenarios, list):
+    graph_scenarios = []
 login_session = {}
 for line in login_session_path.read_text(encoding="utf-8").splitlines():
     if "=" in line:
@@ -513,6 +521,33 @@ def status_at(mapping, *keys):
             return None
         value = value.get(key)
     return value.get("status") if isinstance(value, dict) else None
+
+def graph_scenario_pass(producer):
+    matches = [item for item in graph_scenarios if isinstance(item, dict) and item.get("producer") == producer]
+    if len(matches) != 1:
+        return False
+    scenario = matches[0]
+    route = scenario.get("graph_button_route")
+    cancellation = scenario.get("cancellation")
+    forced_cleanup = scenario.get("forced_cleanup")
+    teardown = scenario.get("process_teardown")
+    if not all(isinstance(item, dict) for item in (route, cancellation, forced_cleanup, teardown)):
+        return False
+    before, after = route.get("sync_count_before"), route.get("sync_count_after")
+    observed = teardown.get("observed_identity_count")
+    return (
+        scenario.get("status") == "pass"
+        and route.get("status") == "pass"
+        and isinstance(before, int) and not isinstance(before, bool)
+        and isinstance(after, int) and not isinstance(after, bool) and after > before
+        and cancellation.get("status") == "pass"
+        and forced_cleanup.get("status") == "not_used"
+        and teardown.get("status") == "pass"
+        and isinstance(observed, int) and not isinstance(observed, bool) and observed > 0
+        and teardown.get("surviving_identities") == []
+    )
+
+producers = [item.get("producer") for item in graph_scenarios if isinstance(item, dict)]
 
 required = {
     "report_status": report.get("status") == "completed_with_pending_gates",
@@ -529,6 +564,18 @@ required = {
     ),
     "runtime_temp_removed": status_at(report, "cleanup", "temporary_directory") == "removed",
     "screenshot_captured": screenshot_path.is_file() and screenshot_path.stat().st_size > 0,
+    "graph_report_passed": graph_report.get("status") == "passed",
+    "graph_preflight_passed": status_at(graph_report, "checks", "target_preflight") == "pass",
+    "graph_scenarios_exactly_local_and_remote": sorted(producers) == ["local", "remote"],
+    "local_graph_button_sync_and_clean_teardown": (
+        graph_checks.get("local_clock_graph_button_route") == "pass"
+        and graph_scenario_pass("local")
+    ),
+    "remote_graph_button_sync_and_clean_teardown": (
+        graph_checks.get("remote_clock_graph_button_route") == "pass"
+        and graph_scenario_pass("remote")
+    ),
+    "graph_natural_cancellation_and_reaping": status_at(graph_report, "checks", "natural_cancellation_and_reaping") == "pass",
     "active_local_seat0_vt1": (
         login_session.get("Seat") == "seat0"
         and login_session.get("State") == "active"
@@ -540,9 +587,9 @@ Path(sys.argv[1]).with_name("acceptance-gate.json").write_text(
         {
             "required_smoke_passed": all(required.values()),
             "required_checks": required,
-            "scope": "live Arch/Hyprland/Quickshell protocol and widget smoke; graph execution routing and Omarchy desktop certification remain pending",
-            "proof_boundary": "The existing harness speaks directly to Quickshell; it does not prove RuntimeGraphExecutor-to-Quickshell button routing.",
-            "next_gate": "Run tools/desktop_demo.py with local and remote clock fixtures; focus each Qt window, send Tab/Return until fixture sync_count advances, then signal/cancel each graph and verify workers/renderers are reaped.",
+            "scope": "live Arch/Hyprland/Quickshell protocol smoke plus RuntimeGraphExecutor-to-Quickshell button routing; full Omarchy desktop certification remains pending",
+            "proof_boundary": "The direct harness proves renderer protocol behavior; the separate graph harness proves only the two local/remote button routes and observed cancellation teardown on this disposable Arch session.",
+            "next_gate": "Run the remaining Omarchy-specific desktop scenarios before claiming native desktop certification.",
         },
         indent=2,
         sort_keys=True,

@@ -52,6 +52,40 @@ if ! wait "$screen_pid"; then
     printf 'screenshot watcher did not complete cleanly\n' >> "$ARTIFACTS/screenshot-status.txt"
 fi
 
+direct_acceptance_passed=0
+if (( harness_status == 0 )) && [[ -s "$ARTIFACTS/evidence.json" ]] && jq -e '
+    .status == "completed_with_pending_gates" and
+    .native_desktop_certification == "PENDING" and
+    .checks.target_preflight.status == "pass" and
+    .checks.quickshell_wayland_smoke.status == "pass" and
+    .checks.button_signal.status == "pass" and
+    .results.renderer_restart_replay.status == "pass" and
+    .results.hyprland_window_focus.status == "pass" and
+    .results.hyprland_window_focus.active_window_verified == true and
+    .cleanup.temporary_directory.status == "removed"
+' "$ARTIFACTS/evidence.json" >/dev/null; then
+    direct_acceptance_passed=1
+fi
+
+graph_harness_status=125
+if (( direct_acceptance_passed == 1 )); then
+    set +e
+    EXECUTE_OMARCHY_DISPOSABLE=1 \
+    EXECUTE_OMARCHY_SESSION_ID="$EXECUTE_OMARCHY_SESSION_ID" \
+        python3 tools/desktop_graph_acceptance.py \
+            --run-in-disposable-arch \
+            --execute /home/arch/execute/target/release/execute \
+            --evidence "$ARTIFACTS/graph-evidence.json" \
+            > "$ARTIFACTS/graph-harness.stdout.json" \
+            2> "$ARTIFACTS/graph-harness.stderr.log"
+    graph_harness_status="$?"
+    set -e
+else
+    : > "$ARTIFACTS/graph-harness.stdout.json"
+    printf 'graph harness skipped because direct acceptance evidence failed (harness exit status %s)\n' \
+        "$harness_status" > "$ARTIFACTS/graph-harness.stderr.log"
+fi
+
 if [[ -x /usr/bin/qs ]]; then
     /usr/bin/qs --version > "$ARTIFACTS/quickshell-version.txt" 2>&1 || true
 else
@@ -77,6 +111,8 @@ hyprctl monitors -j > "$ARTIFACTS/hyprland-monitors-after.json" 2>&1 || true
     printf 'HYPRLAND_INSTANCE_SIGNATURE_PRESENT=%s\n' "$([[ -n "$HYPRLAND_INSTANCE_SIGNATURE" ]] && echo true || echo false)"
     printf 'DBUS_SESSION_BUS_ADDRESS_PRESENT=%s\n' "$([[ -n "$DBUS_SESSION_BUS_ADDRESS" ]] && echo true || echo false)"
     printf 'harness_exit_status=%s\n' "$harness_status"
+    printf 'direct_acceptance_passed=%s\n' "$([[ "$direct_acceptance_passed" == 1 ]] && echo true || echo false)"
+    printf 'graph_harness_exit_status=%s\n' "$graph_harness_status"
 } > "$ARTIFACTS/session-environment.txt"
 
 if [[ ! -s "$ARTIFACTS/evidence.json" ]]; then
@@ -86,6 +122,42 @@ fi
 if (( harness_status != 0 )); then
     printf 'harness-exit-status=%s\n' "$harness_status" > "$FAILED"
     exit "$harness_status"
+fi
+if (( direct_acceptance_passed != 1 )); then
+    printf 'direct harness evidence did not prove the existing required smoke checks\n' > "$FAILED"
+    exit 1
+fi
+if [[ ! -s "$ARTIFACTS/graph-evidence.json" ]]; then
+    printf 'graph harness did not produce graph-evidence.json\n' > "$FAILED"
+    exit 1
+fi
+if (( graph_harness_status != 0 )); then
+    printf 'graph-harness-exit-status=%s\n' "$graph_harness_status" > "$FAILED"
+    exit "$graph_harness_status"
+fi
+if ! jq -e '
+    .status == "passed" and
+    .checks.local_clock_graph_button_route == "pass" and
+    .checks.remote_clock_graph_button_route == "pass" and
+    .checks.natural_cancellation_and_reaping.status == "pass" and
+    ([.scenarios[].producer] | sort) == ["local", "remote"] and
+    all(.scenarios[];
+        .status == "pass" and
+        (.graph_button_route as $route |
+            $route.status == "pass" and
+            ($route.sync_count_before | type) == "number" and
+            ($route.sync_count_after | type) == "number" and
+            $route.sync_count_after > $route.sync_count_before) and
+        .cancellation.status == "pass" and
+        .forced_cleanup.status == "not_used" and
+        .process_teardown.status == "pass" and
+        (.process_teardown.observed_identity_count | type) == "number" and
+        .process_teardown.observed_identity_count > 0 and
+        .process_teardown.surviving_identities == []
+    )
+' "$ARTIFACTS/graph-evidence.json" > "$ARTIFACTS/graph-acceptance-gate.json"; then
+    printf 'graph evidence did not prove local and remote button routing plus clean cancellation teardown\n' > "$FAILED"
+    exit 1
 fi
 
 chmod -R a+rX "$ARTIFACTS"

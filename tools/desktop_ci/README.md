@@ -3,9 +3,13 @@
 This opt-in runner boots one disposable Arch Linux cloud image in QEMU on a
 fresh GitHub-hosted Ubuntu 24.04 runner. It installs the official Arch packages
 for Hyprland, Quickshell and the tools used by `tools/omarchy_acceptance.py`,
-then starts Hyprland from an autologin on local VT1 and runs that existing live
-harness. QEMU's serial connection is retained for boot logs; compositor startup
-is not tied to the serial console.
+then starts Hyprland from an autologin on local VT1 and runs the existing direct
+Quickshell harness. Only after its evidence passes does the guest run the
+RuntimeGraphExecutor-to-Quickshell acceptance for both local and remote clocks.
+The runner requires both graph button routes to advance the fixture sync count
+and both graph processes to exit through normal SIGINT cancellation with their
+observed descendants reaped before it writes `READY`. QEMU's serial connection
+is retained for boot logs; compositor startup is not tied to the serial console.
 
 The workflow is manual-only (`workflow_dispatch`). It pins the official
 Arch-boxes image release and Arch Linux Archive package snapshot in its
@@ -48,16 +52,17 @@ form on Hyprland 0.55 and later, keeps the older named dispatcher form for prior
 versions, records the chosen command and result, and verifies that Hyprland
 reports the exact Quickshell window address as active before sending input.
 
-The current live gate proves a real Arch/Hyprland/Wayland session, Quickshell QML
+The live gate proves a real Arch/Hyprland/Wayland session, Quickshell QML
 process, IPC protocol negotiation, widget create/update/destroy, renderer
 restart/replay, stale-generation rejection, and a typed Quickshell `clicked`
-event following synthetic keyboard input sent through Wayland. The acceptance
-harness speaks its renderer protocol directly to Quickshell. It does not prove
-`RuntimeGraphExecutor` to Quickshell to graph-button routing. That should be a
-separate next gate: run `tools/desktop_demo.py` in local-clock and remote-clock
-modes with its loopback fixture, focus each actual Qt window, send Tab/Return
-until the fixture's sync counter advances, then signal/cancel each graph and
-assert its workers and renderers are reaped.
+event following synthetic keyboard input sent through Wayland. A separate
+graph harness then runs both clock graphs through `execute run`, focuses their
+actual Quickshell windows, sends Tab/Return through Wayland until the loopback
+fixture's sync counter advances, and requires source-pinned SIGINT cancellation
+plus teardown of observed Execute descendants. The host gate reads the separate
+`graph-evidence.json` and verifies each scenario's counter increase and clean
+teardown fields. These two gates remain scoped to the disposable Arch session;
+they do not amount to full Omarchy desktop certification.
 
 The existing harness leaves `native_desktop_certification` as `PENDING`. This
 runner does not install Omarchy and does not certify the full Omarchy desktop,

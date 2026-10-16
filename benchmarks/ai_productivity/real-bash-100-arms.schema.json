@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/ai-productivity-real-bash-100-arms-1.json",
+  "title": "Sealed arm map for the 100-script study",
+  "type": "object",
+  "required": ["schema", "arms"],
+  "properties": {
+    "schema": {"const": "execute.ai-productivity.real-bash-100-arms/1"},
+    "arms": {
+      "type": "object", "minProperties": 3, "maxProperties": 3,
+      "propertyNames": {"pattern": "^arm_[a-z0-9]{8,32}$"},
+      "additionalProperties": {"$ref": "#/$defs/arm"}
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "arm": {
+      "type": "object",
+      "required": ["variant", "provider", "model_alias", "model_snapshot_status", "model_snapshot", "comparison_block", "generation_parameters", "language_version", "language_reference_sha256", "programmer_prompt_sha256", "language_instruction_sha256", "tool_configuration_sha256"],
+      "properties": {
+        "variant": {"enum": ["bash", "nushell", "execute_program"]},
+        "provider": {"type": "string", "minLength": 1},
+        "model_alias": {"const": "gpt-6-luna"},
+        "model_snapshot_status": {"enum": ["recorded", "unavailable"]},
+        "model_snapshot": {"type": ["string", "null"]},
+        "comparison_block": {"type": "string", "minLength": 1},
+        "generation_parameters": {"type": "object", "description": "Use explicit nulls for settings the Codex surface does not expose."},
+        "language_version": {"type": "string", "minLength": 1},
+        "language_reference_sha256": {"$ref": "#/$defs/sha"},
+        "programmer_prompt_sha256": {"$ref": "#/$defs/sha"},
+        "language_instruction_sha256": {"$ref": "#/$defs/sha", "description": "Hash of the per-arm target-language declaration/instruction; shared task and behavior briefs are separately committed in the task roster."},
+        "tool_configuration_sha256": {"$ref": "#/$defs/sha"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

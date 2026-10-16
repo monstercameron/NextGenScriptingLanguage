@@ -1,0 +1,33 @@
+{
+  "schema": "execute.ai-productivity.real-bash-100-rubric/1",
+  "scale": {
+    "minimum": 1,
+    "maximum": 5,
+    "integer_only": true
+  },
+  "blinding": "Two independent raters receive task requirements and a randomly labeled final artifact. They do not receive the arm-to-language mapping, model/provider, generation settings, repair history, usage, timing, or the other rater's score. The language may be identifiable from syntax, so this is masked-identity review, not guaranteed language-blind review.",
+  "dimensions": {
+    "requirement_coverage": {
+      "1": "Misses the requested behavior or cannot be used for the stated task.",
+      "2": "Implements only part of the behavior, with major requirements absent.",
+      "3": "Implements the main behavior but omits a material requirement or edge case.",
+      "4": "Meets the stated requirements with at most a minor gap.",
+      "5": "Meets every stated requirement and declared edge case."
+    },
+    "readability": {
+      "1": "Purpose and control flow are very difficult to follow.",
+      "2": "Several important steps or assumptions are hard to understand.",
+      "3": "The main flow is understandable, though some names, structure, or error paths need reconstruction.",
+      "4": "Purpose, names, and control flow are clear on a careful first read.",
+      "5": "Purpose and behavior are immediately clear, with direct names and no needless complexity."
+    },
+    "changeability": {
+      "1": "A small predeclared change would require a rewrite or risks unrelated behavior.",
+      "2": "The change is spread across tightly coupled code and is difficult to check.",
+      "3": "The change is feasible but needs multiple edits or lacks a direct regression check.",
+      "4": "The change is localized and has a direct way to verify it.",
+      "5": "A clear change point and focused regression check are already present."
+    }
+  },
+  "adjudication": "If the first two raters differ on any dimension, a third independent blinded rater scores all dimensions. Preserve all three ratings and use the third rating as the resolved score."
+}

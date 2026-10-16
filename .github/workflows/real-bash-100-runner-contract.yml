@@ -1,0 +1,23 @@
+name: Real Bash 100 runner contract (fixtures only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runner-contract:
+    name: Linux fixture-only runner self-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compile the runner modules
+        run: python3 -m py_compile benchmarks/ai_productivity/real_bash_100_runner.py tests/ai_productivity_real_bash_100_runner.py
+      - name: Parse the runner package schemas
+        run: |
+          python3 -m json.tool benchmarks/ai_productivity/real-bash-100-task-package.schema.json >/dev/null
+          python3 -m json.tool benchmarks/ai_productivity/real-bash-100-case-oracles.schema.json >/dev/null
+          python3 -m json.tool benchmarks/ai_productivity/real-bash-100-attempt-archive-manifest.schema.json >/dev/null
+      - name: Exercise the runner with owned temporary fixtures
+        run: python3 tests/ai_productivity_real_bash_100_runner.py

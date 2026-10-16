@@ -1,0 +1,186 @@
+{
+  "schema": "execute.ai-productivity.real-bash-preregistration/1",
+  "benchmark_id": "execute-real-bash-recreation-100-v1",
+  "version": 1,
+  "status": "draft_revision3_rejected_replacement_review_pending_trials_not_run",
+  "supersedes": null,
+  "relationship_to_existing_protocol": "This is a separate focused protocol. The existing preregistration.json remains unchanged and continues to govern its three-stratum study.",
+  "registration_state": "This repository file is a prospective protocol draft, not evidence of an external preregistration or timestamped freeze. Before any programmer dispatch, deposit or independently timestamp the exact protocol bytes, accepted corpus receipt, complete trial freeze, and randomized plan. Amendments after first dispatch must be separately versioned and reported as deviations.",
+  "primary_question": "For 100 held-out real Bash workflow behaviors, how do fresh Bash, Nushell, and Execute (.program) Luna programmers compare when recreating each behavior from the same language-neutral task brief, in correctness, repairs required, candidate runtime, and masked-identity human ratings?",
+  "estimand_scope": "This is a matched behavior-recreation comparison, not direct source-to-source migration. The source Bash files establish task provenance and the independent evaluator derives the behavior briefs and hidden oracles from them; no programmer arm sees source or reference implementation bytes. Any Execute-versus-original migration-acceptance evaluation is a separate study and is not part of this result.",
+  "claim_scope": "The candidate source set is 100 files from one pinned Omarchy release/repository. Results describe these 100 tasks and do not establish performance across independent repositories or all Bash scripts.",
+  "source_corpus": {
+    "candidate_origin": "Omarchy v4.0.4 bin/ scripts, subject to independent corpus review and the exact commit recorded in the corpus manifest.",
+    "programmer_visibility": "Original Bash source and all reference implementations are evaluator-only provenance/oracle-basis materials. They are withheld from every programmer session. Every arm receives the same language-neutral task prompt and behavior-brief bytes; only the assigned target language instruction, versioned language references, and required runtime differ by arm.",
+    "held_out_target": 100,
+    "unit": "One unique upstream Bash file mapped one-to-one to one task ID. Variants, fixtures, and aliases do not add to the 100.",
+    "candidate_frame": "Revision 3's 444-row direct-bin inventory contains 439 Bash files and 5 non-Bash files. It excludes 20 known exact-source exposures, 5 source-reviewed material-adjacency candidates, and 8 purpose-only campaign-scope candidates, leaving 406 Bash files before curation. The fixed 100 distinct-file convenience sample has 27 curator-assigned functional clusters and descriptive fixture quotas of 30 command_fixture, 40 filesystem_fixture, and 30 desktop_cli_simulation. The sample is not random or representative; fixture labels are not independent-family strata, and the other 306 Bash files were not behaviorally classified as infeasible.",
+    "candidate_manifest_schema": "execute.real-bash-corpus.candidate/1",
+    "required_record_fields": [
+      "task_id", "script_id", "family_id", "family_label", "family_rationale",
+      "analysis_stratum", "proposed_split", "status", "testability_stratum",
+      "testability_status", "fixture_plan", "dependency_inventory", "source", "license",
+      "inventory_signals", "size_band", "low_complexity_flag"
+    ],
+    "source_record_fields": [
+      "repository_url", "release_tag", "commit", "path", "permalink",
+      "copy_path", "sha256", "bytes", "lines", "mode_octal"
+    ],
+    "receipt_schema": "execute.real-bash-corpus.receipt/1",
+    "manifest_record_hash_definition": "SHA-256 of UTF-8 Python 3 json.dumps for the exact script object with ensure_ascii=false, sort_keys=true, separators=(',', ':'), allow_nan=false, and no trailing newline.",
+    "candidate_status": "candidate_unsealed; this is not an accepted or frozen trial corpus",
+    "selection_and_exclusion": [
+      "Use only unique upstream files from the pinned release and record the exact repository commit and path for every script.",
+      "Select a curated convenience sample from the eligible source frame; it is not probability-sampled or representative. Freeze the eligible-frame count, feasibility strata and quotas, selection rule, and any replacements before dispatch. The candidate frame excludes prior exact-source exposures, but exact source disjointness alone does not establish task-family holdout.",
+      "Exclude any source previously used as a checked-in public fixture, reference port, tutorial/example, or existing rewrite task; keep an explicit exclusion ledger with reason and source hash. Independently review the family-adjacency ledger against every known exposed source/port family. The accepted held-out corpus may contain no unresolved or materially overlapping exposed behavior families; replace any materially overlapping task before freezing while preserving exactly 100 unique source tasks. Because upstream sources are public, exclusion from model pretraining or prior familiarity cannot be guaranteed.",
+      "Exclude generated/vendor files and scripts whose core behavior cannot be checked against a frozen CLI oracle in the declared runner. A desktop_cli_simulation fixture label does not constitute desktop/QML acceptance.",
+      "The three testability labels describe fixture strategy only: command_fixture uses temporary HOME/cwd and fake PATH; filesystem_fixture uses temporary paths/disposable container-root overlays and fake external endpoints; desktop_cli_simulation substitutes fake CLI/device/system endpoints and temporary state. The last category has no renderer/compositor/hardware acceptance and is not a desktop_composition stratum.",
+      "Record the license identifier and license-file hash for each selected source. Unknown or ambiguous reuse terms are an exclusion until resolved.",
+      "Report the eligible source population, curated selection rule and fixture-feasibility quotas, family-cluster rationale, size/complexity signals, duplicate checks, exact-source and family-adjacency exclusions, and exposure events. Do not imply a representative random sample if fixture feasibility drove selection.",
+      "Report that all candidate scripts are from one upstream project and may share style, utilities, or dependencies. Do not describe them as 100 independent repositories."
+    ],
+    "freeze_requirements": "Only after a separate reviewer accepts the candidate corpus and its licensing, selection, exact-source exposure, family-adjacency, and family-cluster records, freeze the corpus manifest bytes, digest receipt, all source/companion bytes, independent review record, all 100 task prompts and behavior briefs, hidden oracle package, timing-case package, runner source/image, language/runtime references, arm/tool configuration, and randomized 300-cell plan. Store exact SHA-256 values in the separate freeze receipt."
+  },
+  "arms": {
+    "variants": ["bash", "nushell", "execute_program"],
+    "matched_model": "Use the same gpt-6-luna model selection for all variants and all tasks. Record the provider's immutable backend snapshot if the execution surface exposes one. If only the moving alias is available, record the alias and mark snapshot identity unavailable; no snapshot-specific claim is allowed.",
+    "fresh_sessions": true,
+    "planned_sessions": 300,
+    "replicates_per_script_variant": 1,
+    "randomization": "Shuffle the 100 script blocks, then independently permute the three opaque arm IDs within each block using the preregistered seed. Freeze the complete 300-cell schedule before dispatch and preserve its dispatch indices and timestamps.",
+    "equal_conditions": [
+      "Every fresh programmer recreates the same source-derived behavior from identical language-neutral task-prompt and behavior-brief bytes, task constraints, and permitted fixture inputs. No arm sees the upstream Bash source, source comments, or reference implementations; those remain evaluator-only provenance and oracle-basis materials.",
+      "The assigned target-language instruction, versioned language reference bundle, and required runtime differ by arm. Freeze the shared task prompt, shared behavior brief, equivalent reference availability, tool permissions, context/output limits, time limits, and model settings on calibration data. Record all per-arm instruction and reference hashes in the sealed arm map.",
+      "Each session receives only the assigned task and its frozen references. It cannot see another variant's transcript, artifact, repair feedback, or hidden oracle contents.",
+      "Give each cell a fresh conversation and a separate worker sandbox whose filesystem permissions expose only that cell's task prompt, behavior brief, permitted fixture inputs, and language references. Do not dispatch on a shared-filesystem subagent surface unless an independently reviewed OS boundary prevents reads of corpus sources, other cells, results, and hidden oracles. Dispatch one cell at a time and retain every isolated worker image/configuration hash. If this access boundary cannot be established, do not start the trial."
+    ]
+  },
+  "trial_policy": {
+    "one_generation_attempt": true,
+    "maximum_repair_attempts": 2,
+    "replicates_per_cell": 1,
+    "repair_policy": "After each definite behavioral failure, the independent runner returns the same bounded language-neutral list of false mandatory criterion IDs and a short generic failure category. A pass requires every mandatory criterion true. At least one false mandatory criterion establishes failure even when another criterion is null; a no-false result with any null criterion is incomplete infrastructure/oracle evidence, not a pass and not a repair trigger. Every task requires all_cases_observed: all_cases_observed, so candidate timeout, output/resource limit, or candidate workspace-snapshot cap fails completion even if another observed behavior matches. Launch/process/observer infrastructure failures remain null when no candidate violation is established. Provider refusal/timeout with no candidate is not accepted by the current result importer; retain it in external conductor evidence and leave the cell unimported until a provider-event adapter is versioned. The runner never returns hidden input contents, expected values, test source, or oracle text. No repair is offered after a pass or incomplete outcome.",
+    "candidate_execution": "The independent runner executes the artifact and applies each task's frozen black-box criteria after generation and each repair. Preserve every artifact and outcome.",
+    "infrastructure": "Record infrastructure error, provider refusal/timeout, invalid artifact, and behavioral failure separately. Preserve partial case observations and null criterion values. If at least one mandatory criterion is false, record a definite behavioral failure and send only those failed IDs; otherwise any unevaluated mandatory criterion makes the cell incomplete and ineligible for repair. Apply only the preregistered exclusion/rerun policy and retain the original row."
+  },
+  "frozen_evidence_contract": {
+    "schemas": {
+      "corpus_manifest": "real-bash-100-corpus.schema.json",
+      "corpus_digest_receipt": "real-bash-100-receipt.schema.json",
+      "corpus_review": "real-bash-100-corpus-review.schema.json",
+      "task_roster": "real-bash-100-roster.schema.json",
+      "arm_map": "real-bash-100-arms.schema.json",
+      "randomized_run_plan": "real-bash-100-run-plan.schema.json",
+      "run_record": "real-bash-100-result.schema.json",
+      "freeze_receipt": "real-bash-100-freeze.schema.json",
+      "human_rating_rubric": "real-bash-100-rubric.json",
+      "shared_task_package": "real-bash-100-task-package.schema.json",
+      "evaluator_case_oracles": "real-bash-100-case-oracles.schema.json"
+    },
+    "per_task_commitments": [
+      "source SHA-256 and corpus-manifest record SHA-256",
+      "prompt SHA-256 and behavior-brief SHA-256",
+      "hidden oracle SHA-256 plus an opaque evaluator-only oracle reference",
+      "timing-case-set SHA-256 and exact mandatory criterion-ID to observation-operation map, including the reserved completion operation"
+    ],
+    "per_run_commitments": [
+      "protocol, corpus manifest, digest receipt, roster, runner image, and task-package SHA-256 values",
+      "SHA-256 of every generated/repair artifact, canonical archive manifest, exact runner observation, copied runner source, and complete retained raw case evidence",
+      "language/runtime and prompt/tool configuration hashes in the evaluator-only arm map",
+      "review-rubric hash and score-lock timestamp when human rating is completed",
+      "external evidence linking each candidate artifact to the assigned Luna session, exact prompt/repair feedback, and model response; the current app surface has no verified adapter for this evidence"
+    ],
+    "hash_rules": {
+      "packages": "Freeze exact raw UTF-8 bytes of the shared task package and evaluator-only case-oracle package. The per-task prompt and behavior-brief SHA-256 values are over their exact UTF-8 strings.",
+      "task_oracle": "The per-task oracle_sha256 is SHA-256 over canonical UTF-8 JSON for the normalized object {criteria,cases}, using sorted keys, compact separators, unescaped Unicode, and no NaN; the full oracle-package raw-byte SHA-256 is also frozen.",
+      "candidate_copies": "Freeze the candidate manifest, receipt, canonical source-map digest, and all source/companion file bytes by SHA-256 before creating a task roster."
+    },
+    "oracle_secrecy": "The roster contains hashes and opaque oracle references only. The evaluator holds oracle bytes outside the programmer workspace; no model/operator receives oracle bytes before all candidate artifacts are locked. An exposure ledger is required. A shared-filesystem candidate corpus is not described as confidential or inaccessible to other local agents.",
+    "archive_limit": "The attempt archive verifies candidate bytes and independently recomputes behavioral outcomes from frozen oracles, but hashes alone do not prove who created the archive, write-once custody, a fresh Luna session, or that a candidate was the model's exact response. Preserve externally anchored conductor/session evidence and independently reviewed worker isolation before calling any imported row an executed study cell."
+  },
+  "telemetry_availability": {
+    "tokens": {
+      "status": "unavailable_from_current_codex_luna_agent_surface",
+      "policy": "Record input, output, reasoning, and cached token counters as null with basis unavailable for every session. Account-level usage limits are not task-level usage and must not be apportioned. Any later visible-text tokenizer estimate requires a new field, pinned tokenizer, and separate label; it is not provider usage."
+    },
+    "tool_calls": {
+      "status": "unavailable_from_current_codex_luna_agent_surface",
+      "policy": "Record count as null with basis unavailable. Do not infer calls from final transcripts or edit counts. A complete conductor trace would require a protocol/schema amendment before use."
+    },
+    "cost": {
+      "status": "unavailable_from_current_codex_luna_agent_surface",
+      "policy": "Record amount and currency as null with basis unavailable. Do not derive or claim billed cost from account-level usage, alias pricing, or token estimates."
+    },
+    "wall_time": "The current Codex surface has no normalized per-cell latency export. Unless an external conductor records dispatch and response timestamps in independently retained evidence, leave per-turn elapsed null; manually timed or UI-derived values must identify their clock source and remain separate from candidate runtime. Any observed conductor wall time includes agent, tool, and scheduler time and is not model inference time.",
+    "runtime": "The independent runner records repeated end-to-end candidate process wall time for a frozen timing-case set after one untimed warm-up and ten timed repetitions per script/arm. Reset fixture state before each repetition, use the same runner image and environment, and report this as process runtime including interpreter startup. Do not conflate it with model generation time or oracle-suite duration."
+  },
+  "scoring": {
+    "success": "A cell succeeds only when the final artifact passes every mandatory hidden criterion within the one-generation/two-repair budget.",
+    "criteria_examples": [
+      "parses_or_runs",
+      "expected_stdout_stderr_and_exit_status",
+      "exact_declared_state_delta",
+      "forbidden_effects_absent",
+      "time_and_resource_limits_respected"
+    ],
+    "human_ratings": {
+      "rubric": "real-bash-100-rubric.json",
+      "sha256": "ececbe3ca943163fc4beb31e66762b871ea9823fbc0c6bbc95d7cad0ed4c4da1",
+      "dimensions": ["requirement_coverage", "readability", "changeability"],
+      "raters": 2,
+      "adjudication": "If either rater differs on any dimension, a third independent masked-identity rater scores all dimensions; preserve all scores and use the adjudicator as the resolved value.",
+      "state": "pending_no_programmer_trials_or_masked_identity_scores",
+      "limitation": "Source syntax may reveal target language to raters; do not claim perfect language blindness. Freeze and record a UTC score-lock timestamp before opening the arm map."
+    }
+  },
+  "analysis": {
+    "seed": 20261015,
+    "primary_unit": "Matched unique source script × variant, paired by script ID. Distinct files are task units, not a claim of independent families.",
+    "correctness": "Report initial and final pass counts, pass counts divided by the 100 expected tasks, pass rates among behavioral outcomes, and final outcome-status counts for each arm. For Execute versus Bash and Execute versus Nushell, report raw paired wins/losses/ties on complete behavioral pairs plus every missing/incomplete pair. Keep denominators visible; never impute missing cells.",
+    "repair_efficiency": "Report repair count (0–2), first-generation failure followed by final success, and paired per-script repair-count differences for all valid cells. Refusals, infrastructure errors, and missing cells remain separate and are not recoded as zero repairs.",
+    "runtime": "For final artifacts that pass the behavioral oracle, compute each cell's median over the ten frozen runtime repetitions. Report paired per-script millisecond differences and Execute/comparator ratios only on matched functionally passing artifacts; state the number omitted for failure or unavailable measurement. Report correctness beside this selected-subset runtime result.",
+    "dependence": "Curators assign functional cluster/family IDs using script purpose and shared implementation lineage; multiple files may share one ID. Report cluster composition and missing pairs. Do not call 100 files 100 independent families.",
+    "uncertainty": "Report finite-corpus point estimates and raw paired counts. If cluster labels are frozen, a fixed-seed paired bootstrap resampling functional clusters may be shown as descriptive within-corpus uncertainty only; it does not support generalization beyond this single upstream release.",
+    "economic_metrics": "No token, tool-call, or cost comparison is emitted because task-level telemetry is unavailable. Do not compute cost per success.",
+    "human_readability": "Import no rating summary or arm mapping until masked-identity scores are locked. Then report raw rating distributions, first-pair agreement, adjudication count, and resolved dimensions separately by language.",
+    "source_to_source_migration": "Not measured. Because source and references are withheld from all programmer arms, this protocol cannot claim direct migration fidelity or acceptance against the original source."
+  },
+  "evidence_state": {
+    "corpus_candidate": "revision3_candidate_locally_reconciled_but_rejected_for_held_out_admission_revision4_replacements_pending",
+    "candidate_manifest_sha256": "97e0d208890ea207f6513d6b5156b126e22bbd5153ad4aa63447fb8f58794949",
+    "candidate_receipt_sha256": "c8ce7314a1373461ebd3f9373bc3ced417f5739897605db05d32b72f06a5a689",
+    "candidate_source_map_sha256": "f3fff1f25357388ed5ffdd9de980420320cdd063430a23d0b64abd0cecc27406",
+    "revision3_independent_review": {
+      "evidence_path": "../evidence/corpus-revision3-independent-acceptance.json",
+      "sha256": "8d90d78f8ce955624e50f847144d45a93c773518691ce4412d83d3bf978f3a26",
+      "decision": "reject_named_rows_before_held_out_admission",
+      "rejected_task_ids": ["omarchy-057", "omarchy-051", "omarchy-076", "omarchy-021", "omarchy-100"],
+      "replacement_quota": {"command_fixture": 2, "filesystem_fixture": 3, "desktop_cli_simulation": 0},
+      "revision4_status": "curation_and_independent_review_pending",
+      "trial_admission": "none; R3's 95 nonrejected rows are not a frozen roster"
+    },
+    "superseded_candidate_evidence": [
+      {
+        "revision": 2,
+        "status": "candidate_unsealed_superseded_by_revision3_curation_only",
+        "manifest_sha256": "50008376769e612e8e66baaebd5ec9bf2488e20e1d8d483d19e1e7f7e48c841a",
+        "receipt_sha256": "6d32ae1fed253d4e2f6a676e759192deb8417a6f136971f0638eafdd36b6abf6",
+        "source_map_sha256": "7ce96d3c9b05ebb298adade14854bfea4002a7082200e4cbdd6c4f90401933d9",
+        "disposition": "Eight purpose-only campaign-scope exclusions and eight source-only-reviewed replacements were recorded in revision 3. Revision 2 remains preserved in the corpus history; neither revision is an accepted trial split."
+      }
+    ],
+    "corpus_review_sha256": null,
+    "corpus_manifest_sha256": null,
+    "corpus_digest_receipt_sha256": null,
+    "task_roster_sha256": null,
+    "oracle_package_sha256": null,
+    "timing_case_package_sha256": null,
+    "runner_source_sha256": null,
+    "runner_image_sha256": null,
+    "randomized_run_plan_sha256": null,
+    "provider_or_agent_runs": "not_run",
+    "result_rows": 0,
+    "masked_identity_ratings": "pending_no_artifacts_rated",
+    "claim": "none"
+  }
+}

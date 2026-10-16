@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/real-bash-100-attempt-archive-manifest-1.json",
+  "title": "Immutable runner attempt archive manifest",
+  "type": "object",
+  "required": ["schema", "files"],
+  "properties": {
+    "schema": {"const": "execute.real-bash-100-attempt-archive-manifest/1"},
+    "files": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/file"},
+      "uniqueItems": true,
+      "description": "Sorted by POSIX relative path. Enumerates every regular file in the attempt archive except archive-manifest.json itself; directories are omitted."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "file": {
+      "type": "object",
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "description": "Unique non-absolute POSIX path with no empty, dot, or parent components."},
+        "sha256": {"$ref": "#/$defs/sha"},
+        "bytes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

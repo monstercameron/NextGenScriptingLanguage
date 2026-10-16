@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/ai-productivity-real-bash-100-corpus-review-1.json",
+  "title": "Independent held-out corpus acceptance record",
+  "type": "object",
+  "required": [
+    "schema", "decision", "reviewed_utc", "reviewer_id", "independence",
+    "corpus_manifest_sha256", "corpus_receipt_sha256", "candidate_source_count",
+    "accepted_task_ids", "exact_source_overlap_count", "license_status",
+    "selection_status", "family_adjacency_review", "review_notes_sha256"
+  ],
+  "properties": {
+    "schema": {"const": "execute.ai-productivity.real-bash-100-corpus-review/1"},
+    "decision": {"const": "accepted_held_out"},
+    "reviewed_utc": {"type": "string", "format": "date-time"},
+    "reviewer_id": {"type": "string", "minLength": 1},
+    "independence": {
+      "type": "object",
+      "required": ["not_corpus_curator", "not_programmer_operator"],
+      "properties": {
+        "not_corpus_curator": {"const": true},
+        "not_programmer_operator": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "corpus_manifest_sha256": {"$ref": "#/$defs/sha"},
+    "corpus_receipt_sha256": {"$ref": "#/$defs/sha"},
+    "candidate_source_count": {"const": 100},
+    "accepted_task_ids": {"type": "array", "minItems": 100, "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"}},
+    "exact_source_overlap_count": {"const": 0},
+    "license_status": {"const": "accepted"},
+    "selection_status": {"const": "accepted_curated_sample_as_described"},
+    "family_adjacency_review": {
+      "type": "object",
+      "required": ["ledger_sha256", "rows_reviewed", "material_overlap_rows", "unresolved_rows"],
+      "properties": {
+        "ledger_sha256": {"$ref": "#/$defs/sha"},
+        "rows_reviewed": {"type": "integer", "minimum": 0},
+        "material_overlap_rows": {"const": 0},
+        "unresolved_rows": {"const": 0}
+      },
+      "additionalProperties": false
+    },
+    "review_notes_sha256": {"$ref": "#/$defs/sha"}
+  },
+  "additionalProperties": false,
+  "$defs": {"sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

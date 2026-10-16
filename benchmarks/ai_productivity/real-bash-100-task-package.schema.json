@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/real-bash-100-task-package-1.json",
+  "title": "Shared language-neutral briefs for the 100-script study",
+  "description": "Programmer-visible package. It contains the exact same prompt and behavior brief for every arm and excludes source files, references, functional cases, and oracle material.",
+  "type": "object",
+  "required": ["schema", "status", "fixture_only", "protocol_sha256", "corpus_manifest_sha256", "tasks"],
+  "properties": {
+    "schema": {"const": "execute.real-bash-100-task-package/1"},
+    "status": {"enum": ["draft_fixture", "frozen_before_generation"]},
+    "fixture_only": {"type": "boolean"},
+    "protocol_sha256": {"$ref": "#/$defs/sha"},
+    "corpus_manifest_sha256": {"$ref": "#/$defs/sha"},
+    "tasks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/task"}}
+  },
+  "allOf": [
+    {"if": {"properties": {"fixture_only": {"const": true}}}, "then": {"properties": {"status": {"const": "draft_fixture"}}}},
+    {"if": {"properties": {"fixture_only": {"const": false}}}, "then": {"properties": {"status": {"const": "frozen_before_generation"}, "tasks": {"minItems": 100, "maxItems": 100}}}}
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "task": {
+      "type": "object",
+      "required": ["task_id", "family_id", "split", "stratum", "testability_stratum", "prompt", "behavior_brief", "prompt_sha256", "behavior_brief_sha256"],
+      "properties": {
+        "task_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+        "family_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+        "split": {"const": "held_out"},
+        "stratum": {"const": "workflow_cli"},
+        "testability_stratum": {"type": "string", "minLength": 1},
+        "prompt": {"type": "string", "minLength": 1, "description": "Identical user-visible task prompt for all language arms."},
+        "behavior_brief": {"type": "string", "minLength": 1, "description": "Language-neutral behavior requirements shared by all language arms."},
+        "prompt_sha256": {"$ref": "#/$defs/sha"},
+        "behavior_brief_sha256": {"$ref": "#/$defs/sha"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

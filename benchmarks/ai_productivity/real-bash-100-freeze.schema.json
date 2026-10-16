@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/ai-productivity-real-bash-100-freeze-1.json",
+  "title": "Pre-dispatch freeze receipt for the 100-script comparison",
+  "type": "object",
+  "required": [
+    "schema", "status", "frozen_utc", "randomization_seed", "protocol_sha256",
+    "rubric_sha256", "corpus_review_status", "corpus_review_sha256", "corpus_manifest_sha256", "corpus_digest_receipt_sha256",
+    "task_roster_sha256", "task_package_sha256", "oracle_package_sha256",
+    "timing_case_package_sha256", "runner_source_sha256", "runner_image_sha256",
+    "language_reference_bundle_sha256", "arm_map_sha256", "tool_configuration_sha256",
+    "randomized_run_plan_sha256", "comparison_block"
+  ],
+  "properties": {
+    "schema": {"const": "execute.ai-productivity.real-bash-100-freeze/1"},
+    "status": {"const": "frozen_before_dispatch"},
+    "frozen_utc": {"type": "string", "format": "date-time"},
+    "randomization_seed": {"type": "integer", "minimum": 0},
+    "comparison_block": {"type": "string", "minLength": 1},
+    "protocol_sha256": {"$ref": "#/$defs/sha"},
+    "rubric_sha256": {"$ref": "#/$defs/sha"},
+    "corpus_review_status": {"const": "accepted"},
+    "corpus_review_sha256": {"$ref": "#/$defs/sha", "description": "Hash of the independent corpus acceptance/rejection record; candidate_unsealed manifests cannot be frozen for trials."},
+    "corpus_manifest_sha256": {"$ref": "#/$defs/sha"},
+    "corpus_digest_receipt_sha256": {"$ref": "#/$defs/sha"},
+    "task_roster_sha256": {"$ref": "#/$defs/sha"},
+    "task_package_sha256": {"$ref": "#/$defs/sha"},
+    "oracle_package_sha256": {"$ref": "#/$defs/sha"},
+    "timing_case_package_sha256": {"$ref": "#/$defs/sha"},
+    "runner_source_sha256": {"$ref": "#/$defs/sha"},
+    "runner_image_sha256": {"$ref": "#/$defs/sha"},
+    "language_reference_bundle_sha256": {"$ref": "#/$defs/sha"},
+    "arm_map_sha256": {"$ref": "#/$defs/sha"},
+    "tool_configuration_sha256": {"$ref": "#/$defs/sha"},
+    "randomized_run_plan_sha256": {"$ref": "#/$defs/sha"}
+  },
+  "additionalProperties": false,
+  "$defs": {"sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

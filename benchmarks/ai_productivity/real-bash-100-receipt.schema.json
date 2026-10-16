@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/real-bash-corpus-receipt-1.json",
+  "title": "Integrity receipt for the candidate corpus manifest and source copies",
+  "type": "object",
+  "required": ["schema", "manifest_path", "manifest_sha256", "source_map_sha256", "source_count", "unique_script_ids", "unique_source_paths", "unique_source_hashes", "family_counts", "license_sha256", "sources", "verification", "companion_files", "created_utc"],
+  "properties": {
+    "schema": {"const": "execute.real-bash-corpus.receipt/1"},
+    "created_utc": {"type": "string", "format": "date-time"},
+    "manifest_path": {"type": "string", "minLength": 1},
+    "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_map_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$", "description": "SHA-256 of rows sorted by script_id, each containing script_id, path, sha256, bytes, lines, mode_octal joined by tabs, with one final LF."},
+    "source_count": {"const": 100},
+    "unique_script_ids": {"const": 100},
+    "unique_source_paths": {"const": 100},
+    "unique_source_hashes": {"const": 100},
+    "family_counts": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "integer", "minimum": 1}},
+    "license_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "sources": {
+      "type": "array", "minItems": 100, "maxItems": 100,
+      "items": {
+        "type": "object",
+        "properties": {
+          "script_id": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "bytes": {"type": "integer", "minimum": 1},
+          "lines": {"type": "integer", "minimum": 1},
+          "mode_octal": {"type": "string", "pattern": "^[0-7]{4}$"}
+        },
+        "required": ["script_id", "path", "sha256", "bytes", "lines", "mode_octal"],
+        "additionalProperties": false
+      }
+    },
+    "verification": {"type": "object"},
+    "companion_files": {
+      "type": "object",
+      "required": ["candidate-exclusion-ledger.json", "exclusions.json", "exposure-log.jsonl", "exposure-adjacency.json", "similarity-audit.json", "README.md", "independent-review.json", "revision2-changes.json"],
+      "properties": {
+        "candidate-exclusion-ledger.json": {"$ref": "#/$defs/sha"},
+        "exclusions.json": {"$ref": "#/$defs/sha"},
+        "exposure-log.jsonl": {"$ref": "#/$defs/sha"},
+        "exposure-adjacency.json": {"$ref": "#/$defs/sha"},
+        "similarity-audit.json": {"$ref": "#/$defs/sha"},
+        "README.md": {"$ref": "#/$defs/sha"},
+        "independent-review.json": {"$ref": "#/$defs/sha"},
+        "revision2-changes.json": {"$ref": "#/$defs/sha"},
+        "revision3-proposal.json": {"$ref": "#/$defs/sha"},
+        "revision3-independent-review.json": {"$ref": "#/$defs/sha"},
+        "revision3-changes.json": {"$ref": "#/$defs/sha"},
+        "revision4-changes.json": {"$ref": "#/$defs/sha"},
+        "revision4-exposure-addendum.json": {"$ref": "#/$defs/sha"},
+        "revision4-independent-review.json": {"$ref": "#/$defs/sha"},
+        "revision4-proposal.json": {"$ref": "#/$defs/sha"},
+        "revision5-bundled-independent-review.json": {"$ref": "#/$defs/sha"},
+        "revision5-bundled-proposal.json": {"$ref": "#/$defs/sha"},
+        "revision5-changes.json": {"$ref": "#/$defs/sha"},
+        "revision5-curation-amendment.json": {"$ref": "#/$defs/sha"},
+        "revision5-curation-exposure-log-addendum.jsonl": {"$ref": "#/$defs/sha"},
+        "revision5-curation-exposure-log.jsonl": {"$ref": "#/$defs/sha"},
+        "revision5-exposure-closure-screen.json": {"$ref": "#/$defs/sha"},
+        "revision5-final-screen-binding.json": {"$ref": "#/$defs/sha"},
+        "revision5-full-candidate-token-screen.json": {"$ref": "#/$defs/sha"},
+        "revision5-literal-closure-intersections.json": {"$ref": "#/$defs/sha"},
+        "revision5-proposal-amendment.json": {"$ref": "#/$defs/sha"},
+        "revision5-proposal.json": {"$ref": "#/$defs/sha"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {"sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

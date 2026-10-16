@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/real-bash-100-case-oracles-1.json",
+  "title": "Evaluator-only functional cases and hidden oracles",
+  "description": "Keep this package in the independent evaluator. The programmer-visible brief package contains no case or oracle content.",
+  "type": "object",
+  "required": ["schema", "status", "fixture_only", "task_package_sha256", "tasks"],
+  "properties": {
+    "schema": {"const": "execute.real-bash-100-case-oracles/1"},
+    "status": {"enum": ["draft_fixture", "frozen_before_generation"]},
+    "fixture_only": {"type": "boolean"},
+    "task_package_sha256": {"$ref": "#/$defs/sha", "description": "SHA-256 of the exact public brief package bytes."},
+    "tasks": {"type": "array", "items": {"$ref": "#/$defs/task"}}
+  },
+  "allOf": [
+    {"if": {"properties": {"fixture_only": {"const": true}}}, "then": {"properties": {"status": {"const": "draft_fixture"}}}},
+    {"if": {"properties": {"fixture_only": {"const": false}}}, "then": {"properties": {"status": {"const": "frozen_before_generation"}, "tasks": {"minItems": 100, "maxItems": 100}}}}
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "criterionId": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"},
+    "task": {
+      "type": "object",
+      "required": ["task_id", "oracle_sha256", "criteria", "cases"],
+      "properties": {
+        "task_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+        "oracle_sha256": {"$ref": "#/$defs/sha", "description": "Hash of canonical JSON {criteria,cases} as stored in this package; UTF-8, sorted keys, compact separators, unescaped Unicode."},
+        "criteria": {
+          "type": "object", "required": ["all_cases_observed"],
+          "properties": {"all_cases_observed": {"const": "all_cases_observed"}},
+          "additionalProperties": {"enum": ["process_io_exact", "filesystem_final_exact", "mock_command_effects_exact"]},
+          "propertyNames": {"$ref": "#/$defs/criterionId"},
+          "description": "Stable criterion IDs mapped to observation operations. The reserved all_cases_observed ID/operation pair is mandatory exactly once; the runner enforces exactly one such operation."
+        },
+        "cases": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/case"}}
+      },
+      "additionalProperties": false
+    },
+    "case": {
+      "type": "object",
+      "required": ["case_id", "cwd", "argv", "stdin_base64", "env", "filesystem_initial", "mock_commands", "expected"],
+      "properties": {
+        "case_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+        "cwd": {"type": "string", "description": "Relative path to an existing owned directory, or \".\" for the workspace root."},
+        "argv": {"type": "array", "items": {"type": "string"}, "description": "Arguments appended to the frozen runtime argv after {candidate}. Evaluator-only strings may use exact {workspace}, {home}, and {tmp} path tokens, expanded per case without wildcard matching."},
+        "stdin_base64": {"type": "string", "contentEncoding": "base64"},
+        "env": {"type": "object", "additionalProperties": {"type": "string", "description": "Exact text with optional {workspace}, {home}, and {tmp} path tokens."}, "description": "Case-specific variables. The runner owns PATH, HOME, TMPDIR, locale, timezone, and mock transport variables."},
+        "filesystem_initial": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+        "mock_commands": {"type": "array", "items": {"$ref": "#/$defs/mock"}},
+        "expected": {"$ref": "#/$defs/expected"}
+      },
+      "additionalProperties": false
+    },
+    "node": {
+      "oneOf": [
+        {"type": "object", "required": ["path", "type", "data_base64"], "properties": {"path": {"type": "string", "minLength": 1}, "type": {"const": "file"}, "mode": {"type": "string", "pattern": "^[0-7]{4}$", "default": "0644"}, "data_base64": {"type": "string", "contentEncoding": "base64"}}, "additionalProperties": false},
+        {"type": "object", "required": ["path", "type"], "properties": {"path": {"type": "string", "minLength": 1}, "type": {"const": "directory"}, "mode": {"type": "string", "pattern": "^[0-7]{4}$", "default": "0755"}}, "additionalProperties": false},
+        {"type": "object", "required": ["path", "type", "target"], "properties": {"path": {"type": "string", "minLength": 1}, "type": {"const": "symlink"}, "target": {"type": "string", "minLength": 1}}, "additionalProperties": false}
+      ]
+    },
+    "effect": {
+      "oneOf": [
+        {"type": "object", "required": ["op", "path", "data_base64"], "properties": {"op": {"enum": ["write_file", "append_file"]}, "path": {"type": "string", "minLength": 1}, "data_base64": {"type": "string", "contentEncoding": "base64"}}, "additionalProperties": false},
+        {"type": "object", "required": ["op", "path"], "properties": {"op": {"enum": ["remove", "mkdir"]}, "path": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+        {"type": "object", "required": ["op", "source", "destination"], "properties": {"op": {"const": "rename"}, "source": {"type": "string", "minLength": 1}, "destination": {"type": "string", "minLength": 1}}, "additionalProperties": false}
+      ]
+    },
+    "observedEffect": {
+      "oneOf": [
+        {"type": "object", "required": ["op", "path", "sha256", "bytes"], "properties": {"op": {"enum": ["write_file", "append_file"]}, "path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha"}, "bytes": {"type": "integer", "minimum": 0}}, "additionalProperties": false},
+        {"type": "object", "required": ["op", "path"], "properties": {"op": {"enum": ["remove", "mkdir"]}, "path": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+        {"type": "object", "required": ["op", "source", "destination"], "properties": {"op": {"const": "rename"}, "source": {"type": "string", "minLength": 1}, "destination": {"type": "string", "minLength": 1}}, "additionalProperties": false}
+      ]
+    },
+    "mock": {
+      "type": "object", "required": ["name", "steps"],
+      "properties": {"name": {"type": "string", "pattern": "^[A-Za-z0-9_.+-]{1,100}$"}, "observe_env": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"}}, "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}}},
+      "additionalProperties": false
+    },
+    "step": {
+      "type": "object", "required": ["match", "response", "effects"],
+      "properties": {
+        "match": {"type": "object", "required": ["argv"], "properties": {"argv": {"type": "array", "items": {"type": "string", "description": "Exact argument strings after path-token materialization."}}, "stdin_sha256": {"$ref": "#/$defs/sha"}, "stdin_base64": {"type": "string", "contentEncoding": "base64", "description": "Optional exact stdin bytes, preferred when the input includes per-case path tokens. If both stdin fields are provided, the stored digest must match the stored bytes; materialization recomputes it after token expansion."}}, "additionalProperties": false},
+        "response": {"type": "object", "required": ["returncode", "stdout_base64", "stderr_base64"], "properties": {"returncode": {"type": "integer", "minimum": 0, "maximum": 255}, "stdout_base64": {"type": "string", "contentEncoding": "base64"}, "stderr_base64": {"type": "string", "contentEncoding": "base64"}}, "additionalProperties": false},
+        "effects": {"type": "array", "items": {"$ref": "#/$defs/effect"}}
+      },
+      "additionalProperties": false
+    },
+    "mockEvent": {
+      "type": "object", "required": ["event_index", "command", "call_index", "matched_step", "argv", "stdin_sha256", "stdin_base64", "cwd", "env", "returncode", "stdout_sha256", "stderr_sha256", "matched", "applied_effects"],
+      "properties": {
+        "event_index": {"type": "integer", "minimum": 0}, "command": {"type": "string", "pattern": "^[A-Za-z0-9_.+-]{1,100}$"},
+        "call_index": {"type": ["integer", "null"], "minimum": 0}, "matched_step": {"type": ["integer", "null"], "minimum": 0},
+        "argv": {"type": "array", "items": {"type": "string"}}, "stdin_sha256": {"$ref": "#/$defs/sha"}, "stdin_base64": {"type": "string", "contentEncoding": "base64"},
+        "cwd": {"type": "string"}, "env": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Expected normalized values; workspace path tokens materialize to $WORKSPACE aliases."}, "returncode": {"type": "integer"}, "stdout_sha256": {"$ref": "#/$defs/sha"},
+        "stderr_sha256": {"$ref": "#/$defs/sha"}, "matched": {"type": "boolean"}, "applied_effects": {"type": "array", "items": {"$ref": "#/$defs/observedEffect"}}
+      },
+      "additionalProperties": false
+    },
+    "expected": {
+      "type": "object", "required": ["returncode", "stdout_base64", "stderr_base64", "filesystem_after", "mock_events"],
+      "properties": {"returncode": {"type": "integer", "minimum": -255, "maximum": 255}, "stdout_base64": {"type": "string", "contentEncoding": "base64"}, "stderr_base64": {"type": "string", "contentEncoding": "base64"}, "filesystem_after": {"type": "array", "items": {"$ref": "#/$defs/node"}}, "mock_events": {"type": "array", "items": {"$ref": "#/$defs/mockEvent"}}},
+      "additionalProperties": false
+    }
+  }
+}

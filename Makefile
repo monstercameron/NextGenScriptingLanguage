@@ -62,6 +62,8 @@ check: rust-check docs-check applet-boundaries-harness-check
 	$(PYTHON) -O tests/model_catalog.py
 	$(PYTHON) tests/desktop_acceptance.py
 	$(PYTHON) tools/desktop_ci/pam_transform.py --self-test
+	$(PYTHON) tests/ai_productivity_real_bash_100.py
+	$(PYTHON) tests/ai_productivity_real_bash_100_runner.py
 	EXECUTE_TEST_BINARY="$(CURDIR)/target/release/execute" $(PYTHON) tests/omarchy_interfaces.py
 	EXECUTE_TEST_BINARY="$(CURDIR)/target/release/execute" $(PYTHON) tests/site.py
 	$(PYTHON) tests/unix_bench.py

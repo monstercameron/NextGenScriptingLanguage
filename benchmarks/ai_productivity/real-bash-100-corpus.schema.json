@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/real-bash-corpus-candidate-1.json",
+  "title": "Unsealed candidate provenance manifest for real Bash scripts",
+  "type": "object",
+  "required": ["schema", "corpus_id", "status", "proposed_split", "source_population", "selection", "statistical_scope", "integrity", "scripts"],
+  "properties": {
+    "schema": {"const": "execute.real-bash-corpus.candidate/1"},
+    "corpus_id": {"type": "string", "minLength": 1},
+    "status": {"const": "candidate_unsealed"},
+    "proposed_split": {"const": "held_out"},
+    "source_population": {"type": "object"},
+    "selection": {"type": "object"},
+    "statistical_scope": {"type": "object"},
+    "integrity": {
+      "type": "object",
+      "required": ["line_count_definition", "mode_definition", "companion_evidence"],
+      "properties": {
+        "line_count_definition": {"type": "string", "minLength": 1},
+        "mode_definition": {"type": "string", "minLength": 1},
+        "companion_evidence": {
+          "type": "array", "minItems": 9, "maxItems": 28, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "additionalProperties": true
+    },
+    "scripts": {"type": "array", "minItems": 100, "maxItems": 100, "items": {"$ref": "#/$defs/script"}},
+    "exclusion_summary": {"type": "object"},
+    "exposure_limitations": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}, {"type": "object"}]}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "git_oid": {"type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"},
+    "script": {
+      "type": "object",
+      "required": ["task_id", "script_id", "family_id", "family_label", "family_rationale", "analysis_stratum", "proposed_split", "status", "testability_stratum", "testability_status", "fixture_plan", "dependency_inventory", "source", "license", "inventory_signals", "size_band", "low_complexity_flag"],
+      "properties": {
+        "task_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+        "script_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+        "family_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$", "description": "A functional cluster label. It may repeat across related files."},
+        "family_label": {"type": "string", "minLength": 1},
+        "family_rationale": {"type": "string", "minLength": 1},
+        "analysis_stratum": {"const": "workflow_cli"},
+        "proposed_split": {"const": "held_out"},
+        "status": {"const": "candidate_unsealed"},
+        "testability_stratum": {"type": "string", "minLength": 1},
+        "testability_status": {"type": "string", "minLength": 1, "description": "Static feasibility note only; not evidence of a successful fixture or behavior test."},
+        "fixture_plan": {"type": "string", "minLength": 1},
+        "dependency_inventory": {
+          "type": "object",
+          "required": ["absolute_path_literal_candidates", "dynamic_or_unresolved_dependencies", "environment_variable_candidates", "external_command_candidates", "method", "omarchy_helper_candidates", "source_operator_observed", "source_operator_tokens", "source_path_candidates"],
+          "properties": {
+            "absolute_path_literal_candidates": {"type": "array", "items": {"type": "string"}},
+            "dynamic_or_unresolved_dependencies": {"type": "string", "minLength": 1},
+            "environment_variable_candidates": {"type": "array", "items": {"type": "string"}},
+            "external_command_candidates": {"type": "array", "items": {"type": "string"}},
+            "method": {"type": "string", "minLength": 1},
+            "omarchy_helper_candidates": {"type": "array", "items": {"type": "string"}},
+            "source_operator_observed": {"type": "boolean"},
+            "source_operator_tokens": {"type": "array", "items": {"type": "string"}},
+            "source_path_candidates": {"type": "array", "items": {"type": "string"}},
+            "manual_callsite_corrections": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["helper", "line", "reason", "rpc_method"],
+                "properties": {
+                  "helper": {"type": "string", "minLength": 1},
+                  "line": {"type": "integer", "minimum": 1},
+                  "reason": {"type": "string", "minLength": 1},
+                  "rpc_method": {"type": "string", "minLength": 1}
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false,
+          "description": "Lexical inventory candidates, explicitly overinclusive/incomplete and not a resolved dependency graph."
+        },
+        "source": {"$ref": "#/$defs/source"},
+        "license": {"$ref": "#/$defs/license"},
+        "inventory_signals": {"type": "object"},
+        "size_band": {"type": "string", "minLength": 1},
+        "low_complexity_flag": {"type": "boolean"},
+        "source_only_adjacency_review": {
+          "type": "string", "minLength": 1,
+          "description": "R5 source-curation note for a revised slot; not task/oracle acceptance or behavior evidence."
+        }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "required": ["repository_url", "release_tag", "commit", "path", "permalink", "copy_path", "sha256", "bytes", "lines", "mode_octal"],
+      "properties": {
+        "repository_url": {"type": "string", "format": "uri"},
+        "release_tag": {"type": "string", "minLength": 1},
+        "commit": {"$ref": "#/$defs/git_oid"},
+        "path": {"type": "string", "minLength": 1},
+        "permalink": {"type": "string", "format": "uri"},
+        "copy_path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "lines": {"type": "integer", "minimum": 1},
+        "mode_octal": {"type": "string", "pattern": "^[0-7]{4}$", "description": "Zero-padded low permission bits, matching tar_mode & 0777."}
+      },
+      "additionalProperties": false
+    },
+    "license": {
+      "type": "object",
+      "required": ["SPDX", "path", "sha256"],
+      "properties": {
+        "SPDX": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

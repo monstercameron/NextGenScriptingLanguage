@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/real-bash-100-roster-1.json",
+  "title": "Hash-only task roster for the held-out 100-script study",
+  "type": "object",
+  "required": ["schema", "status", "frozen_utc", "protocol_sha256", "corpus_manifest_sha256", "digest_receipt_sha256", "task_package_sha256", "tasks"],
+  "properties": {
+    "schema": {"const": "execute.ai-productivity.real-bash-100-roster/1"},
+    "status": {"const": "frozen_before_generation"},
+    "frozen_utc": {"type": "string", "format": "date-time"},
+    "protocol_sha256": {"$ref": "#/$defs/sha"},
+    "corpus_manifest_sha256": {"$ref": "#/$defs/sha"},
+    "digest_receipt_sha256": {"$ref": "#/$defs/sha"},
+    "task_package_sha256": {"$ref": "#/$defs/sha"},
+    "tasks": {"type": "array", "minItems": 100, "maxItems": 100, "items": {"$ref": "#/$defs/task"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "git_oid": {"type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"},
+    "task": {
+      "type": "object",
+      "required": ["task_id", "family_id", "split", "stratum", "testability_stratum", "repo_url", "source_commit", "source_path", "source_sha256", "manifest_record_sha256", "prompt_sha256", "behavior_brief_sha256", "oracle_sha256", "oracle_ref", "criteria", "timing_case_set_sha256", "timing_case_ref"],
+      "properties": {
+        "task_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+        "family_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+        "split": {"const": "held_out"},
+        "stratum": {"const": "workflow_cli"},
+        "testability_stratum": {"type": "string", "minLength": 1, "description": "Descriptive fixture-feasibility label; does not imply a desktop-acceptance stratum."},
+        "repo_url": {"type": "string", "format": "uri"},
+        "source_commit": {"$ref": "#/$defs/git_oid"},
+        "source_path": {"type": "string", "minLength": 1},
+        "source_sha256": {"$ref": "#/$defs/sha"},
+        "manifest_record_sha256": {"$ref": "#/$defs/sha"},
+        "prompt_sha256": {"$ref": "#/$defs/sha"},
+        "behavior_brief_sha256": {"$ref": "#/$defs/sha"},
+        "oracle_sha256": {"$ref": "#/$defs/sha", "description": "SHA-256 over canonical UTF-8 JSON {criteria,cases}, sorted keys, compact separators, unescaped Unicode, no NaN; the full evaluator package raw-byte hash is separately frozen."},
+        "oracle_ref": {"type": "string", "minLength": 1, "description": "Opaque evaluator-only reference; never a local path readable by the programmer."},
+        "criteria": {
+          "type": "object", "minProperties": 1,
+          "required": ["all_cases_observed"],
+          "propertyNames": {"pattern": "^[a-z][a-z0-9_]{1,63}$"},
+          "properties": {"all_cases_observed": {"const": "all_cases_observed"}},
+          "additionalProperties": {"enum": ["process_io_exact", "filesystem_final_exact", "mock_command_effects_exact"]},
+          "description": "Exact criterion-ID to evaluator operation map. Every production task requires the reserved all_cases_observed criterion; completion prevents a matching timeout or candidate resource limit from passing."
+        },
+        "timing_case_set_sha256": {"$ref": "#/$defs/sha"},
+        "timing_case_ref": {"type": "string", "minLength": 1, "description": "Opaque evaluator-only reference to the frozen runtime workload."}
+      },
+      "additionalProperties": false
+    }
+  }
+}

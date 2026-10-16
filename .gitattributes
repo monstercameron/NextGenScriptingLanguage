@@ -33,6 +33,12 @@ benchmarks/**/*.patch binary
 benchmarks/payload-size-paired-macos-linux-20261016/source/direct-size-harness.rs binary
 
 # Immutable graph-run logs, patches, and the original audited source keep raw whitespace.
+benchmarks/graph-collector-queue-macos-arm64-20261016/** -text
 benchmarks/graph-collector-queue-macos-arm64-20261016/**/*.log binary
 benchmarks/graph-collector-queue-macos-arm64-20261016/**/*.diff binary
 benchmarks/graph-collector-queue-macos-arm64-20261016/collector-e2e/audit/audit_graph_transport_e2e.py binary
+
+# Immutable scalar-run inputs and reports retain their recorded byte hashes.
+benchmarks/typed-json-carry-scalar-mixed-20261016/** -text
+benchmarks/typed-json-carry-scalar-mixed-20261016/**/*.log binary
+benchmarks/typed-json-carry-scalar-mixed-20261016/**/*.diff binary

@@ -1,0 +1,87 @@
+{
+  "attempt_dir": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/paired-run-v3-attempt-1/attempts/measurement-06-2-candidate",
+  "attempt_id": "measurement-06-2-candidate",
+  "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+  "binary_sha256_after": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+  "binary_sha256_before": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+  "build_receipt_sha256": "4a98e340a15ae7a39a27df9ad8cbc171d4d6a9f7a71f07c36722d349b6bd5fe3",
+  "execution_error": null,
+  "finished_at": "2026-10-16T08:34:06.883Z",
+  "global_pair_index": 8,
+  "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+  "helper_sha256_after": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+  "helper_sha256_before": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+  "median_duration_ns": 1759417,
+  "phase": "measurement",
+  "phase_pair_index": 6,
+  "position_in_pair": 2,
+  "raw_report_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/paired-run-v3-attempt-1/attempts/measurement-06-2-candidate/raw.json",
+  "raw_report_present": true,
+  "raw_report_sha256": "974c2707b3a24bc116ddcde8b3e33a39c81905e4e152fbbc7fbc77a09a6a3013",
+  "raw_sample_ns": [
+    1845750,
+    1759417,
+    1710250
+  ],
+  "raw_validation_error": null,
+  "retry": 0,
+  "returncode": 0,
+  "semantic_oracles": [
+    {
+      "cache_hits": 0,
+      "dropped_execution_records": 744,
+      "dropped_stages": 744,
+      "expected_dropped_execution_records": 744,
+      "expected_retained_execution_records": 256,
+      "launched_processes": 0,
+      "output_hex": "33",
+      "retained_all_success_status_0": true,
+      "retained_execution_records": 256,
+      "retained_stdout_bytes_per_call": 2
+    },
+    {
+      "cache_hits": 0,
+      "dropped_execution_records": 744,
+      "dropped_stages": 744,
+      "expected_dropped_execution_records": 744,
+      "expected_retained_execution_records": 256,
+      "launched_processes": 0,
+      "output_hex": "33",
+      "retained_all_success_status_0": true,
+      "retained_execution_records": 256,
+      "retained_stdout_bytes_per_call": 2
+    },
+    {
+      "cache_hits": 0,
+      "dropped_execution_records": 744,
+      "dropped_stages": 744,
+      "expected_dropped_execution_records": 744,
+      "expected_retained_execution_records": 256,
+      "launched_processes": 0,
+      "output_hex": "33",
+      "retained_all_success_status_0": true,
+      "retained_execution_records": 256,
+      "retained_stdout_bytes_per_call": 2
+    }
+  ],
+  "side": "candidate",
+  "source_fingerprint_sha256": "cae72e203cc3b1b8cd17cc3fa6dfc27e8db3912ea4227c1355eca7036befd0d1",
+  "stderr_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/paired-run-v3-attempt-1/attempts/measurement-06-2-candidate/stderr.bin",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/paired-run-v3-attempt-1/attempts/measurement-06-2-candidate/stdout.bin",
+  "stdout_sha256": "8fbb1bdccb92d3f24815d5b1c4a2937f4d5cdb3a4480fe7bd92f8ffa8dfe8d82",
+  "successful": true,
+  "timed_out": false,
+  "wall_elapsed_ns": 23478250,
+  "workload": {
+    "applet": "number.add",
+    "calls": 1000,
+    "catalog_sha256": "66b19b10aea5b14f37a5230ed72db4109b2419f5cf4cb8e3cbe9a6be1c1d4138",
+    "literal_operands": [
+      1,
+      2
+    ],
+    "source_bytes": 53031,
+    "source_sha256": "ebc52bd23f0e7ed6191bbff77e8b1ee8eef8eb2e2e861e3741b6337af6e76dac"
+  }
+}

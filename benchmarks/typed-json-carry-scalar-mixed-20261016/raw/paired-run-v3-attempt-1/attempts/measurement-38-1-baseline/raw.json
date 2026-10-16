@@ -1,0 +1,66 @@
+{
+  "measured_samples": 3,
+  "method": "Public runtime::run API; 1,000 uncached in-process number.add calls with literal operands 1 and 2, each bound to a distinct name, followed by JSON encoding of the last result. Includes runtime validation, per-call typed output validation, bindings, and result construction; excludes registry/source setup and RunResult destruction. No child processes.",
+  "results": {
+    "literal_number_add_1000": {
+      "p50_ns": 1945625,
+      "p95_ns": 1972750,
+      "raw_sample_ns": [
+        1945625,
+        1925458,
+        1972750
+      ],
+      "semantic_oracles": [
+        {
+          "cache_hits": 0,
+          "dropped_execution_records": 744,
+          "dropped_stages": 744,
+          "expected_dropped_execution_records": 744,
+          "expected_retained_execution_records": 256,
+          "launched_processes": 0,
+          "output_hex": "33",
+          "retained_all_success_status_0": true,
+          "retained_execution_records": 256,
+          "retained_stdout_bytes_per_call": 2
+        },
+        {
+          "cache_hits": 0,
+          "dropped_execution_records": 744,
+          "dropped_stages": 744,
+          "expected_dropped_execution_records": 744,
+          "expected_retained_execution_records": 256,
+          "launched_processes": 0,
+          "output_hex": "33",
+          "retained_all_success_status_0": true,
+          "retained_execution_records": 256,
+          "retained_stdout_bytes_per_call": 2
+        },
+        {
+          "cache_hits": 0,
+          "dropped_execution_records": 744,
+          "dropped_stages": 744,
+          "expected_dropped_execution_records": 744,
+          "expected_retained_execution_records": 256,
+          "launched_processes": 0,
+          "output_hex": "33",
+          "retained_all_success_status_0": true,
+          "retained_execution_records": 256,
+          "retained_stdout_bytes_per_call": 2
+        }
+      ]
+    }
+  },
+  "schema": "typed_json_carry_public_runtime_bench/v1",
+  "warmup_runs": 0,
+  "workload": {
+    "applet": "number.add",
+    "calls": 1000,
+    "catalog_sha256": "66b19b10aea5b14f37a5230ed72db4109b2419f5cf4cb8e3cbe9a6be1c1d4138",
+    "literal_operands": [
+      1,
+      2
+    ],
+    "source_bytes": 53031,
+    "source_sha256": "ebc52bd23f0e7ed6191bbff77e8b1ee8eef8eb2e2e861e3741b6337af6e76dac"
+  }
+}

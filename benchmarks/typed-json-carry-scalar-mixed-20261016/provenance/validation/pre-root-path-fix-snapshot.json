@@ -1,0 +1,11 @@
+{
+  "files": {
+    "evidence/typed-json-carry-bench/benchmark-plan-v3.md.pre-root-path-fix": "b3d4884eb39bdde857b89ea45666544b3baf9287b401d98a59709a1f49bdb064",
+    "evidence/typed-json-carry-bench/v3-source-freeze-receipt.json.pre-root-path-fix": "ed96fd83ec5e3ca62e27460b486966c873ca670b738f4b5ac6f29fa9fecadbb2",
+    "evidence/typed-json-carry-bench/v3-source-freeze-receipt.json.sha256.pre-root-path-fix": "650589c727afdc63fe9db4a68bb3655364ab6f0f02f757ac6bcf52a17a807aa6",
+    "work/typed-json-carry-v3-paired-runner/README.md.pre-root-path-fix": "7f6ac14a8d76b50b08457b2b1aa2934744d42f37dbb5b46a41abc646315e1157",
+    "work/typed-json-carry-v3-paired-runner/test_typed_json_carry_pair.py.pre-root-path-fix": "e4d518446689571a66cd232f449dff15f3913c2e3c87b4905a485bff4cd24e6b",
+    "work/typed-json-carry-v3-paired-runner/typed_json_carry_v3_pair.py.pre-root-path-fix": "7758fba635330b830dd10379757584a25f47d071c699a8c817aff365fd2c87ae"
+  },
+  "schema": "typed-json-carry-path-fix-preservation/1"
+}

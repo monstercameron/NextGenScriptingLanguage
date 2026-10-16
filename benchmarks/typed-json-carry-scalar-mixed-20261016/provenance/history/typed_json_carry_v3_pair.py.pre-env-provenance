@@ -1,0 +1,989 @@
+#!/usr/bin/env python3
+"""Strict fixed-schedule paired runner for the typed-JSON carry public-runtime microbenchmark.
+
+This runner never builds. It validates the frozen 2,197-file source trees and the
+immutable Cargo test/helper artifacts, then invokes only the named ignored test.
+Every invocation gets a new absolute OPT_BENCH_REPORT path and its complete
+stdout, stderr, raw report, status, and identity checks are retained.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import statistics
+import stat
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from typing import Any, Mapping, Sequence
+
+FORMAT_VERSION = 1
+CASE = "literal_number_add_1000"
+TEST_NAME = CASE
+HARNESS_RELATIVE = "tests/opt_typed_json_carry.rs"
+EXPECTED_HARNESS_SHA256 = "ba0336a0749d86e4b4f28231daea6fa36cb85a3020f93302bb0b94d83260f68b"
+HARNESS_PATCH_SHA256 = "3a227a33319519bbbcd64f29678c4d3879bba0121383f2cfc8afe9511c4d1141"
+PRODUCT_PATCH_SHA256 = "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9"
+BUILD_DRIVER_SHA256 = "3c17e32cd168fcee1838c610345962b3378a2836863f1b08d329e1ae0ba404cf"
+SOURCE_BINDINGS_SHA256 = "cd64998235087d2fb448cc8533b99c03c007204381de80b08d7046b622652e9e"
+BASE_COMMIT = "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b"
+EMPTY_DIFF_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+EXPECTED_SOURCE_BYTES = 53031
+EXPECTED_SOURCE_SHA256 = "ebc52bd23f0e7ed6191bbff77e8b1ee8eef8eb2e2e861e3741b6337af6e76dac"
+EXPECTED_OUTPUT_HEX = "33"
+EXPECTED_OUTPUT_SHA256 = "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+EXPECTED_METHOD = (
+    "Public runtime::run API; 1,000 uncached in-process number.add calls with literal operands 1 and 2, each bound to a distinct name, followed by JSON encoding of the last result. Includes runtime validation, per-call typed output validation, bindings, and result construction; excludes registry/source setup and RunResult destruction. No child processes."
+)
+WARMUP_PAIRS = 3
+MEASURED_PAIRS = 48
+INNER_WARMUPS = 0
+INNER_SAMPLES = 3
+INVOCATION_TIMEOUT_SECONDS = 120
+MAX_JSON_BYTES = 4_000_000
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+C = Path(__file__).resolve().parent.parent
+CAMPAIGN = C
+EVIDENCE = C / "evidence/typed-json-carry-bench"
+SOURCE_BINDINGS = EVIDENCE / "source-fingerprints-v3.json"
+BUILD_DRIVER = C / "work/build_typed_json_carry_v3_pair.py"
+BUILD_RUN = EVIDENCE / "build-attempt-v3"
+BASELINE_ROOT = C / "work/typed-json-carry-bench-baseline-e5fa516"
+CANDIDATE_ROOT = C / "work/typed-json-carry-v3-bench-candidate-e5fa516"
+TARGET = C / "work/perf-target-candidate"
+BUILD_TARGETS = {
+    "flow": Path("src/lib.rs"),
+    "typed_contracts": Path("tests/typed_contracts.rs"),
+    "opt_typed_json_carry": Path(HARNESS_RELATIVE),
+}
+HELPER_NAME = "execute-applet"
+HELPER_SOURCE = Path("src/bin/execute-applet.rs")
+ARTIFACT_NAMES = ("flow", "typed_contracts", "opt_typed_json_carry")
+CLEAN_ARGS = ["cargo", "clean", "--release", "-p", "execute"]
+BUILD_ARGS = [
+    "cargo", "test", "--locked", "--release", "-p", "execute", "--lib",
+    "--test", "typed_contracts", "--test", "opt_typed_json_carry", "--no-run",
+    "--message-format=json",
+]
+HELPER_BUILD_ARGS = ["cargo", "build", "--locked", "--release", "-p", "execute", "--bin", HELPER_NAME, "--message-format=json"]
+
+
+class PairError(RuntimeError):
+    """A frozen-input, invocation, or benchmark-contract failure."""
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def sha_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def sha_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant: {value}")
+
+
+def strict_json_bytes(payload: bytes, label: str) -> Any:
+    if len(payload) > MAX_JSON_BYTES:
+        raise PairError(f"{label} exceeds {MAX_JSON_BYTES} bytes")
+    try:
+        return json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise PairError(f"{label} is not strict UTF-8 JSON: {error}") from error
+
+
+def load_json(path: Path, label: str) -> Any:
+    try:
+        payload = path.expanduser().resolve(strict=True).read_bytes()
+    except OSError as error:
+        raise PairError(f"cannot read {label}: {error}") from error
+    return strict_json_bytes(payload, label)
+
+
+def write_json(path: Path, value: Any, *, exclusive: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n").encode("utf-8")
+    if exclusive:
+        with path.open("xb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("xb") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+
+
+def write_bytes_new(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("xb") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def git(root: Path, *arguments: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise PairError(f"cannot inspect {root}: {error}") from error
+    if result.returncode:
+        raise PairError(result.stderr.decode("utf-8", errors="replace").strip())
+    return result.stdout
+
+
+def listed_source_paths(root: Path) -> list[str]:
+    tracked = git(root, "ls-files", "-z").split(b"\0")
+    untracked = git(root, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0")
+    return sorted({os.fsdecode(item) for item in tracked + untracked if item})
+
+
+def source_fingerprint(root: Path) -> dict[str, Any]:
+    files: dict[str, str] = {}
+    for relative in listed_source_paths(root):
+        path = root / relative
+        if path.is_symlink():
+            data = b"symlink\0" + os.fsencode(os.readlink(path))
+        else:
+            try:
+                data = path.read_bytes()
+            except OSError as error:
+                raise PairError(f"cannot fingerprint source {relative}: {error}") from error
+        files[relative] = sha_bytes(data)
+    canonical = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
+    return {"sha256": sha_bytes(canonical), "file_count": len(files), "files": files}
+
+
+def diff_sha256(root: Path, *, staged: bool = False) -> str:
+    args = ("diff", "--cached", "--binary") if staged else ("diff", "--binary")
+    return sha_bytes(git(root, *args))
+
+
+def _expect(condition: bool, message: str) -> None:
+    if not condition:
+        raise PairError(message)
+
+
+def _exact_bool(value: Any, expected: bool) -> bool:
+    return type(value) is bool and value is expected
+
+
+def validate_artifact_row(
+    artifact: Any,
+    *,
+    side: str,
+    root: Path,
+    target_name: str,
+    expected_source: Path,
+    test_profile: bool,
+    target_dir: Path,
+    executable_subdirectory: Path = Path("release/deps"),
+) -> Path:
+    _expect(isinstance(artifact, dict), f"{side}/{target_name} Cargo artifact is not an object")
+    target = artifact.get("target")
+    profile = artifact.get("profile")
+    _expect(isinstance(target, dict) and isinstance(profile, dict), f"{side}/{target_name} lacks target/profile")
+    _expect(artifact.get("reason") == "compiler-artifact", f"{side}/{target_name} is not compiler-artifact metadata")
+    _expect(artifact.get("fresh") is False, f"{side}/{target_name} was fresh/reused")
+    _expect(target.get("name") == target_name, f"{side}/{target_name} target name mismatch")
+    expected_kind = ["lib"] if target_name == "flow" else (["test"] if test_profile else ["bin"])
+    _expect(target.get("kind") == expected_kind, f"{side}/{target_name} Cargo target kind mismatch")
+    _expect(type(target.get("test")) is bool and target["test"] is test_profile, f"{side}/{target_name} target test flag mismatch")
+    _expect(type(profile.get("test")) is bool and profile["test"] is test_profile, f"{side}/{target_name} profile test flag mismatch")
+    _expect(profile.get("opt_level") == "3" and profile.get("debug_assertions") is False, f"{side}/{target_name} is not optimized release")
+    _expect(Path(artifact.get("manifest_path", "")).resolve() == (root / "Cargo.toml").resolve(), f"{side}/{target_name} manifest path mismatch")
+    _expect(Path(target.get("src_path", "")).resolve() == (root / expected_source).resolve(), f"{side}/{target_name} source path mismatch")
+    expected_package = f"path+{root.as_uri()}#execute@"
+    _expect(isinstance(artifact.get("package_id"), str) and artifact["package_id"].startswith(expected_package), f"{side}/{target_name} package identity mismatch")
+    executable = artifact.get("executable")
+    filenames = artifact.get("filenames")
+    _expect(isinstance(executable, str) and isinstance(filenames, list) and executable in filenames, f"{side}/{target_name} executable is not named by Cargo")
+    binary = Path(executable).resolve()
+    _expect(binary.is_file(), f"{side}/{target_name} Cargo binary is missing")
+    _expect(binary.is_relative_to(target_dir.resolve() / executable_subdirectory), f"{side}/{target_name} is outside {executable_subdirectory}")
+    return binary
+
+
+def validate_helper_artifact(artifact: Any, *, side: str, root: Path, target_dir: Path) -> Path:
+    binary = validate_artifact_row(
+        artifact,
+        side=side,
+        root=root,
+        target_name=HELPER_NAME,
+        expected_source=HELPER_SOURCE,
+        test_profile=False,
+        target_dir=target_dir,
+        executable_subdirectory=Path("release"),
+    )
+    expected = target_dir.resolve() / "release" / HELPER_NAME
+    _expect(binary == expected, f"{side} helper is not the exact release/execute-applet artifact")
+    return binary
+
+
+def _artifact_identity(
+    side: str,
+    target_name: str,
+    receipt: Mapping[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    item = receipt["artifacts"].get(target_name)
+    _expect(isinstance(item, dict), f"{side}/{target_name} receipt entry missing")
+    expected_saved = BUILD_RUN / side / "binaries" / f"{target_name}-test-binary"
+    saved = Path(item.get("saved_binary", "")).resolve(strict=True)
+    _expect(saved == expected_saved.resolve(strict=True), f"{side}/{target_name} saved test binary path mismatch")
+    saved_original = expected_saved
+    _expect(not saved_original.is_symlink(), f"{side}/{target_name} saved test binary must be a regular copied file")
+    artifact = item.get("cargo_artifact")
+    binary = validate_artifact_row(
+        artifact,
+        side=side,
+        root=root,
+        target_name=target_name,
+        expected_source=BUILD_TARGETS[target_name],
+        test_profile=True,
+        target_dir=TARGET,
+    )
+    _expect(Path(item.get("binary_path", "")).resolve() == binary, f"{side}/{target_name} original binary path mismatch")
+    digest = item.get("saved_binary_sha256")
+    _expect(isinstance(digest, str) and SHA256_RE.fullmatch(digest) is not None, f"{side}/{target_name} binary digest invalid")
+    _expect(sha_file(saved) == digest and item.get("binary_sha256") == digest, f"{side}/{target_name} saved binary digest mismatch")
+    _expect(os.access(saved, os.X_OK), f"{side}/{target_name} saved test binary is not executable")
+    _expect(item.get("saved_binary_mode") == "0o555", f"{side}/{target_name} saved binary mode mismatch")
+    _expect(stat.S_IMODE(saved.stat().st_mode) == 0o555, f"{side}/{target_name} saved test binary is writable or has unexpected mode")
+    _expect(sha_file(binary) == item.get("binary_sha256"), f"{side}/{target_name} Cargo binary differs from its saved copy")
+    return {
+        "artifact": artifact,
+        "cargo_binary": str(binary),
+        "binary": str(saved),
+        "binary_sha256": digest,
+    }
+
+
+def _helper_identity(side: str, receipt: Mapping[str, Any], root: Path) -> dict[str, Any]:
+    item = receipt.get("helper_artifact")
+    _expect(isinstance(item, dict), f"{side} helper artifact receipt missing")
+    _expect(receipt.get("helper_target") == HELPER_NAME, f"{side} helper target mismatch")
+    _expect(receipt.get("helper_source") == str(HELPER_SOURCE), f"{side} helper source receipt mismatch")
+    _expect(item.get("saved_beside_test_binaries") is True and item.get("helper_not_executed") is True, f"{side} helper execution/placement assertion mismatch")
+    cargo_binary = validate_helper_artifact(item.get("cargo_artifact"), side=side, root=root, target_dir=TARGET)
+    _expect(Path(item.get("binary_path", "")).resolve() == cargo_binary, f"{side} helper Cargo path mismatch")
+    _expect(sha_file(cargo_binary) == item.get("binary_sha256"), f"{side} Cargo helper digest mismatch")
+    saved = BUILD_RUN / side / "binaries" / HELPER_NAME
+    _expect(Path(item.get("saved_binary", "")).resolve(strict=True) == saved.resolve(strict=True), f"{side} copied helper path mismatch")
+    _expect(not saved.is_symlink(), f"{side} copied helper must be a regular file")
+    digest = item.get("saved_binary_sha256")
+    _expect(isinstance(digest, str) and SHA256_RE.fullmatch(digest) is not None, f"{side} copied helper digest malformed")
+    _expect(sha_file(saved) == digest and os.access(saved, os.X_OK), f"{side} copied helper hash/execute bit mismatch")
+    _expect(item.get("saved_binary_mode") == "0o555", f"{side} copied helper mode mismatch")
+    _expect(stat.S_IMODE(saved.stat().st_mode) == 0o555, f"{side} copied helper is writable or has unexpected mode")
+    return {"artifact": item["cargo_artifact"], "cargo_binary": str(cargo_binary), "binary": str(saved), "binary_sha256": digest}
+
+
+def _test_list_identity(side: str, target_name: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
+    listing = receipt["test_lists"].get(target_name)
+    _expect(isinstance(listing, dict), f"{side}/{target_name} test-list receipt missing")
+    path = Path(listing.get("test_list_path", "")).resolve(strict=True)
+    expected = BUILD_RUN / side / "test-lists" / f"{target_name}.txt"
+    _expect(path == expected.resolve(strict=True), f"{side}/{target_name} test-list path mismatch")
+    data = path.read_bytes()
+    digest = sha_bytes(data)
+    _expect(listing.get("test_list_sha256") == digest, f"{side}/{target_name} test-list digest mismatch")
+    _expect(listing.get("return_code") == 0, f"{side}/{target_name} test listing command failed")
+    _expect(listing.get("tests_not_executed") is True, f"{side}/{target_name} list receipt claims tests ran")
+    test_count = sum(line.rstrip().endswith(b": test") for line in data.splitlines())
+    _expect(listing.get("test_count_lines") == test_count, f"{side}/{target_name} listed-test count mismatch")
+    stderr_path = Path(listing.get("stderr_path", "")).resolve(strict=True)
+    expected_stderr = BUILD_RUN / side / "test-lists" / f"{target_name}.txt.stderr.log"
+    _expect(stderr_path == expected_stderr.resolve(strict=True), f"{side}/{target_name} listing stderr path mismatch")
+    _expect(sha_file(stderr_path) == listing.get("stderr_sha256"), f"{side}/{target_name} listing stderr hash mismatch")
+    if target_name == "opt_typed_json_carry":
+        _expect(f"{TEST_NAME}: test".encode() in data.splitlines(), f"{side} exact benchmark test is absent from test listing")
+    return {"path": str(path), "sha256": digest, "test_count_lines": listing.get("test_count_lines")}
+
+
+def source_map_pair_validation(baseline: Mapping[str, Any], candidate: Mapping[str, Any]) -> set[str]:
+    base_fp = baseline.get("source_fingerprint")
+    cand_fp = candidate.get("source_fingerprint")
+    _expect(isinstance(base_fp, dict) and isinstance(cand_fp, dict), "paired source fingerprints missing")
+    base_files = base_fp.get("files")
+    cand_files = cand_fp.get("files")
+    _expect(isinstance(base_files, dict) and isinstance(cand_files, dict), "paired source file maps missing")
+    _expect(base_files.keys() == cand_files.keys(), "paired source roots have different 2,197-file paths")
+    changed = {path for path in base_files if base_files[path] != cand_files[path]}
+    expected = {
+        "src/contracts.rs",
+        "src/manifest.rs",
+        "src/runtime.rs",
+        "src/runtime/program_backend.rs",
+        "src/runtime/windows_process.rs",
+        "tests/typed_contracts.rs",
+    }
+    _expect(changed == expected, f"paired source differences do not equal the frozen product patch: {sorted(changed)}")
+    _expect(baseline.get("root") != candidate.get("root"), "paired source roots are not distinct")
+    _expect(baseline.get("opt_test_binary", {}).get("binary") != candidate.get("opt_test_binary", {}).get("binary"), "paired benchmark binary paths are not distinct")
+    _expect(baseline.get("opt_test_binary", {}).get("binary_sha256") != candidate.get("opt_test_binary", {}).get("binary_sha256"), "paired benchmark binaries are byte-identical")
+    for key in ("harness_source_sha256", "harness_patch_sha256", "product_patch_sha256"):
+        _expect(baseline.get(key) == candidate.get(key), f"paired arms differ in {key}")
+    return changed
+
+
+def _live_arm(side: str, frozen: Mapping[str, Any]) -> dict[str, Any]:
+    root = Path(frozen["root"]).resolve(strict=True)
+    _expect(root == (BASELINE_ROOT if side == "baseline" else CANDIDATE_ROOT).resolve(strict=True), f"{side} root is not the registered checkout")
+    _expect(git(root, "rev-parse", "HEAD").decode().strip() == BASE_COMMIT, f"{side} HEAD differs from the frozen base")
+    live_fp = source_fingerprint(root)
+    expected_fp = frozen["tree"]
+    _expect(live_fp == expected_fp, f"{side} live full-source fingerprint differs from the frozen 2,197-file map")
+    _expect(diff_sha256(root) == frozen["tracked_diff_sha256"], f"{side} tracked diff changed")
+    _expect(diff_sha256(root, staged=True) == frozen["staged_diff_sha256"], f"{side} staged diff changed")
+    _expect(live_fp["files"].get(HARNESS_RELATIVE) == EXPECTED_HARNESS_SHA256, f"{side} formatted harness hash mismatch")
+    receipt_path = BUILD_RUN / side / "build-receipt.json"
+    receipt = load_json(receipt_path, f"{side} build receipt")
+    _expect(receipt.get("status") == "success" and receipt.get("source_stable") is True, f"{side} build did not attest to a stable successful source")
+    _expect(receipt.get("tests_executed") is False, f"{side} build receipt says tests ran during preparation")
+    _expect(receipt.get("side") == side and receipt.get("worktree") == str(root), f"{side} build worktree metadata mismatch")
+    _expect(receipt.get("head") == BASE_COMMIT, f"{side} build receipt HEAD mismatch")
+    _expect(receipt.get("clean") == CLEAN_ARGS and receipt.get("build") == BUILD_ARGS, f"{side} clean/build command differs from the frozen plan")
+    _expect(receipt.get("helper_build") == HELPER_BUILD_ARGS, f"{side} helper build command differs from the frozen plan")
+    _expect(receipt.get("target_directory") == str(TARGET.resolve()), f"{side} build target directory mismatch")
+    _expect(receipt.get("expected_artifacts") == {name: str(source) for name, source in BUILD_TARGETS.items()}, f"{side} expected artifact targets mismatch")
+    _expect(receipt.get("source_fingerprint_sha256") == live_fp["sha256"], f"{side} build source fingerprint mismatch")
+    _expect(receipt.get("source_fingerprint_after") == {"sha256": live_fp["sha256"], "file_count": live_fp["file_count"]}, f"{side} postbuild fingerprint mismatch")
+    _expect(receipt.get("tracked_diff_sha256") == frozen["tracked_diff_sha256"], f"{side} receipt tracked diff mismatch")
+    _expect(receipt.get("staged_diff_sha256") == frozen["staged_diff_sha256"], f"{side} receipt staged diff mismatch")
+    _expect(receipt.get("build_driver_sha256") == BUILD_DRIVER_SHA256, f"{side} build driver digest mismatch")
+    _expect(receipt.get("product_patch_sha256") == PRODUCT_PATCH_SHA256, f"{side} product patch digest mismatch")
+    _expect(receipt.get("harness_patch_sha256") == HARNESS_PATCH_SHA256, f"{side} harness patch digest mismatch")
+    _expect(receipt.get("harness_source_sha256") == EXPECTED_HARNESS_SHA256, f"{side} harness source digest mismatch")
+    _expect(receipt.get("clean_return_code") == 0 and receipt.get("build_return_code") == 0 and receipt.get("helper_build_return_code") == 0, f"{side} build receipts contain a failed command")
+    log_bindings = {
+        "clean_log": (BUILD_RUN / side / "clean.log", "clean_log_sha256"),
+        "clean_stderr_log": (BUILD_RUN / side / "clean.stderr.log", "clean_stderr_sha256"),
+        "build_stdout_jsonl": (BUILD_RUN / side / "build.jsonl", "build_stdout_sha256"),
+        "build_stderr_log": (BUILD_RUN / side / "build.stderr.log", "build_stderr_sha256"),
+        "helper_build_stdout_jsonl": (BUILD_RUN / side / "helper-build.jsonl", "helper_build_stdout_sha256"),
+        "helper_build_stderr_log": (BUILD_RUN / side / "helper-build.stderr.log", "helper_build_stderr_sha256"),
+    }
+    for path_field, (expected_path, hash_field) in log_bindings.items():
+        logged_path = Path(receipt.get(path_field, "")).resolve(strict=True)
+        _expect(logged_path == expected_path.resolve(strict=True), f"{side} {path_field} path mismatch")
+        _expect(sha_file(logged_path) == receipt.get(hash_field), f"{side} {path_field} digest mismatch")
+    identities = {
+        name: _artifact_identity(side, name, receipt, root)
+        for name in ARTIFACT_NAMES
+    }
+    helper = _helper_identity(side, receipt, root)
+    _expect(Path(helper["binary"]).parent == Path(identities["opt_typed_json_carry"]["binary"]).parent, f"{side} helper is not beside the benchmark test binary")
+    listings = {name: _test_list_identity(side, name, receipt) for name in ARTIFACT_NAMES}
+    return {
+        "side": side,
+        "root": str(root),
+        "head": BASE_COMMIT,
+        "source_fingerprint": live_fp,
+        "tracked_diff_sha256": frozen["tracked_diff_sha256"],
+        "staged_diff_sha256": frozen["staged_diff_sha256"],
+        "product_patch_sha256": PRODUCT_PATCH_SHA256,
+        "harness_patch_sha256": HARNESS_PATCH_SHA256,
+        "harness_source_sha256": EXPECTED_HARNESS_SHA256,
+        "receipt": str(receipt_path.resolve(strict=True)),
+        "receipt_sha256": sha_file(receipt_path),
+        "artifacts": identities,
+        "opt_test_binary": identities["opt_typed_json_carry"],
+        "helper": helper,
+        "test_lists": listings,
+    }
+
+
+def load_build_provenance() -> tuple[dict[str, Any], dict[str, Any]]:
+    bindings_path = SOURCE_BINDINGS.resolve(strict=True)
+    _expect(sha_file(bindings_path) == SOURCE_BINDINGS_SHA256, "source-fingerprints-v3.json hash changed")
+    bindings = load_json(bindings_path, "full 2,197-file source bindings")
+    _expect(bindings.get("schema") == "typed-json-carry-source-fingerprints/1", "source bindings schema mismatch")
+    _expect(bindings.get("base_commit") == BASE_COMMIT, "source bindings base commit mismatch")
+    _expect(bindings.get("product_patch_sha256") == PRODUCT_PATCH_SHA256, "source bindings product patch mismatch")
+    _expect(bindings.get("harness_patch_sha256") == HARNESS_PATCH_SHA256, "source bindings harness patch mismatch")
+    _expect(bindings.get("harness_source_sha256") == EXPECTED_HARNESS_SHA256, "source bindings harness source mismatch")
+    _expect(sha_file(EVIDENCE / "typed_json_carry_product_v3.patch") == PRODUCT_PATCH_SHA256, "product patch file digest mismatch")
+    _expect(sha_file(EVIDENCE / "opt_typed_json_carry.patch") == HARNESS_PATCH_SHA256, "harness patch file digest mismatch")
+    _expect(sha_file(BUILD_DRIVER) == BUILD_DRIVER_SHA256, "build driver file digest mismatch")
+    for side in ("baseline", "candidate"):
+        frozen = bindings["arms"][side]
+        expected_root = BASELINE_ROOT if side == "baseline" else CANDIDATE_ROOT
+        _expect(Path(frozen.get("root", "")).resolve(strict=True) == expected_root.resolve(strict=True), f"{side} frozen root mismatch")
+        _expect(frozen.get("head") == BASE_COMMIT, f"{side} frozen HEAD mismatch")
+        expected_diff = EMPTY_DIFF_SHA256 if side == "baseline" else PRODUCT_PATCH_SHA256
+        _expect(frozen.get("tracked_diff_sha256") == expected_diff, f"{side} frozen tracked patch mismatch")
+        _expect(frozen.get("staged_diff_sha256") == EMPTY_DIFF_SHA256, f"{side} frozen staged diff mismatch")
+        tree = frozen.get("tree")
+        _expect(isinstance(tree, dict) and tree.get("file_count") == 2197, f"{side} must bind all 2,197 files")
+        _expect(isinstance(tree.get("files"), dict) and len(tree["files"]) == 2197, f"{side} full path map count mismatch")
+        canonical = json.dumps(tree["files"], sort_keys=True, separators=(",", ":")).encode()
+        _expect(tree.get("sha256") == sha_bytes(canonical), f"{side} full source map tree digest mismatch")
+    pair_command_path = BUILD_RUN / "build-pair-command.json"
+    pair_receipt_path = BUILD_RUN / "build-pair-receipt.json"
+    tool_path = BUILD_RUN / "tool-environment.json"
+    pair_command = load_json(pair_command_path, "build-pair command")
+    pair_receipt = load_json(pair_receipt_path, "build-pair receipt")
+    tool_environment = load_json(tool_path, "pinned tool environment")
+    _expect(pair_receipt.get("status") == "success" and pair_receipt.get("tests_executed") is False, "build-pair receipt status/tests mismatch")
+    _expect(pair_receipt.get("source_bindings_sha256") == SOURCE_BINDINGS_SHA256, "build-pair source-binding hash mismatch")
+    _expect(pair_receipt.get("product_patch_sha256") == PRODUCT_PATCH_SHA256, "build-pair product patch mismatch")
+    _expect(pair_receipt.get("harness_patch_sha256") == HARNESS_PATCH_SHA256, "build-pair harness patch mismatch")
+    _expect(pair_command.get("build_driver_sha256") == BUILD_DRIVER_SHA256, "build command driver hash mismatch")
+    _expect(pair_command.get("source_bindings_sha256") == SOURCE_BINDINGS_SHA256, "build command source-binding hash mismatch")
+    _expect(pair_command.get("tool_environment_sha256") == sha_file(tool_path), "tool environment digest mismatch")
+    _expect(pair_command.get("tests_executed") is False and pair_command.get("test_binaries_listed_only") is True, "build command says tests ran")
+    _expect(pair_command.get("execute_applet_helper_built_and_copied_not_executed") is True, "build command helper provenance missing")
+    _expect(pair_command.get("clean_command_per_arm") == CLEAN_ARGS, "paired clean command mismatch")
+    _expect(pair_command.get("build_command_per_arm") == BUILD_ARGS, "paired build command mismatch")
+    _expect(pair_command.get("helper_build_command_per_arm") == HELPER_BUILD_ARGS, "paired helper build command mismatch")
+    _expect(pair_receipt.get("helper_build_command_per_arm") == HELPER_BUILD_ARGS, "build receipt helper command mismatch")
+    _expect(tool_environment.get("captured_before_clean_or_build") is True, "tool environment was not captured before build")
+    _expect(tool_environment.get("build_driver_sha256") == BUILD_DRIVER_SHA256, "tool environment build-driver hash mismatch")
+    _expect(Path(tool_environment.get("target_directory", "")).resolve() == TARGET.resolve(), "tool environment shared target path mismatch")
+    env = tool_environment.get("environment")
+    _expect(isinstance(env, dict) and Path(env.get("CARGO_TARGET_DIR", "")).resolve() == TARGET.resolve(), "captured CARGO_TARGET_DIR mismatch")
+    _expect(Path(pair_command.get("shared_target_directory", "")).resolve() == TARGET.resolve(), "build command target directory mismatch")
+    _expect(pair_command.get("arms") == {"baseline": str(BASELINE_ROOT), "candidate": str(CANDIDATE_ROOT)}, "build command source roots mismatch")
+    _expect(pair_receipt.get("arms") == {side: str(BUILD_RUN / side / "build-receipt.json") for side in ("baseline", "candidate")}, "build-pair arm receipt paths mismatch")
+    _expect(pair_receipt.get("shared_target_directory") == str(TARGET.resolve()), "build-pair shared target mismatch")
+    meta = {
+        "source_bindings_path": str(bindings_path),
+        "source_bindings_sha256": SOURCE_BINDINGS_SHA256,
+        "build_driver_path": str(BUILD_DRIVER.resolve(strict=True)),
+        "build_driver_sha256": BUILD_DRIVER_SHA256,
+        "build_pair_command_path": str(pair_command_path.resolve(strict=True)),
+        "build_pair_command_sha256": sha_file(pair_command_path),
+        "build_pair_receipt_path": str(pair_receipt_path.resolve(strict=True)),
+        "build_pair_receipt_sha256": sha_file(pair_receipt_path),
+        "tool_environment_path": str(tool_path.resolve(strict=True)),
+        "tool_environment_sha256": sha_file(tool_path),
+        "product_patch_sha256": PRODUCT_PATCH_SHA256,
+        "harness_patch_sha256": HARNESS_PATCH_SHA256,
+        "harness_source_sha256": EXPECTED_HARNESS_SHA256,
+        "base_commit": BASE_COMMIT,
+        "build_run": str(BUILD_RUN.resolve(strict=True)),
+    }
+    identities = {side: _live_arm(side, bindings["arms"][side]) for side in ("baseline", "candidate")}
+    source_map_pair_validation(identities["baseline"], identities["candidate"])
+    return meta, identities
+
+
+def protocol() -> dict[str, Any]:
+    return {
+        "case": CASE,
+        "test_name": TEST_NAME,
+        "warmup_pairs": WARMUP_PAIRS,
+        "measured_pairs": MEASURED_PAIRS,
+        "pair_order": "global pairs alternate AB/BA beginning AB; after three warmup pairs the measured phase begins BA and has 24 pairs of each order",
+        "invocation_samples": INNER_SAMPLES,
+        "invocation_warmups": INNER_WARMUPS,
+        "invocation_timeout_seconds": INVOCATION_TIMEOUT_SECONDS,
+        "retry_policy": "none; retain the outcome and continue the fixed schedule",
+        "invocation": [
+            "--exact", TEST_NAME, "--ignored", "--nocapture", "--test-threads=1"
+        ],
+        "environment": {
+            "OPT_BENCH_REPORT": "fresh absolute path per invocation",
+            "LC_ALL": "C",
+            "TZ": "UTC",
+        },
+        "measured_metric": "median of three in-process runtime::run durations per invocation; paired candidate-minus-baseline delta across 48 measured pairs",
+        "correctness": (
+            "raw report schema typed_json_carry_public_runtime_bench/v1; 1,000 literal number.add calls; exact output hex 33; "
+            "zero subprocess launches/cache hits; 256 retained successful status-0 records with 2 stdout bytes each; "
+            "744 dropped execution records and stages; fixed workload source and identical catalog hash across both arms"
+        ),
+        "interpretation_limit": "same-host fixed public-runtime microbenchmark only; no CLI startup, cold-start, sustained-load, or general workload claim",
+    }
+
+
+def prepare(args: argparse.Namespace) -> None:
+    metadata, arms = load_build_provenance()
+    _expect(arms["baseline"]["opt_test_binary"]["binary"] != arms["candidate"]["opt_test_binary"]["binary"], "benchmark binaries share a path")
+    runner = Path(__file__).resolve(strict=True)
+    prereg = {
+        "schema": "typed-json-carry-paired-preregistration/1",
+        "protocol": protocol(),
+        "provenance": metadata,
+        "inputs": arms,
+        "runner": {"path": str(runner), "sha256": sha_file(runner)},
+        "workload": {
+            "calls": 1000,
+            "applet": "number.add",
+            "literal_operands": [1, 2],
+            "source_bytes": EXPECTED_SOURCE_BYTES,
+            "source_sha256": EXPECTED_SOURCE_SHA256,
+            "output_hex": EXPECTED_OUTPUT_HEX,
+            "output_sha256": EXPECTED_OUTPUT_SHA256,
+            "launched_processes": 0,
+            "cache_hits": 0,
+            "retained_records": 256,
+            "dropped_records_and_stages": 744,
+        },
+        "prepared_at": utc_now(),
+    }
+    destination = Path(args.preregistration).expanduser().absolute()
+    _expect(not destination.exists() and not destination.is_symlink(), f"refusing to overwrite preregistration: {destination}")
+    write_json(destination, prereg, exclusive=True)
+    print(json.dumps({"preregistration": str(destination), "sha256": sha_file(destination)}, sort_keys=True))
+
+
+def verify_preregistration(path: Path) -> dict[str, Any]:
+    prereg = load_json(path, "paired preregistration")
+    _expect(isinstance(prereg, dict) and prereg.get("schema") == "typed-json-carry-paired-preregistration/1", "preregistration schema mismatch")
+    _expect(prereg.get("protocol") == protocol(), "protocol differs from this runner")
+    _expect(prereg.get("workload") == {
+        "calls": 1000,
+        "applet": "number.add",
+        "literal_operands": [1, 2],
+        "source_bytes": EXPECTED_SOURCE_BYTES,
+        "source_sha256": EXPECTED_SOURCE_SHA256,
+        "output_hex": EXPECTED_OUTPUT_HEX,
+        "output_sha256": EXPECTED_OUTPUT_SHA256,
+        "launched_processes": 0,
+        "cache_hits": 0,
+        "retained_records": 256,
+        "dropped_records_and_stages": 744,
+    }, "workload contract changed")
+    runner = prereg.get("runner")
+    path_now = Path(__file__).resolve(strict=True)
+    _expect(isinstance(runner, dict) and runner.get("path") == str(path_now) and runner.get("sha256") == sha_file(path_now), "runner changed since preregistration")
+    metadata, arms = load_build_provenance()
+    _expect(prereg.get("provenance") == metadata, "build/source provenance changed since preregistration")
+    _expect(prereg.get("inputs") == arms, "arm source, binary, helper, or receipt changed since preregistration")
+    return prereg
+
+
+def interleaved_order(global_pair_index: int) -> tuple[str, str]:
+    return ("baseline", "candidate") if global_pair_index % 2 == 0 else ("candidate", "baseline")
+
+
+def expected_workload(catalog_sha256: str) -> dict[str, Any]:
+    return {
+        "calls": 1000,
+        "applet": "number.add",
+        "literal_operands": [1, 2],
+        "source_bytes": EXPECTED_SOURCE_BYTES,
+        "source_sha256": EXPECTED_SOURCE_SHA256,
+        "catalog_sha256": catalog_sha256,
+    }
+
+
+def validate_raw_report(payload: bytes) -> dict[str, Any]:
+    report = strict_json_bytes(payload, "raw benchmark report")
+    expected_fields = {"schema", "method", "warmup_runs", "measured_samples", "workload", "results"}
+    _expect(isinstance(report, dict) and set(report) == expected_fields, "raw report has an unexpected schema")
+    _expect(report.get("schema") == "typed_json_carry_public_runtime_bench/v1", "raw report schema mismatch")
+    _expect(report.get("method") == EXPECTED_METHOD, "raw report method text mismatch")
+    _expect(type(report.get("warmup_runs")) is int and report["warmup_runs"] == INNER_WARMUPS, "raw report warmup count mismatch")
+    _expect(type(report.get("measured_samples")) is int and report["measured_samples"] == INNER_SAMPLES, "raw report sample count mismatch")
+    workload = report.get("workload")
+    required_workload = {"calls", "applet", "literal_operands", "source_bytes", "source_sha256", "catalog_sha256"}
+    _expect(isinstance(workload, dict) and set(workload) == required_workload, "raw workload shape mismatch")
+    _expect(
+        workload.get("calls") == 1000 and type(workload.get("calls")) is int
+        and workload.get("applet") == "number.add"
+        and isinstance(workload.get("literal_operands"), list)
+        and len(workload["literal_operands"]) == 2
+        and all(type(value) is int for value in workload["literal_operands"])
+        and workload["literal_operands"] == [1, 2]
+        and type(workload.get("source_bytes")) is int and workload["source_bytes"] == EXPECTED_SOURCE_BYTES
+        and workload.get("source_sha256") == EXPECTED_SOURCE_SHA256
+        and isinstance(workload.get("catalog_sha256"), str)
+        and SHA256_RE.fullmatch(workload["catalog_sha256"]) is not None,
+        "raw workload identity mismatch",
+    )
+    results = report.get("results")
+    _expect(isinstance(results, dict) and set(results) == {CASE}, "raw report case set mismatch")
+    case = results[CASE]
+    _expect(isinstance(case, dict) and set(case) == {"p50_ns", "p95_ns", "raw_sample_ns", "semantic_oracles"}, "case report shape mismatch")
+    raw = case.get("raw_sample_ns")
+    _expect(isinstance(raw, list) and len(raw) == INNER_SAMPLES, "raw report must have exactly three durations")
+    _expect(all(type(value) is int and 0 < value < (1 << 64) for value in raw), "raw report duration must be a positive u64")
+    ordered = sorted(raw)
+    _expect(type(case.get("p50_ns")) is int and case["p50_ns"] == ordered[1], "reported p50 does not match three raw samples")
+    _expect(type(case.get("p95_ns")) is int and case["p95_ns"] == ordered[2], "reported p95 does not match three raw samples")
+    oracles = case.get("semantic_oracles")
+    _expect(isinstance(oracles, list) and len(oracles) == INNER_SAMPLES, "raw report must have one oracle per duration")
+    exact_oracle = {
+        "output_hex": EXPECTED_OUTPUT_HEX,
+        "launched_processes": 0,
+        "cache_hits": 0,
+        "retained_execution_records": 256,
+        "expected_retained_execution_records": 256,
+        "retained_all_success_status_0": True,
+        "retained_stdout_bytes_per_call": 2,
+        "dropped_execution_records": 744,
+        "expected_dropped_execution_records": 744,
+        "dropped_stages": 744,
+    }
+    for index, oracle in enumerate(oracles):
+        _expect(isinstance(oracle, dict) and set(oracle) == set(exact_oracle), f"semantic oracle {index} shape mismatch")
+        _expect(
+            all(type(oracle[key]) is type(value) and oracle[key] == value for key, value in exact_oracle.items()),
+            f"semantic oracle {index} does not match exact output/call/status/cache/record oracle",
+        )
+    return {
+        "workload": workload,
+        "raw_sample_ns": raw,
+        "median_duration_ns": ordered[1],
+        "semantic_oracles": oracles,
+    }
+
+
+def _normalize_output(value: bytes | str | None) -> bytes:
+    if value is None:
+        return b""
+    return value.encode("utf-8", errors="replace") if isinstance(value, str) else value
+
+
+def run_attempt(
+    identity: Mapping[str, Any],
+    attempt_dir: Path,
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    attempt_dir.mkdir(parents=True, exist_ok=False)
+    raw_path = attempt_dir / "raw.json"
+    _expect(raw_path.is_absolute(), "raw report path must be absolute")
+    _expect(not raw_path.exists() and not raw_path.is_symlink(), "refusing existing raw report path")
+    binary = Path(identity["opt_test_binary"]["binary"])
+    helper = Path(identity["helper"]["binary"])
+    expected_binary_hash = identity["opt_test_binary"]["binary_sha256"]
+    expected_helper_hash = identity["helper"]["binary_sha256"]
+    binary_before = sha_file(binary) if binary.is_file() else None
+    helper_before = sha_file(helper) if helper.is_file() else None
+    _expect(binary_before == expected_binary_hash and os.access(binary, os.X_OK), "saved test binary hash/execute check failed before call")
+    _expect(helper_before == expected_helper_hash and os.access(helper, os.X_OK), "saved sibling helper hash/execute check failed before call")
+    command = [str(binary), "--exact", TEST_NAME, "--ignored", "--nocapture", "--test-threads=1"]
+    environment = os.environ.copy()
+    environment.update({"OPT_BENCH_REPORT": str(raw_path), "LC_ALL": "C", "TZ": "UTC"})
+    started = {
+        **dict(metadata),
+        "started_at": utc_now(),
+        "command": command,
+        "cwd": identity["root"],
+        "timeout_seconds": INVOCATION_TIMEOUT_SECONDS,
+        "binary_sha256_before": binary_before,
+        "helper_sha256_before": helper_before,
+        "raw_report_path": str(raw_path),
+        "environment": {"OPT_BENCH_REPORT": str(raw_path), "LC_ALL": "C", "TZ": "UTC"},
+        "retry": 0,
+    }
+    write_json(attempt_dir / "started.json", started, exclusive=True)
+    returncode: int | None = None
+    timed_out = False
+    execution_error: str | None = None
+    stdout = b""
+    stderr = b""
+    start = time.monotonic_ns()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=identity["root"],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=INVOCATION_TIMEOUT_SECONDS,
+            check=False,
+        )
+        returncode = completed.returncode
+        stdout, stderr = completed.stdout, completed.stderr
+    except subprocess.TimeoutExpired as exception:
+        timed_out = True
+        stdout = _normalize_output(exception.stdout)
+        stderr = _normalize_output(exception.stderr)
+    except OSError as exception:
+        execution_error = f"{type(exception).__name__}: {exception}"
+        stderr = execution_error.encode("utf-8", errors="replace")
+    wall_ns = time.monotonic_ns() - start
+    binary_after = sha_file(binary) if binary.is_file() else None
+    helper_after = sha_file(helper) if helper.is_file() else None
+    if binary_after != expected_binary_hash:
+        execution_error = "saved benchmark binary changed during invocation"
+    if helper_after != expected_helper_hash:
+        execution_error = "saved sibling helper changed during invocation"
+    write_bytes_new(attempt_dir / "stdout.bin", stdout)
+    write_bytes_new(attempt_dir / "stderr.bin", stderr)
+    raw_present = raw_path.is_file() and not raw_path.is_symlink()
+    raw_bytes = raw_path.read_bytes() if raw_present else None
+    raw_hash = sha_bytes(raw_bytes) if raw_bytes is not None else None
+    parsed: dict[str, Any] | None = None
+    validation_error: str | None = None
+    if raw_bytes is None:
+        validation_error = "test binary did not create a regular raw report"
+    else:
+        try:
+            parsed = validate_raw_report(raw_bytes)
+        except PairError as error:
+            validation_error = str(error)
+    success = returncode == 0 and not timed_out and execution_error is None and validation_error is None
+    result = {
+        **dict(metadata),
+        "finished_at": utc_now(),
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "execution_error": execution_error,
+        "wall_elapsed_ns": wall_ns,
+        "binary_sha256_before": binary_before,
+        "binary_sha256_after": binary_after,
+        "helper_sha256_before": helper_before,
+        "helper_sha256_after": helper_after,
+        "raw_report_present": raw_present,
+        "raw_report_sha256": raw_hash,
+        "raw_report_path": str(raw_path.resolve()),
+        "raw_validation_error": validation_error,
+        "successful": success,
+        "workload": parsed["workload"] if parsed else None,
+        "raw_sample_ns": parsed["raw_sample_ns"] if parsed else None,
+        "median_duration_ns": parsed["median_duration_ns"] if parsed else None,
+        "semantic_oracles": parsed["semantic_oracles"] if parsed else None,
+        "stdout_sha256": sha_bytes(stdout),
+        "stderr_sha256": sha_bytes(stderr),
+        "stdout_path": str((attempt_dir / "stdout.bin").resolve()),
+        "stderr_path": str((attempt_dir / "stderr.bin").resolve()),
+        "attempt_dir": str(attempt_dir.resolve()),
+        "retry": 0,
+    }
+    write_json(attempt_dir / "finished.json", result, exclusive=True)
+    return result
+
+
+def workload_compatible(workloads: Sequence[Mapping[str, Any]]) -> bool:
+    if not workloads:
+        return False
+    first = dict(workloads[0])
+    return all(dict(value) == first for value in workloads[1:])
+
+
+def pair_result(global_pair_index: int, phase: str, phase_index: int, order: Sequence[str], attempts: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    baseline = attempts["baseline"]
+    candidate = attempts["candidate"]
+    same_workload = (
+        baseline.get("successful") is True
+        and candidate.get("successful") is True
+        and baseline.get("workload") == candidate.get("workload")
+    )
+    valid = same_workload
+    result: dict[str, Any] = {
+        "pair_index": phase_index,
+        "global_pair_index": global_pair_index,
+        "phase": phase,
+        "order": list(order),
+        "valid_for_timing": valid,
+        "same_catalog_and_workload": same_workload,
+    }
+    if valid:
+        base_ns = baseline["median_duration_ns"]
+        candidate_ns = candidate["median_duration_ns"]
+        result.update({
+            "baseline_median_ns": base_ns,
+            "candidate_median_ns": candidate_ns,
+            "candidate_minus_baseline_ns": candidate_ns - base_ns,
+        })
+    else:
+        result["failure_reasons"] = {
+            "baseline_successful": baseline.get("successful") is True,
+            "candidate_successful": candidate.get("successful") is True,
+            "workloads_equal": baseline.get("workload") == candidate.get("workload"),
+        }
+    return result
+
+
+def summarize(pairs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    deltas = [item["candidate_minus_baseline_ns"] for item in pairs if item.get("valid_for_timing") is True]
+    return {
+        "valid_pair_count": len(deltas),
+        "paired_candidate_minus_baseline_ns": deltas,
+        "median_paired_candidate_minus_baseline_ns": statistics.median(deltas) if deltas else None,
+        "candidate_improvements": sum(delta < 0 for delta in deltas),
+        "candidate_losses": sum(delta > 0 for delta in deltas),
+        "ties": sum(delta == 0 for delta in deltas),
+        "interpretation": "descriptive same-host public-runtime microbenchmark; no confidence interval or general speedup claim",
+    }
+
+
+def run(args: argparse.Namespace) -> int:
+    prereg_path = Path(args.preregistration).expanduser().resolve(strict=True)
+    prereg = verify_preregistration(prereg_path)
+    prereg_sha = sha_file(prereg_path)
+    report_dir = Path(args.report_dir).expanduser().absolute()
+    _expect(not report_dir.exists() and not report_dir.is_symlink(), f"refusing to overwrite output directory: {report_dir}")
+    report_dir.mkdir(parents=True, exist_ok=False)
+    report_path = report_dir / "paired-report.json"
+    report: dict[str, Any] = {
+        "schema": "typed-json-carry-paired-report/1",
+        "created_at": utc_now(),
+        "status": "running",
+        "preregistration_path": str(prereg_path),
+        "preregistration_sha256": prereg_sha,
+        "runner": prereg["runner"],
+        "protocol": prereg["protocol"],
+        "workload_contract": prereg["workload"],
+        "inputs": prereg["inputs"],
+        "host": {"system": platform.system(), "release": platform.release(), "machine": platform.machine(), "python": sys.version},
+        "attempts": [],
+        "warmup_pairs": [],
+        "measured_pairs": [],
+    }
+    write_json(report_path, report, exclusive=True)
+    overall_failed = False
+    workload_seen: dict[str, Any] | None = None
+    global_count = WARMUP_PAIRS + MEASURED_PAIRS
+    for global_pair in range(global_count):
+        phase = "warmup" if global_pair < WARMUP_PAIRS else "measurement"
+        phase_index = global_pair + 1 if phase == "warmup" else global_pair - WARMUP_PAIRS + 1
+        order = interleaved_order(global_pair)
+        pair_attempts: dict[str, dict[str, Any]] = {}
+        for position, side in enumerate(order, start=1):
+            identity = prereg["inputs"][side]
+            attempt_id = f"{phase}-{phase_index:02d}-{position}-{side}"
+            metadata = {
+                "attempt_id": attempt_id,
+                "phase": phase,
+                "phase_pair_index": phase_index,
+                "global_pair_index": global_pair,
+                "position_in_pair": position,
+                "side": side,
+                "source_fingerprint_sha256": identity["source_fingerprint"]["sha256"],
+                "build_receipt_sha256": identity["receipt_sha256"],
+                "binary_sha256": identity["opt_test_binary"]["binary_sha256"],
+                "helper_sha256": identity["helper"]["binary_sha256"],
+            }
+            try:
+                result = run_attempt(identity, report_dir / "attempts" / attempt_id, metadata)
+            except (PairError, OSError, KeyError, TypeError, ValueError) as error:
+                result = {
+                    **metadata,
+                    "finished_at": utc_now(),
+                    "successful": False,
+                    "execution_error": f"{type(error).__name__}: {error}",
+                    "returncode": None,
+                    "timed_out": False,
+                    "retry": 0,
+                    "attempt_dir": str((report_dir / "attempts" / attempt_id).resolve()),
+                }
+                overall_failed = True
+            report["attempts"].append(result)
+            pair_attempts[side] = result
+            if result.get("successful") is not True:
+                overall_failed = True
+            if result.get("successful") is True:
+                current_workload = result["workload"]
+                if workload_seen is None:
+                    workload_seen = current_workload
+                elif current_workload != workload_seen:
+                    result["successful"] = False
+                    result["cross_arm_catalog_workload_mismatch"] = True
+                    overall_failed = True
+            write_json(report_path, report)
+        pair = pair_result(global_pair, phase, phase_index, order, pair_attempts)
+        if not pair["valid_for_timing"]:
+            overall_failed = True
+        target_list = report["warmup_pairs"] if phase == "warmup" else report["measured_pairs"]
+        target_list.append(pair)
+        write_json(report_path, report)
+    post: dict[str, Any] = {}
+    try:
+        meta_after, arms_after = load_build_provenance()
+        post["provenance_stable"] = meta_after == prereg["provenance"] and arms_after == prereg["inputs"]
+        post["source_bindings_sha256"] = meta_after["source_bindings_sha256"]
+        post["arms"] = {
+            side: {
+                "source_fingerprint_sha256": arms_after[side]["source_fingerprint"]["sha256"],
+                "build_receipt_sha256": arms_after[side]["receipt_sha256"],
+                "binary_sha256": arms_after[side]["opt_test_binary"]["binary_sha256"],
+                "helper_sha256": arms_after[side]["helper"]["binary_sha256"],
+            } for side in ("baseline", "candidate")
+        }
+        overall_failed |= not post["provenance_stable"]
+    except (PairError, OSError, KeyError, TypeError, ValueError) as error:
+        post["provenance_stable"] = False
+        post["error"] = str(error)
+        overall_failed = True
+    prereg_stable = sha_file(prereg_path) == prereg_sha
+    runner_path = Path(prereg["runner"]["path"])
+    runner_stable = runner_path.is_file() and sha_file(runner_path) == prereg["runner"]["sha256"]
+    post["preregistration_stable"] = prereg_stable
+    post["runner_stable"] = runner_stable
+    report["post_run_identity"] = post
+    report["paired_summary"] = summarize(report["measured_pairs"])
+    report["completed_at"] = utc_now()
+    report["attempt_count"] = len(report["attempts"])
+    report["successful_attempt_count"] = sum(item.get("successful") is True for item in report["attempts"])
+    report["failed_attempt_count"] = report["attempt_count"] - report["successful_attempt_count"]
+    complete_schedule = (
+        report["attempt_count"] == 2 * global_count
+        and len(report["warmup_pairs"]) == WARMUP_PAIRS
+        and len(report["measured_pairs"]) == MEASURED_PAIRS
+    )
+    report["status"] = "complete" if complete_schedule and not overall_failed and runner_stable and prereg_stable else "failed"
+    write_json(report_path, report)
+    print(json.dumps({"report": str(report_path), "status": report["status"]}, sort_keys=True))
+    return 0 if report["status"] == "complete" else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    prepare_command = commands.add_parser("prepare", help="validate build receipts and freeze a fresh paired preregistration")
+    prepare_command.add_argument("--preregistration", required=True)
+    prepare_command.set_defaults(function=prepare)
+    run_command = commands.add_parser("run", help="run exactly 3 warmup and 48 measured AB/BA pairs")
+    run_command.add_argument("--preregistration", required=True)
+    run_command.add_argument("--report-dir", required=True)
+    run_command.set_defaults(function=run)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        return int(args.function(args) or 0)
+    except (PairError, OSError, KeyError, TypeError, ValueError) as error:
+        print(f"typed-JSON carry paired benchmark: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

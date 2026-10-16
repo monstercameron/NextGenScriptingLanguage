@@ -1,0 +1,1 @@
+The independent audit result and its checks, metrics, timestamps, and input hashes are preserved in paired-run-v3-attempt-1-independent-audit.json. No standalone independent auditor script was present in the campaign evidence tree for this trial. verify_bundle.py validates this publication bundle only; it does not re-run or replace the independent raw-trial audit.

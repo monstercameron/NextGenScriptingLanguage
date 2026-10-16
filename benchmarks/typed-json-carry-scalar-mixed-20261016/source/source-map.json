@@ -1,0 +1,209 @@
+{
+  "schema": "typed-json-scalar-mixed-source-map/1",
+  "trial": "typed-json-carry-v3-attempt-1",
+  "status": "unlanded experimental candidate; fixed same-host scalar microbenchmark only",
+  "base_commit": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+  "fingerprints": {
+    "path": "source/source-fingerprints-v3.json",
+    "sha256": "cd64998235087d2fb448cc8533b99c03c007204381de80b08d7046b622652e9e",
+    "baseline_tree_sha256": "51032b2c7eec6b86904ce27e5ed19970eb608c7dd0d1227ba08cb91ba6c46976",
+    "candidate_tree_sha256": "cae72e203cc3b1b8cd17cc3fa6dfc27e8db3912ea4227c1355eca7036befd0d1",
+    "path_count": 2197
+  },
+  "harness": {
+    "source_path": "tests/opt_typed_json_carry.rs",
+    "source_sha256": "ba0336a0749d86e4b4f28231daea6fa36cb85a3020f93302bb0b94d83260f68b",
+    "patch_path": "source/patches/opt_typed_json_carry.patch",
+    "patch_sha256": "3a227a33319519bbbcd64f29678c4d3879bba0121383f2cfc8afe9511c4d1141",
+    "identical_in_both_arms": true
+  },
+  "product": {
+    "patch_path": "source/patches/typed_json_carry_product_v3.patch",
+    "patch_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+    "changed_tracked_files": [
+      "src/contracts.rs",
+      "src/manifest.rs",
+      "src/runtime.rs",
+      "src/runtime/program_backend.rs",
+      "src/runtime/windows_process.rs",
+      "tests/typed_contracts.rs"
+    ],
+    "candidate_tree_sha256": "cae72e203cc3b1b8cd17cc3fa6dfc27e8db3912ea4227c1355eca7036befd0d1"
+  },
+  "runner": {
+    "path": "harness/typed_json_carry_v3_pair.py",
+    "sha256": "8b2992921d500efc02a007695b51a91333a0d1f8dac1cc417bbed16eeecbe9cb",
+    "tests_path": "harness/test_typed_json_carry_pair.py",
+    "tests_sha256": "cedcfa12e3eb00d6cfb860522b1bbf70aef9aae76f1cb347d195fcca54913826"
+  },
+  "build_driver": {
+    "path": "harness/build_typed_json_carry_v3_pair.py",
+    "sha256": "d6c09a51b2e21d736d2d46e470e7e3b6c42f9073e99e92ecd3077eecfd3c14d3"
+  },
+  "preregistration": {
+    "path": "protocol/paired-preregistration-v3-attempt-2.json",
+    "sha256": "e7c3679f3b86c9ad1772ea352529a58d00355270edf48fb3954ad21693d02ead"
+  },
+  "build_pair_receipt": {
+    "path": "provenance/build/build-pair-receipt.json",
+    "sha256": "02a008481d2c555a1bfbb628d57b4cf993931f62161f79ddea3478a45759ee23",
+    "build_pair_command_sha256": "9f1d79d5144f7fc34dad402f43bb3d8e107d11e584d5582f112147bb2421d45a",
+    "tool_environment_sha256": "994d1c97e89d6fc7e257676721b548565094038d5ccd5ca806713bd23ab861e3"
+  },
+  "independent_audit": {
+    "path": "provenance/paired-run-v3-attempt-1-independent-audit.json",
+    "sha256": "c48b4eb6f8c02b5bd0d9efd9b21ed12bfcb9966304250fdcaafb2dc3ac643a51"
+  },
+  "report": {
+    "path": "raw/paired-run-v3-attempt-1/paired-report.json",
+    "sha256": "b43ea3ac82e6fcef564c44684d49f1768ca87cabe37d3ca0fe3ae9732d0e3765"
+  },
+  "arms": {
+    "baseline": {
+      "head": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+      "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tree_sha256": "51032b2c7eec6b86904ce27e5ed19970eb608c7dd0d1227ba08cb91ba6c46976",
+      "file_count": 2197,
+      "files": [
+        {
+          "source_path": "src/contracts.rs",
+          "snapshot_path": "source/snapshots/baseline/src/contracts.rs",
+          "sha256": "6ba02aa3df712d3f43fb10ea97412cda532b8a63eadabad3ce2c039f4e51d8fa",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "src/manifest.rs",
+          "snapshot_path": "source/snapshots/baseline/src/manifest.rs",
+          "sha256": "1c894eab0aeaa4a52f04e4f945dd94f4dfb347f6e114451d84c31e6ed4a77726",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "src/runtime.rs",
+          "snapshot_path": "source/snapshots/baseline/src/runtime.rs",
+          "sha256": "9159b5028ae0680f9d15943453365f60b7a84e9d061bb1ddb278972fc42cb038",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "src/runtime/program_backend.rs",
+          "snapshot_path": "source/snapshots/baseline/src/runtime/program_backend.rs",
+          "sha256": "45be335cb33c50e3748c9ea9e2f0625d8f09c21c8b401a012a08fa97f3d0ca14",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "src/runtime/windows_process.rs",
+          "snapshot_path": "source/snapshots/baseline/src/runtime/windows_process.rs",
+          "sha256": "c69f48347e53e94346c6ee2ad8a98013f3bcd206d64c366e9ada0276e63ae235",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "tests/typed_contracts.rs",
+          "snapshot_path": "source/snapshots/baseline/tests/typed_contracts.rs",
+          "sha256": "ba93af3ed326c7e1a03e09881e40f4582b3f3cf0c0bddbcf10782f3d8a74d887",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "Cargo.toml",
+          "snapshot_path": "source/snapshots/baseline/Cargo.toml",
+          "sha256": "2e2cd88356201ac07b3b8d68be1af9379d7c307bf2c5b67765a13d0f8e040874",
+          "role": "build_input"
+        },
+        {
+          "source_path": "Cargo.lock",
+          "snapshot_path": "source/snapshots/baseline/Cargo.lock",
+          "sha256": "2be0aa74e5bfe3e4897ea9ca9121efce663a94a4df7850958dc2cf511c6f427c",
+          "role": "build_input"
+        },
+        {
+          "source_path": ".cargo/config.toml",
+          "snapshot_path": "source/snapshots/baseline/.cargo/config.toml",
+          "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+          "role": "build_input"
+        },
+        {
+          "source_path": "tests/opt_typed_json_carry.rs",
+          "snapshot_path": "source/snapshots/baseline/tests/opt_typed_json_carry.rs",
+          "sha256": "ba0336a0749d86e4b4f28231daea6fa36cb85a3020f93302bb0b94d83260f68b",
+          "role": "tracked_product_or_harness_source"
+        }
+      ],
+      "build_receipt_path": "provenance/build/baseline/build-receipt.json",
+      "saved_benchmark_binary_path": "artifacts/binaries/baseline/opt_typed_json_carry-test-binary",
+      "saved_helper_binary_path": "artifacts/binaries/baseline/execute-applet",
+      "benchmark_binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "helper_binary_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07"
+    },
+    "candidate": {
+      "head": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+      "tracked_diff_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+      "tree_sha256": "cae72e203cc3b1b8cd17cc3fa6dfc27e8db3912ea4227c1355eca7036befd0d1",
+      "file_count": 2197,
+      "files": [
+        {
+          "source_path": "src/contracts.rs",
+          "snapshot_path": "source/snapshots/candidate/src/contracts.rs",
+          "sha256": "e026b070c32b8dcbfeadf6bb470c981bf21a32bcc92c3e9bfc1b8cc297212299",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "src/manifest.rs",
+          "snapshot_path": "source/snapshots/candidate/src/manifest.rs",
+          "sha256": "25ff965d5d0566321d460ebd99b918fdce03767abb98299544fc0f1a4c8ca514",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "src/runtime.rs",
+          "snapshot_path": "source/snapshots/candidate/src/runtime.rs",
+          "sha256": "51a81ea5194bb3b94ede8d421880e48067c286a3fbf4009244e5b405ffb27a77",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "src/runtime/program_backend.rs",
+          "snapshot_path": "source/snapshots/candidate/src/runtime/program_backend.rs",
+          "sha256": "697224d23f1e9b091886582c33c1477436a287f0ae90fc5d277539ef2943437e",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "src/runtime/windows_process.rs",
+          "snapshot_path": "source/snapshots/candidate/src/runtime/windows_process.rs",
+          "sha256": "82e26e7008655194f1f44d6cf1304e71ba6c78c25f839294f1951c09486f53a8",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "tests/typed_contracts.rs",
+          "snapshot_path": "source/snapshots/candidate/tests/typed_contracts.rs",
+          "sha256": "a219a927f132e25e5b1edd7b4d0f9e5fcb73ad6e59c757a0a4b1c19c97b54eee",
+          "role": "tracked_product_or_harness_source"
+        },
+        {
+          "source_path": "Cargo.toml",
+          "snapshot_path": "source/snapshots/candidate/Cargo.toml",
+          "sha256": "2e2cd88356201ac07b3b8d68be1af9379d7c307bf2c5b67765a13d0f8e040874",
+          "role": "build_input"
+        },
+        {
+          "source_path": "Cargo.lock",
+          "snapshot_path": "source/snapshots/candidate/Cargo.lock",
+          "sha256": "2be0aa74e5bfe3e4897ea9ca9121efce663a94a4df7850958dc2cf511c6f427c",
+          "role": "build_input"
+        },
+        {
+          "source_path": ".cargo/config.toml",
+          "snapshot_path": "source/snapshots/candidate/.cargo/config.toml",
+          "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+          "role": "build_input"
+        },
+        {
+          "source_path": "tests/opt_typed_json_carry.rs",
+          "snapshot_path": "source/snapshots/candidate/tests/opt_typed_json_carry.rs",
+          "sha256": "ba0336a0749d86e4b4f28231daea6fa36cb85a3020f93302bb0b94d83260f68b",
+          "role": "tracked_product_or_harness_source"
+        }
+      ],
+      "build_receipt_path": "provenance/build/candidate/build-receipt.json",
+      "saved_benchmark_binary_path": "artifacts/binaries/candidate/opt_typed_json_carry-test-binary",
+      "saved_helper_binary_path": "artifacts/binaries/candidate/execute-applet",
+      "benchmark_binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "helper_binary_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717"
+    }
+  }
+}

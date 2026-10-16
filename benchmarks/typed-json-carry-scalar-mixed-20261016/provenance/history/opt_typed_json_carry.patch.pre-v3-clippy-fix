@@ -1,0 +1,199 @@
+diff --git a/tests/opt_typed_json_carry.rs b/tests/opt_typed_json_carry.rs
+new file mode 100644
+index 0000000..9a6464d
+--- /dev/null
++++ b/tests/opt_typed_json_carry.rs
+@@ -0,0 +1,193 @@
++//! Public runtime benchmark for the in-process typed JSON output path.
++//!
++//! Run only from separately built release test executables, with the campaign's
++//! paired driver. The workload and result checks are identical on baseline and
++//! candidate; parsing, catalog loading, fixture creation, hashing, and reporting
++//! are outside the timed region.
++
++use flow::{manifest::Registry, parser, runtime, runtime::execution_result::ExecutionKind};
++use serde_json::json;
++use sha2::{Digest, Sha256};
++use std::{
++    collections::BTreeMap,
++    fmt::Write as _,
++    fs::OpenOptions,
++    hint::black_box,
++    io::Write as _,
++    path::{Path, PathBuf},
++    time::Instant,
++};
++
++const CALLS: usize = 1_000;
++const WARMUPS: usize = 0;
++const SAMPLES: usize = 3;
++const EXPECTED_CALL_STDOUT_BYTES: usize = 2;
++const EXPECTED_RETAINED_EXECUTION_RECORDS: usize = 256;
++const EXPECTED_DROPPED_EXECUTION_RECORDS: usize = CALLS - EXPECTED_RETAINED_EXECUTION_RECORDS;
++
++fn verify(result: &runtime::RunResult) {
++    assert_eq!(result.output, b"3", "literal add workflow changed output");
++    assert_eq!(
++        result.launched_processes, 0,
++        "number.add launched a process"
++    );
++    assert_eq!(
++        result.cache_hits, 0,
++        "unexpected cache hit in uncached workload"
++    );
++    assert_eq!(
++        runtime::execution_result::MAX_EXECUTION_RECORDS,
++        EXPECTED_RETAINED_EXECUTION_RECORDS,
++        "public execution-record bound changed"
++    );
++    assert_eq!(
++        result.executions.len(),
++        EXPECTED_RETAINED_EXECUTION_RECORDS,
++        "retained execution history count changed"
++    );
++    assert_eq!(
++        result.dropped_executions, EXPECTED_DROPPED_EXECUTION_RECORDS,
++        "runtime did not drop exactly 744 overflow calls"
++    );
++    assert!(
++        result.executions.iter().all(|record| {
++            record.applet == "number.add"
++                && record.kind == ExecutionKind::Success
++                && record.outcome.as_deref() == Some("success")
++                && record.status == Some(0)
++                && record.stdout_captured
++                && record.stdout_bytes == EXPECTED_CALL_STDOUT_BYTES
++                && !record.stderr_captured
++                && record.stderr_bytes == 0
++                && record.stages.len() == 1
++                && record.stages[0].applet == "number.add"
++                && record.stages[0].status == Some(0)
++                && record.stages[0].kind == Some(ExecutionKind::Success)
++                && record.stages[0].outcome.as_deref() == Some("success")
++        }),
++        "a retained number.add record did not match the success/byte oracle"
++    );
++    assert_eq!(result.dropped_stages, result.dropped_executions);
++}
++
++#[test]
++#[ignore = "explicit paired release public-runtime performance measurement"]
++fn literal_number_add_1000() {
++    assert_eq!(WARMUPS, 0);
++    assert_eq!(SAMPLES, 3);
++
++    let report_path = PathBuf::from(
++        std::env::var("OPT_BENCH_REPORT")
++            .expect("set OPT_BENCH_REPORT to a new absolute JSON report path"),
++    );
++    assert!(
++        report_path.is_absolute(),
++        "OPT_BENCH_REPORT must be absolute"
++    );
++    assert!(
++        !report_path.exists(),
++        "refusing to overwrite benchmark report {}",
++        report_path.display()
++    );
++
++    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
++    let registry = Registry::load(&root.join("manifests")).unwrap();
++    let mut source = String::with_capacity(CALLS * 64 + 40);
++    for index in 0..CALLS {
++        writeln!(
++            source,
++            "run number.add with left 1 and right 2 as answer{index:04}"
++        )
++        .unwrap();
++    }
++    writeln!(source, "then encode answer{:04} as json", CALLS - 1).unwrap();
++    let program = parser::parse(&source).unwrap();
++    let options = runtime::RunOptions {
++        inputs: BTreeMap::new(),
++        working_directory: std::env::current_dir().unwrap(),
++        cache_directory: None,
++        trace: false,
++        max_output_bytes: 1024 * 1024,
++        command_timeout: None,
++        total_timeout: None,
++    };
++
++    let source_sha256 = format!("{:x}", Sha256::digest(source.as_bytes()));
++    let catalog_sha256 = format!(
++        "{:x}",
++        Sha256::digest(serde_json::to_vec(registry.manifests()).unwrap())
++    );
++    let mut raw_sample_ns = Vec::with_capacity(SAMPLES);
++    let mut semantic_oracles = Vec::with_capacity(SAMPLES);
++
++    for sample_index in 0..(WARMUPS + SAMPLES) {
++        let started = Instant::now();
++        let result = runtime::run(
++            black_box(&program),
++            black_box(&registry),
++            black_box(&options),
++        )
++        .unwrap();
++        let elapsed_ns = started.elapsed().as_nanos() as u64;
++
++        // Check each timed invocation after stopping its timer. Keeping this
++        // oracle on every sample prevents a fast error path from looking like a
++        // successful measurement.
++        verify(&result);
++        black_box(&result);
++        if sample_index >= WARMUPS {
++            raw_sample_ns.push(elapsed_ns);
++            semantic_oracles.push(json!({
++                "output_hex": "33",
++                "launched_processes": result.launched_processes,
++                "cache_hits": result.cache_hits,
++                "retained_execution_records": result.executions.len(),
++                "expected_retained_execution_records": EXPECTED_RETAINED_EXECUTION_RECORDS,
++                "retained_all_success_status_0": true,
++                "retained_stdout_bytes_per_call": EXPECTED_CALL_STDOUT_BYTES,
++                "dropped_execution_records": result.dropped_executions,
++                "expected_dropped_execution_records": EXPECTED_DROPPED_EXECUTION_RECORDS,
++                "dropped_stages": result.dropped_stages,
++            }));
++        }
++    }
++
++    let mut sorted = raw_sample_ns.clone();
++    sorted.sort_unstable();
++    let report = json!({
++        "schema": "typed_json_carry_public_runtime_bench/v1",
++        "method": "Public runtime::run API; 1,000 uncached in-process number.add calls with literal operands 1 and 2, each bound to a distinct name, followed by JSON encoding of the last result. Includes runtime validation, per-call typed output validation, bindings, and result construction; excludes registry/source setup and RunResult destruction. No child processes.",
++        "warmup_runs": WARMUPS,
++        "measured_samples": SAMPLES,
++        "workload": {
++            "calls": CALLS,
++            "applet": "number.add",
++            "literal_operands": [1, 2],
++            "source_bytes": source.len(),
++            "source_sha256": source_sha256,
++            "catalog_sha256": catalog_sha256,
++        },
++        "results": {
++            "literal_number_add_1000": {
++                "p50_ns": sorted[1],
++                "p95_ns": sorted[2],
++                "raw_sample_ns": raw_sample_ns,
++                "semantic_oracles": semantic_oracles,
++            }
++        },
++    });
++    let mut report_file = OpenOptions::new()
++        .write(true)
++        .create_new(true)
++        .open(&report_path)
++        .unwrap_or_else(|error| {
++            panic!(
++                "creating fresh benchmark report {}: {error}",
++                report_path.display()
++            )
++        });
++    report_file
++        .write_all(&serde_json::to_vec_pretty(&report).unwrap())
++        .unwrap();
++    report_file.sync_all().unwrap();
++}

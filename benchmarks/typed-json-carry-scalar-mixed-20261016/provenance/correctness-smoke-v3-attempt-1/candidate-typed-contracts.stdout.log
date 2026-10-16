@@ -1,0 +1,14 @@
+
+running 9 tests
+test absence_and_failure_envelopes_route_as_distinct_declared_outcomes ... ok
+test deep_in_process_json_binding_matches_cache_hit_byte_decoding ... ok
+test finite_programs_can_use_typed_references_in_nested_record_parameters ... ok
+test helper_command_and_in_process_backends_have_identical_typed_stdout ... ok
+test in_process_json_output_binding_preserves_result_envelope_and_stdout_bytes ... ok
+test invalid_typed_output_schemas_fail_during_manifest_load ... ok
+test record_outputs_feed_existing_take_and_condition_syntax ... ok
+test statically_known_output_type_fails_before_earlier_effects ... ok
+test typed_path_outputs_are_semantically_checked_and_feed_path_operations ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+

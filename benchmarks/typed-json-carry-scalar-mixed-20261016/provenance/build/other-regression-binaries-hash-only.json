@@ -1,0 +1,44 @@
+{
+  "baseline": {
+    "flow": {
+      "original_saved_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/baseline/binaries/flow-test-binary",
+      "sha256": "cf8d8b42f3110a20aed5abcb83376646791d190a5a202110c2fab850acd7ea0d",
+      "bytes": 10212656,
+      "included_as_bytes": false
+    },
+    "typed_contracts": {
+      "original_saved_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/baseline/binaries/typed_contracts-test-binary",
+      "sha256": "28f7e83569ca36603ee1cd05d3adcedbdcaf031637d5015a81845e0be023f57b",
+      "bytes": 5887968,
+      "included_as_bytes": false
+    },
+    "execute-applet-helper": {
+      "original_saved_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/baseline/binaries/execute-applet",
+      "sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "bytes": 878352,
+      "included_as_bytes": true,
+      "bundle_path": "artifacts/binaries/baseline/execute-applet"
+    }
+  },
+  "candidate": {
+    "flow": {
+      "original_saved_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/candidate/binaries/flow-test-binary",
+      "sha256": "37a5bdf8ad9c8e6d67f9e1b393acda6b9a5089c768576e6fa3a408eb18f81819",
+      "bytes": 10295568,
+      "included_as_bytes": false
+    },
+    "typed_contracts": {
+      "original_saved_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/candidate/binaries/typed_contracts-test-binary",
+      "sha256": "6d0ff58cd5141bb55c744ece1b27d1fbf9ab770ecb9b79237118a194356e0225",
+      "bytes": 5970976,
+      "included_as_bytes": false
+    },
+    "execute-applet-helper": {
+      "original_saved_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/candidate/binaries/execute-applet",
+      "sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "bytes": 878320,
+      "included_as_bytes": true,
+      "bundle_path": "artifacts/binaries/candidate/execute-applet"
+    }
+  }
+}

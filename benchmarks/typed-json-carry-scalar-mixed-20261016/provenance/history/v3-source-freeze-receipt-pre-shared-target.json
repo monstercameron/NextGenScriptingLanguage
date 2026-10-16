@@ -1,0 +1,79 @@
+{
+  "active_paired_runner": {
+    "README_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-paired-runner/README.md",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-paired-runner/typed_json_carry_v3_pair.py",
+    "sha256": "f69245e3b3d9407fb037b001daf07ee212dfcb0c0542f6078061693b8f3cf300",
+    "tests_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-paired-runner/test_typed_json_carry_pair.py"
+  },
+  "base_commit": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+  "baseline_worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-bench-baseline-e5fa516",
+  "candidate_worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-bench-candidate-e5fa516",
+  "created_at": "2026-10-16T07:35:55Z",
+  "future_build": {
+    "driver_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/build_typed_json_carry_v3_pair.py",
+    "driver_sha256": "dc37ac3f68fbbd789313871ebf528d7bc474b555223a78e50cd07826b6f0aef1",
+    "fresh_evidence_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3",
+    "isolated_target_directory": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-typedcarry-v3"
+  },
+  "harness": {
+    "harness_patch_sha256": "5bb38618bde4bc04356a86a20f68402efe726cae0c6b05a5a6002022c6204f1f",
+    "same_in_baseline_v2_and_v3": true,
+    "source_path": "tests/opt_typed_json_carry.rs",
+    "source_sha256": "4fb2cacfb1eb103ff7cac962b8b6f749257e6dc41695b954241c8c9675ddd077"
+  },
+  "product": {
+    "changed_tracked_files": [
+      "src/contracts.rs",
+      "src/manifest.rs",
+      "src/runtime.rs",
+      "src/runtime/program_backend.rs",
+      "src/runtime/windows_process.rs",
+      "tests/typed_contracts.rs"
+    ],
+    "production_diff_files_byte_identical_to_v2": {
+      "src/contracts.rs": "768de9f10eb3e5c239d1e416c5336e308b2f4a68e36bc7e0f6bf38b2a311d23b",
+      "src/manifest.rs": "11830912e95cfefb26a12f9a5741ae6697a92ea104214cdf76e03d070d573378",
+      "src/runtime.rs": "3437cbfb1662cae2bed6b4d4338eba9e4b94529f14d241820c42a2b81719a85b",
+      "src/runtime/program_backend.rs": "af04b44273a80b1350e714e1187f0b521195503485bc13203e23a0e6caaffdc0",
+      "src/runtime/windows_process.rs": "a0b0136e3a012edd940732473b97a7b31b758eb1c80b899e0f54b8f80217446f"
+    },
+    "test_file_v3_reduces_to_v2_after_reversing_only_private-cache-fixture-lines": true,
+    "v2_patch_sha256": "0305d8b2ab6c7d0650d7fb384c143375d33801fdbc6dadf0e2e85799930d1e50",
+    "v3_cumulative_patch_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/typed_json_carry_product_v3.patch",
+    "v3_cumulative_patch_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+    "v3_only_difference_from_v2": "tests/typed_contracts.rs: imports Unix DirBuilderExt and creates the deep-cache fixture directory using mode(0o700). No runtime source or policy behavior changes."
+  },
+  "schema": "typed-json-carry-v3-source-freeze/1",
+  "source_bindings": {
+    "baseline_tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline_tree_sha256": "94d1d6e1532501bc093b8072e8d34d6a592bf6e9b592b7379881ee5a3b8470df",
+    "candidate_tracked_diff_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+    "candidate_tree_sha256": "85305dd05633aff94daecb1c5321e86914d1eb2e5bb331f96ab6cf3c34516e17",
+    "changed_source_paths": [
+      "src/contracts.rs",
+      "src/manifest.rs",
+      "src/runtime.rs",
+      "src/runtime/program_backend.rs",
+      "src/runtime/windows_process.rs",
+      "tests/typed_contracts.rs"
+    ],
+    "file_count": 2197,
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/source-fingerprints-v3.json",
+    "sha256": "33f6e26ade9a97749a5edbfba6a9a1eef2d3315dce4d39dae9519f9df23783f2"
+  },
+  "source_only": true,
+  "v2_preserved_worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v2-bench-candidate-e5fa516",
+  "validation": {
+    "baseline_tracked_diff_empty": true,
+    "benchmark_or_timing_run": false,
+    "builds": false,
+    "cargo_invoked": false,
+    "only_six_expected_tracked_product_or_test_files_changed": true,
+    "product_or_helper_executed": false,
+    "runtime_and_four_other_production_diffs_match_v2_byte_for_byte": true,
+    "rust_tests_run": false,
+    "same_2197_source_paths_both_arms": true,
+    "staged_diffs_empty": true,
+    "tracked_product_patch_equals_candidate_diff": true
+  }
+}

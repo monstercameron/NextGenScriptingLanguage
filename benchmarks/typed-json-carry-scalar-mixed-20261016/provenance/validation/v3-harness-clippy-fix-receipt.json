@@ -1,0 +1,40 @@
+{
+  "baseline_harness_sha256": "ba0336a0749d86e4b4f28231daea6fa36cb85a3020f93302bb0b94d83260f68b",
+  "baseline_tree_sha256": "51032b2c7eec6b86904ce27e5ed19970eb608c7dd0d1227ba08cb91ba6c46976",
+  "build_driver_sha256": "3c17e32cd168fcee1838c610345962b3378a2836863f1b08d329e1ae0ba404cf",
+  "candidate_harness_sha256": "ba0336a0749d86e4b4f28231daea6fa36cb85a3020f93302bb0b94d83260f68b",
+  "candidate_tree_sha256": "cae72e203cc3b1b8cd17cc3fa6dfc27e8db3912ea4227c1355eca7036befd0d1",
+  "change": "Removed sample_index and its always-true branch; iterate exactly SAMPLES invocations and retain each result/oracle. Product sources and benchmark workload are unchanged.",
+  "harness_patch_sha256": "3a227a33319519bbbcd64f29678c4d3879bba0121383f2cfc8afe9511c4d1141",
+  "paired_runner_sha256": "8a22b362ab1e3f564328a47ff1e7bab17abc924e63bcaf1927d6c33b2213485a",
+  "preserved_before_fix": {
+    "driver_sha256": "93b80734554e5976cdb7c9cd9b76cb7f8d9174b6713c2a7a9e0f04fe79a8b3f4",
+    "harness_patch_sha256": "5bb38618bde4bc04356a86a20f68402efe726cae0c6b05a5a6002022c6204f1f",
+    "harness_source_sha256": "4fb2cacfb1eb103ff7cac962b8b6f749257e6dc41695b954241c8c9675ddd077",
+    "runner_sha256": "b15831f5e6fab190ca7c2c60e331d9b37aab9d9dfa0527d5dc3f4d05d0cfe093",
+    "source_bindings_sha256": "33f6e26ade9a97749a5edbfba6a9a1eef2d3315dce4d39dae9519f9df23783f2"
+  },
+  "prior_clippy_attempt_log": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/v3-native-clippy-attempt-1.log",
+  "product_patch_sha256": "99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9",
+  "python_test_command": "python3 -B -m unittest -v test_typed_json_carry_pair",
+  "python_test_count": 14,
+  "reason": "strict native all-targets Clippy rejected `sample_index >= WARMUPS` because WARMUPS is fixed at zero; the branch is redundant for the fixed zero-warmup benchmark.",
+  "rustfmt_check_command": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustfmt --edition 2021 --check tests/opt_typed_json_carry.rs",
+  "rustfmt_check_passed": true,
+  "rustfmt_command": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustfmt --edition 2021 tests/opt_typed_json_carry.rs",
+  "schema": "typed-json-carry-v3-harness-clippy-fix/1",
+  "source_bindings_sha256": "cd64998235087d2fb448cc8533b99c03c007204381de80b08d7046b622652e9e",
+  "verification": {
+    "all_2197_paths_fingerprinted_per_arm": true,
+    "builds": false,
+    "cargo_invoked": false,
+    "cargo_invoked_by_this_source_only_correction": false,
+    "expected_product_diff_paths_only": true,
+    "identical_baseline_and_candidate_harness": true,
+    "product_executed": false,
+    "python_tests_passed": true,
+    "python_tests_run": true,
+    "rustfmt_check_passed": true,
+    "timing": false
+  }
+}

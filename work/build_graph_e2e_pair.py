@@ -413,6 +413,23 @@ def verify_cargo_configuration_fingerprint(
         raise EvidenceError(f"Cargo configuration inputs changed {label} the sequential build")
 
 
+def build_environment_receipt_path(evidence_root: Path) -> Path:
+    """Use the exact environment receipt namespace frozen in the paired runner."""
+    receipt_relative = Path(pair.BUILD_ENVIRONMENT_RELATIVE)
+    evidence_relative = Path(EVIDENCE_RELATIVE)
+    try:
+        relative_to_evidence = receipt_relative.relative_to(evidence_relative)
+    except ValueError as error:
+        raise EvidenceError("paired runner build-environment path is outside EVIDENCE_RELATIVE") from error
+    return evidence_root / relative_to_evidence
+
+
+def write_build_environment_receipt(evidence_root: Path, metadata: dict[str, Any]) -> Path:
+    path = build_environment_receipt_path(evidence_root)
+    write_json(path, metadata, exclusive=True)
+    return path
+
+
 def build_metadata(environment: dict[str, str]) -> dict[str, Any]:
     return {
         "rustc_vv": _tool_output(["rustc", "-Vv"], environment),
@@ -544,7 +561,7 @@ def build_pair(campaign_root: Path, evidence_root: Path, target_parent: Path) ->
     metadata["baseline"] = build_metadata(environments["baseline"])
     if not pair._validated_build_metadata(metadata["baseline"], "baseline").get("captured_before_clean_and_build"):
         raise EvidenceError("baseline metadata was not captured before the build")
-    write_json(build_dir / "build-environment-attempt-1.json", metadata["baseline"], exclusive=True)
+    write_build_environment_receipt(evidence_root, metadata["baseline"])
     host_info = {
         "captured_at": utc_now(),
         "python": _tool_output([sys.executable, "--version"], environments["baseline"]),

@@ -1,0 +1,51 @@
+{
+  "arms": {
+    "baseline": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-bench-baseline-e5fa516",
+    "candidate": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-bench-candidate-e5fa516"
+  },
+  "build_command_per_arm": [
+    "cargo",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "execute",
+    "--lib",
+    "--test",
+    "typed_contracts",
+    "--test",
+    "opt_typed_json_carry",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "build_driver_sha256": "d6c09a51b2e21d736d2d46e470e7e3b6c42f9073e99e92ecd3077eecfd3c14d3",
+  "cargo_configuration_fingerprint_before_sha256": "062c84a92da005e60234f0cced0b3ed3d00ea11c6c4477cc432f11865ce8e9ab",
+  "clean_command_per_arm": [
+    "cargo",
+    "clean",
+    "--release",
+    "-p",
+    "execute"
+  ],
+  "execute_applet_helper_built_and_copied_not_executed": true,
+  "helper_build_command_per_arm": [
+    "cargo",
+    "build",
+    "--locked",
+    "--release",
+    "-p",
+    "execute",
+    "--bin",
+    "execute-applet",
+    "--message-format=json"
+  ],
+  "order": [
+    "baseline",
+    "candidate"
+  ],
+  "shared_target_directory": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+  "source_bindings_sha256": "cd64998235087d2fb448cc8533b99c03c007204381de80b08d7046b622652e9e",
+  "test_binaries_listed_only": true,
+  "tests_executed": false,
+  "tool_environment_sha256": "994d1c97e89d6fc7e257676721b548565094038d5ccd5ca806713bd23ab861e3"
+}

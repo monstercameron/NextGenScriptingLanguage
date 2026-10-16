@@ -1,0 +1,57 @@
+{
+  "workload": {
+    "applet": "number.add",
+    "calls": 1000,
+    "catalog_sha256": "66b19b10aea5b14f37a5230ed72db4109b2419f5cf4cb8e3cbe9a6be1c1d4138",
+    "literal_operands": [
+      1,
+      2
+    ],
+    "source_bytes": 53031,
+    "source_sha256": "ebc52bd23f0e7ed6191bbff77e8b1ee8eef8eb2e2e861e3741b6337af6e76dac"
+  },
+  "raw_sample_ns": [
+    6458625,
+    1856333,
+    1822958
+  ],
+  "median_duration_ns": 1856333,
+  "semantic_oracles": [
+    {
+      "cache_hits": 0,
+      "dropped_execution_records": 744,
+      "dropped_stages": 744,
+      "expected_dropped_execution_records": 744,
+      "expected_retained_execution_records": 256,
+      "launched_processes": 0,
+      "output_hex": "33",
+      "retained_all_success_status_0": true,
+      "retained_execution_records": 256,
+      "retained_stdout_bytes_per_call": 2
+    },
+    {
+      "cache_hits": 0,
+      "dropped_execution_records": 744,
+      "dropped_stages": 744,
+      "expected_dropped_execution_records": 744,
+      "expected_retained_execution_records": 256,
+      "launched_processes": 0,
+      "output_hex": "33",
+      "retained_all_success_status_0": true,
+      "retained_execution_records": 256,
+      "retained_stdout_bytes_per_call": 2
+    },
+    {
+      "cache_hits": 0,
+      "dropped_execution_records": 744,
+      "dropped_stages": 744,
+      "expected_dropped_execution_records": 744,
+      "expected_retained_execution_records": 256,
+      "launched_processes": 0,
+      "output_hex": "33",
+      "retained_all_success_status_0": true,
+      "retained_execution_records": 256,
+      "retained_stdout_bytes_per_call": 2
+    }
+  ]
+}

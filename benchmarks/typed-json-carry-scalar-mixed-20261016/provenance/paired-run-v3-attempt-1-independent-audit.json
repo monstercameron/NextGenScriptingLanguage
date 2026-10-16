@@ -1,0 +1,2610 @@
+{
+  "all_pairs": [
+    {
+      "baseline_median_ns": 1910584,
+      "candidate_median_ns": 1961750,
+      "candidate_minus_baseline_ns": 51166,
+      "global_pair_index": 0,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 1,
+      "phase": "warmup"
+    },
+    {
+      "baseline_median_ns": 1996833,
+      "candidate_median_ns": 1968334,
+      "candidate_minus_baseline_ns": -28499,
+      "global_pair_index": 1,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 2,
+      "phase": "warmup"
+    },
+    {
+      "baseline_median_ns": 1735167,
+      "candidate_median_ns": 1838000,
+      "candidate_minus_baseline_ns": 102833,
+      "global_pair_index": 2,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 3,
+      "phase": "warmup"
+    },
+    {
+      "baseline_median_ns": 1807458,
+      "candidate_median_ns": 1749791,
+      "candidate_minus_baseline_ns": -57667,
+      "global_pair_index": 3,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 1,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2178791,
+      "candidate_median_ns": 2107500,
+      "candidate_minus_baseline_ns": -71291,
+      "global_pair_index": 4,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 2,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1845542,
+      "candidate_median_ns": 2011292,
+      "candidate_minus_baseline_ns": 165750,
+      "global_pair_index": 5,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 3,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1812708,
+      "candidate_median_ns": 3546292,
+      "candidate_minus_baseline_ns": 1733584,
+      "global_pair_index": 6,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 4,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2415083,
+      "candidate_median_ns": 2095167,
+      "candidate_minus_baseline_ns": -319916,
+      "global_pair_index": 7,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 5,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 4036083,
+      "candidate_median_ns": 1759417,
+      "candidate_minus_baseline_ns": -2276666,
+      "global_pair_index": 8,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 6,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1755583,
+      "candidate_median_ns": 1720791,
+      "candidate_minus_baseline_ns": -34792,
+      "global_pair_index": 9,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 7,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1864041,
+      "candidate_median_ns": 2106584,
+      "candidate_minus_baseline_ns": 242543,
+      "global_pair_index": 10,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 8,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1886667,
+      "candidate_median_ns": 1742292,
+      "candidate_minus_baseline_ns": -144375,
+      "global_pair_index": 11,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 9,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1904834,
+      "candidate_median_ns": 1801125,
+      "candidate_minus_baseline_ns": -103709,
+      "global_pair_index": 12,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 10,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1899167,
+      "candidate_median_ns": 1698875,
+      "candidate_minus_baseline_ns": -200292,
+      "global_pair_index": 13,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 11,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1710000,
+      "candidate_median_ns": 1849250,
+      "candidate_minus_baseline_ns": 139250,
+      "global_pair_index": 14,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 12,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1734959,
+      "candidate_median_ns": 1689917,
+      "candidate_minus_baseline_ns": -45042,
+      "global_pair_index": 15,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 13,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1747292,
+      "candidate_median_ns": 1769542,
+      "candidate_minus_baseline_ns": 22250,
+      "global_pair_index": 16,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 14,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1852958,
+      "candidate_median_ns": 1748375,
+      "candidate_minus_baseline_ns": -104583,
+      "global_pair_index": 17,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 15,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1813584,
+      "candidate_median_ns": 1952667,
+      "candidate_minus_baseline_ns": 139083,
+      "global_pair_index": 18,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 16,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1789167,
+      "candidate_median_ns": 1791875,
+      "candidate_minus_baseline_ns": 2708,
+      "global_pair_index": 19,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 17,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1871709,
+      "candidate_median_ns": 1816958,
+      "candidate_minus_baseline_ns": -54751,
+      "global_pair_index": 20,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 18,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1731125,
+      "candidate_median_ns": 1784959,
+      "candidate_minus_baseline_ns": 53834,
+      "global_pair_index": 21,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 19,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1739666,
+      "candidate_median_ns": 1777542,
+      "candidate_minus_baseline_ns": 37876,
+      "global_pair_index": 22,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 20,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2036583,
+      "candidate_median_ns": 1697709,
+      "candidate_minus_baseline_ns": -338874,
+      "global_pair_index": 23,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 21,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1761500,
+      "candidate_median_ns": 1707666,
+      "candidate_minus_baseline_ns": -53834,
+      "global_pair_index": 24,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 22,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1851666,
+      "candidate_median_ns": 1718834,
+      "candidate_minus_baseline_ns": -132832,
+      "global_pair_index": 25,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 23,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2014625,
+      "candidate_median_ns": 2299583,
+      "candidate_minus_baseline_ns": 284958,
+      "global_pair_index": 26,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 24,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1970416,
+      "candidate_median_ns": 2509292,
+      "candidate_minus_baseline_ns": 538876,
+      "global_pair_index": 27,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 25,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2037667,
+      "candidate_median_ns": 2067125,
+      "candidate_minus_baseline_ns": 29458,
+      "global_pair_index": 28,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 26,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2006708,
+      "candidate_median_ns": 2139166,
+      "candidate_minus_baseline_ns": 132458,
+      "global_pair_index": 29,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 27,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1802917,
+      "candidate_median_ns": 1957625,
+      "candidate_minus_baseline_ns": 154708,
+      "global_pair_index": 30,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 28,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2398375,
+      "candidate_median_ns": 1778417,
+      "candidate_minus_baseline_ns": -619958,
+      "global_pair_index": 31,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 29,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1927416,
+      "candidate_median_ns": 2058041,
+      "candidate_minus_baseline_ns": 130625,
+      "global_pair_index": 32,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 30,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2546084,
+      "candidate_median_ns": 1805959,
+      "candidate_minus_baseline_ns": -740125,
+      "global_pair_index": 33,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 31,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2100583,
+      "candidate_median_ns": 1870708,
+      "candidate_minus_baseline_ns": -229875,
+      "global_pair_index": 34,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 32,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1811250,
+      "candidate_median_ns": 1814709,
+      "candidate_minus_baseline_ns": 3459,
+      "global_pair_index": 35,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 33,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1772791,
+      "candidate_median_ns": 1812417,
+      "candidate_minus_baseline_ns": 39626,
+      "global_pair_index": 36,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 34,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1905917,
+      "candidate_median_ns": 1682292,
+      "candidate_minus_baseline_ns": -223625,
+      "global_pair_index": 37,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 35,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1748458,
+      "candidate_median_ns": 1685834,
+      "candidate_minus_baseline_ns": -62624,
+      "global_pair_index": 38,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 36,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1835250,
+      "candidate_median_ns": 1699916,
+      "candidate_minus_baseline_ns": -135334,
+      "global_pair_index": 39,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 37,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1945625,
+      "candidate_median_ns": 1769750,
+      "candidate_minus_baseline_ns": -175875,
+      "global_pair_index": 40,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 38,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1794958,
+      "candidate_median_ns": 1754250,
+      "candidate_minus_baseline_ns": -40708,
+      "global_pair_index": 41,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 39,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1719125,
+      "candidate_median_ns": 1688083,
+      "candidate_minus_baseline_ns": -31042,
+      "global_pair_index": 42,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 40,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 2181834,
+      "candidate_median_ns": 2020750,
+      "candidate_minus_baseline_ns": -161084,
+      "global_pair_index": 43,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 41,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1863542,
+      "candidate_median_ns": 1768416,
+      "candidate_minus_baseline_ns": -95126,
+      "global_pair_index": 44,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 42,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1979583,
+      "candidate_median_ns": 1788458,
+      "candidate_minus_baseline_ns": -191125,
+      "global_pair_index": 45,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 43,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1767708,
+      "candidate_median_ns": 1834291,
+      "candidate_minus_baseline_ns": 66583,
+      "global_pair_index": 46,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 44,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1816167,
+      "candidate_median_ns": 1719792,
+      "candidate_minus_baseline_ns": -96375,
+      "global_pair_index": 47,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 45,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1771875,
+      "candidate_median_ns": 2003958,
+      "candidate_minus_baseline_ns": 232083,
+      "global_pair_index": 48,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 46,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1760458,
+      "candidate_median_ns": 1812208,
+      "candidate_minus_baseline_ns": 51750,
+      "global_pair_index": 49,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 47,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 1790917,
+      "candidate_median_ns": 1846750,
+      "candidate_minus_baseline_ns": 55833,
+      "global_pair_index": 50,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 48,
+      "phase": "measurement"
+    }
+  ],
+  "assessment": "All reports and metrics verified. The estimate is small and order-dependent: candidate loses 14/24 AB pairs and wins 17/24 BA pairs; AB median delta is positive and BA is negative. This narrow same-host public-runtime microbenchmark does not establish a robust general speedup.",
+  "attempt_receipts": [
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:05.943Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "warmup-01-1-baseline",
+      "median_ns": 1910584,
+      "outer_wall_ns": 45493625,
+      "p95_max_ns": 2311583,
+      "phase": "warmup",
+      "raw_sha256": "d8aea0fc1f5a1a630200fe67199b9952e3ed01e50f105afc0fca2b756d99b807",
+      "samples_ns": [
+        2311583,
+        1910584,
+        1792500
+      ],
+      "started_at": "2026-10-16T08:34:05.892Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:05.984Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "warmup-01-2-candidate",
+      "median_ns": 1961750,
+      "outer_wall_ns": 24635459,
+      "p95_max_ns": 2340208,
+      "phase": "warmup",
+      "raw_sha256": "52980f9c4931d0945b0ddd07a7d8029c60872b8b857593ba2539b86f7db26e4a",
+      "samples_ns": [
+        2340208,
+        1800292,
+        1961750
+      ],
+      "started_at": "2026-10-16T08:34:05.953Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:06.030Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "warmup-02-1-candidate",
+      "median_ns": 1968334,
+      "outer_wall_ns": 26250209,
+      "p95_max_ns": 3169791,
+      "phase": "warmup",
+      "raw_sha256": "4db7618fc195a7f907845b5b24f9b3ab0baa06b35d580e8240e8c89375e93541",
+      "samples_ns": [
+        3169791,
+        1968334,
+        1758417
+      ],
+      "started_at": "2026-10-16T08:34:05.998Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:06.072Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "warmup-02-2-baseline",
+      "median_ns": 1996833,
+      "outer_wall_ns": 25364000,
+      "p95_max_ns": 2314167,
+      "phase": "warmup",
+      "raw_sha256": "4ff1d17774930ab92140bf5e90751143e2c1517d0d50cfd68b4b28c2b1940271",
+      "samples_ns": [
+        2314167,
+        1965792,
+        1996833
+      ],
+      "started_at": "2026-10-16T08:34:06.041Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:06.113Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "warmup-03-1-baseline",
+      "median_ns": 1735167,
+      "outer_wall_ns": 22438375,
+      "p95_max_ns": 1920959,
+      "phase": "warmup",
+      "raw_sha256": "4715dce2c4b085ea463576274b65f71ee0c9357031df12f0e6baa4c73b3b06df",
+      "samples_ns": [
+        1920959,
+        1735167,
+        1724750
+      ],
+      "started_at": "2026-10-16T08:34:06.086Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:06.153Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "warmup-03-2-candidate",
+      "median_ns": 1838000,
+      "outer_wall_ns": 24106625,
+      "p95_max_ns": 2030084,
+      "phase": "warmup",
+      "raw_sha256": "6cc2ada9ead6689e32df8d645222017c6b49dacb7243efb66d9c1e31a8df0b2d",
+      "samples_ns": [
+        2030084,
+        1838000,
+        1762000
+      ],
+      "started_at": "2026-10-16T08:34:06.123Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:06.199Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-01-1-candidate",
+      "median_ns": 1749791,
+      "outer_wall_ns": 24150875,
+      "p95_max_ns": 1879958,
+      "phase": "measurement",
+      "raw_sha256": "656f10316c65e60191ad55c9d982e8d978aa88d592b5d2c5d852b9703f52111b",
+      "samples_ns": [
+        1879958,
+        1749791,
+        1724792
+      ],
+      "started_at": "2026-10-16T08:34:06.169Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:06.245Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-01-2-baseline",
+      "median_ns": 1807458,
+      "outer_wall_ns": 27917125,
+      "p95_max_ns": 1971792,
+      "phase": "measurement",
+      "raw_sha256": "a0c633af0231aeaf2f9930b31efcc580ca4be106f4ed1322756016bcc2691528",
+      "samples_ns": [
+        1971792,
+        1777042,
+        1807458
+      ],
+      "started_at": "2026-10-16T08:34:06.210Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:06.308Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-02-1-baseline",
+      "median_ns": 2178791,
+      "outer_wall_ns": 28431166,
+      "p95_max_ns": 2253292,
+      "phase": "measurement",
+      "raw_sha256": "62b4fc2df257052aea1cd70451b93a7b8a2ec8a7952c952cd7a32a82d3c5d452",
+      "samples_ns": [
+        2178791,
+        2030167,
+        2253292
+      ],
+      "started_at": "2026-10-16T08:34:06.273Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:06.361Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-02-2-candidate",
+      "median_ns": 2107500,
+      "outer_wall_ns": 33566208,
+      "p95_max_ns": 2736208,
+      "phase": "measurement",
+      "raw_sha256": "8593a131855b9e04dc02444230d7b77889fce745460cfb5c82fbc0021c997658",
+      "samples_ns": [
+        2107500,
+        2054583,
+        2736208
+      ],
+      "started_at": "2026-10-16T08:34:06.320Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:06.425Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-03-1-candidate",
+      "median_ns": 2011292,
+      "outer_wall_ns": 37646416,
+      "p95_max_ns": 2125750,
+      "phase": "measurement",
+      "raw_sha256": "77467d5b4f8408a5daf56422aad0cfc1462130552c35be41753507b256851f9f",
+      "samples_ns": [
+        2125750,
+        2011292,
+        1784833
+      ],
+      "started_at": "2026-10-16T08:34:06.378Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:06.494Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-03-2-baseline",
+      "median_ns": 1845542,
+      "outer_wall_ns": 45213250,
+      "p95_max_ns": 2177417,
+      "phase": "measurement",
+      "raw_sha256": "4124c45d08d81bb4ce10f3a878fc2b15e92990f4ce91c133bc9dc64ba7cf022a",
+      "samples_ns": [
+        2177417,
+        1845542,
+        1821417
+      ],
+      "started_at": "2026-10-16T08:34:06.440Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:06.549Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-04-1-baseline",
+      "median_ns": 1812708,
+      "outer_wall_ns": 26033667,
+      "p95_max_ns": 1849167,
+      "phase": "measurement",
+      "raw_sha256": "157137d95e296e567b3591672807cb4051fe188b5e9d43bb0551675f5b51b55d",
+      "samples_ns": [
+        1849167,
+        1812708,
+        1750041
+      ],
+      "started_at": "2026-10-16T08:34:06.516Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:06.602Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-04-2-candidate",
+      "median_ns": 3546292,
+      "outer_wall_ns": 35632916,
+      "p95_max_ns": 6888333,
+      "phase": "measurement",
+      "raw_sha256": "bb3f9adefef1b8076dcf8a9f46014fcf5154eecce67fb8619e40d3a85706c7c6",
+      "samples_ns": [
+        2001084,
+        3546292,
+        6888333
+      ],
+      "started_at": "2026-10-16T08:34:06.560Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:06.675Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-05-1-candidate",
+      "median_ns": 2095167,
+      "outer_wall_ns": 34886625,
+      "p95_max_ns": 2154792,
+      "phase": "measurement",
+      "raw_sha256": "051c479bca03a0c1a56950dd038fe0450b22d7a7ade659eb0a7ee16a533ee198",
+      "samples_ns": [
+        2063208,
+        2095167,
+        2154792
+      ],
+      "started_at": "2026-10-16T08:34:06.629Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:06.776Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-05-2-baseline",
+      "median_ns": 2415083,
+      "outer_wall_ns": 72843583,
+      "p95_max_ns": 6009709,
+      "phase": "measurement",
+      "raw_sha256": "b92f7a90b58341c71b8fe80b0deef8bbcd9c62e0318ec25e8158cdae50ece11f",
+      "samples_ns": [
+        6009709,
+        2415083,
+        1873292
+      ],
+      "started_at": "2026-10-16T08:34:06.694Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:06.841Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-06-1-baseline",
+      "median_ns": 4036083,
+      "outer_wall_ns": 39255542,
+      "p95_max_ns": 4254000,
+      "phase": "measurement",
+      "raw_sha256": "1c0ef252bc99f05b451af361dd21da239724564f5d5577a10f584e806d90d3d1",
+      "samples_ns": [
+        2956792,
+        4036083,
+        4254000
+      ],
+      "started_at": "2026-10-16T08:34:06.796Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:06.883Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-06-2-candidate",
+      "median_ns": 1759417,
+      "outer_wall_ns": 23478250,
+      "p95_max_ns": 1845750,
+      "phase": "measurement",
+      "raw_sha256": "974c2707b3a24bc116ddcde8b3e33a39c81905e4e152fbbc7fbc77a09a6a3013",
+      "samples_ns": [
+        1845750,
+        1759417,
+        1710250
+      ],
+      "started_at": "2026-10-16T08:34:06.853Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:06.929Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-07-1-candidate",
+      "median_ns": 1720791,
+      "outer_wall_ns": 22585459,
+      "p95_max_ns": 1822333,
+      "phase": "measurement",
+      "raw_sha256": "54f696bfaa24ef750526789e4351dc63fe4540560f47084e4aafdc89196f03b4",
+      "samples_ns": [
+        1822333,
+        1720791,
+        1707541
+      ],
+      "started_at": "2026-10-16T08:34:06.901Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:06.969Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-07-2-baseline",
+      "median_ns": 1755583,
+      "outer_wall_ns": 24797416,
+      "p95_max_ns": 1943333,
+      "phase": "measurement",
+      "raw_sha256": "f148cee521033c1c63f953e6d808c10c5e4816016722d5fdefd928b84d6daecc",
+      "samples_ns": [
+        1943333,
+        1742792,
+        1755583
+      ],
+      "started_at": "2026-10-16T08:34:06.940Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.015Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-08-1-baseline",
+      "median_ns": 1864041,
+      "outer_wall_ns": 22973292,
+      "p95_max_ns": 1903083,
+      "phase": "measurement",
+      "raw_sha256": "89456e209dc0ab804c3c3604a63912cd689282e6e038dc3ab04e820705cb31d0",
+      "samples_ns": [
+        1903083,
+        1733042,
+        1864041
+      ],
+      "started_at": "2026-10-16T08:34:06.986Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.060Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-08-2-candidate",
+      "median_ns": 2106584,
+      "outer_wall_ns": 27840875,
+      "p95_max_ns": 2733458,
+      "phase": "measurement",
+      "raw_sha256": "34160ce4b7534238a5934c785ea4a3fd53600621a49e5db10ef85499b3d5dbef",
+      "samples_ns": [
+        2106584,
+        2733458,
+        2007458
+      ],
+      "started_at": "2026-10-16T08:34:07.026Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.106Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-09-1-candidate",
+      "median_ns": 1742292,
+      "outer_wall_ns": 23099750,
+      "p95_max_ns": 1872917,
+      "phase": "measurement",
+      "raw_sha256": "828bec4e627ccac9071fdf624677a7b34219c1ee81e442b668f7f86e8a483ff1",
+      "samples_ns": [
+        1872917,
+        1728333,
+        1742292
+      ],
+      "started_at": "2026-10-16T08:34:07.077Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.153Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-09-2-baseline",
+      "median_ns": 1886667,
+      "outer_wall_ns": 27523500,
+      "p95_max_ns": 2276292,
+      "phase": "measurement",
+      "raw_sha256": "e3e4e0753f704ed02a45547bd5031b10984d141fbc4ede23f28b3dfcd5463e52",
+      "samples_ns": [
+        2276292,
+        1886667,
+        1861000
+      ],
+      "started_at": "2026-10-16T08:34:07.118Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.204Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-10-1-baseline",
+      "median_ns": 1904834,
+      "outer_wall_ns": 26794167,
+      "p95_max_ns": 2065750,
+      "phase": "measurement",
+      "raw_sha256": "160bdd5dbbe9bac724a82517e363d4a10beb3f0c00c4ba473a4af56937bdb6b0",
+      "samples_ns": [
+        2065750,
+        1904834,
+        1770375
+      ],
+      "started_at": "2026-10-16T08:34:07.171Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.244Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-10-2-candidate",
+      "median_ns": 1801125,
+      "outer_wall_ns": 22290625,
+      "p95_max_ns": 1874958,
+      "phase": "measurement",
+      "raw_sha256": "a4cf00e251eaaad493e652369eee0795e9482733411b3005f4e37bdbfa19e428",
+      "samples_ns": [
+        1874958,
+        1801125,
+        1734250
+      ],
+      "started_at": "2026-10-16T08:34:07.216Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.291Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-11-1-candidate",
+      "median_ns": 1698875,
+      "outer_wall_ns": 23139333,
+      "p95_max_ns": 1804959,
+      "phase": "measurement",
+      "raw_sha256": "7d7617e7d3a0a1653a78281344a3491764c637916ffcd51b5d7e76942c70941b",
+      "samples_ns": [
+        1804959,
+        1693375,
+        1698875
+      ],
+      "started_at": "2026-10-16T08:34:07.262Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.332Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-11-2-baseline",
+      "median_ns": 1899167,
+      "outer_wall_ns": 24148084,
+      "p95_max_ns": 2000750,
+      "phase": "measurement",
+      "raw_sha256": "3f0e865b2c9a35b2b8dd053874c62c45d44aeeef301be47b75d7794ac13073c5",
+      "samples_ns": [
+        2000750,
+        1899167,
+        1814250
+      ],
+      "started_at": "2026-10-16T08:34:07.302Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.381Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-12-1-baseline",
+      "median_ns": 1710000,
+      "outer_wall_ns": 26273041,
+      "p95_max_ns": 1834250,
+      "phase": "measurement",
+      "raw_sha256": "af5dee469c06e790af7fbf8d00984b51bdde45c53ed5acd9c780b8ae934b1c2b",
+      "samples_ns": [
+        1834250,
+        1710000,
+        1708459
+      ],
+      "started_at": "2026-10-16T08:34:07.350Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.421Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-12-2-candidate",
+      "median_ns": 1849250,
+      "outer_wall_ns": 23352375,
+      "p95_max_ns": 1917458,
+      "phase": "measurement",
+      "raw_sha256": "89034f24047a4f4e26a0358cd66df1eab416de7ee8125643cce90e29a0e6e9b8",
+      "samples_ns": [
+        1917458,
+        1849250,
+        1680875
+      ],
+      "started_at": "2026-10-16T08:34:07.392Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.467Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-13-1-candidate",
+      "median_ns": 1689917,
+      "outer_wall_ns": 23377833,
+      "p95_max_ns": 1866750,
+      "phase": "measurement",
+      "raw_sha256": "744dc795cd416d949ff4c70f347d95cf9464d0d7f7ee89a18e49dd70dec09e7f",
+      "samples_ns": [
+        1866750,
+        1689000,
+        1689917
+      ],
+      "started_at": "2026-10-16T08:34:07.438Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.507Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-13-2-baseline",
+      "median_ns": 1734959,
+      "outer_wall_ns": 22639542,
+      "p95_max_ns": 1844584,
+      "phase": "measurement",
+      "raw_sha256": "7fd99cd1d52dd5b2ef2780c0f951abc30b96b407d149f15e086a476c2a7bc65d",
+      "samples_ns": [
+        1844584,
+        1734959,
+        1708959
+      ],
+      "started_at": "2026-10-16T08:34:07.479Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.560Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-14-1-baseline",
+      "median_ns": 1747292,
+      "outer_wall_ns": 28494792,
+      "p95_max_ns": 1858250,
+      "phase": "measurement",
+      "raw_sha256": "d132f9874dbf875cc370fde93667c6f55a5d8a918e670588114c9b23f79a0b81",
+      "samples_ns": [
+        1858250,
+        1726334,
+        1747292
+      ],
+      "started_at": "2026-10-16T08:34:07.525Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.599Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-14-2-candidate",
+      "median_ns": 1769542,
+      "outer_wall_ns": 21262708,
+      "p95_max_ns": 1877875,
+      "phase": "measurement",
+      "raw_sha256": "ceae29f4054ba823918bc97f04ad8c2aaaeff7df59a533a5a3cddd4bf9010340",
+      "samples_ns": [
+        1877875,
+        1769542,
+        1767542
+      ],
+      "started_at": "2026-10-16T08:34:07.572Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.648Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-15-1-candidate",
+      "median_ns": 1748375,
+      "outer_wall_ns": 24770666,
+      "p95_max_ns": 1828167,
+      "phase": "measurement",
+      "raw_sha256": "5685fc48774e7cff85b764df75d9c6860d2ae4dd460b00452fa0c91de30bb7da",
+      "samples_ns": [
+        1828167,
+        1707375,
+        1748375
+      ],
+      "started_at": "2026-10-16T08:34:07.617Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.692Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-15-2-baseline",
+      "median_ns": 1852958,
+      "outer_wall_ns": 26928292,
+      "p95_max_ns": 1990208,
+      "phase": "measurement",
+      "raw_sha256": "3f22df123e2b0205bfbe14baee2e127227c69f5a129b45564e54b91a6f3a4697",
+      "samples_ns": [
+        1990208,
+        1852958,
+        1817792
+      ],
+      "started_at": "2026-10-16T08:34:07.659Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.773Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-16-1-baseline",
+      "median_ns": 1813584,
+      "outer_wall_ns": 53776375,
+      "p95_max_ns": 1969875,
+      "phase": "measurement",
+      "raw_sha256": "4ebe357b02ad7b0807eb46640d772f6cbe693f8abe59a3550424743a625902d8",
+      "samples_ns": [
+        1969875,
+        1803875,
+        1813584
+      ],
+      "started_at": "2026-10-16T08:34:07.714Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.815Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-16-2-candidate",
+      "median_ns": 1952667,
+      "outer_wall_ns": 24674666,
+      "p95_max_ns": 2104166,
+      "phase": "measurement",
+      "raw_sha256": "c9aa462cffac6fa690678e855713d591912eb0accedc3b43d30423740644e669",
+      "samples_ns": [
+        2104166,
+        1952667,
+        1893333
+      ],
+      "started_at": "2026-10-16T08:34:07.785Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.864Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-17-1-candidate",
+      "median_ns": 1791875,
+      "outer_wall_ns": 24316958,
+      "p95_max_ns": 1801708,
+      "phase": "measurement",
+      "raw_sha256": "11b4d60d4a141ae54eeb7c7104ae5a2222efda5a066b488441a7dbc675a62c19",
+      "samples_ns": [
+        1801708,
+        1694333,
+        1791875
+      ],
+      "started_at": "2026-10-16T08:34:07.834Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.905Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-17-2-baseline",
+      "median_ns": 1789167,
+      "outer_wall_ns": 23018917,
+      "p95_max_ns": 1892167,
+      "phase": "measurement",
+      "raw_sha256": "2c1fbb187021c3bc55ec48aa669c4a94b85b96813dcd927b896c1ca161665cec",
+      "samples_ns": [
+        1892167,
+        1789167,
+        1721208
+      ],
+      "started_at": "2026-10-16T08:34:07.876Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:07.953Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-18-1-baseline",
+      "median_ns": 1871709,
+      "outer_wall_ns": 24059083,
+      "p95_max_ns": 1974334,
+      "phase": "measurement",
+      "raw_sha256": "d63aa47107cdc78a9d2a60eaace5f142415efd26eb3a1d67ff18d361a322c3ee",
+      "samples_ns": [
+        1974334,
+        1871709,
+        1773958
+      ],
+      "started_at": "2026-10-16T08:34:07.924Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:07.993Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-18-2-candidate",
+      "median_ns": 1816958,
+      "outer_wall_ns": 21905541,
+      "p95_max_ns": 1904750,
+      "phase": "measurement",
+      "raw_sha256": "a344e18e08480d83f152f465725b3bfe8215a418f8bc9d7b8b824de05a4281d8",
+      "samples_ns": [
+        1904750,
+        1794042,
+        1816958
+      ],
+      "started_at": "2026-10-16T08:34:07.966Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:08.041Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-19-1-candidate",
+      "median_ns": 1784959,
+      "outer_wall_ns": 23515666,
+      "p95_max_ns": 1897042,
+      "phase": "measurement",
+      "raw_sha256": "78a9046a3a415768cd5e8cb593930e4171fc81da201db3d4e8ef025cd781d13e",
+      "samples_ns": [
+        1897042,
+        1784959,
+        1682667
+      ],
+      "started_at": "2026-10-16T08:34:08.012Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:08.085Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-19-2-baseline",
+      "median_ns": 1731125,
+      "outer_wall_ns": 27596834,
+      "p95_max_ns": 1858708,
+      "phase": "measurement",
+      "raw_sha256": "b64777c82b2b665aed4adeb1fc37930dbe91c9e1bf7e91d9b3bfede890e2d771",
+      "samples_ns": [
+        1858708,
+        1722625,
+        1731125
+      ],
+      "started_at": "2026-10-16T08:34:08.053Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:08.132Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-20-1-baseline",
+      "median_ns": 1739666,
+      "outer_wall_ns": 22195209,
+      "p95_max_ns": 1877042,
+      "phase": "measurement",
+      "raw_sha256": "420a981b225628801f3e4f461ca7bccc5063471958b540be835b4dccd10d1a5d",
+      "samples_ns": [
+        1877042,
+        1739666,
+        1705833
+      ],
+      "started_at": "2026-10-16T08:34:08.104Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:08.179Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-20-2-candidate",
+      "median_ns": 1777542,
+      "outer_wall_ns": 28889834,
+      "p95_max_ns": 1944625,
+      "phase": "measurement",
+      "raw_sha256": "42261e3aaad46b587d6a68a5df047497779a3b5e74ecfb0fe1fd2d8cc9640cb9",
+      "samples_ns": [
+        1944625,
+        1777542,
+        1717542
+      ],
+      "started_at": "2026-10-16T08:34:08.145Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:08.228Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-21-1-candidate",
+      "median_ns": 1697709,
+      "outer_wall_ns": 24430333,
+      "p95_max_ns": 1806042,
+      "phase": "measurement",
+      "raw_sha256": "74e8e2daa1806db169d4a264239ca63052d58d0647781f923ab345c7eefa77c4",
+      "samples_ns": [
+        1806042,
+        1693541,
+        1697709
+      ],
+      "started_at": "2026-10-16T08:34:08.198Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:08.271Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-21-2-baseline",
+      "median_ns": 2036583,
+      "outer_wall_ns": 24406292,
+      "p95_max_ns": 2257291,
+      "phase": "measurement",
+      "raw_sha256": "4ec080db07a5d2f316369f602dca1ddfbc5d5aceada80be98466cc2d44d04595",
+      "samples_ns": [
+        2257291,
+        2036583,
+        1883791
+      ],
+      "started_at": "2026-10-16T08:34:08.241Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:08.324Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-22-1-baseline",
+      "median_ns": 1761500,
+      "outer_wall_ns": 28146542,
+      "p95_max_ns": 1883209,
+      "phase": "measurement",
+      "raw_sha256": "ed5b826c332b1ba4cb3f451c0d32c35751873ecf88183d3b786b92f70618b6d2",
+      "samples_ns": [
+        1883209,
+        1718292,
+        1761500
+      ],
+      "started_at": "2026-10-16T08:34:08.291Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:08.368Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-22-2-candidate",
+      "median_ns": 1707666,
+      "outer_wall_ns": 25015167,
+      "p95_max_ns": 1911584,
+      "phase": "measurement",
+      "raw_sha256": "1426a3e5358298fad2be21a835032b16abb196a6325c0fb4164847cac875ea47",
+      "samples_ns": [
+        1911584,
+        1704708,
+        1707666
+      ],
+      "started_at": "2026-10-16T08:34:08.336Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:08.417Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-23-1-candidate",
+      "median_ns": 1718834,
+      "outer_wall_ns": 22944458,
+      "p95_max_ns": 1839375,
+      "phase": "measurement",
+      "raw_sha256": "889b7e330e3bc64c43ec766c7690399e40288837f11c0b68d0b3af521932250d",
+      "samples_ns": [
+        1839375,
+        1707625,
+        1718834
+      ],
+      "started_at": "2026-10-16T08:34:08.388Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:08.458Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-23-2-baseline",
+      "median_ns": 1851666,
+      "outer_wall_ns": 22854625,
+      "p95_max_ns": 1993250,
+      "phase": "measurement",
+      "raw_sha256": "3b964550b6c2f97b48b358ecaa4ca8533b2469b492aee0b05e195b29e85dd3bf",
+      "samples_ns": [
+        1993250,
+        1820458,
+        1851666
+      ],
+      "started_at": "2026-10-16T08:34:08.430Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:08.508Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-24-1-baseline",
+      "median_ns": 2014625,
+      "outer_wall_ns": 23703667,
+      "p95_max_ns": 2052959,
+      "phase": "measurement",
+      "raw_sha256": "a35579a9c09055eccd6a99f3af315b3a80ad2a4d2e1b562212ad9cc0a1a4b704",
+      "samples_ns": [
+        2014625,
+        1983875,
+        2052959
+      ],
+      "started_at": "2026-10-16T08:34:08.478Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:08.569Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-24-2-candidate",
+      "median_ns": 2299583,
+      "outer_wall_ns": 32823125,
+      "p95_max_ns": 2561292,
+      "phase": "measurement",
+      "raw_sha256": "8f859c422ac6d8d34d1f003ff9e9731e8e7d5f6d2256d8fbfe8d8a81b4c35e89",
+      "samples_ns": [
+        1945958,
+        2299583,
+        2561292
+      ],
+      "started_at": "2026-10-16T08:34:08.526Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:08.679Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-25-1-candidate",
+      "median_ns": 2509292,
+      "outer_wall_ns": 45955708,
+      "p95_max_ns": 2648208,
+      "phase": "measurement",
+      "raw_sha256": "19bc45f3fe21faa5649eff043dab9f21e17e9cc9bc3b3d00fa36b494678fe7ec",
+      "samples_ns": [
+        2003208,
+        2509292,
+        2648208
+      ],
+      "started_at": "2026-10-16T08:34:08.621Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:08.756Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-25-2-baseline",
+      "median_ns": 1970416,
+      "outer_wall_ns": 37335458,
+      "p95_max_ns": 2504125,
+      "phase": "measurement",
+      "raw_sha256": "cd6f8ca08bd8f0cf330fee6bcd93281bfad70d7d93fba999de298feed4f956a8",
+      "samples_ns": [
+        1970416,
+        1879333,
+        2504125
+      ],
+      "started_at": "2026-10-16T08:34:08.710Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:08.860Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-26-1-baseline",
+      "median_ns": 2037667,
+      "outer_wall_ns": 46456375,
+      "p95_max_ns": 4928041,
+      "phase": "measurement",
+      "raw_sha256": "1fa3dd38adf1f19b602e87a4e8f369383dab87574d9238eb815dd2625101ba4d",
+      "samples_ns": [
+        4928041,
+        1999250,
+        2037667
+      ],
+      "started_at": "2026-10-16T08:34:08.798Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:08.945Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-26-2-candidate",
+      "median_ns": 2067125,
+      "outer_wall_ns": 51897709,
+      "p95_max_ns": 2108792,
+      "phase": "measurement",
+      "raw_sha256": "98af337ac714d91f1d8248f4de30fcc7865741e6f2599cfbbeb05b61ebad11aa",
+      "samples_ns": [
+        2067125,
+        1835750,
+        2108792
+      ],
+      "started_at": "2026-10-16T08:34:08.887Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:09.011Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-27-1-candidate",
+      "median_ns": 2139166,
+      "outer_wall_ns": 25154291,
+      "p95_max_ns": 2411417,
+      "phase": "measurement",
+      "raw_sha256": "e0c43db78957b2280dcf33ad6ba03025a11990d48e49adc4d325843b95fe9bf2",
+      "samples_ns": [
+        2139166,
+        2411417,
+        1870458
+      ],
+      "started_at": "2026-10-16T08:34:08.980Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.076Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-27-2-baseline",
+      "median_ns": 2006708,
+      "outer_wall_ns": 42640084,
+      "p95_max_ns": 2839416,
+      "phase": "measurement",
+      "raw_sha256": "f74a9c7b4b746636278fe6b70b126720c59649b0e4507b19a631deb49ce4f27f",
+      "samples_ns": [
+        2006708,
+        1850542,
+        2839416
+      ],
+      "started_at": "2026-10-16T08:34:09.028Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.136Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-28-1-baseline",
+      "median_ns": 1802917,
+      "outer_wall_ns": 28441333,
+      "p95_max_ns": 2010208,
+      "phase": "measurement",
+      "raw_sha256": "2c8794b0f5389a64f9f638040104943e33308218217fa903f3919ff67945c5b3",
+      "samples_ns": [
+        2010208,
+        1791833,
+        1802917
+      ],
+      "started_at": "2026-10-16T08:34:09.100Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:09.183Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-28-2-candidate",
+      "median_ns": 1957625,
+      "outer_wall_ns": 24210500,
+      "p95_max_ns": 2171208,
+      "phase": "measurement",
+      "raw_sha256": "48f1f6792476c0f696389ce58116ff54a0156a239d9347edb1cec07a844e0021",
+      "samples_ns": [
+        2171208,
+        1850583,
+        1957625
+      ],
+      "started_at": "2026-10-16T08:34:09.152Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:09.234Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-29-1-candidate",
+      "median_ns": 1778417,
+      "outer_wall_ns": 25164916,
+      "p95_max_ns": 1937750,
+      "phase": "measurement",
+      "raw_sha256": "bf36ece4ab0af600663d56569f9ad248a6969e24bedb7817f40aecf59787a458",
+      "samples_ns": [
+        1937750,
+        1778417,
+        1733583
+      ],
+      "started_at": "2026-10-16T08:34:09.204Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.284Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-29-2-baseline",
+      "median_ns": 2398375,
+      "outer_wall_ns": 26422208,
+      "p95_max_ns": 2420625,
+      "phase": "measurement",
+      "raw_sha256": "168eb880a9e4c1c68779f65d69c2ce4eac8cdc94457866028fc641857f088ae1",
+      "samples_ns": [
+        2398375,
+        2420625,
+        1966875
+      ],
+      "started_at": "2026-10-16T08:34:09.249Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.337Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-30-1-baseline",
+      "median_ns": 1927416,
+      "outer_wall_ns": 24176209,
+      "p95_max_ns": 1968584,
+      "phase": "measurement",
+      "raw_sha256": "93d657dc9270144c79cf8df35cb19faba9c9e83e526e498452e525168117d229",
+      "samples_ns": [
+        1968584,
+        1841250,
+        1927416
+      ],
+      "started_at": "2026-10-16T08:34:09.306Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:09.383Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-30-2-candidate",
+      "median_ns": 2058041,
+      "outer_wall_ns": 26266416,
+      "p95_max_ns": 5368625,
+      "phase": "measurement",
+      "raw_sha256": "f038e8a4e131c7fb5d15ca7ba9a49c8f84291cbd8e56d9cab9ce35ac7092c2cb",
+      "samples_ns": [
+        2058041,
+        1803833,
+        5368625
+      ],
+      "started_at": "2026-10-16T08:34:09.350Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:09.443Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-31-1-candidate",
+      "median_ns": 1805959,
+      "outer_wall_ns": 31726666,
+      "p95_max_ns": 1960208,
+      "phase": "measurement",
+      "raw_sha256": "2a7eedcd4a1b8e52bc5a812795fd39ded56c41e0b5bab14ffc148b86f632d909",
+      "samples_ns": [
+        1960208,
+        1788958,
+        1805959
+      ],
+      "started_at": "2026-10-16T08:34:09.406Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.495Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-31-2-baseline",
+      "median_ns": 2546084,
+      "outer_wall_ns": 31594125,
+      "p95_max_ns": 3411625,
+      "phase": "measurement",
+      "raw_sha256": "744eabcb4a125335301b6c07eedc669aa98f68487a251eafbffe6958a5f56262",
+      "samples_ns": [
+        3411625,
+        2546084,
+        2161875
+      ],
+      "started_at": "2026-10-16T08:34:09.458Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.582Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-32-1-baseline",
+      "median_ns": 2100583,
+      "outer_wall_ns": 31467125,
+      "p95_max_ns": 2463625,
+      "phase": "measurement",
+      "raw_sha256": "1648bd1044071a864f7e225101564cca6359b260d321d843e7d67c5350fd3b1f",
+      "samples_ns": [
+        2463625,
+        2100583,
+        1960333
+      ],
+      "started_at": "2026-10-16T08:34:09.544Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:09.626Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-32-2-candidate",
+      "median_ns": 1870708,
+      "outer_wall_ns": 22960583,
+      "p95_max_ns": 1887584,
+      "phase": "measurement",
+      "raw_sha256": "604a320d4b3628567fab57a71d7e53236c2d9ce8963ebb2226a2e8f3ae53411a",
+      "samples_ns": [
+        1887584,
+        1870708,
+        1820042
+      ],
+      "started_at": "2026-10-16T08:34:09.597Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:09.681Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-33-1-candidate",
+      "median_ns": 1814709,
+      "outer_wall_ns": 25887250,
+      "p95_max_ns": 1891542,
+      "phase": "measurement",
+      "raw_sha256": "8b1ff4adc960738ad5a47901b643629bdadb6d6a8d16f02fe15dfbe61c689f94",
+      "samples_ns": [
+        1891542,
+        1759917,
+        1814709
+      ],
+      "started_at": "2026-10-16T08:34:09.648Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.726Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-33-2-baseline",
+      "median_ns": 1811250,
+      "outer_wall_ns": 24790500,
+      "p95_max_ns": 1958625,
+      "phase": "measurement",
+      "raw_sha256": "89422e619d19305b323e457a6690db702a94c410c911b5fd88abfe2ada3147d1",
+      "samples_ns": [
+        1958625,
+        1811250,
+        1781583
+      ],
+      "started_at": "2026-10-16T08:34:09.695Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.777Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-34-1-baseline",
+      "median_ns": 1772791,
+      "outer_wall_ns": 21922875,
+      "p95_max_ns": 1876833,
+      "phase": "measurement",
+      "raw_sha256": "be88cfb33f48312a6f84f11d86312224c6ea367be400374211f1c0419774502f",
+      "samples_ns": [
+        1876833,
+        1772791,
+        1750750
+      ],
+      "started_at": "2026-10-16T08:34:09.750Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:09.820Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-34-2-candidate",
+      "median_ns": 1812417,
+      "outer_wall_ns": 23355333,
+      "p95_max_ns": 1933542,
+      "phase": "measurement",
+      "raw_sha256": "1204266043748bcc2a214331e765f044198c6215677fc17b7740e77e8b2e2443",
+      "samples_ns": [
+        1933542,
+        1812417,
+        1704209
+      ],
+      "started_at": "2026-10-16T08:34:09.791Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:09.872Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-35-1-candidate",
+      "median_ns": 1682292,
+      "outer_wall_ns": 23863334,
+      "p95_max_ns": 1818583,
+      "phase": "measurement",
+      "raw_sha256": "1936fb14cfd74081ddabbc1c8825681d70a2afb6b7820a7b598d8282c36eeee5",
+      "samples_ns": [
+        1818583,
+        1682292,
+        1677208
+      ],
+      "started_at": "2026-10-16T08:34:09.843Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.916Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-35-2-baseline",
+      "median_ns": 1905917,
+      "outer_wall_ns": 23612292,
+      "p95_max_ns": 1990583,
+      "phase": "measurement",
+      "raw_sha256": "f7d5b6e46a2579f8e75f19bd36fb50841134e0acbdc26770c6297c5c50df3b84",
+      "samples_ns": [
+        1990583,
+        1820042,
+        1905917
+      ],
+      "started_at": "2026-10-16T08:34:09.886Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:09.968Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-36-1-baseline",
+      "median_ns": 1748458,
+      "outer_wall_ns": 22739833,
+      "p95_max_ns": 1892416,
+      "phase": "measurement",
+      "raw_sha256": "32b3eb82a733b10ef7d41b98a39d8d4c6b1d395ff74d4cb85e97ac6d01df8b05",
+      "samples_ns": [
+        1892416,
+        1748458,
+        1715458
+      ],
+      "started_at": "2026-10-16T08:34:09.939Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.013Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-36-2-candidate",
+      "median_ns": 1685834,
+      "outer_wall_ns": 25605333,
+      "p95_max_ns": 1816209,
+      "phase": "measurement",
+      "raw_sha256": "6d88c4f2cd01eabaf953d9f52573a163de6f7b61b91ea19e03a4bac8bec1a515",
+      "samples_ns": [
+        1816209,
+        1685834,
+        1677583
+      ],
+      "started_at": "2026-10-16T08:34:09.982Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.067Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-37-1-candidate",
+      "median_ns": 1699916,
+      "outer_wall_ns": 23975166,
+      "p95_max_ns": 1816375,
+      "phase": "measurement",
+      "raw_sha256": "e6c1d75bf445bfd0a442bfe8c205be58b7fcc4d2cfe2322379fc6f9e1040fbd0",
+      "samples_ns": [
+        1816375,
+        1699916,
+        1695708
+      ],
+      "started_at": "2026-10-16T08:34:10.036Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.114Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-37-2-baseline",
+      "median_ns": 1835250,
+      "outer_wall_ns": 24794042,
+      "p95_max_ns": 2270583,
+      "phase": "measurement",
+      "raw_sha256": "76bdecf55a47aa2b1cf60688be6258ad39551835ab8e759cde5a21cf098cbd0f",
+      "samples_ns": [
+        2270583,
+        1835250,
+        1796792
+      ],
+      "started_at": "2026-10-16T08:34:10.083Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.169Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-38-1-baseline",
+      "median_ns": 1945625,
+      "outer_wall_ns": 24579875,
+      "p95_max_ns": 1972750,
+      "phase": "measurement",
+      "raw_sha256": "26eb99743234f9442b8ca69db66af5185efc9d9525f918d13de55d255b8120c4",
+      "samples_ns": [
+        1945625,
+        1925458,
+        1972750
+      ],
+      "started_at": "2026-10-16T08:34:10.139Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.213Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-38-2-candidate",
+      "median_ns": 1769750,
+      "outer_wall_ns": 23393917,
+      "p95_max_ns": 1889125,
+      "phase": "measurement",
+      "raw_sha256": "556f4d44233badae332422dc874bf81d03e81ffb56b7f14ed6f66a8b57c223ad",
+      "samples_ns": [
+        1889125,
+        1769750,
+        1752125
+      ],
+      "started_at": "2026-10-16T08:34:10.184Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.266Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-39-1-candidate",
+      "median_ns": 1754250,
+      "outer_wall_ns": 22096667,
+      "p95_max_ns": 1889792,
+      "phase": "measurement",
+      "raw_sha256": "ac2271dc5ecc16da6ff1179bcc15e9e74b6c7decf54a46903e55bb4d7c49a188",
+      "samples_ns": [
+        1889792,
+        1754250,
+        1710584
+      ],
+      "started_at": "2026-10-16T08:34:10.238Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.310Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-39-2-baseline",
+      "median_ns": 1794958,
+      "outer_wall_ns": 24964791,
+      "p95_max_ns": 1932167,
+      "phase": "measurement",
+      "raw_sha256": "5d11cf4ed9b20425946d7e1a106642e3c976b71c09309e4b1a151a9e11792f2d",
+      "samples_ns": [
+        1932167,
+        1794958,
+        1782708
+      ],
+      "started_at": "2026-10-16T08:34:10.280Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.364Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-40-1-baseline",
+      "median_ns": 1719125,
+      "outer_wall_ns": 24089167,
+      "p95_max_ns": 1892625,
+      "phase": "measurement",
+      "raw_sha256": "7fd5ca368bc78e174225e5ceffc128e37cc0a6f5d98f830dd0619ffeacbe2f9b",
+      "samples_ns": [
+        1892625,
+        1719125,
+        1713666
+      ],
+      "started_at": "2026-10-16T08:34:10.335Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.407Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-40-2-candidate",
+      "median_ns": 1688083,
+      "outer_wall_ns": 23104042,
+      "p95_max_ns": 1798541,
+      "phase": "measurement",
+      "raw_sha256": "5ec0fd66c3d0a66bff681b49c38d1e6f469b496515880a554a653e10ab69e773",
+      "samples_ns": [
+        1798541,
+        1679500,
+        1688083
+      ],
+      "started_at": "2026-10-16T08:34:10.379Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.461Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-41-1-candidate",
+      "median_ns": 2020750,
+      "outer_wall_ns": 24484542,
+      "p95_max_ns": 2076541,
+      "phase": "measurement",
+      "raw_sha256": "d40b63af8fed81753ec7542cc45f9431362ff1b93e2ca5f387ae17bb0886d02a",
+      "samples_ns": [
+        2076541,
+        1914291,
+        2020750
+      ],
+      "started_at": "2026-10-16T08:34:10.431Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.510Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-41-2-baseline",
+      "median_ns": 2181834,
+      "outer_wall_ns": 27167375,
+      "p95_max_ns": 2185625,
+      "phase": "measurement",
+      "raw_sha256": "c8bd8743570362f78793ed79db3b117a6e266c3eb242557185c513f770c6d3b2",
+      "samples_ns": [
+        2010625,
+        2181834,
+        2185625
+      ],
+      "started_at": "2026-10-16T08:34:10.477Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.566Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-42-1-baseline",
+      "median_ns": 1863542,
+      "outer_wall_ns": 24385083,
+      "p95_max_ns": 1913334,
+      "phase": "measurement",
+      "raw_sha256": "320c00e1110087c0f1e07075783bab57d23f80e45274c60b14a0dffe1977693d",
+      "samples_ns": [
+        1913334,
+        1863542,
+        1822791
+      ],
+      "started_at": "2026-10-16T08:34:10.536Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.611Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-42-2-candidate",
+      "median_ns": 1768416,
+      "outer_wall_ns": 23594292,
+      "p95_max_ns": 1879166,
+      "phase": "measurement",
+      "raw_sha256": "f6f5166098638d03c5c4f12edc200d429e33c08c4fe6602329d34eadd3cc55b4",
+      "samples_ns": [
+        1879166,
+        1768416,
+        1736000
+      ],
+      "started_at": "2026-10-16T08:34:10.582Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.665Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-43-1-candidate",
+      "median_ns": 1788458,
+      "outer_wall_ns": 23281125,
+      "p95_max_ns": 1845709,
+      "phase": "measurement",
+      "raw_sha256": "55f97770fae94f6ea70ed43bcd6d655f95df4c0906182bf62ad1af357970e330",
+      "samples_ns": [
+        1845709,
+        1788458,
+        1742333
+      ],
+      "started_at": "2026-10-16T08:34:10.636Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.712Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-43-2-baseline",
+      "median_ns": 1979583,
+      "outer_wall_ns": 26023458,
+      "p95_max_ns": 4024750,
+      "phase": "measurement",
+      "raw_sha256": "a48f9f3acfa0a71e049e4463c7f2d6cc04af34518b8d2821c0589652be52e746",
+      "samples_ns": [
+        1897166,
+        4024750,
+        1979583
+      ],
+      "started_at": "2026-10-16T08:34:10.681Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.767Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-44-1-baseline",
+      "median_ns": 1767708,
+      "outer_wall_ns": 23459000,
+      "p95_max_ns": 1879667,
+      "phase": "measurement",
+      "raw_sha256": "5f68168f9a0afacb6933673c0c9dd72708d92114fc0a0c1b68f57948d4d06a83",
+      "samples_ns": [
+        1879667,
+        1767708,
+        1743333
+      ],
+      "started_at": "2026-10-16T08:34:10.737Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.811Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-44-2-candidate",
+      "median_ns": 1834291,
+      "outer_wall_ns": 23918792,
+      "p95_max_ns": 1996708,
+      "phase": "measurement",
+      "raw_sha256": "a52a354b04e36f64f0dc1e068cf5193ec7ea37bc60c65d7a1fed1c6a3fe4bf04",
+      "samples_ns": [
+        1996708,
+        1834291,
+        1703000
+      ],
+      "started_at": "2026-10-16T08:34:10.782Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:10.864Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-45-1-candidate",
+      "median_ns": 1719792,
+      "outer_wall_ns": 22260708,
+      "p95_max_ns": 1822000,
+      "phase": "measurement",
+      "raw_sha256": "840d711d9ed1e35b91aeea3b82a2a2515f82baa70dff8bb02251382fbaf40b0a",
+      "samples_ns": [
+        1822000,
+        1708917,
+        1719792
+      ],
+      "started_at": "2026-10-16T08:34:10.836Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.913Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-45-2-baseline",
+      "median_ns": 1816167,
+      "outer_wall_ns": 26979958,
+      "p95_max_ns": 1944166,
+      "phase": "measurement",
+      "raw_sha256": "33255958315edf9e6df40157fbcde01bcb4ba936b399bef6128524e592ff5489",
+      "samples_ns": [
+        1944166,
+        1814958,
+        1816167
+      ],
+      "started_at": "2026-10-16T08:34:10.880Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:10.971Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-46-1-baseline",
+      "median_ns": 1771875,
+      "outer_wall_ns": 27247750,
+      "p95_max_ns": 1892750,
+      "phase": "measurement",
+      "raw_sha256": "52210104597aaf8cef414d6871257cfac08d713903ed0447e3b87c9299f8c3c5",
+      "samples_ns": [
+        1892750,
+        1763916,
+        1771875
+      ],
+      "started_at": "2026-10-16T08:34:10.938Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:11.018Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-46-2-candidate",
+      "median_ns": 2003958,
+      "outer_wall_ns": 24968042,
+      "p95_max_ns": 2121458,
+      "phase": "measurement",
+      "raw_sha256": "f147fa9876c0c688ee82a1f478fa11bc8fb0663107f92edcc1a20138dbd10ae8",
+      "samples_ns": [
+        2121458,
+        2003958,
+        1848000
+      ],
+      "started_at": "2026-10-16T08:34:10.988Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:11.084Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-47-1-candidate",
+      "median_ns": 1812208,
+      "outer_wall_ns": 28697042,
+      "p95_max_ns": 1956208,
+      "phase": "measurement",
+      "raw_sha256": "c6619d6872e007f7df3d635636d7087e587e8c7cfcd1292ff6e30fa7b1e22897",
+      "samples_ns": [
+        1956208,
+        1812208,
+        1811000
+      ],
+      "started_at": "2026-10-16T08:34:11.050Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:11.132Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-47-2-baseline",
+      "median_ns": 1760458,
+      "outer_wall_ns": 24940500,
+      "p95_max_ns": 1894250,
+      "phase": "measurement",
+      "raw_sha256": "58ff1f1140759cabb1816b1b38af49d24cf25ff6fcb00dfb9b94d6ea029ee41a",
+      "samples_ns": [
+        1894250,
+        1760458,
+        1759125
+      ],
+      "started_at": "2026-10-16T08:34:11.102Z"
+    },
+    {
+      "arm": "baseline",
+      "binary_sha256": "348c33133829995dc44f7a6aa9e88ca0698050568d0cb04c20be8b3cadaf41a7",
+      "finished_at": "2026-10-16T08:34:11.188Z",
+      "helper_sha256": "ba7a2d1a32a556bfc1e3b3d6dd0ba856ae7a4a9b9f5472e02f4c7f516f69bc07",
+      "id": "measurement-48-1-baseline",
+      "median_ns": 1790917,
+      "outer_wall_ns": 23661584,
+      "p95_max_ns": 1915584,
+      "phase": "measurement",
+      "raw_sha256": "efe1d104eb3082867d89f72cdd9e55080dca9c4c974de4525a6cc97fc8a57657",
+      "samples_ns": [
+        1915584,
+        1790917,
+        1755375
+      ],
+      "started_at": "2026-10-16T08:34:11.159Z"
+    },
+    {
+      "arm": "candidate",
+      "binary_sha256": "6711ae0c1bd8aa9c416119ce275e8caac741fa16930e4d5ea04406590c041f86",
+      "finished_at": "2026-10-16T08:34:11.232Z",
+      "helper_sha256": "75fb19e84093b065e8d7785e5bc2e17a23351ebcf9fa6af7b23c4da63ab28717",
+      "id": "measurement-48-2-candidate",
+      "median_ns": 1846750,
+      "outer_wall_ns": 22568458,
+      "p95_max_ns": 1861708,
+      "phase": "measurement",
+      "raw_sha256": "dbef2797146c952750c35befe6d49947fc8c5d302930b0f4b89b687b6d68a657",
+      "samples_ns": [
+        1861708,
+        1794125,
+        1846750
+      ],
+      "started_at": "2026-10-16T08:34:11.204Z"
+    }
+  ],
+  "audited_at_utc": "2026-10-16T08:44:21+00:00",
+  "checks": [
+    {
+      "check": "102/102 attempt success, no retries/timeouts/raw failures",
+      "passed": true
+    },
+    {
+      "check": "all raw hashes, 3 samples each, p50/p95 recomputed",
+      "passed": true
+    },
+    {
+      "check": "exact workload metadata and all semantic oracle values",
+      "passed": true
+    },
+    {
+      "check": "attempt journals and binary/helper pre/post hashes match",
+      "passed": true
+    },
+    {
+      "check": "all pair deltas, order schedule, and report aggregate recomputed",
+      "passed": true
+    },
+    {
+      "check": "source-map/build provenance independently checked in preceding source pass (2,197 paths per arm)",
+      "passed": true
+    }
+  ],
+  "hashes": {
+    "build_driver": "d6c09a51b2e21d736d2d46e470e7e3b6c42f9073e99e92ecd3077eecfd3c14d3",
+    "build_pair_receipt": "02a008481d2c555a1bfbb628d57b4cf993931f62161f79ddea3478a45759ee23",
+    "preregistration": "e7c3679f3b86c9ad1772ea352529a58d00355270edf48fb3954ad21693d02ead",
+    "report": "b43ea3ac82e6fcef564c44684d49f1768ca87cabe37d3ca0fe3ae9732d0e3765",
+    "runner": "8b2992921d500efc02a007695b51a91333a0d1f8dac1cc417bbed16eeecbe9cb",
+    "source_map": "cd64998235087d2fb448cc8533b99c03c007204381de80b08d7046b622652e9e"
+  },
+  "metrics": {
+    "baseline_arm_median_ns": 1848604.0,
+    "candidate_arm_median_ns": 1796500.0,
+    "candidate_over_baseline_arm_medians": 0.971814406979537,
+    "first24": {
+      "losses": 10,
+      "median_delta_ns": -49438.0,
+      "median_pair_ratio": 0.9723933516797723,
+      "wins": 14
+    },
+    "largest_losses": [
+      {
+        "delta_ns": 1733584,
+        "pair": 4
+      },
+      {
+        "delta_ns": 538876,
+        "pair": 25
+      },
+      {
+        "delta_ns": 284958,
+        "pair": 24
+      },
+      {
+        "delta_ns": 242543,
+        "pair": 8
+      },
+      {
+        "delta_ns": 232083,
+        "pair": 46
+      }
+    ],
+    "largest_wins": [
+      {
+        "delta_ns": -2276666,
+        "pair": 6
+      },
+      {
+        "delta_ns": -740125,
+        "pair": 31
+      },
+      {
+        "delta_ns": -619958,
+        "pair": 29
+      },
+      {
+        "delta_ns": -338874,
+        "pair": 21
+      },
+      {
+        "delta_ns": -319916,
+        "pair": 5
+      }
+    ],
+    "last24": {
+      "losses": 11,
+      "median_delta_ns": -35875.0,
+      "median_pair_ratio": 0.9796320287469814,
+      "wins": 13
+    },
+    "losses": 21,
+    "median_pair_ratio": 0.975679748700689,
+    "median_paired_delta_ns": -42875.0,
+    "order_effect": {
+      "AB": {
+        "baseline_median_ns": 1813146.0,
+        "candidate_median_ns": 1840520.5,
+        "losses": 14,
+        "median_delta_ns": 33667.0,
+        "median_pair_ratio": 1.018114362252414,
+        "n": 24,
+        "wins": 10
+      },
+      "BA": {
+        "baseline_median_ns": 1852312.0,
+        "candidate_median_ns": 1766333.5,
+        "losses": 7,
+        "median_delta_ns": -100479.0,
+        "median_pair_ratio": 0.9452469196810795,
+        "n": 24,
+        "wins": 17
+      }
+    },
+    "ties": 0,
+    "wins": 27
+  },
+  "protocol": {
+    "AB_BA_pairs": [
+      24,
+      24
+    ],
+    "attempts": 102,
+    "failures": 0,
+    "first_start": "2026-10-16T08:34:05.892Z",
+    "last_finish": "2026-10-16T08:34:11.232Z",
+    "measured_pairs": 48,
+    "retries": 0,
+    "runtime_environment_caveat": "Only LC_ALL=C, TZ=UTC, and the absolute report-path override are journaled; runner inherits the parent environment.",
+    "successes": 102,
+    "warmup_pairs": 3
+  },
+  "result": "PASS_RAW_AND_PROVENANCE_AUDIT_ORDER_EFFECT_CAVEAT",
+  "schema": "typed-json-carry-v3-independent-audit/1",
+  "semantic_scope": {
+    "applet": "number.add",
+    "cache_hits": 0,
+    "calls": 1000,
+    "catalog_sha256": "66b19b10aea5b14f37a5230ed72db4109b2419f5cf4cb8e3cbe9a6be1c1d4138",
+    "dropped_records_and_stages": 744,
+    "output_hex": "33",
+    "p95_caveat": "max of only three samples, not a stable tail estimate",
+    "per_invocation_metric": "median of 3 timed public runtime::run calls",
+    "processes": 0,
+    "retained_records": 256,
+    "retained_status": 0,
+    "source_bytes": 53031,
+    "source_sha256": "ebc52bd23f0e7ed6191bbff77e8b1ee8eef8eb2e2e861e3741b6337af6e76dac",
+    "stdout_bytes_per_record": 2,
+    "timer_boundary": "Instant directly brackets runtime::run; registry/source setup and RunResult destruction are outside the timed interval."
+  }
+}

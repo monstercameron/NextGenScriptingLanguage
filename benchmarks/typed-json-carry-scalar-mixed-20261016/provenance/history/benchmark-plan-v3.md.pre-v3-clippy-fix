@@ -1,0 +1,13 @@
+# Typed-JSON carry V3 source and measurement plan
+
+V3 is the source candidate for the typed JSON carry optimization, based on commit e5fa5162b9bdca608f7f3c9d0d273db40a93c17b. It retains the V2 runtime changes and fixes the test fixture that previously failed the existing private-cache-directory rule. The Unix cache fixture now creates its directory with DirBuilderExt::mode(0o700). No runtime or security policy source changed in V3. V2 remains preserved separately.
+
+The V3 cumulative product patch is typed_json_carry_product_v3.patch, SHA-256 99650ce4d9c2a2d4c8418e52bc3dbbda2f99a2a745e54c48332f9dc6a1958bb9. The five production-file diffs match V2 byte-for-byte; V3's sole additional tracked change is the test fixture in tests/typed_contracts.rs. The benchmark harness remains identical in both arms: source SHA-256 4fb2cacfb1eb103ff7cac962b8b6f749257e6dc41695b954241c8c9675ddd077, harness patch SHA-256 5bb38618bde4bc04356a86a20f68402efe726cae0c6b05a5a6002022c6204f1f.
+
+The full baseline/V3 2,197-file source map is source-fingerprints-v3.json, SHA-256 33f6e26ade9a97749a5edbfba6a9a1eef2d3315dce4d39dae9519f9df23783f2. Its candidate tree SHA-256 is 85305dd05633aff94daecb1c5321e86914d1eb2e5bb331f96ab6cf3c34516e17; baseline tree SHA-256 is unchanged at 94d1d6e1532501bc093b8072e8d34d6a592bf6e9b592b7379881ee5a3b8470df. The source-freeze receipt is v3-source-freeze-receipt.json.
+
+The build-only driver is work/build_typed_json_carry_v3_pair.py, SHA-256 93b80734554e5976cdb7c9cd9b76cb7f8d9174b6713c2a7a9e0f04fe79a8b3f4. It is pinned to the V3 candidate worktree and V3 source map, with fresh evidence under build-attempt-v3 and the existing shared dependency target directory under work/perf-target-candidate. It has not been run by this source-only preparation.
+
+The active paired runner is work/typed-json-carry-v3-paired-runner/typed_json_carry_v3_pair.py, SHA-256 b15831f5e6fab190ca7c2c60e331d9b37aab9d9dfa0527d5dc3f4d05d0cfe093. It is bound to V3 and the fixed 3-warmup/48-measured AB/BA public-runtime protocol. Its 14 offline Python tests passed. It must wait for root's local V3 compile/test review and fresh build receipts before preregistration or timing.
+
+The build driver runs `cargo clean --release -p execute` once per arm while reusing the campaign shared target directory and its dependency cache. No Cargo build, Rust test, helper execution, product execution, benchmark run, or timing was performed for V3. No speedup is claimed. Any eventual result applies only to this 1,000-call public-runtime microbenchmark, not CLI startup or general workloads.

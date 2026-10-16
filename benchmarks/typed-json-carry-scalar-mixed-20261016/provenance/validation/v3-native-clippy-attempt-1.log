@@ -1,0 +1,15 @@
+    Checking iana-time-zone v0.1.65 (/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-bench-candidate-e5fa516/vendor/iana-time-zone)
+    Checking chrono v0.4.45
+    Checking execute v0.9.0-rc.5 (/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-bench-candidate-e5fa516)
+error: this comparison involving the minimum or maximum element for this type contains a case that is always true or always false
+   --> tests/opt_typed_json_carry.rs:138:12
+    |
+138 |         if sample_index >= WARMUPS {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: because `WARMUPS` is the minimum value for this type, this comparison is always true
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#absurd_extreme_comparisons
+    = note: `#[deny(clippy::absurd_extreme_comparisons)]` on by default
+
+error: could not compile `execute` (test "opt_typed_json_carry") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

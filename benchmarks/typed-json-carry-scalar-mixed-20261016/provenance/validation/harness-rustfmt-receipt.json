@@ -1,0 +1,43 @@
+{
+  "schema": "typed-json-carry-harness-rustfmt/1",
+  "action": "Format only the ignored benchmark harness with the campaign-pinned stable rustfmt; copy the exact output to baseline and v2 candidate worktrees.",
+  "rustfmt": {
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustfmt",
+    "version": "rustfmt 1.10.0-stable (b940084d7e 2026-09-28)",
+    "toolchain": "stable-aarch64-apple-darwin",
+    "edition": "2021",
+    "command": ["rustfmt", "--edition", "2021", "opt_typed_json_carry.rs"],
+    "format_check_command": ["rustfmt", "--edition", "2021", "--check", "opt_typed_json_carry.rs"]
+  },
+  "harness": {
+    "source_before_sha256": "12b93aeab840f29f7380f85be7eddd0da7ec428f7e4773dcc4c4550feeac23ca",
+    "patch_before_sha256": "5c9398a4fffd221ac3885c6615ff739153b193dfe97bf88346d170ef948dc142",
+    "source_after_sha256": "4fb2cacfb1eb103ff7cac962b8b6f749257e6dc41695b954241c8c9675ddd077",
+    "patch_after_sha256": "5bb38618bde4bc04356a86a20f68402efe726cae0c6b05a5a6002022c6204f1f",
+    "source_snapshot_before": "opt_typed_json_carry-v2-pre-rustfmt.rs",
+    "patch_snapshot_before": "opt_typed_json_carry-v2-pre-rustfmt.patch",
+    "worktrees_updated": [
+      "work/typed-json-carry-bench-baseline-e5fa516",
+      "work/typed-json-carry-v2-bench-candidate-e5fa516"
+    ]
+  },
+  "source_fingerprints": {
+    "before_sha256": "f722b03c3852599967415ebb201990518edb1b2212faeeb14dba79ff15817ab2",
+    "after_sha256": "d3354bd018bcb2b2b4021b587af5a4a08a1557f3115b7bfc3f1b46f529708750",
+    "before_snapshot": "source-fingerprints-v2-pre-rustfmt.json"
+  },
+  "product": {
+    "v2_patch_sha256_before_and_after": "0305d8b2ab6c7d0650d7fb384c143375d33801fdbc6dadf0e2e85799930d1e50",
+    "changed": false
+  },
+  "verification": {
+    "rustfmt_check_passed": true,
+    "baseline_diff_check_passed": true,
+    "candidate_diff_check_passed": true,
+    "cargo_invoked": false,
+    "builds": false,
+    "tests": false,
+    "product_execution": false,
+    "timing": false
+  }
+}

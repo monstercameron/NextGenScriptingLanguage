@@ -1,0 +1,47 @@
+{
+  "status": "passed",
+  "results": [
+    {
+      "name": "candidate-library",
+      "command": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/candidate/binaries/flow-test-binary",
+        "--test-threads=1"
+      ],
+      "cwd": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-bench-candidate-e5fa516",
+      "return_code": 0
+    },
+    {
+      "name": "candidate-typed-contracts",
+      "command": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/candidate/binaries/typed_contracts-test-binary",
+        "--test-threads=1"
+      ],
+      "cwd": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-bench-candidate-e5fa516",
+      "return_code": 0
+    },
+    {
+      "name": "baseline-benchmark-smoke",
+      "command": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/baseline/binaries/opt_typed_json_carry-test-binary",
+        "--ignored",
+        "--exact",
+        "literal_number_add_1000",
+        "--test-threads=1"
+      ],
+      "cwd": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-bench-baseline-e5fa516",
+      "return_code": 0
+    },
+    {
+      "name": "candidate-benchmark-smoke",
+      "command": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/typed-json-carry-bench/build-attempt-v3/candidate/binaries/opt_typed_json_carry-test-binary",
+        "--ignored",
+        "--exact",
+        "literal_number_add_1000",
+        "--test-threads=1"
+      ],
+      "cwd": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/typed-json-carry-v3-bench-candidate-e5fa516",
+      "return_code": 0
+    }
+  ]
+}

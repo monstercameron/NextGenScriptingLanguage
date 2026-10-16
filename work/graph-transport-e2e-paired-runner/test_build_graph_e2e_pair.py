@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import copy
+from contextlib import redirect_stdout
 import importlib.util
+from io import StringIO
 import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
+from unittest import mock
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -179,6 +183,149 @@ class HostedGraphBuildTests(unittest.TestCase):
         del invalid["selected_build_environment"]["PATH"]
         with self.assertRaises(support.pair.PairError):
             support.validate_build_metadata_pair(baseline, invalid)
+
+    def test_pair_prepare_consumes_the_helpers_complete_build_provenance_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = Path(temporary)
+            evidence = campaign / "evidence/graph-transport-e2e"
+            evidence.mkdir(parents=True)
+            baseline_root = campaign / "work/baseline"
+            candidate_root = campaign / "work/candidate"
+            baseline_root.mkdir(parents=True)
+            candidate_root.mkdir(parents=True)
+            (campaign / "work/build_graph_e2e_pair.py").write_bytes(b"pinned build helper fixture\n")
+
+            source_roots = {"baseline": baseline_root, "candidate": candidate_root}
+            transport_hashes = {"baseline": "1" * 64, "candidate": "2" * 64}
+            common_lib_hash = "3" * 64
+            harness = (HERE / "graph_transport_e2e_bench.rs").read_bytes()
+            metadata_by_side = {}
+            payloads = {}
+            log_names = {
+                "clean": "{side}-release-clean-attempt-1.log",
+                "build_json": "{side}-build-attempt-1.jsonl",
+                "build_stderr": "{side}-build-attempt-1.log",
+                "test_list": "{side}-test-list.txt",
+            }
+            for side, root in source_roots.items():
+                (root / "Cargo.toml").write_text("[package]\nname='execute'\n", encoding="utf-8")
+                harness_path = root / support.pair.HARNESS_RELATIVE
+                harness_path.parent.mkdir(parents=True)
+                harness_path.write_bytes(harness)
+                target = campaign / "targets" / side
+                target_binary = target / "release/deps/graph_transport_e2e_bench-fixture"
+                target_binary.parent.mkdir(parents=True)
+                target_binary.write_bytes(b"compiler-produced fixture executable\n")
+                target_binary.chmod(0o755)
+                selected_env = {
+                    "PATH": "/toolchain/bin:/usr/bin",
+                    "CARGO_HOME": "/home/runner/.cargo",
+                    "RUSTUP_HOME": "/home/runner/.rustup",
+                    "RUSTUP_TOOLCHAIN": "stable",
+                    "CARGO_BUILD_JOBS": "4",
+                    "CARGO_INCREMENTAL": "0",
+                    "CARGO_TARGET_DIR": str(target),
+                    support.CONFIG_FINGERPRINT_ENV_KEY: "a" * 64,
+                }
+                metadata_by_side[side] = {
+                    "rustc_vv": "rustc 1.90.0\n",
+                    "cargo_version": "cargo 1.90.0\n",
+                    "selected_build_environment": selected_env,
+                    "captured_before_clean_and_build": True,
+                }
+                artifact = {
+                    "reason": "compiler-artifact",
+                    "manifest_path": str(root / "Cargo.toml"),
+                    "target": {
+                        "name": "graph_transport_e2e_bench",
+                        "kind": ["test"],
+                        "test": True,
+                        "src_path": str(harness_path),
+                    },
+                    "profile": {"test": True, "opt_level": "3", "debug_assertions": False},
+                    "fresh": False,
+                    "executable": str(target_binary),
+                    "filenames": [str(target_binary)],
+                }
+                saved_binary = evidence / f"{side}-test-binary"
+                saved_binary.write_bytes(b"saved immutable test executable fixture\n")
+                saved_binary.chmod(0o755)
+                receipt = {
+                    "artifact": artifact,
+                    "saved_binary": str(saved_binary),
+                    "sha256": support.sha256_file(saved_binary),
+                    "source_sha256": transport_hashes[side],
+                    "source_stable": True,
+                    "attempt": 1,
+                    "build_metadata": metadata_by_side[side],
+                }
+                support.write_json(evidence / f"{side}-binary-receipt.json", receipt, exclusive=True)
+                clean = b"No cargo clean invoked; fresh target directory.\n"
+                stderr = b"cargo build log fixture\n"
+                test_list = (support.pair.TEST_NAME + ": test\n").encode()
+                build_json = (json.dumps(artifact, sort_keys=True) + "\n").encode()
+                payloads[side] = {
+                    "clean": clean,
+                    "build_json": build_json,
+                    "build_stderr": stderr,
+                    "test_list": test_list,
+                }
+                for label, payload in payloads[side].items():
+                    (evidence / log_names[label].format(side=side)).write_bytes(payload)
+
+            baseline_metadata = metadata_by_side["baseline"]
+            candidate_metadata = metadata_by_side["candidate"]
+            environment_path = support.write_build_environment_receipt(evidence, baseline_metadata)
+            self.assertEqual(
+                environment_path,
+                campaign / support.pair.BUILD_ENVIRONMENT_RELATIVE,
+            )
+            self.assertTrue(environment_path.is_file())
+
+            def fixture_source_identity(root, side, _harness):
+                return {
+                    "root": str(root.resolve()),
+                    "commit": support.pair.BASELINE_COMMIT,
+                    "transport_path": str(root / "src/graph/transport.rs"),
+                    "transport_sha256": transport_hashes[side],
+                    "harness_path": str(root / support.pair.HARNESS_RELATIVE),
+                    "harness_sha256": support.pair.HARNESS_SHA256,
+                    "source_fingerprint": {
+                        "files": {
+                            "src/graph/transport.rs": transport_hashes[side],
+                            "src/lib.rs": common_lib_hash,
+                        }
+                    },
+                }
+
+            preregistration = campaign / "paired-preregistration.json"
+            args = SimpleNamespace(
+                harness_source=str(HERE / "graph_transport_e2e_bench.rs"),
+                candidate_root=str(candidate_root),
+                baseline_receipt=str(evidence / "baseline-binary-receipt.json"),
+                candidate_receipt=str(evidence / "candidate-binary-receipt.json"),
+                preregistration=str(preregistration),
+            )
+            with mock.patch.object(support.pair, "CAMPAIGN", campaign), \
+                 mock.patch.object(support.pair, "BASELINE_ROOT", baseline_root), \
+                 mock.patch.object(support.pair, "_inspect_source", side_effect=fixture_source_identity), \
+                 redirect_stdout(StringIO()):
+                support.pair.prepare(args)
+
+            result = json.loads(preregistration.read_text(encoding="utf-8"))
+            provenance = result["inputs"]["build_provenance"]
+            self.assertEqual(
+                provenance["environment"]["path"],
+                str(environment_path.resolve()),
+            )
+            self.assertEqual(provenance["environment"]["sha256"], support.sha256_file(environment_path))
+            self.assertEqual(provenance["driver"]["path"], str((campaign / "work/build_graph_e2e_pair.py").resolve()))
+            for side, artifacts in payloads.items():
+                self.assertEqual(set(provenance["logs"][side]), set(log_names))
+                for label, payload in artifacts.items():
+                    artifact_path = evidence / log_names[label].format(side=side)
+                    self.assertEqual(provenance["logs"][side][label]["path"], str(artifact_path.resolve()))
+                    self.assertEqual(provenance["logs"][side][label]["sha256"], support.sha256_file(artifact_path))
 
     def test_hosted_workflow_is_manual_fixed_and_preserves_failure_artifacts(self) -> None:
         workflow = (HERE.parents[1] / ".github/workflows/graph-collector-e2e-hosted-replication.yml").read_text(encoding="utf-8")

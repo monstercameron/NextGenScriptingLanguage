@@ -1,0 +1,414 @@
+"""Offline contract tests for the frozen typed-carry paired runner.
+
+These tests exercise only runner validation and mocked process failures; they do
+not build or execute the Rust product or benchmark binary.
+"""
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+from unittest import mock
+
+_RUNNER_PATH = Path(__file__).with_name("typed_json_carry_v3_pair.py")
+_SPEC = importlib.util.spec_from_file_location("typed_json_carry_v3_pair", _RUNNER_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
+pair = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(pair)
+
+_BUILD_DRIVER_PATH = Path(__file__).resolve().parents[2] / "work/build_typed_json_carry_v3_pair.py"
+_BUILD_DRIVER_SPEC = importlib.util.spec_from_file_location("build_typed_json_carry_v3_pair", _BUILD_DRIVER_PATH)
+assert _BUILD_DRIVER_SPEC is not None and _BUILD_DRIVER_SPEC.loader is not None
+build_driver = importlib.util.module_from_spec(_BUILD_DRIVER_SPEC)
+_BUILD_DRIVER_SPEC.loader.exec_module(build_driver)
+
+
+def raw_report():
+    semantic = {
+        "output_hex": pair.EXPECTED_OUTPUT_HEX,
+        "launched_processes": 0,
+        "cache_hits": 0,
+        "retained_execution_records": 256,
+        "expected_retained_execution_records": 256,
+        "retained_all_success_status_0": True,
+        "retained_stdout_bytes_per_call": 2,
+        "dropped_execution_records": 744,
+        "expected_dropped_execution_records": 744,
+        "dropped_stages": 744,
+    }
+    return {
+        "schema": "typed_json_carry_public_runtime_bench/v1",
+        "method": pair.EXPECTED_METHOD,
+        "warmup_runs": 0,
+        "measured_samples": 3,
+        "workload": {
+            "calls": 1000,
+            "applet": "number.add",
+            "literal_operands": [1, 2],
+            "source_bytes": pair.EXPECTED_SOURCE_BYTES,
+            "source_sha256": pair.EXPECTED_SOURCE_SHA256,
+            "catalog_sha256": "a" * 64,
+        },
+        "results": {
+            pair.CASE: {
+                "p50_ns": 20,
+                "p95_ns": 30,
+                "raw_sample_ns": [10, 20, 30],
+                "semantic_oracles": [dict(semantic) for _ in range(3)],
+            }
+        },
+    }
+
+
+def artifact(*, fresh=False, target_name="opt_typed_json_carry", test=True):
+    return {
+        "reason": "compiler-artifact",
+        "fresh": fresh,
+        "package_id": "path+file:///tmp/candidate#execute@0.1.0",
+        "manifest_path": "/tmp/candidate/Cargo.toml",
+        "target": {
+            "name": target_name,
+            "src_path": "/tmp/candidate/tests/opt_typed_json_carry.rs",
+            "kind": ["test"] if test else ["bin"],
+            "test": test,
+        },
+        "profile": {"test": test, "opt_level": "3", "debug_assertions": False},
+        "executable": "/tmp/target/release/deps/opt_typed_json_carry-abc",
+        "filenames": ["/tmp/target/release/deps/opt_typed_json_carry-abc"],
+    }
+
+
+class TypedJsonCarryPairTests(unittest.TestCase):
+    def test_build_driver_drops_unallowlisted_inherited_overrides(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host = {
+                "PATH": "/untrusted/tool/bin:/usr/bin",
+                "HOME": directory,
+                "LANG": "C.UTF-8",
+                "RUSTFLAGS": "-C opt-level=0",
+                "CARGO_HOME": "/attacker/cargo",
+                "EXECUTE_EXTRA": "should-not-forward",
+            }
+            environment = build_driver.setup_environment(host)
+        self.assertEqual(
+            set(environment),
+            set(build_driver.INHERITED_BUILD_ENV_KEYS) & set(host) | set(build_driver.FIXED_BUILD_ENVIRONMENT),
+        )
+        self.assertTrue(environment["PATH"].startswith(str(build_driver.PINNED_CARGO_BIN) + os.pathsep))
+        self.assertEqual(environment["PATH"].split(os.pathsep, 1)[1], host["PATH"])
+        self.assertNotIn("RUSTFLAGS", environment)
+        self.assertNotIn("EXECUTE_EXTRA", environment)
+        self.assertEqual(environment["CARGO_HOME"], str(build_driver.PINNED_CARGO_HOME))
+        self.assertEqual(environment["RUSTUP_HOME"], str(build_driver.PINNED_RUSTUP_HOME))
+        with self.assertRaisesRegex(RuntimeError, "requires inherited PATH and HOME"):
+            build_driver.setup_environment({"PATH": "/usr/bin"})
+
+    def test_cargo_configuration_fingerprint_covers_home_and_ancestors_to_filesystem_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            cargo_home = root / "cargo"
+            baseline = home / "project/work/baseline"
+            candidate = home / "project/work/candidate"
+            cargo_home.mkdir()
+            baseline.mkdir(parents=True)
+            candidate.mkdir(parents=True)
+            (cargo_home / "config.toml").write_text("[net]\noffline = true\n")
+            (cargo_home / "config").symlink_to("config.toml")
+            (home / ".cargo").mkdir()
+            (home / ".cargo/config.toml").write_text("[build]\njobs = 4\n")
+            environment = {"HOME": str(home), "CARGO_HOME": str(cargo_home)}
+            roots = {"baseline": baseline, "candidate": candidate}
+
+            before = build_driver.cargo_configuration_fingerprint(roots, environment)
+            self.assertTrue(before["source_roots"]["baseline"]["home_is_ancestor"])
+            self.assertEqual(before["cargo_home"]["config_files"][0]["symlink_target"], "config.toml")
+            ancestor_paths = {
+                entry["path"]
+                for entry in before["source_roots"]["baseline"]["config_files"]
+            }
+            filesystem_root_configs = {
+                str(Path("/") / ".cargo" / filename)
+                for filename in build_driver.CARGO_CONFIG_FILENAMES
+            }
+            self.assertTrue(filesystem_root_configs.issubset(ancestor_paths))
+            pair.validate_cargo_configuration_fingerprint(before, "test")
+
+            (home / ".cargo/config.toml").write_text("[build]\njobs = 5\n")
+            after = build_driver.cargo_configuration_fingerprint(roots, environment)
+            self.assertNotEqual(before, after)
+            with self.assertRaisesRegex(RuntimeError, "changed during"):
+                build_driver.verify_cargo_configuration_fingerprint(before, roots, environment, "during")
+
+    def test_runner_build_environment_validation_rejects_overrides(self):
+        environment = {
+            "PATH": str(pair.PINNED_CARGO_BIN) + os.pathsep + "/usr/bin",
+            "HOME": "/Users/example",
+            "LANG": "C.UTF-8",
+            **pair.FIXED_BUILD_ENVIRONMENT,
+        }
+        self.assertEqual(pair.validate_selected_build_environment(environment, "test"), environment)
+        environment["RUSTFLAGS"] = "-C opt-level=0"
+        with self.assertRaisesRegex(pair.PairError, "unallowlisted"):
+            pair.validate_selected_build_environment(environment, "test")
+
+    def test_fixed_schedule_has_three_warmups_then_balanced_48_measurements(self):
+        all_orders = [pair.interleaved_order(index) for index in range(pair.WARMUP_PAIRS + pair.MEASURED_PAIRS)]
+        self.assertEqual(all_orders[:3], [
+            ("baseline", "candidate"),
+            ("candidate", "baseline"),
+            ("baseline", "candidate"),
+        ])
+        measured = all_orders[pair.WARMUP_PAIRS:]
+        self.assertEqual(len(measured), 48)
+        self.assertEqual(measured[0], ("candidate", "baseline"))
+        self.assertEqual(measured.count(("baseline", "candidate")), 24)
+        self.assertEqual(measured.count(("candidate", "baseline")), 24)
+        self.assertEqual(2 * len(all_orders), 102)
+
+    def test_raw_report_accepts_exact_schema_and_semantics(self):
+        result = pair.validate_raw_report(json.dumps(raw_report()).encode())
+        self.assertEqual(result["median_duration_ns"], 20)
+        self.assertEqual(result["raw_sample_ns"], [10, 20, 30])
+        self.assertEqual(result["workload"]["catalog_sha256"], "a" * 64)
+        self.assertEqual(len(result["semantic_oracles"]), 3)
+
+    def test_raw_report_rejects_bad_per_sample_status_output_and_counts(self):
+        fields = (
+            ("output_hex", "34"),
+            ("launched_processes", 1),
+            ("cache_hits", 1),
+            ("retained_execution_records", 255),
+            ("retained_all_success_status_0", False),
+            ("retained_stdout_bytes_per_call", 1),
+            ("dropped_execution_records", 743),
+            ("dropped_stages", 743),
+        )
+        for field, value in fields:
+            with self.subTest(field=field):
+                report = raw_report()
+                report["results"][pair.CASE]["semantic_oracles"][1][field] = value
+                with self.assertRaises(pair.PairError):
+                    pair.validate_raw_report(json.dumps(report).encode())
+
+    def test_raw_report_rejects_call_shape_and_catalog_digest(self):
+        for field, value in (
+            ("calls", True),
+            ("source_bytes", 1),
+            ("source_sha256", "0" * 64),
+            ("catalog_sha256", "z" * 64),
+        ):
+            with self.subTest(field=field):
+                report = raw_report()
+                report["workload"][field] = value
+                with self.assertRaises(pair.PairError):
+                    pair.validate_raw_report(json.dumps(report).encode())
+
+    def test_raw_report_rejects_malformed_durations_and_percentiles(self):
+        mutations = (
+            lambda r: r["results"][pair.CASE].update(raw_sample_ns=[10, 20]),
+            lambda r: r["results"][pair.CASE].update(raw_sample_ns=[10, True, 30]),
+            lambda r: r["results"][pair.CASE].update(p50_ns=21),
+            lambda r: r["results"][pair.CASE].update(p95_ns=29),
+            lambda r: r["results"][pair.CASE].update(p95_ns=True),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                report = raw_report()
+                mutate(report)
+                with self.assertRaises(pair.PairError):
+                    pair.validate_raw_report(json.dumps(report).encode())
+
+    def test_raw_report_rejects_wrong_case_schema_or_extra_field(self):
+        report = raw_report()
+        report["results"]["another_case"] = report["results"].pop(pair.CASE)
+        with self.assertRaises(pair.PairError):
+            pair.validate_raw_report(json.dumps(report).encode())
+        report = raw_report()
+        report["unexpected"] = 1
+        with self.assertRaises(pair.PairError):
+            pair.validate_raw_report(json.dumps(report).encode())
+
+    def test_strict_json_rejects_duplicate_keys_and_nonfinite_constants(self):
+        for payload in (b'{"a":1,"a":2}', b'{"x": NaN}', b'{"x": Infinity}'):
+            with self.subTest(payload=payload):
+                with self.assertRaises(pair.PairError):
+                    pair.strict_json_bytes(payload, "test input")
+
+    def test_workload_compatibility_requires_same_catalog_hash(self):
+        first = raw_report()["workload"]
+        second = dict(first)
+        self.assertTrue(pair.workload_compatible([first, second]))
+        second["catalog_sha256"] = "b" * 64
+        self.assertFalse(pair.workload_compatible([first, second]))
+        self.assertFalse(pair.workload_compatible([]))
+
+    def test_source_pair_rejects_unexpected_product_delta_and_same_binary(self):
+        common = {
+            "source_fingerprint": {"files": {"a": "1", "src/runtime.rs": "old"}},
+            "root": "/baseline",
+            "opt_test_binary": {"binary": "/bin/a", "binary_sha256": "a" * 64},
+            "harness_source_sha256": pair.EXPECTED_HARNESS_SHA256,
+            "harness_patch_sha256": pair.HARNESS_PATCH_SHA256,
+            "product_patch_sha256": pair.PRODUCT_PATCH_SHA256,
+        }
+        candidate = {
+            **common,
+            "source_fingerprint": {"files": {"a": "1", "src/runtime.rs": "new"}},
+            "root": "/candidate",
+            "opt_test_binary": {"binary": "/bin/b", "binary_sha256": "b" * 64},
+        }
+        # The small map is deliberately invalid because it omits the exact six-file
+        # product delta; validation must not accept partial provenance.
+        with self.assertRaises(pair.PairError):
+            pair.source_map_pair_validation(common, candidate)
+        candidate["source_fingerprint"] = {"files": {
+            "src/contracts.rs": "2",
+            "src/manifest.rs": "2",
+            "src/runtime.rs": "2",
+            "src/runtime/program_backend.rs": "2",
+            "src/runtime/windows_process.rs": "2",
+            "tests/typed_contracts.rs": "2",
+        }}
+        common["source_fingerprint"] = {"files": {
+            "src/contracts.rs": "1",
+            "src/manifest.rs": "1",
+            "src/runtime.rs": "1",
+            "src/runtime/program_backend.rs": "1",
+            "src/runtime/windows_process.rs": "1",
+            "tests/typed_contracts.rs": "1",
+        }}
+        self.assertEqual(len(pair.source_map_pair_validation(common, candidate)), 6)
+        candidate["opt_test_binary"] = dict(common["opt_test_binary"])
+        with self.assertRaises(pair.PairError):
+            pair.source_map_pair_validation(common, candidate)
+
+    def test_artifact_provenance_rejects_fresh_wrong_target_and_wrong_profile(self):
+        root = Path("/tmp/candidate")
+        target = Path("/tmp/target")
+        row = artifact()
+        with self.assertRaises(pair.PairError):
+            pair.validate_artifact_row(row, side="candidate", root=root, target_name="opt_typed_json_carry",
+                                       expected_source=Path("tests/opt_typed_json_carry.rs"), test_profile=True,
+                                       target_dir=target)
+        row = artifact(fresh=True)
+        with self.assertRaises(pair.PairError):
+            pair.validate_artifact_row(row, side="candidate", root=root, target_name="opt_typed_json_carry",
+                                       expected_source=Path("tests/opt_typed_json_carry.rs"), test_profile=True,
+                                       target_dir=target)
+        row = artifact()
+        row["profile"]["opt_level"] = "0"
+        with self.assertRaises(pair.PairError):
+            pair.validate_artifact_row(row, side="candidate", root=root, target_name="opt_typed_json_carry",
+                                       expected_source=Path("tests/opt_typed_json_carry.rs"), test_profile=True,
+                                       target_dir=target)
+
+    def test_artifact_provenance_accepts_exact_test_and_helper_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "candidate"
+            target_dir = Path(directory) / "target"
+            (root / "Cargo.toml").parent.mkdir(parents=True)
+            (root / "Cargo.toml").write_text("[package]\nname='execute'\n")
+            test_source = root / "tests/opt_typed_json_carry.rs"
+            test_source.parent.mkdir()
+            test_source.write_text("// fixed harness\n")
+            helper_source = root / "src/bin/execute-applet.rs"
+            helper_source.parent.mkdir(parents=True)
+            helper_source.write_text("fn main() {}\n")
+            test_binary = target_dir / "release/deps/opt_typed_json_carry-hash"
+            test_binary.parent.mkdir(parents=True)
+            test_binary.write_bytes(b"test binary")
+            helper_binary = target_dir / "release/execute-applet"
+            helper_binary.parent.mkdir(parents=True, exist_ok=True)
+            helper_binary.write_bytes(b"helper binary")
+
+            def row(name, source, binary, kind, test):
+                return {
+                    "reason": "compiler-artifact",
+                    "fresh": False,
+                    "package_id": f"path+{root.as_uri()}#execute@0.1.0",
+                    "manifest_path": str(root / "Cargo.toml"),
+                    "target": {"name": name, "src_path": str(source), "kind": [kind], "test": test},
+                    "profile": {"test": test, "opt_level": "3", "debug_assertions": False},
+                    "executable": str(binary),
+                    "filenames": [str(binary)],
+                }
+
+            selected = pair.validate_artifact_row(
+                row("opt_typed_json_carry", test_source, test_binary, "test", True),
+                side="candidate", root=root, target_name="opt_typed_json_carry",
+                expected_source=Path("tests/opt_typed_json_carry.rs"), test_profile=True,
+                target_dir=target_dir,
+            )
+            self.assertEqual(selected, test_binary.resolve())
+            selected_helper = pair.validate_helper_artifact(
+                row("execute-applet", helper_source, helper_binary, "bin", False),
+                side="candidate", root=root, target_dir=target_dir,
+            )
+            self.assertEqual(selected_helper, helper_binary.resolve())
+
+    def test_create_new_report_refuses_existing_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "exists.json"
+            path.write_text("{}")
+            with self.assertRaises(FileExistsError):
+                pair.write_json(path, {"fresh": True}, exclusive=True)
+            self.assertEqual(path.read_text(), "{}")
+
+    def test_timeout_is_retained_once_without_retry_and_captures_partial_streams(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            test_binary = root / "test-binary"
+            helper_binary = root / "execute-applet"
+            test_binary.write_bytes(b"immutable test binary")
+            helper_binary.write_bytes(b"immutable helper")
+            test_binary.chmod(0o555)
+            helper_binary.chmod(0o555)
+            test_hash = hashlib.sha256(test_binary.read_bytes()).hexdigest()
+            helper_hash = hashlib.sha256(helper_binary.read_bytes()).hexdigest()
+            identity = {
+                "root": str(root),
+                "opt_test_binary": {"binary": str(test_binary), "binary_sha256": test_hash},
+                "helper": {"binary": str(helper_binary), "binary_sha256": helper_hash},
+            }
+            attempt_dir = root / "attempt"
+            timeout = subprocess.TimeoutExpired(
+                cmd=[str(test_binary)],
+                timeout=pair.INVOCATION_TIMEOUT_SECONDS,
+                output=b"partial stdout",
+                stderr=b"partial stderr",
+            )
+            with mock.patch.object(pair.subprocess, "run", side_effect=timeout) as run_mock:
+                result = pair.run_attempt(identity, attempt_dir, {"attempt_id": "timeout-test"})
+            self.assertEqual(run_mock.call_count, 1)
+            self.assertEqual(run_mock.call_args.kwargs["timeout"], 120)
+            self.assertFalse(result["successful"])
+            self.assertTrue(result["timed_out"])
+            self.assertEqual(result["returncode"], None)
+            self.assertEqual((attempt_dir / "stdout.bin").read_bytes(), b"partial stdout")
+            self.assertEqual((attempt_dir / "stderr.bin").read_bytes(), b"partial stderr")
+            self.assertFalse(result["raw_report_present"])
+            self.assertIn("did not create", result["raw_validation_error"])
+
+    def test_pair_requires_same_workload_and_success(self):
+        okay = {
+            "successful": True,
+            "workload": {"catalog_sha256": "a" * 64},
+            "median_duration_ns": 10,
+        }
+        candidate = {**okay, "median_duration_ns": 8}
+        result = pair.pair_result(0, "measurement", 1, ("baseline", "candidate"),
+                                  {"baseline": okay, "candidate": candidate})
+        self.assertTrue(result["valid_for_timing"])
+        self.assertEqual(result["candidate_minus_baseline_ns"], -2)
+        candidate["workload"] = {"catalog_sha256": "b" * 64}
+        result = pair.pair_result(0, "measurement", 1, ("baseline", "candidate"),
+                                  {"baseline": okay, "candidate": candidate})
+        self.assertFalse(result["valid_for_timing"])
+
+
+if __name__ == "__main__":
+    unittest.main()

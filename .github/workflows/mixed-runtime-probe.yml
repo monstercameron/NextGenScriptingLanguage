@@ -9,15 +9,16 @@ on:
         type: boolean
         default: false
       window_ms:
-        description: Active window for each 1,000-actor trial
+        description: Active window per 1,000-actor trial; 300000 ms is bounded and single-trial only
         required: true
         type: choice
         options:
           - "1000"
           - "10000"
+          - "300000"
         default: "1000"
       replications:
-        description: Fixed number of 1,000-actor trials; every selected trial runs
+        description: Fixed trials; 300000 ms requires one trial; every selected trial runs
         required: true
         type: choice
         options:
@@ -34,6 +35,28 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
+      - name: Validate requested 1,000-actor trial bounds
+        if: inputs.run_1000
+        env:
+          MIXED_WINDOW_MS: ${{ inputs.window_ms }}
+          MIXED_REPLICATIONS: ${{ inputs.replications }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          window_ms="${MIXED_WINDOW_MS}"
+          replications="${MIXED_REPLICATIONS}"
+          case "$window_ms" in
+            1000|10000|300000) ;;
+            *) echo "unsupported mixed window: $window_ms" >&2; exit 2 ;;
+          esac
+          case "$replications" in
+            1|3) ;;
+            *) echo "unsupported replication count: $replications" >&2; exit 2 ;;
+          esac
+          if [[ "$window_ms" == "300000" && "$replications" != "1" ]]; then
+            echo "the bounded 300000 ms window supports exactly one 1,000-actor trial" >&2
+            exit 2
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -70,13 +93,17 @@ jobs:
           window_ms="${MIXED_WINDOW_MS}"
           replications="${MIXED_REPLICATIONS}"
           case "$window_ms" in
-            1000|10000) ;;
+            1000|10000|300000) ;;
             *) echo "unsupported mixed window: $window_ms" >&2; exit 2 ;;
           esac
           case "$replications" in
             1|3) ;;
             *) echo "unsupported replication count: $replications" >&2; exit 2 ;;
           esac
+          if [[ "$window_ms" == "300000" && "$replications" != "1" ]]; then
+            echo "the bounded 300000 ms window supports exactly one 1,000-actor trial" >&2
+            exit 2
+          fi
 
           failed=0
           for ((trial = 1; trial <= replications; trial++)); do

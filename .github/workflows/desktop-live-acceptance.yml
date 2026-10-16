@@ -1,0 +1,77 @@
+name: Disposable Arch desktop acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch_boxes_release:
+        description: Pinned official Arch-boxes cloud image release
+        required: true
+        default: "20261015.611680"
+        type: string
+      arch_archive_date:
+        description: Pinned Arch Linux Archive daily snapshot (must be no more than one day before the image)
+        required: true
+        default: "2026/10/14"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  arch-hyprland-quickshell:
+    name: Arch + Hyprland + Quickshell smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install disposable VM host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cloud-image-utils \
+            libegl1 \
+            libgl1-mesa-dri \
+            libglx-mesa0 \
+            libvirglrenderer1 \
+            mesa-utils \
+            qemu-system-gui \
+            qemu-system-modules-opengl \
+            qemu-system-x86 \
+            qemu-utils \
+            xauth \
+            xvfb
+          sudo apt-get clean
+
+      - name: Check Xvfb, llvmpipe, and QEMU virgl startup
+        run: bash tools/desktop_ci/host-preflight.sh
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Build the Linux candidate
+        run: |
+          rustc --version
+          cargo --version
+          cargo build --locked --release --bin execute
+
+      - name: Run the live Arch guest acceptance
+        env:
+          ARCH_BOXES_RELEASE: ${{ inputs.arch_boxes_release }}
+          ARCH_ARCHIVE_DATE: ${{ inputs.arch_archive_date }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_SOURCE_SHA: ${{ github.sha }}
+        run: bash tools/desktop_ci/run-arch-qemu.sh
+
+      - name: Upload logs, screenshot, receipts, and harness report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/desktop-ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 14

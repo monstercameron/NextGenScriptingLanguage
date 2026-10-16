@@ -5,15 +5,99 @@ from __future__ import annotations
 
 import json
 import os
+import importlib.util
 import pathlib
 import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HARNESS = ROOT / "tools" / "omarchy_acceptance.py"
+SPEC = importlib.util.spec_from_file_location("omarchy_acceptance", HARNESS)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("could not load acceptance harness for focused helper tests")
+ACCEPTANCE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = ACCEPTANCE
+SPEC.loader.exec_module(ACCEPTANCE)
+
+
+class HyprlandFocusCompatibilityTests(unittest.TestCase):
+    def test_lua_dispatch_uses_documented_object_then_verifies_active_address(self) -> None:
+        calls: list[list[str]] = []
+        responses = [
+            SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
+            SimpleNamespace(returncode=0, stdout=json.dumps({"address": "0xabc"}), stderr=""),
+        ]
+
+        def runner(command: list[str], **_kwargs: object) -> SimpleNamespace:
+            calls.append(command)
+            return responses.pop(0)
+
+        result = ACCEPTANCE.focus_hyprland_window(
+            "/usr/bin/hyprctl",
+            "Hyprland 0.56.2 built from branch v0.56.2 at commit efb5099",
+            "0xabc",
+            command_runner=runner,
+        )
+        self.assertEqual(
+            calls,
+            [
+                ["/usr/bin/hyprctl", "dispatch", "hl.dsp.focus({ window = 'address:0xabc' })"],
+                ["/usr/bin/hyprctl", "-j", "activewindow"],
+            ],
+        )
+        self.assertEqual(result["focus_form"], "lua_dispatcher_object")
+        self.assertEqual(result["focus_command"], calls[0])
+        self.assertEqual(result["active_window_command"], calls[1])
+        self.assertEqual(result["active_window_address"], "0xabc")
+        self.assertTrue(result["active_window_verified"])
+
+    def test_legacy_version_form_is_selected_and_mismatch_fails_closed(self) -> None:
+        calls: list[list[str]] = []
+        responses = [
+            SimpleNamespace(returncode=0, stdout="ok\n", stderr=""),
+            SimpleNamespace(returncode=0, stdout=json.dumps({"address": "0xdef"}), stderr=""),
+        ]
+
+        def runner(command: list[str], **_kwargs: object) -> SimpleNamespace:
+            calls.append(command)
+            return responses.pop(0)
+
+        result = ACCEPTANCE.focus_hyprland_window(
+            "/usr/bin/hyprctl",
+            "Hyprland 0.54.3 built from branch v0.54.3",
+            "0xabc",
+            command_runner=runner,
+        )
+        self.assertEqual(
+            calls[0],
+            ["/usr/bin/hyprctl", "dispatch", "focuswindow", "address:0xabc"],
+        )
+        self.assertEqual(calls[1], ["/usr/bin/hyprctl", "-j", "activewindow"])
+        self.assertEqual(result["focus_form"], "legacy_named_dispatcher")
+        self.assertEqual(result["status"], "fail")
+        self.assertFalse(result.get("active_window_verified", False))
+
+    def test_failed_lua_dispatch_does_not_query_or_accept_an_active_window(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(command: list[str], **_kwargs: object) -> SimpleNamespace:
+            calls.append(command)
+            return SimpleNamespace(returncode=1, stdout="", stderr="unsupported dispatcher")
+
+        result = ACCEPTANCE.focus_hyprland_window(
+            "/usr/bin/hyprctl",
+            "Hyprland 0.56.2 built from branch v0.56.2",
+            "0xabc",
+            command_runner=runner,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(result["focus_form"], "lua_dispatcher_object")
+        self.assertFalse(result.get("active_window_verified", False))
 
 
 class DesktopAcceptanceHarnessTests(unittest.TestCase):

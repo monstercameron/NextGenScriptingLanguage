@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import stat
@@ -105,6 +106,119 @@ def command_version(command: list[str], timeout: float = 4.0) -> dict[str, Any]:
         "stdout": completed.stdout[:4000].strip(),
         "stderr": completed.stderr[:2000].strip(),
     }
+
+
+def parse_hyprland_version(version_output: str) -> tuple[int, int, int]:
+    match = re.search(r"(?m)^Hyprland\s+v?(\d+)\.(\d+)\.(\d+)(?:\s|$)", version_output)
+    if match is None:
+        raise ValueError("could not parse the Hyprland version string")
+    return tuple(int(part) for part in match.groups())
+
+
+def focus_hyprland_window(
+    hyprctl: str,
+    version_output: str,
+    window_address: str,
+    *,
+    command_runner: Any = None,
+) -> dict[str, Any]:
+    """Focus one actual Hyprland client and verify it became active before input."""
+    runner = command_runner or subprocess.run
+    try:
+        version_tuple = parse_hyprland_version(version_output)
+    except ValueError as error:
+        return {
+            "status": "fail",
+            "hyprland_version_output": version_output[:1000],
+            "focus_form": "unsupported_version",
+            "window_address": window_address,
+            "reason": str(error),
+        }
+
+    version = ".".join(str(part) for part in version_tuple)
+    if not re.fullmatch(r"0[xX][0-9a-fA-F]+", window_address):
+        return {
+            "status": "fail",
+            "hyprland_version": version,
+            "focus_form": "invalid_window_address",
+            "window_address": window_address[:256],
+            "reason": "Hyprland returned a window address outside the expected hexadecimal form",
+        }
+
+    if version_tuple >= (0, 55, 0):
+        focus_form = "lua_dispatcher_object"
+        focus_command = [
+            hyprctl,
+            "dispatch",
+            f"hl.dsp.focus({{ window = 'address:{window_address}' }})",
+        ]
+    else:
+        focus_form = "legacy_named_dispatcher"
+        focus_command = [hyprctl, "dispatch", "focuswindow", f"address:{window_address}"]
+
+    evidence: dict[str, Any] = {
+        "status": "fail",
+        "hyprland_version": version,
+        "focus_form": focus_form,
+        "focus_command": focus_command,
+        "window_address": window_address,
+    }
+    try:
+        focused = runner(
+            focus_command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=COMMAND_TIMEOUT,
+            check=False,
+            text=True,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        evidence["reason"] = f"Hyprland focus command failed to run: {error}"
+        return evidence
+
+    evidence["focus_returncode"] = focused.returncode
+    evidence["focus_stdout"] = focused.stdout.strip()[:1000]
+    evidence["focus_stderr"] = focused.stderr.strip()[:1000]
+    if focused.returncode != 0 or focused.stdout.strip() != "ok":
+        evidence["reason"] = "Hyprland did not acknowledge the focus command with ok"
+        return evidence
+
+    active_command = [hyprctl, "-j", "activewindow"]
+    evidence["active_window_command"] = active_command
+    try:
+        active = runner(
+            active_command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=COMMAND_TIMEOUT,
+            check=False,
+            text=True,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        evidence["reason"] = f"Hyprland active-window query failed to run: {error}"
+        return evidence
+
+    evidence["active_window_returncode"] = active.returncode
+    evidence["active_window_stderr"] = active.stderr.strip()[:1000]
+    if active.returncode != 0:
+        evidence["reason"] = "Hyprland active-window query failed"
+        return evidence
+    try:
+        active_data = json.loads(active.stdout)
+    except json.JSONDecodeError as error:
+        evidence["reason"] = f"Hyprland active-window query returned invalid JSON: {error}"
+        return evidence
+    active_address = active_data.get("address") if isinstance(active_data, dict) else None
+    evidence["active_window_address"] = active_address
+    if active_address != window_address:
+        evidence["reason"] = "Hyprland did not report the requested Quickshell window as active"
+        return evidence
+
+    evidence["active_window_verified"] = True
+    evidence["status"] = "pass"
+    return evidence
 
 
 def read_os_release() -> dict[str, str]:
@@ -663,16 +777,14 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
                 match = next((window for window in windows if window.get("title") == "Execute generic renderer"), None)
                 if match is None or not match.get("address"):
                     raise RuntimeError("Quickshell surface was not found in Hyprland client list")
-                focus = subprocess.run(
-                    [hyprctl_path, "dispatch", "focuswindow", f"address:{match['address']}"],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=COMMAND_TIMEOUT,
-                    check=True,
-                    text=True,
+                focus_evidence = focus_hyprland_window(
+                    hyprctl_path,
+                    tool_checks["hyprctl"]["stdout"],
+                    str(match["address"]),
                 )
-                del focus
+                outcomes["hyprland_window_focus"] = focus_evidence
+                if focus_evidence["status"] != "pass":
+                    raise RuntimeError(f"Hyprland focus was not verified: {focus_evidence.get('reason', 'unknown failure')}")
                 key_result = subprocess.run(
                     [click_path, "-k", "Tab", "-k", "Return"],
                     stdin=subprocess.DEVNULL,

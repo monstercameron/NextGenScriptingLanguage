@@ -60,7 +60,7 @@ fn error_response(error: &anyhow::Error) -> Json {
 }
 fn schema() -> Json {
     json!({"ok":true,"protocol":"execute.live/1","execute_version":env!("CARGO_PKG_VERSION"),"commands":{
-        "serve":"execute live serve FILE --socket PATH [--paused] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--agent-policy FILE] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
+        "serve":"execute live serve FILE --socket PATH [--paused] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR | --manifest-catalog FILE] [--capability-policy FILE] [--data-flow-policy FILE] [--agent-policy FILE] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
         "token-create":"execute live token-create --agent ID --token-file FILE (creates a new private file and displays the token once)",
         "read":"execute live read [JSON_POINTER] --socket PATH [--agent ID --token-file FILE]",
         "create":"execute live create JSON_POINTER --json JSON --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
@@ -116,6 +116,7 @@ fn options(args: &[String]) -> Result<Options> {
                 "--bindings",
                 "--state-file",
                 "--manifest-dir",
+                "--manifest-catalog",
                 "--capability-policy",
                 "--data-flow-policy",
                 "--agent-policy",
@@ -279,6 +280,7 @@ fn dispatch(
                 "--bindings",
                 "--state-file",
                 "--manifest-dir",
+                "--manifest-catalog",
                 "--capability-policy",
                 "--data-flow-policy",
                 "--agent-policy",
@@ -289,6 +291,11 @@ fn dispatch(
             ],
             true,
         )?;
+        if opts.flags.contains_key("--manifest-dir")
+            && opts.flags.contains_key("--manifest-catalog")
+        {
+            bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+        }
         if opts.positional.len() != 1 {
             bail!("serve requires one .program file");
         }
@@ -341,9 +348,14 @@ fn dispatch(
         {
             bail!("invalid command timeout");
         }
-        let registry = match opts.flags.get("--manifest-dir") {
-            Some(path) => Registry::load(Path::new(path)),
-            None => Registry::load_optional(&default_manifests),
+        let registry = match (
+            opts.flags.get("--manifest-dir"),
+            opts.flags.get("--manifest-catalog"),
+        ) {
+            (Some(path), None) => Registry::load(Path::new(path)),
+            (None, Some(path)) => Registry::load_catalog(Path::new(path)),
+            (None, None) => Registry::load_optional(&default_manifests),
+            (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
         }?;
         let registry = if let Some(path) = opts.flags.get("--capability-policy") {
             let bytes = limited_read(Path::new(path), 1024 * 1024)

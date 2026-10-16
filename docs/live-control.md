@@ -15,6 +15,10 @@ execute live serve queue-monitor.program --state-file queue-state.json \
   --socket /tmp/execute-queue.sock --paused
 ```
 
+`live serve` keeps the existing manifest discovery by default. For an explicit
+packed catalog, add `--manifest-catalog FILE`; it cannot be combined with
+`--manifest-dir`.
+
 The foreground server emits a JSON `ready` event. It stays alive after a finite
 program completes, allowing inspection, repair, and another explicitly requested
 execution. `control stop` stops its owned native groups, joins the workers, removes

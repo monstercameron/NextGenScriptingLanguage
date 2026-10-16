@@ -7,6 +7,7 @@ pub use crate::contracts::{
 };
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::any::{Any, TypeId};
 #[cfg(not(target_arch = "wasm32"))]
@@ -150,6 +151,18 @@ struct RegistryData {
     host_state: Arc<Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
 }
 
+const MANIFEST_CATALOG_FORMAT: &str = "execute.manifest-catalog";
+const MANIFEST_CATALOG_VERSION: u32 = 1;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawManifestCatalog<'a> {
+    format: String,
+    version: u32,
+    #[serde(borrow)]
+    manifests: Vec<&'a RawValue>,
+}
+
 impl Registry {
     /// Missing optional catalogs do not prevent direct executable calls.
     /// Explicit catalog paths should use `load` so configuration mistakes fail.
@@ -240,6 +253,60 @@ impl Registry {
                 .with_context(|| format!("canonicalizing manifest {}", path.display()))?;
             Self::insert_source(&mut data, &raw, Some(origin))
                 .with_context(|| format!("invalid manifest {}", path.display()))?;
+        }
+        Ok(Self {
+            data: Arc::new(data),
+        })
+    }
+
+    /// Load one explicit, versioned catalog file containing an ordered array
+    /// of manifest objects. Every entry receives the catalog's canonical path
+    /// as its origin, and its parent directory is the module root. The whole
+    /// envelope's JSON syntax is parsed first; semantic manifest validation
+    /// then runs in array order. A later syntax error therefore takes
+    /// precedence over an earlier semantic manifest error.
+    pub fn load_catalog(path: &Path) -> Result<Self> {
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("reading manifest catalog {}", path.display()))?;
+        let origin = fs::canonicalize(path)
+            .with_context(|| format!("canonicalizing manifest catalog {}", path.display()))?;
+        let module_root = origin
+            .parent()
+            .ok_or_else(|| anyhow!("manifest catalog path has no parent directory"))?
+            .to_path_buf();
+        let catalog: RawManifestCatalog<'_> = serde_json::from_str(&raw)
+            .with_context(|| format!("parsing manifest catalog {}", path.display()))?;
+        if catalog.format != MANIFEST_CATALOG_FORMAT {
+            bail!(
+                "unsupported manifest catalog format {:?}; expected {:?}",
+                catalog.format,
+                MANIFEST_CATALOG_FORMAT
+            );
+        }
+        if catalog.version != MANIFEST_CATALOG_VERSION {
+            bail!(
+                "unsupported manifest catalog version {}; supported version is {}",
+                catalog.version,
+                MANIFEST_CATALOG_VERSION
+            );
+        }
+        if catalog.manifests.is_empty() {
+            bail!("manifest catalog {} contains no manifests", path.display());
+        }
+
+        let mut data = RegistryData {
+            module_root: Some(module_root),
+            ..RegistryData::default()
+        };
+        for (index, manifest) in catalog.manifests.iter().enumerate() {
+            Self::insert_source(&mut data, manifest.get(), Some(origin.clone())).with_context(
+                || {
+                    format!(
+                        "invalid manifest catalog entry {index} in {}",
+                        path.display()
+                    )
+                },
+            )?;
         }
         Ok(Self {
             data: Arc::new(data),

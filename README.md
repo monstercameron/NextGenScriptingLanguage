@@ -58,8 +58,11 @@ sam@example.com
 
 `check` validates without running commands. `explain` also prints the plan and argv.
 Relative paths resolve from the calling directory. Quoted executable calls work
-without manifests; named applets use the shipped catalog or `--manifest-dir PATH`.
-Keep both runtime executables and the catalog together when extracting a release.
+without manifests; named applets use the shipped catalog or an explicit
+`--manifest-dir PATH`/legacy JSON file. A packed catalog can be selected with
+`--manifest-catalog FILE`; this is opt-in and mutually exclusive with
+`--manifest-dir`. Keep runtime executables and the selected catalog together
+when extracting a release.
 
 ## The language in one minute
 

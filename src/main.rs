@@ -23,6 +23,7 @@ struct Args {
     command: String,
     file: PathBuf,
     manifest_dir: Option<PathBuf>,
+    manifest_catalog: Option<PathBuf>,
     capability_policy: Option<PathBuf>,
     data_flow_policy: Option<PathBuf>,
     cache_dir: Option<PathBuf>,
@@ -151,7 +152,7 @@ fn execute() -> Result<()> {
                     && !flow::stream::is_stream(&source)
                     && !flow::graph::is_graph(&source) =>
             {
-                match load_registry(args.manifest_dir.clone()) {
+                match load_registry(args.manifest_dir.clone(), args.manifest_catalog.clone()) {
                     Ok(registry) => {
                         let diagnostics = flow::diagnostics::analyze_source(&source, &registry);
                         (diagnostics, Some(FiniteCheckSnapshot { source, registry }))
@@ -273,6 +274,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         let registry = load_workflow_registry(
             args.manifest_dir,
+            args.manifest_catalog,
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
@@ -356,6 +358,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         let screen = flow::ui::syntax::parse(&source).context("parsing UI")?;
         let registry = load_workflow_registry(
             args.manifest_dir,
+            args.manifest_catalog,
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
@@ -484,6 +487,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         let registry = load_workflow_registry(
             args.manifest_dir,
+            args.manifest_catalog,
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
@@ -594,6 +598,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         ),
         None => load_workflow_registry(
             args.manifest_dir,
+            args.manifest_catalog,
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?,
@@ -731,6 +736,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut inputs = BTreeMap::new();
     let mut program_arguments = Vec::new();
     let mut manifest_dir = None;
+    let mut manifest_catalog = None;
     let mut capability_policy = None;
     let mut data_flow_policy = None;
     let mut cache_dir = None;
@@ -795,11 +801,28 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 if manifest_dir.is_some() {
                     bail!("--manifest-dir may be specified only once");
                 }
+                if manifest_catalog.is_some() {
+                    bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+                }
                 manifest_dir = Some(PathBuf::from(take_option_value(
                     &arguments,
                     &mut index,
                     "--manifest-dir",
                     "a directory",
+                )?));
+            }
+            "--manifest-catalog" => {
+                if manifest_catalog.is_some() {
+                    bail!("--manifest-catalog may be specified only once");
+                }
+                if manifest_dir.is_some() {
+                    bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+                }
+                manifest_catalog = Some(PathBuf::from(take_option_value(
+                    &arguments,
+                    &mut index,
+                    "--manifest-catalog",
+                    "a packed manifest catalog file",
                 )?));
             }
             "--capability-policy"
@@ -989,6 +1012,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         command,
         file,
         manifest_dir,
+        manifest_catalog,
         capability_policy,
         data_flow_policy,
         cache_dir,
@@ -1143,7 +1167,7 @@ fn take_option_value(
 }
 
 fn applets_cli(arguments: &[String]) -> Result<()> {
-    const HELP: &str = "Usage: execute applets list [--manifest-dir PATH]\n       execute applets inspect NAME_OR_PHRASE [--manifest-dir PATH]\n       execute applets discover\n       execute applets match --json REQUEST [--manifest-dir PATH]\n\nInspect emits validated contract metadata without executing applets. Discover reports installed commands using PATH metadata only. Match ranks declared typed ports without running applets. Versioned contracts expose typed I/O, outcomes, effects, backends, and lifecycle while retaining legacy fields for compatibility.\nUse -- before a name or phrase beginning with a hyphen.";
+    const HELP: &str = "Usage: execute applets list [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets inspect NAME_OR_PHRASE [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets discover\n       execute applets match --json REQUEST [--manifest-dir PATH | --manifest-catalog FILE]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. Inspect emits validated contract metadata without executing applets. Discover reports installed commands using PATH metadata only. Match ranks declared typed ports without running applets. Versioned contracts expose typed I/O, outcomes, effects, backends, and lifecycle while retaining legacy fields for compatibility.\nUse -- before a name or phrase beginning with a hyphen.";
     if arguments == ["--help"] || arguments == ["-h"] {
         writeln!(std::io::stdout().lock(), "{HELP}")?;
         return Ok(());
@@ -1153,6 +1177,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
         bail!("unknown applets command {command:?}\n{HELP}");
     }
     let mut manifest_dir = None;
+    let mut manifest_catalog = None;
     let mut name = None;
     let mut request = None;
     let mut request_file = None;
@@ -1166,11 +1191,27 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
             if manifest_dir.is_some() {
                 bail!("--manifest-dir may be specified only once");
             }
+            if manifest_catalog.is_some() {
+                bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+            }
             manifest_dir = Some(PathBuf::from(take_option_value(
                 arguments,
                 &mut index,
                 "--manifest-dir",
                 "a manifest path",
+            )?));
+        } else if !literal && argument == "--manifest-catalog" {
+            if manifest_catalog.is_some() {
+                bail!("--manifest-catalog may be specified only once");
+            }
+            if manifest_dir.is_some() {
+                bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+            }
+            manifest_catalog = Some(PathBuf::from(take_option_value(
+                arguments,
+                &mut index,
+                "--manifest-catalog",
+                "a packed manifest catalog file",
             )?));
         } else if !literal && argument == "--json" && command == "match" {
             if request.is_some() || request_file.is_some() {
@@ -1211,13 +1252,16 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
         if manifest_dir.is_some() {
             bail!("--manifest-dir does not apply to applets discover");
         }
+        if manifest_catalog.is_some() {
+            bail!("--manifest-catalog does not apply to applets discover");
+        }
         return write_json(&serde_json::json!({
             "protocol": "execute.applets-discovery/1",
             "validation": "path_metadata_only",
             "commands": flow::discovery::inventory_commands()?
         }));
     }
-    let registry = load_registry(manifest_dir)?;
+    let registry = load_registry(manifest_dir, manifest_catalog)?;
     if command == "match" {
         if name.is_some() {
             bail!("applets match takes no positional arguments");
@@ -1402,7 +1446,7 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
 }
 
 fn service_cli(arguments: &[String]) -> Result<()> {
-    const HELP: &str = "Usage: execute service generate <systemd|launchd> FILE [--name ID] [--manifest-dir DIR] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--input NAME=VALUE ...] [-- ARG...]\n\nPrint a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
+    const HELP: &str = "Usage: execute service generate <systemd|launchd> FILE [--name ID] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--input NAME=VALUE ...] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
     if arguments == ["--help"] || arguments == ["-h"] {
         writeln!(io::stdout().lock(), "{HELP}")?;
         return Ok(());
@@ -1413,6 +1457,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     let mut positional = Vec::new();
     let mut label = None;
     let mut manifest_dir = None;
+    let mut manifest_catalog = None;
     let mut working_directory = None;
     let mut capability_policy = None;
     let mut data_flow_policy = None;
@@ -1441,11 +1486,28 @@ fn service_cli(arguments: &[String]) -> Result<()> {
                 if manifest_dir.is_some() {
                     bail!("--manifest-dir may be specified once");
                 }
+                if manifest_catalog.is_some() {
+                    bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+                }
                 manifest_dir = Some(PathBuf::from(take_option_value(
                     arguments,
                     &mut index,
                     "--manifest-dir",
                     "a manifest directory",
+                )?));
+            }
+            "--manifest-catalog" => {
+                if manifest_catalog.is_some() {
+                    bail!("--manifest-catalog may be specified once");
+                }
+                if manifest_dir.is_some() {
+                    bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+                }
+                manifest_catalog = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--manifest-catalog",
+                    "a packed manifest catalog file",
                 )?));
             }
             "--working-dir" => {
@@ -1525,6 +1587,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     let working_directory = fs::canonicalize(working_directory.unwrap_or(env::current_dir()?))?;
     let registry = load_workflow_registry(
         manifest_dir.clone(),
+        manifest_catalog.clone(),
         capability_policy.as_ref(),
         data_flow_policy.as_ref(),
     )?;
@@ -1548,18 +1611,30 @@ fn service_cli(arguments: &[String]) -> Result<()> {
         inputs: &supplied_inputs,
         program_arguments: &program_arguments,
     };
-    print!(
-        "{}",
-        flow::service_deployment::render_for_workflow(&request)?
-    );
+    let rendered = match manifest_catalog.as_deref() {
+        Some(path) => {
+            flow::service_deployment::render_for_workflow_with_manifest_catalog(&request, path)?
+        }
+        None => flow::service_deployment::render_for_workflow(&request)?,
+    };
+    print!("{rendered}");
     Ok(())
 }
 
-fn load_registry(explicit_path: Option<PathBuf>) -> Result<Registry> {
-    match explicit_path {
-        Some(path) => Registry::load(&path)
+fn load_registry(
+    explicit_path: Option<PathBuf>,
+    explicit_catalog: Option<PathBuf>,
+) -> Result<Registry> {
+    if explicit_path.is_some() && explicit_catalog.is_some() {
+        bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+    }
+    match (explicit_path, explicit_catalog) {
+        (Some(path), None) => Registry::load(&path)
             .with_context(|| format!("could not load manifests from {}", path.display())),
-        None => Registry::load_optional(&default_manifest_dir()),
+        (None, Some(path)) => Registry::load_catalog(&path)
+            .with_context(|| format!("could not load packed manifest catalog {}", path.display())),
+        (None, None) => Registry::load_optional(&default_manifest_dir()),
+        (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
     }
 }
 
@@ -1587,10 +1662,11 @@ fn load_data_flow_policy(path: &Path) -> Result<flow::security::DataFlowPolicy> 
 
 fn load_workflow_registry(
     explicit_path: Option<PathBuf>,
+    explicit_catalog: Option<PathBuf>,
     capability_policy: Option<&CapabilityPolicy>,
     data_flow_policy: Option<&flow::security::DataFlowPolicy>,
 ) -> Result<Registry> {
-    let registry = load_registry(explicit_path)?;
+    let registry = load_registry(explicit_path, explicit_catalog)?;
     Ok(install_workflow_policy_state(
         registry,
         capability_policy,
@@ -1641,7 +1717,7 @@ fn default_manifest_dir() -> PathBuf {
 }
 
 fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory containing applet manifests\n  --capability-policy FILE Enforce a strict, versioned applet policy (check/explain/inspect/run/resume/live serve)\n  --data-flow-policy FILE Enforce origin and persistence data-flow grants\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --missed-ticks POLICY   Trigger backlog policy: skip, coalesce, or catch-up (run/resume)\n  --max-catch-up N         Bound catch-up runs to 1..64 (requires catch-up)\n  --calendar-dedup MODE   Calendar fold policy: instant or local (run/resume)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory or one legacy JSON file containing applet manifests\n  --manifest-catalog FILE Explicit packed catalog; mutually exclusive with --manifest-dir\n  --capability-policy FILE Enforce a strict, versioned applet policy (check/explain/inspect/run/resume/live serve)\n  --data-flow-policy FILE Enforce origin and persistence data-flow grants\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --missed-ticks POLICY   Trigger backlog policy: skip, coalesce, or catch-up (run/resume)\n  --max-catch-up N         Bound catch-up runs to 1..64 (requires catch-up)\n  --calendar-dedup MODE   Calendar fold policy: instant or local (run/resume)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

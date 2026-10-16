@@ -593,8 +593,9 @@ unknown. Define a manifest with an explicit cache contract when caching is safe.
 Programs made entirely of direct calls work with an empty `Registry` through the
 Rust API and without a catalog installed beside the CLI binary. A missing
 automatically discovered catalog is allowed; a malformed catalog or an explicit
-missing `--manifest-dir` remains an error. Existing manifests remain optional
-adapters, rather than a prerequisite for integrating a new executable.
+missing `--manifest-dir` or `--manifest-catalog` remains an error. Existing
+manifests remain optional adapters, rather than a prerequisite for integrating
+a new executable.
 
 `run` ignores previous stdout. `then` buffers finite output and feeds it only to
 commands that accept stdin. `pipe to` joins a concurrently running group with
@@ -896,7 +897,14 @@ directory is the initial program directory, regardless of where the source file
 lives. `cd` resolves physical directories. An explicit relative cache directory
 resolves from the initial caller directory.
 
-All commands accept `--manifest-dir DIR` (or one JSON file). Discovery checks
+Workflow, registry-backed applet, service-generation, and live-serve commands
+accept `--manifest-dir DIR` (or one legacy JSON file). They also accept the
+explicit, mutually exclusive `--manifest-catalog FILE` selector for a strict,
+versioned packed catalog. A packed catalog is never selected automatically and does not
+merge with a directory. Catalog paths are relative to the caller's working
+directory; packed entries use the canonical catalog file as their origin, and
+relative program-module sources resolve from its parent directory. Service
+definitions store the canonical catalog path. Discovery checks
 `./manifests`, then `../manifests` beside the executable, then the development
 source location. The catalog includes `cd`, `pwd`, `ls`, `cat`, `printf`, `tr`,
 `wc`, `tail`, `grep`, `sort`, `uniq`, `cut`, `head`, `false`, and a `git.commit` mapping. Older aliases remain available.

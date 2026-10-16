@@ -14,7 +14,12 @@ execute applets list
 execute applets inspect printf
 execute applets inspect "count lines"
 execute applets list --manifest-dir ./my-applets
+execute applets list --manifest-catalog ./my-applets.catalog
 ```
+
+`--manifest-dir` retains its directory or single-manifest JSON file behavior.
+`--manifest-catalog` explicitly selects one packed catalog file; the selectors
+are mutually exclusive. No catalog is merged or selected automatically.
 
 `list` returns protocol `execute.applets/1` with applets sorted by canonical
 name. `inspect` returns `execute.applet/1`; canonical names and phrases resolve

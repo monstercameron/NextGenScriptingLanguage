@@ -48,16 +48,41 @@ pub fn render_for_workflow(request: &WorkflowServiceRequest<'_>) -> Result<Strin
     render_for_workflow_with_launchd_home(request, None)
 }
 
+/// Render a service that explicitly uses one packed manifest catalog.
+///
+/// The generated command stores the canonical catalog file path, so it does
+/// not depend on the caller's working directory when the service starts.
+pub fn render_for_workflow_with_manifest_catalog(
+    request: &WorkflowServiceRequest<'_>,
+    manifest_catalog: &Path,
+) -> Result<String> {
+    render_for_workflow_with_launchd_home_and_catalog(request, None, Some(manifest_catalog))
+}
+
 fn render_for_workflow_with_launchd_home(
     request: &WorkflowServiceRequest<'_>,
     launchd_home: Option<&Path>,
 ) -> Result<String> {
+    render_for_workflow_with_launchd_home_and_catalog(request, launchd_home, None)
+}
+
+fn render_for_workflow_with_launchd_home_and_catalog(
+    request: &WorkflowServiceRequest<'_>,
+    launchd_home: Option<&Path>,
+    manifest_catalog: Option<&Path>,
+) -> Result<String> {
+    if manifest_catalog.is_some() && request.manifest_directory.is_some() {
+        bail!("manifest directory and packed manifest catalog are mutually exclusive");
+    }
     let workflow = canonical_file(request.workflow_path, "workflow")?;
     let executable = canonical_file(request.executable, "execute binary")?;
     let working_directory = canonical_directory(request.working_directory, "working directory")?;
     let manifest_directory = request
         .manifest_directory
         .map(|path| canonical_directory(path, "manifest directory"))
+        .transpose()?;
+    let manifest_catalog = manifest_catalog
+        .map(|path| canonical_file(path, "manifest catalog"))
         .transpose()?;
     let capability_policy = request
         .capability_policy
@@ -106,6 +131,12 @@ fn render_for_workflow_with_launchd_home(
         argv.extend([
             "--manifest-dir".into(),
             utf8_path(&path, "manifest directory")?,
+        ]);
+    }
+    if let Some(path) = manifest_catalog {
+        argv.extend([
+            "--manifest-catalog".into(),
+            utf8_path(&path, "manifest catalog")?,
         ]);
     }
     if let Some(path) = capability_policy {
@@ -433,6 +464,41 @@ mod tests {
         assert!(rendered.contains("Restart=on-failure"));
         assert!(rendered.contains("\"two words\""));
         assert!(rendered.contains("Generated for review"));
+    }
+
+    #[test]
+    fn generated_service_keeps_explicit_catalog_path_in_argv() {
+        let directory = tempdir().unwrap();
+        let workflow = directory.path().join("scheduled.program");
+        fs::write(
+            &workflow,
+            "every 5 minutes\n  then encode \"body\" as json\n",
+        )
+        .unwrap();
+        let catalog = directory.path().join("manifests.catalog");
+        fs::write(&catalog, "packed catalog fixture").unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let inputs = BTreeMap::new();
+        let arguments = Vec::new();
+        let request = WorkflowServiceRequest {
+            format: ServiceFormat::Systemd,
+            workflow_path: &workflow,
+            executable: &executable,
+            working_directory: directory.path(),
+            manifest_directory: None,
+            capability_policy: None,
+            data_flow_policy: None,
+            label: Some("com.example.catalog-service"),
+            inputs: &inputs,
+            program_arguments: &arguments,
+        };
+
+        let rendered = render_for_workflow_with_manifest_catalog(&request, &catalog).unwrap();
+        let canonical_catalog = fs::canonicalize(catalog).unwrap();
+        let canonical_catalog = canonical_catalog.to_string_lossy();
+        assert!(rendered.contains("--manifest-catalog"));
+        assert!(rendered.contains(canonical_catalog.as_ref()));
+        assert!(!rendered.contains("--manifest-dir"));
     }
 
     #[test]

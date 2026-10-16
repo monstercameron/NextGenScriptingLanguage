@@ -1,0 +1,171 @@
+name: Graph recv_any hosted paired benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      repetitions:
+        description: Fixed measured pairs; every requested pair is retained
+        required: true
+        type: choice
+        options:
+          - "12"
+          - "24"
+          - "48"
+        default: "12"
+
+permissions:
+  contents: read
+
+jobs:
+  graph-recv-any-paired:
+    name: Linux hosted paired recv_any benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      BASELINE_COMMIT: b78693294169c22892bb4f78539348a5755992ad
+      CANDIDATE_COMMIT: c6f77a0cb199aedec564440a6a5b4b6170317831
+      BENCHMARK_PATCH_SHA256: 749f639c07957e20966981ca43ea824c078781d7f1a588264fa9252ff0162efe
+      INVOCATION_TIMEOUT_SECONDS: "12"
+      REPETITIONS: ${{ inputs.repetitions }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Validate pinned source identities and run bounds
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BASELINE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BASELINE_COMMIT" != "$CANDIDATE_COMMIT" ]]
+          case "$REPETITIONS" in 12|24|48) ;; *) echo "unsupported repetition count" >&2; exit 2 ;; esac
+          [[ "$INVOCATION_TIMEOUT_SECONDS" == "12" ]]
+          mkdir -p evidence/runtime-perf/build evidence/runtime-perf/patch
+          printf 'baseline=%s\ncandidate=%s\nrepetitions=%s\nwarmup_pairs=3\ntimeout_seconds=%s\n' \
+            "$BASELINE_COMMIT" "$CANDIDATE_COMMIT" "$REPETITIONS" "$INVOCATION_TIMEOUT_SECONDS" \
+            > evidence/runtime-perf/request.txt
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout exact baseline source
+        with:
+          ref: ${{ env.BASELINE_COMMIT }}
+          path: build-source/baseline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout exact candidate source
+        with:
+          ref: ${{ env.CANDIDATE_COMMIT }}
+          path: build-source/candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Apply or verify the exact same frozen harness patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="$GITHUB_WORKSPACE/benchmarks/graph_recv_any_benchmark.patch"
+          printf '%s  %s\n' "$BENCHMARK_PATCH_SHA256" "$patch" | sha256sum --check --status
+          for side in baseline candidate; do
+            root="$GITHUB_WORKSPACE/build-source/$side"
+            expected="$BASELINE_COMMIT"
+            if [[ "$side" == candidate ]]; then expected="$CANDIDATE_COMMIT"; fi
+            actual="$(git -C "$root" rev-parse HEAD)"
+            [[ "$actual" == "$expected" ]]
+            log="evidence/runtime-perf/patch/$side.txt"
+            if git -C "$root" apply --reverse --check "$patch" >"$log" 2>&1; then
+              printf 'exact frozen patch already present in source commit\n' >> "$log"
+            elif git -C "$root" apply --check "$patch" >>"$log" 2>&1; then
+              git -C "$root" apply "$patch"
+              printf 'exact frozen patch applied to checkout\n' >> "$log"
+            else
+              cat "$log" >&2
+              echo "the frozen harness patch neither matches nor applies to $side" >&2
+              exit 1
+            fi
+            mapfile -t modified < <(git -C "$root" diff --name-only)
+            mapfile -t staged < <(git -C "$root" diff --cached --name-only)
+            mapfile -t untracked < <(git -C "$root" ls-files --others --exclude-standard)
+            [[ ${#staged[@]} -eq 0 && ${#untracked[@]} -eq 0 ]]
+            if [[ ${#modified[@]} -gt 0 ]]; then
+              [[ ${#modified[@]} -eq 1 && "${modified[0]}" == "src/graph/transport.rs" ]]
+            fi
+            printf 'HEAD=%s\nmodified=%s\n' "$actual" "${modified[*]:-clean}" >> "$log"
+          done
+
+      - name: Build both release test binaries in fresh separate target directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          for side in baseline candidate; do
+            root="$GITHUB_WORKSPACE/build-source/$side"
+            target="$RUNNER_TEMP/graph-recv-any-$side-target"
+            output="$GITHUB_WORKSPACE/evidence/runtime-perf/build/$side"
+            mkdir -p "$output"
+            if [[ -e "$target" ]]; then
+              echo "target directory was not fresh: $target" >&2
+              exit 1
+            fi
+            mkdir -p "$target"
+            cargo --version > "$output/tool-versions.txt"
+            rustc --version --verbose >> "$output/tool-versions.txt"
+            set +e
+            CARGO_TARGET_DIR="$target" CARGO_INCREMENTAL=0 \
+              cargo test --manifest-path "$root/Cargo.toml" --locked --release --lib --no-run \
+                --message-format=json > "$output/cargo-stdout.jsonl" 2> "$output/cargo-stderr.log"
+            status=$?
+            set -e
+            printf '%s\n' "$status" > "$output/cargo-exit-status.txt"
+            if [[ "$status" -ne 0 ]]; then
+              echo "$side release test build failed" >&2
+              exit "$status"
+            fi
+            binary="$(python3 "$GITHUB_WORKSPACE/benchmarks/graph_recv_any_pair.py" select-binary \
+              --cargo-json "$output/cargo-stdout.jsonl" \
+              --manifest-path "$root/Cargo.toml" \
+              --target-source-path "$root/src/lib.rs" \
+              --target-dir "$target")"
+            commit="$CANDIDATE_COMMIT"
+            if [[ "$side" == baseline ]]; then commit="$BASELINE_COMMIT"; fi
+            python3 "$GITHUB_WORKSPACE/benchmarks/graph_recv_any_pair.py" build-receipt \
+              --root "$root" \
+              --commit "$commit" \
+              --target-dir "$target" \
+              --binary "$binary" \
+              --patch "$GITHUB_WORKSPACE/benchmarks/graph_recv_any_benchmark.patch" \
+              --receipt "$output/build-receipt.json" \
+              --fresh-target-dir-confirmed > "$output/receipt-command.json"
+            printf '%s\n' "$binary" > "$output/test-binary-path.txt"
+          done
+
+      - name: Run alternating sequential pairs and validate every result
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/graph_recv_any_pair.py run \
+            --baseline-root "$GITHUB_WORKSPACE/build-source/baseline" \
+            --candidate-root "$GITHUB_WORKSPACE/build-source/candidate" \
+            --baseline-commit "$BASELINE_COMMIT" \
+            --candidate-commit "$CANDIDATE_COMMIT" \
+            --baseline-receipt "$GITHUB_WORKSPACE/evidence/runtime-perf/build/baseline/build-receipt.json" \
+            --candidate-receipt "$GITHUB_WORKSPACE/evidence/runtime-perf/build/candidate/build-receipt.json" \
+            --patch "$GITHUB_WORKSPACE/benchmarks/graph_recv_any_benchmark.patch" \
+            --repetitions "$REPETITIONS" \
+            --timeout-seconds "$INVOCATION_TIMEOUT_SECONDS" \
+            --report-dir "$GITHUB_WORKSPACE/evidence/runtime-perf/paired-runs"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: graph-recv-any-paired-${{ github.run_id }}
+          path: evidence/runtime-perf
+          if-no-files-found: warn
+          retention-days: 90

@@ -374,6 +374,16 @@ fn cached_input_names(
         .collect()
 }
 
+fn all_input_queues_closed(queues: &[Arc<BoundedQueue>]) -> Result<bool> {
+    let mut all_closed = true;
+    for queue in queues {
+        // Evaluate every queue in order, even after finding an open queue, so
+        // a later lock error is reported just as it was by the old collect.
+        all_closed &= queue.is_closed_and_empty()?;
+    }
+    Ok(all_closed)
+}
+
 impl NodeIo {
     fn input_name_index(&self, port: &str) -> Option<usize> {
         self.input_names
@@ -480,6 +490,29 @@ impl NodeIo {
         Ok(None)
     }
 
+    fn try_recv_from_named_input(
+        &mut self,
+        port: &str,
+        cursor_index: usize,
+        queue_count: usize,
+    ) -> Result<Option<EventEnvelope>> {
+        let Self {
+            inputs,
+            input_queue_cursors,
+            ..
+        } = self;
+        let start = input_queue_cursors[cursor_index] % queue_count;
+        let queues = inputs.get(port).expect("named receive has a bound input");
+        for offset in 0..queue_count {
+            let index = (start + offset) % queue_count;
+            if let Some(event) = queues[index].try_recv()? {
+                input_queue_cursors[cursor_index] = index + 1;
+                return Ok(Some(event));
+            }
+        }
+        Ok(None)
+    }
+
     /// Receive the next message from one named input. Multi-edge inputs merge
     /// in the order messages become available, with a stable queue cursor.
     pub fn recv(&mut self, port: &str) -> Result<Option<EventEnvelope>> {
@@ -489,34 +522,34 @@ impl NodeIo {
                 return Ok(Some(event));
             }
         }
-        let queues = self.inputs.get(port).cloned().unwrap_or_default();
-        if queues.is_empty() {
+        let queue_count = self.inputs.get(port).map_or(0, |queues| queues.len());
+        if queue_count == 0 {
             return Ok(None);
         }
         let cursor_index = self
             .input_name_index(port)
             .expect("bound input has a cached queue cursor");
-        if queues.len() == 1 {
-            let event = queues[0].recv(&self.token)?;
+        if queue_count == 1 {
+            let event = self
+                .inputs
+                .get(port)
+                .expect("named receive has a bound input")[0]
+                .recv(&self.token)?;
             return Ok(event.map(|event| self.observe_input(event)));
         }
         loop {
             self.check_cancelled()?;
-            let start = self.input_queue_cursors[cursor_index] % queues.len();
-            for offset in 0..queues.len() {
-                let index = (start + offset) % queues.len();
-                if let Some(event) = queues[index].try_recv()? {
-                    self.input_queue_cursors[cursor_index] = index + 1;
-                    return Ok(Some(self.observe_input(event)));
-                }
+            if let Some(event) = self.try_recv_from_named_input(port, cursor_index, queue_count)? {
+                return Ok(Some(self.observe_input(event)));
             }
-            if queues
-                .iter()
-                .map(|q| q.is_closed_and_empty())
-                .collect::<Result<Vec<_>>>()?
-                .iter()
-                .all(|closed| *closed)
-            {
+            let all_closed = {
+                let queues = self
+                    .inputs
+                    .get(port)
+                    .expect("named receive has a bound input");
+                all_input_queues_closed(queues)?
+            };
+            if all_closed {
                 return Ok(None);
             }
             thread::sleep(Duration::from_millis(2));
@@ -533,8 +566,8 @@ impl NodeIo {
                 return Ok(Some(event));
             }
         }
-        let queues = self.inputs.get(port).cloned().unwrap_or_default();
-        if queues.is_empty() {
+        let queue_count = self.inputs.get(port).map_or(0, |queues| queues.len());
+        if queue_count == 0 {
             return Ok(None);
         }
         let cursor_index = self
@@ -542,21 +575,17 @@ impl NodeIo {
             .expect("bound input has a cached queue cursor");
         loop {
             self.check_cancelled()?;
-            let start = self.input_queue_cursors[cursor_index] % queues.len();
-            for offset in 0..queues.len() {
-                let index = (start + offset) % queues.len();
-                if let Some(event) = queues[index].try_recv()? {
-                    self.input_queue_cursors[cursor_index] = index + 1;
-                    return Ok(Some(self.observe_input(event)));
-                }
+            if let Some(event) = self.try_recv_from_named_input(port, cursor_index, queue_count)? {
+                return Ok(Some(self.observe_input(event)));
             }
-            if queues
-                .iter()
-                .map(|queue| queue.is_closed_and_empty())
-                .collect::<Result<Vec<_>>>()?
-                .iter()
-                .all(|closed| *closed)
-            {
+            let all_closed = {
+                let queues = self
+                    .inputs
+                    .get(port)
+                    .expect("named receive has a bound input");
+                all_input_queues_closed(queues)?
+            };
+            if all_closed {
                 return Ok(None);
             }
             let now = Instant::now();

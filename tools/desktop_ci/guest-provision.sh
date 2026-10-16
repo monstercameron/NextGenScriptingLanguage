@@ -82,7 +82,32 @@ pacman -Syyuu --noconfirm --needed \
     hyprland quickshell grim wtype jq mesa qt6-wayland sudo dbus openssh python \
     2>&1 | tee "$ARTIFACTS/pacman-install.log"
 
-hyprland_version="$(Hyprland --version 2>&1)"
+hyprland_runtime_dir="$(mktemp -d /run/execute-hyprland-version.XXXXXXXX)"
+trap 'rm -rf -- "$hyprland_runtime_dir"' EXIT
+chmod 0700 "$hyprland_runtime_dir"
+
+hyprland_version_stdout="$ARTIFACTS/hyprland-version.stdout.txt"
+hyprland_version_stderr="$ARTIFACTS/hyprland-version.stderr.txt"
+hyprland_version_status_file="$ARTIFACTS/hyprland-version-probe-status.txt"
+set +e
+XDG_RUNTIME_DIR="$hyprland_runtime_dir" Hyprland --version \
+    > "$hyprland_version_stdout" \
+    2> "$hyprland_version_stderr"
+hyprland_version_status="$?"
+set -e
+{
+    printf 'exit_status=%s\n' "$hyprland_version_status"
+    printf 'runtime_dir=%s\n' "$hyprland_runtime_dir"
+    stat --format='runtime_dir_owner_uid=%u\nruntime_dir_mode=%a' "$hyprland_runtime_dir"
+} > "$hyprland_version_status_file"
+if (( hyprland_version_status != 0 )); then
+    cat "$hyprland_version_stderr" >&2 || true
+    printf 'Hyprland version probe failed with exit status %s\n' "$hyprland_version_status" >&2
+    exit "$hyprland_version_status"
+fi
+hyprland_version="$(<"$hyprland_version_stdout")"
+rm -rf -- "$hyprland_runtime_dir"
+trap - EXIT
 printf '%s\n' "$hyprland_version" > "$ARTIFACTS/hyprland-installed-version.txt"
 python3 - "$hyprland_version" <<'PY'
 import re

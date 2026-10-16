@@ -1,0 +1,786 @@
+{
+  "schema": "execute.manifest-catalog-publication-raw-inventory/1",
+  "description": "Raw paired CLI invocation journal, exact 75-manifest CLI fixture, library paired sample report and reconstructed raw library fixture.",
+  "entries": [
+    {
+      "path": "cli-paired/fixture/fixed-printf-check.program",
+      "size_bytes": 48,
+      "sha256": "556d7ad95612d4ba550431ac108c501bdcdc9762eeb3d65099f956995833b02c"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/awk.json",
+      "size_bytes": 445,
+      "sha256": "e32db563605d84a0873bc51088579825f56ed182b895208278d46d96131e30a6"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/cat.json",
+      "size_bytes": 566,
+      "sha256": "483117c32690b423ab88e9443cc7ce0787545f07833576d678b1d0472f19ab3a"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/cd.json",
+      "size_bytes": 180,
+      "sha256": "8c4e620938ddea3864a46a53238bb1c30c6e95e2cf144e3ab762cdc4c461fb3a"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/comm.json",
+      "size_bytes": 421,
+      "sha256": "a0df36e3df87572400171ad0745dde3f4d1bf841aba734ac066aaaf0cb4907ab"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.color_parse_rgb.json",
+      "size_bytes": 1706,
+      "sha256": "963166185f5cbe095e97d6963e6cacf3d13933e87339fb46e0b1b8c96a341b20"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.color_parse_rgb_result.json",
+      "size_bytes": 2016,
+      "sha256": "23b3c88784f3885771cc293ee91f418c5bc4c608d868019c2eb543fa73ea82cd"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.color_rgb_to_hex.json",
+      "size_bytes": 1479,
+      "sha256": "54f0c2a01e58fa21cb3de5dac49a5979e8722c6a37fe1bd7ef287221c2dcf93b"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.csv_parse.json",
+      "size_bytes": 1656,
+      "sha256": "4582b3e430e6e6e225f832d019d4f73a2fe782652f52f020aa9f0022bb324520"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.csv_stringify.json",
+      "size_bytes": 1150,
+      "sha256": "7fe4e21033a10d6603c4cd6f81ad2b385326b782c211049afed748b79e6e385a"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.fs_read.json",
+      "size_bytes": 1031,
+      "sha256": "44ed96496c80adc848283d6aee23a3d61535abdfbd4d5f2aa8501058ecca8489"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.fs_snapshot.json",
+      "size_bytes": 1039,
+      "sha256": "18100cb43942e6b49fd3bca26d7b534d42f3558d73575e6f9775c57cf05b8681"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.fs_transaction.json",
+      "size_bytes": 1341,
+      "sha256": "43b2623f166e07b4a2dea253b9d0cee9c4f40fc95b34485fed3be131952b9cb3"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.fs_transaction_recover.json",
+      "size_bytes": 1357,
+      "sha256": "df36c26102ae8408fbd784e91a52f834e3c135b689afa78bbce5e86e1755ec2e"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.fs_unlink_checked.json",
+      "size_bytes": 1437,
+      "sha256": "f28b3df29dba998204f80e960c467c994a7d678db5da7242897187e2bf8a7c2e"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.fs_write_atomic.json",
+      "size_bytes": 1646,
+      "sha256": "cebaeb1f4088a38a0b8442979cc95f478d2d2a1ef775604f627f7a6799e8506b"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.json_filter.json",
+      "size_bytes": 1510,
+      "sha256": "28a595a004185f48d11df39f8b6a83b713a17897867ecf1e71611531ad9e3cf0"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.json_get.json",
+      "size_bytes": 1196,
+      "sha256": "5d0a5618080ae281f5ee84653abb0e045cc5993b132d6400628d2f70910c8537"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.json_map.json",
+      "size_bytes": 1508,
+      "sha256": "d349fc6e8d99190a9df87fda906a9e6c1c3f738fa875d00ef10487f6d8beb119"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.json_parse.json",
+      "size_bytes": 1021,
+      "sha256": "7bf89dc1ae80517ba1a21058dfd9817d69c66be23194779c322b4a616648d05a"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.json_set.json",
+      "size_bytes": 1388,
+      "sha256": "10afef209cee6309a0cad10dd8a7c4ae3c8fa2c2cea0832e997183400c7cb0e0"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.json_stringify.json",
+      "size_bytes": 902,
+      "sha256": "69d121310f54ce696c1bca2d40a1692d0b1a6dbc89928cad95f5218bba5e5585"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.jsonc_edit_content.json",
+      "size_bytes": 1594,
+      "sha256": "38eb823e6c2761237ed1220584c0c8f217e3ace0a4f10724ca83791b26e2db6a"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.jsonc_remove.json",
+      "size_bytes": 1658,
+      "sha256": "c5f55346958c5b4f38ce4451c2f328cdf72711093b93e2fef32341e18160fa79"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.jsonc_set.json",
+      "size_bytes": 1719,
+      "sha256": "6302ee1b2958dfdd85df1dbf5556073deed57aca24f3b48006f0b8ce6ab967f5"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.number_add.json",
+      "size_bytes": 1092,
+      "sha256": "3a1003b7ffd90c1d1bbd9d6b9f4fd7a1c69a7d1a22d63c5473118a65c7cae984"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.number_compare.json",
+      "size_bytes": 1102,
+      "sha256": "70d6672245f949dbd9ea883d94d4061816d0f4e0e85dd66a312081ce55553688"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.number_divide.json",
+      "size_bytes": 1098,
+      "sha256": "2d8f77255538b41265fb41ea5773d501fc5308ef7c43cb06041e1b4020a3ead5"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.number_multiply.json",
+      "size_bytes": 1102,
+      "sha256": "fc4cb459000f3d1fc0d1ca2575c34dc933cfe456c55eed03cefd01849ca6fed4"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.number_parse_integer.json",
+      "size_bytes": 1423,
+      "sha256": "814495a7b2e7b8e8fdff9a4426fdb13cb0d7f3fd69136d84402972e60f30d7f3"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.number_parse_integer_result.json",
+      "size_bytes": 1733,
+      "sha256": "a90c728b70645ffb7b49a67b99ec01d0a067c170fb8c828acc05928d37f03a24"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.number_subtract.json",
+      "size_bytes": 1102,
+      "sha256": "603f4b807bd475d2c5586988b2aab280657bc6eba58ab0dbd6ad66ae44c76709"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.number_to_text.json",
+      "size_bytes": 927,
+      "sha256": "15d9ee2ad9e5aa11b818533966223391a0cc1f6747bab0f785a1bf148d5311eb"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.path_basename.json",
+      "size_bytes": 1068,
+      "sha256": "cb9b59c9c18a31df0d85151e8876c239f5456c9d20a97ba796e3b44ff7096864"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.path_dirname.json",
+      "size_bytes": 896,
+      "sha256": "2af4171ccb721f67ffec9d5a4da0b68f899149c4440469bf042a6dd1f79e80f6"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.path_remove_suffix.json",
+      "size_bytes": 1104,
+      "sha256": "4fde5895101514c40f4f0a86eb2ba14a21be3b62a2abab3552472f9af8e1c797"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.text_concat.json",
+      "size_bytes": 1166,
+      "sha256": "9d702a99721778644c647c3eb90057d4d92d07bf173d1da1f5a6d89e9df3023c"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.text_matches.json",
+      "size_bytes": 1909,
+      "sha256": "3286c5d4a5b633f7550c31cae5dec9ef8fcad823497c0fcf184ea24e334f65e7"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/core.text_trim_final_lf.json",
+      "size_bytes": 1039,
+      "sha256": "28a0c383cb4f5c892fba0dfc400c17b56bf350b06c5b6beab6d8de5d2c6e0023"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/count.lines.json",
+      "size_bytes": 168,
+      "sha256": "9e8c2e8b0a096004a90754c4604b6873e04535f2817cc38b28fdab9631959349"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/cut.json",
+      "size_bytes": 426,
+      "sha256": "2eb43493685ece1d739fb1225e40743178cbcb361dc2676470ac22c4bf4eb350"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/desktop.clock_format.json",
+      "size_bytes": 1005,
+      "sha256": "42be106fe4cabe2e8bfec0404b1dcf27493e012f5bc13e2c3ca67331ecacd3ba"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/desktop.clock_local.json",
+      "size_bytes": 815,
+      "sha256": "a34e26e58e3a598c87d16e0a0b3da5a9040cd8d4aaff929cd65d69a23ddc66c9"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/desktop.clock_remote.json",
+      "size_bytes": 868,
+      "sha256": "093c71f4840367c497ca91109373cb37a2c0a46b932d5bc8873f4522d30a7ddf"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/desktop.fixture_sync.json",
+      "size_bytes": 1262,
+      "sha256": "9b3ac4f5a8daff5c08d0f2daae1bb97c1b827c979b690cea4ddb2d948e955541"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/desktop.quickshell.json",
+      "size_bytes": 483,
+      "sha256": "8af9b5900d3cb50f9ddbed04b362e1338ac088eeb748d83b17f87eda783ff5cd"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/false.json",
+      "size_bytes": 85,
+      "sha256": "5bf291319570f954bcf54b2847243eaca0c214c6d844c3f4fc5816ec005c6338"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/gh.repo.json",
+      "size_bytes": 471,
+      "sha256": "821dd80054f78029446e963d5ee30375a8c2ec5dc8dab0c8411bafcea837a2bc"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/git.commit.json",
+      "size_bytes": 493,
+      "sha256": "70e8272197c5974bd76d41e57ea0dde8046927487629fc4cd6a498fa23ff023a"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/grep.json",
+      "size_bytes": 443,
+      "sha256": "aa8192ddb8685b19f4a9e49ad87d489d6dcfc946331037328e00721f16869a74"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/head.json",
+      "size_bytes": 275,
+      "sha256": "3dcacca6166792ff647dc52a7273f0c102683cb012cad8b1f05fc2a2325f5b07"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/jev.classify.json",
+      "size_bytes": 1398,
+      "sha256": "098e97d987b9bfc81bdad8227ce14528209f11506b4d8d649a5351f9c2bd9423"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/jev.judge.json",
+      "size_bytes": 1246,
+      "sha256": "bd5dccd3153a503af5c59963a52676969bc9d5793de3c43268249c653fc88127"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/jev.score.json",
+      "size_bytes": 1392,
+      "sha256": "76601821cf98022a7003028bb7185cb116b53fb101857777403d91001b4d55f3"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/join.json",
+      "size_bytes": 421,
+      "sha256": "949355922238c8acdd020aef386d560aa9f61f8d2a773c959edd2957770e22d8"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/jq.json",
+      "size_bytes": 459,
+      "sha256": "2f6585cff672a91e630833a4b3fc7bc61c9a59d82e5478d926a509d5154f1792"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/jq.ps.json",
+      "size_bytes": 920,
+      "sha256": "9097df3bdb45dd6c9724acb3377ea0cb8bd068aacd0c55257f95c0f02037c50e"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/llm.ask.json",
+      "size_bytes": 1252,
+      "sha256": "652f07f014c12e04892d773e7812812dd95b7c5ebf790571d0d405c3c5a0f13d"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/llm.extract.json",
+      "size_bytes": 1371,
+      "sha256": "58b9b9afada23d708c3e3f382d0952faf3c9065c13b732f0ea171c9b72164155"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/ls.json",
+      "size_bytes": 396,
+      "sha256": "3c193cb2c0f1397e6600ddf3de9b8219110a26d5ae5661281c5263f50b74d17d"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/mkdir.json",
+      "size_bytes": 480,
+      "sha256": "05ff3c97d1b4c03994f3f3d1d3cf0cf868c6b865cf1722501cc240c25a4ec61a"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/omarchy.browser-refresh.json",
+      "size_bytes": 961,
+      "sha256": "069cc4b7d6dc5435a0143f32d4cd57af3777b1d75bf915dfe4291e6e56259abb"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/omarchy.editor-install.json",
+      "size_bytes": 803,
+      "sha256": "ddffab59464e21aebd079e4401eb05c640a723b5c9bce35c9c12146d14e077d9"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/omarchy.editor-list.json",
+      "size_bytes": 770,
+      "sha256": "625f8036efa03a9878adbae4c2ee68403874abe50a69124f1bb9c33e8147268f"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/packed.manifest-catalog",
+      "size_bytes": 69251,
+      "sha256": "268893a9fa473e23c4b1a2ed9f4c0c77817bee8d8f253e741648297acbaaedd7"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/paste.json",
+      "size_bytes": 423,
+      "sha256": "955fd7e57a08fe72518dcb58d2087e2ec005c8ddbdc9145212a9ca927cf59e09"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/printf.json",
+      "size_bytes": 227,
+      "sha256": "abe61c4481c94396e230406897d253ff8ba0f9c854fb09ecc098b85870b0237e"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/ps.json",
+      "size_bytes": 288,
+      "sha256": "b245d02a68d61d316bd67cdc0b2c01225ed4b36c0257767f31e627dc50136475"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/pwd.json",
+      "size_bytes": 58,
+      "sha256": "c7b13a3ffd7b935da4d2b79b9c971ac3e979e43f8d6417c4d917a498217bb50c"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/sed.json",
+      "size_bytes": 441,
+      "sha256": "68e5079957c0da4370e423db3afdc0e799e34f6c2d47603fa37213ce99df8397"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/sort.json",
+      "size_bytes": 295,
+      "sha256": "6d953c33eed06e702c5781290d76929b8e19d62d283b999321e42de19d779b50"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/tail.follow.json",
+      "size_bytes": 323,
+      "sha256": "2529d2e3820b04ee7593562dd1aad88e891c256056089f368df5141a6ffcf401"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/tail.json",
+      "size_bytes": 447,
+      "sha256": "85587f636af5879c435e51eb46fb302f51f0475701ce4c7374a58e27d3678f8d"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/tr.json",
+      "size_bytes": 522,
+      "sha256": "b093a6aa91b7657ea4890279f9c3e97e2738114d31f9232ed0501b780ca78c5e"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/uniq.json",
+      "size_bytes": 295,
+      "sha256": "157054ba866d610e03826a7f652bac52529195ccffca9b26f60a041e74f9b246"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/upper.json",
+      "size_bytes": 199,
+      "sha256": "40f30b92942374f4694d90a33b24a856de99e79f875261b3e9a2f83c563ad0b5"
+    },
+    {
+      "path": "cli-paired/fixture/manifests/wc.json",
+      "size_bytes": 279,
+      "sha256": "be82bb3ac877a6eb53d3b2c699b1de84dcc6fd1d7cb9b05b784edc45d7786579"
+    },
+    {
+      "path": "cli-paired/raw-invocations.jsonl",
+      "size_bytes": 23818396,
+      "sha256": "77fa2a8251e634148195f2bc5b99653b6855c495c731476773fcbdb44d342133"
+    },
+    {
+      "path": "library-paired/attempt-1.stderr",
+      "size_bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "library-paired/attempt-1.stdout",
+      "size_bytes": 170,
+      "sha256": "73b45128bd6be8a13a1c66fc66324db2106053aed16413232b92ddc69bd379b4"
+    },
+    {
+      "path": "library-paired/fixture/manifests/awk.json",
+      "size_bytes": 445,
+      "sha256": "e32db563605d84a0873bc51088579825f56ed182b895208278d46d96131e30a6"
+    },
+    {
+      "path": "library-paired/fixture/manifests/cat.json",
+      "size_bytes": 566,
+      "sha256": "483117c32690b423ab88e9443cc7ce0787545f07833576d678b1d0472f19ab3a"
+    },
+    {
+      "path": "library-paired/fixture/manifests/cd.json",
+      "size_bytes": 180,
+      "sha256": "8c4e620938ddea3864a46a53238bb1c30c6e95e2cf144e3ab762cdc4c461fb3a"
+    },
+    {
+      "path": "library-paired/fixture/manifests/comm.json",
+      "size_bytes": 421,
+      "sha256": "a0df36e3df87572400171ad0745dde3f4d1bf841aba734ac066aaaf0cb4907ab"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.color_parse_rgb.json",
+      "size_bytes": 1706,
+      "sha256": "963166185f5cbe095e97d6963e6cacf3d13933e87339fb46e0b1b8c96a341b20"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.color_parse_rgb_result.json",
+      "size_bytes": 2016,
+      "sha256": "23b3c88784f3885771cc293ee91f418c5bc4c608d868019c2eb543fa73ea82cd"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.color_rgb_to_hex.json",
+      "size_bytes": 1479,
+      "sha256": "54f0c2a01e58fa21cb3de5dac49a5979e8722c6a37fe1bd7ef287221c2dcf93b"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.csv_parse.json",
+      "size_bytes": 1656,
+      "sha256": "4582b3e430e6e6e225f832d019d4f73a2fe782652f52f020aa9f0022bb324520"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.csv_stringify.json",
+      "size_bytes": 1150,
+      "sha256": "7fe4e21033a10d6603c4cd6f81ad2b385326b782c211049afed748b79e6e385a"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.fs_read.json",
+      "size_bytes": 1031,
+      "sha256": "44ed96496c80adc848283d6aee23a3d61535abdfbd4d5f2aa8501058ecca8489"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.fs_snapshot.json",
+      "size_bytes": 1039,
+      "sha256": "18100cb43942e6b49fd3bca26d7b534d42f3558d73575e6f9775c57cf05b8681"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.fs_transaction.json",
+      "size_bytes": 1341,
+      "sha256": "43b2623f166e07b4a2dea253b9d0cee9c4f40fc95b34485fed3be131952b9cb3"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.fs_transaction_recover.json",
+      "size_bytes": 1357,
+      "sha256": "df36c26102ae8408fbd784e91a52f834e3c135b689afa78bbce5e86e1755ec2e"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.fs_unlink_checked.json",
+      "size_bytes": 1437,
+      "sha256": "f28b3df29dba998204f80e960c467c994a7d678db5da7242897187e2bf8a7c2e"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.fs_write_atomic.json",
+      "size_bytes": 1646,
+      "sha256": "cebaeb1f4088a38a0b8442979cc95f478d2d2a1ef775604f627f7a6799e8506b"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.json_filter.json",
+      "size_bytes": 1510,
+      "sha256": "28a595a004185f48d11df39f8b6a83b713a17897867ecf1e71611531ad9e3cf0"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.json_get.json",
+      "size_bytes": 1196,
+      "sha256": "5d0a5618080ae281f5ee84653abb0e045cc5993b132d6400628d2f70910c8537"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.json_map.json",
+      "size_bytes": 1508,
+      "sha256": "d349fc6e8d99190a9df87fda906a9e6c1c3f738fa875d00ef10487f6d8beb119"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.json_parse.json",
+      "size_bytes": 1021,
+      "sha256": "7bf89dc1ae80517ba1a21058dfd9817d69c66be23194779c322b4a616648d05a"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.json_set.json",
+      "size_bytes": 1388,
+      "sha256": "10afef209cee6309a0cad10dd8a7c4ae3c8fa2c2cea0832e997183400c7cb0e0"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.json_stringify.json",
+      "size_bytes": 902,
+      "sha256": "69d121310f54ce696c1bca2d40a1692d0b1a6dbc89928cad95f5218bba5e5585"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.jsonc_edit_content.json",
+      "size_bytes": 1594,
+      "sha256": "38eb823e6c2761237ed1220584c0c8f217e3ace0a4f10724ca83791b26e2db6a"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.jsonc_remove.json",
+      "size_bytes": 1658,
+      "sha256": "c5f55346958c5b4f38ce4451c2f328cdf72711093b93e2fef32341e18160fa79"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.jsonc_set.json",
+      "size_bytes": 1719,
+      "sha256": "6302ee1b2958dfdd85df1dbf5556073deed57aca24f3b48006f0b8ce6ab967f5"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.number_add.json",
+      "size_bytes": 1092,
+      "sha256": "3a1003b7ffd90c1d1bbd9d6b9f4fd7a1c69a7d1a22d63c5473118a65c7cae984"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.number_compare.json",
+      "size_bytes": 1102,
+      "sha256": "70d6672245f949dbd9ea883d94d4061816d0f4e0e85dd66a312081ce55553688"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.number_divide.json",
+      "size_bytes": 1098,
+      "sha256": "2d8f77255538b41265fb41ea5773d501fc5308ef7c43cb06041e1b4020a3ead5"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.number_multiply.json",
+      "size_bytes": 1102,
+      "sha256": "fc4cb459000f3d1fc0d1ca2575c34dc933cfe456c55eed03cefd01849ca6fed4"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.number_parse_integer.json",
+      "size_bytes": 1423,
+      "sha256": "814495a7b2e7b8e8fdff9a4426fdb13cb0d7f3fd69136d84402972e60f30d7f3"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.number_parse_integer_result.json",
+      "size_bytes": 1733,
+      "sha256": "a90c728b70645ffb7b49a67b99ec01d0a067c170fb8c828acc05928d37f03a24"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.number_subtract.json",
+      "size_bytes": 1102,
+      "sha256": "603f4b807bd475d2c5586988b2aab280657bc6eba58ab0dbd6ad66ae44c76709"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.number_to_text.json",
+      "size_bytes": 927,
+      "sha256": "15d9ee2ad9e5aa11b818533966223391a0cc1f6747bab0f785a1bf148d5311eb"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.path_basename.json",
+      "size_bytes": 1068,
+      "sha256": "cb9b59c9c18a31df0d85151e8876c239f5456c9d20a97ba796e3b44ff7096864"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.path_dirname.json",
+      "size_bytes": 896,
+      "sha256": "2af4171ccb721f67ffec9d5a4da0b68f899149c4440469bf042a6dd1f79e80f6"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.path_remove_suffix.json",
+      "size_bytes": 1104,
+      "sha256": "4fde5895101514c40f4f0a86eb2ba14a21be3b62a2abab3552472f9af8e1c797"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.text_concat.json",
+      "size_bytes": 1166,
+      "sha256": "9d702a99721778644c647c3eb90057d4d92d07bf173d1da1f5a6d89e9df3023c"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.text_matches.json",
+      "size_bytes": 1909,
+      "sha256": "3286c5d4a5b633f7550c31cae5dec9ef8fcad823497c0fcf184ea24e334f65e7"
+    },
+    {
+      "path": "library-paired/fixture/manifests/core.text_trim_final_lf.json",
+      "size_bytes": 1039,
+      "sha256": "28a0c383cb4f5c892fba0dfc400c17b56bf350b06c5b6beab6d8de5d2c6e0023"
+    },
+    {
+      "path": "library-paired/fixture/manifests/count.lines.json",
+      "size_bytes": 168,
+      "sha256": "9e8c2e8b0a096004a90754c4604b6873e04535f2817cc38b28fdab9631959349"
+    },
+    {
+      "path": "library-paired/fixture/manifests/cut.json",
+      "size_bytes": 426,
+      "sha256": "2eb43493685ece1d739fb1225e40743178cbcb361dc2676470ac22c4bf4eb350"
+    },
+    {
+      "path": "library-paired/fixture/manifests/desktop.clock_format.json",
+      "size_bytes": 1005,
+      "sha256": "42be106fe4cabe2e8bfec0404b1dcf27493e012f5bc13e2c3ca67331ecacd3ba"
+    },
+    {
+      "path": "library-paired/fixture/manifests/desktop.clock_local.json",
+      "size_bytes": 815,
+      "sha256": "a34e26e58e3a598c87d16e0a0b3da5a9040cd8d4aaff929cd65d69a23ddc66c9"
+    },
+    {
+      "path": "library-paired/fixture/manifests/desktop.clock_remote.json",
+      "size_bytes": 868,
+      "sha256": "093c71f4840367c497ca91109373cb37a2c0a46b932d5bc8873f4522d30a7ddf"
+    },
+    {
+      "path": "library-paired/fixture/manifests/desktop.fixture_sync.json",
+      "size_bytes": 1262,
+      "sha256": "9b3ac4f5a8daff5c08d0f2daae1bb97c1b827c979b690cea4ddb2d948e955541"
+    },
+    {
+      "path": "library-paired/fixture/manifests/desktop.quickshell.json",
+      "size_bytes": 483,
+      "sha256": "8af9b5900d3cb50f9ddbed04b362e1338ac088eeb748d83b17f87eda783ff5cd"
+    },
+    {
+      "path": "library-paired/fixture/manifests/false.json",
+      "size_bytes": 85,
+      "sha256": "5bf291319570f954bcf54b2847243eaca0c214c6d844c3f4fc5816ec005c6338"
+    },
+    {
+      "path": "library-paired/fixture/manifests/gh.repo.json",
+      "size_bytes": 471,
+      "sha256": "821dd80054f78029446e963d5ee30375a8c2ec5dc8dab0c8411bafcea837a2bc"
+    },
+    {
+      "path": "library-paired/fixture/manifests/git.commit.json",
+      "size_bytes": 493,
+      "sha256": "70e8272197c5974bd76d41e57ea0dde8046927487629fc4cd6a498fa23ff023a"
+    },
+    {
+      "path": "library-paired/fixture/manifests/grep.json",
+      "size_bytes": 443,
+      "sha256": "aa8192ddb8685b19f4a9e49ad87d489d6dcfc946331037328e00721f16869a74"
+    },
+    {
+      "path": "library-paired/fixture/manifests/head.json",
+      "size_bytes": 275,
+      "sha256": "3dcacca6166792ff647dc52a7273f0c102683cb012cad8b1f05fc2a2325f5b07"
+    },
+    {
+      "path": "library-paired/fixture/manifests/jev.classify.json",
+      "size_bytes": 1398,
+      "sha256": "098e97d987b9bfc81bdad8227ce14528209f11506b4d8d649a5351f9c2bd9423"
+    },
+    {
+      "path": "library-paired/fixture/manifests/jev.judge.json",
+      "size_bytes": 1246,
+      "sha256": "bd5dccd3153a503af5c59963a52676969bc9d5793de3c43268249c653fc88127"
+    },
+    {
+      "path": "library-paired/fixture/manifests/jev.score.json",
+      "size_bytes": 1392,
+      "sha256": "76601821cf98022a7003028bb7185cb116b53fb101857777403d91001b4d55f3"
+    },
+    {
+      "path": "library-paired/fixture/manifests/join.json",
+      "size_bytes": 421,
+      "sha256": "949355922238c8acdd020aef386d560aa9f61f8d2a773c959edd2957770e22d8"
+    },
+    {
+      "path": "library-paired/fixture/manifests/jq.json",
+      "size_bytes": 459,
+      "sha256": "2f6585cff672a91e630833a4b3fc7bc61c9a59d82e5478d926a509d5154f1792"
+    },
+    {
+      "path": "library-paired/fixture/manifests/jq.ps.json",
+      "size_bytes": 920,
+      "sha256": "9097df3bdb45dd6c9724acb3377ea0cb8bd068aacd0c55257f95c0f02037c50e"
+    },
+    {
+      "path": "library-paired/fixture/manifests/llm.ask.json",
+      "size_bytes": 1252,
+      "sha256": "652f07f014c12e04892d773e7812812dd95b7c5ebf790571d0d405c3c5a0f13d"
+    },
+    {
+      "path": "library-paired/fixture/manifests/llm.extract.json",
+      "size_bytes": 1371,
+      "sha256": "58b9b9afada23d708c3e3f382d0952faf3c9065c13b732f0ea171c9b72164155"
+    },
+    {
+      "path": "library-paired/fixture/manifests/ls.json",
+      "size_bytes": 396,
+      "sha256": "3c193cb2c0f1397e6600ddf3de9b8219110a26d5ae5661281c5263f50b74d17d"
+    },
+    {
+      "path": "library-paired/fixture/manifests/manifests.catalog",
+      "size_bytes": 69326,
+      "sha256": "96282f81ef0d50d57c0322dbf8e4a0866e6d905b9e5578a2106a8277b7b45258"
+    },
+    {
+      "path": "library-paired/fixture/manifests/mkdir.json",
+      "size_bytes": 480,
+      "sha256": "05ff3c97d1b4c03994f3f3d1d3cf0cf868c6b865cf1722501cc240c25a4ec61a"
+    },
+    {
+      "path": "library-paired/fixture/manifests/omarchy.browser-refresh.json",
+      "size_bytes": 961,
+      "sha256": "069cc4b7d6dc5435a0143f32d4cd57af3777b1d75bf915dfe4291e6e56259abb"
+    },
+    {
+      "path": "library-paired/fixture/manifests/omarchy.editor-install.json",
+      "size_bytes": 803,
+      "sha256": "ddffab59464e21aebd079e4401eb05c640a723b5c9bce35c9c12146d14e077d9"
+    },
+    {
+      "path": "library-paired/fixture/manifests/omarchy.editor-list.json",
+      "size_bytes": 770,
+      "sha256": "625f8036efa03a9878adbae4c2ee68403874abe50a69124f1bb9c33e8147268f"
+    },
+    {
+      "path": "library-paired/fixture/manifests/paste.json",
+      "size_bytes": 423,
+      "sha256": "955fd7e57a08fe72518dcb58d2087e2ec005c8ddbdc9145212a9ca927cf59e09"
+    },
+    {
+      "path": "library-paired/fixture/manifests/printf.json",
+      "size_bytes": 227,
+      "sha256": "abe61c4481c94396e230406897d253ff8ba0f9c854fb09ecc098b85870b0237e"
+    },
+    {
+      "path": "library-paired/fixture/manifests/ps.json",
+      "size_bytes": 288,
+      "sha256": "b245d02a68d61d316bd67cdc0b2c01225ed4b36c0257767f31e627dc50136475"
+    },
+    {
+      "path": "library-paired/fixture/manifests/pwd.json",
+      "size_bytes": 58,
+      "sha256": "c7b13a3ffd7b935da4d2b79b9c971ac3e979e43f8d6417c4d917a498217bb50c"
+    },
+    {
+      "path": "library-paired/fixture/manifests/sed.json",
+      "size_bytes": 441,
+      "sha256": "68e5079957c0da4370e423db3afdc0e799e34f6c2d47603fa37213ce99df8397"
+    },
+    {
+      "path": "library-paired/fixture/manifests/sort.json",
+      "size_bytes": 295,
+      "sha256": "6d953c33eed06e702c5781290d76929b8e19d62d283b999321e42de19d779b50"
+    },
+    {
+      "path": "library-paired/fixture/manifests/tail.follow.json",
+      "size_bytes": 323,
+      "sha256": "2529d2e3820b04ee7593562dd1aad88e891c256056089f368df5141a6ffcf401"
+    },
+    {
+      "path": "library-paired/fixture/manifests/tail.json",
+      "size_bytes": 447,
+      "sha256": "85587f636af5879c435e51eb46fb302f51f0475701ce4c7374a58e27d3678f8d"
+    },
+    {
+      "path": "library-paired/fixture/manifests/tr.json",
+      "size_bytes": 522,
+      "sha256": "b093a6aa91b7657ea4890279f9c3e97e2738114d31f9232ed0501b780ca78c5e"
+    },
+    {
+      "path": "library-paired/fixture/manifests/uniq.json",
+      "size_bytes": 295,
+      "sha256": "157054ba866d610e03826a7f652bac52529195ccffca9b26f60a041e74f9b246"
+    },
+    {
+      "path": "library-paired/fixture/manifests/upper.json",
+      "size_bytes": 199,
+      "sha256": "40f30b92942374f4694d90a33b24a856de99e79f875261b3e9a2f83c563ad0b5"
+    },
+    {
+      "path": "library-paired/fixture/manifests/wc.json",
+      "size_bytes": 279,
+      "sha256": "be82bb3ac877a6eb53d3b2c699b1de84dcc6fd1d7cb9b05b784edc45d7786579"
+    }
+  ]
+}

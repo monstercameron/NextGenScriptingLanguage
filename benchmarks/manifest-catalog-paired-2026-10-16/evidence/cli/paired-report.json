@@ -1,0 +1,1404 @@
+{
+  "schema": "execute.catalog-cli-paired-benchmark/1",
+  "estimand": "same-binary explicit directory-vs-packed representation comparison; not default-startup speedup",
+  "plan": {
+    "manifest_count": 75,
+    "warmup_pairs_per_case": 5,
+    "measured_pairs_per_case": 48,
+    "case_order": "AB/BA alternation, 24 each per case",
+    "A": "--manifest-dir",
+    "B": "--manifest-catalog",
+    "cases": [
+      "check --json fixed printf workflow",
+      "applets list"
+    ],
+    "timer": "perf_counter_ns around subprocess.run only; setup, parsing, comparison, hashes and journal writes are untimed"
+  },
+  "paths": {
+    "binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/execute-binary",
+    "build_receipt": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/build-receipt.json",
+    "source_root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree",
+    "manifest_source": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/manifests",
+    "output_dir": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1",
+    "raw_journal": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1/raw-invocations.jsonl",
+    "preregistration": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1/preregistration.json"
+  },
+  "host": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.9.6 (default, May 22 2026, 11:13:45) \n[Clang 21.0.0 (clang-2100.1.1.101)]"
+  },
+  "integrity": {
+    "source_hash_before": "78383ab13d5fcdf852542e1a5c15025d304fcc8f41cc6d27cf6d310a886f58da",
+    "binary_sha256_before": "63a063f6575dd330ae924cef6d4852fb9c98ba3c4766055db6b8b2f7bb5c6bc0",
+    "build_receipt_sha256_before": "26752e7a12304a735aba68bc258b42f1c421989ae0ac32d99a68c169da87b92e",
+    "build_receipt_binary_sha256": "63a063f6575dd330ae924cef6d4852fb9c98ba3c4766055db6b8b2f7bb5c6bc0",
+    "source_hash_scope": "root-level files and src/tests/manifests/tools/vendor/.cargo/.github/.githooks/build trees",
+    "source_hash_after": "78383ab13d5fcdf852542e1a5c15025d304fcc8f41cc6d27cf6d310a886f58da",
+    "binary_sha256_after": "63a063f6575dd330ae924cef6d4852fb9c98ba3c4766055db6b8b2f7bb5c6bc0",
+    "build_receipt_sha256_after": "26752e7a12304a735aba68bc258b42f1c421989ae0ac32d99a68c169da87b92e",
+    "fixture_hash_after": "e567f24e1675646f1e93156377d84f0687b1277aae1748cd83cbdc4b31407e5b",
+    "preregistration_sha256_after": "177e9d3898be8093ff5958f257415a14c6b8cc099b3e7bf2894f6bb434dca76e",
+    "stable": true
+  },
+  "oracle_drift": [],
+  "samples": {
+    "check_json": [
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 1,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8542584,
+        "packed_duration_ns": 5502750
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 2,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8845458,
+        "packed_duration_ns": 5533750
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 3,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9160209,
+        "packed_duration_ns": 5302041
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 4,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9966625,
+        "packed_duration_ns": 6420208
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 5,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8907250,
+        "packed_duration_ns": 5851333
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 6,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12593583,
+        "packed_duration_ns": 7553875
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 7,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 31110916,
+        "packed_duration_ns": 8354709
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 8,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9778041,
+        "packed_duration_ns": 6884208
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 9,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8832333,
+        "packed_duration_ns": 8255708
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 10,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8619125,
+        "packed_duration_ns": 6405541
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 11,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9281625,
+        "packed_duration_ns": 6127667
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 12,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 13392166,
+        "packed_duration_ns": 5423375
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 13,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9029208,
+        "packed_duration_ns": 6418750
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 14,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9666583,
+        "packed_duration_ns": 6041167
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 15,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9005500,
+        "packed_duration_ns": 6090792
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 16,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 7773125,
+        "packed_duration_ns": 5524834
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 17,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9362292,
+        "packed_duration_ns": 5453958
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 18,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 7861875,
+        "packed_duration_ns": 5885834
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 19,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8514750,
+        "packed_duration_ns": 5269333
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 20,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8038083,
+        "packed_duration_ns": 5868125
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 21,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9182500,
+        "packed_duration_ns": 5719084
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 22,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8084750,
+        "packed_duration_ns": 5620500
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 23,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8420333,
+        "packed_duration_ns": 8425208
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 24,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9281500,
+        "packed_duration_ns": 6530458
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 25,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8828084,
+        "packed_duration_ns": 5625750
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 26,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8821333,
+        "packed_duration_ns": 5770208
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 27,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8045333,
+        "packed_duration_ns": 5845458
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 28,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 15694666,
+        "packed_duration_ns": 5971375
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 29,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9170083,
+        "packed_duration_ns": 5747542
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 30,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8207458,
+        "packed_duration_ns": 6388667
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 31,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11373334,
+        "packed_duration_ns": 5865750
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 32,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8164541,
+        "packed_duration_ns": 5375875
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 33,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 7779750,
+        "packed_duration_ns": 5517250
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 34,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8944458,
+        "packed_duration_ns": 5941500
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 35,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9322250,
+        "packed_duration_ns": 5385584
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 36,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8683750,
+        "packed_duration_ns": 6004709
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 37,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8298792,
+        "packed_duration_ns": 5722709
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 38,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 9050167,
+        "packed_duration_ns": 5926542
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 39,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8246791,
+        "packed_duration_ns": 5451208
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 40,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8402500,
+        "packed_duration_ns": 5830375
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 41,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11098042,
+        "packed_duration_ns": 6342625
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 42,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12218750,
+        "packed_duration_ns": 5494833
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 43,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 10883958,
+        "packed_duration_ns": 5701875
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 44,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8397125,
+        "packed_duration_ns": 6140375
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 45,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 8470958,
+        "packed_duration_ns": 5936625
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 46,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 10453542,
+        "packed_duration_ns": 5495666
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 47,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 10622666,
+        "packed_duration_ns": 5219292
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "check_json",
+        "pair": 48,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 13839375,
+        "packed_duration_ns": 5736834
+      }
+    ],
+    "applets_list": [
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 1,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11596750,
+        "packed_duration_ns": 9237333
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 2,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12825542,
+        "packed_duration_ns": 9754459
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 3,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12388791,
+        "packed_duration_ns": 12104042
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 4,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 15341708,
+        "packed_duration_ns": 11317083
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 5,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12555500,
+        "packed_duration_ns": 69540500
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 6,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 24194000,
+        "packed_duration_ns": 19561250
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 7,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 29662667,
+        "packed_duration_ns": 31305500
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 8,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 23916625,
+        "packed_duration_ns": 15567042
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 9,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 14183209,
+        "packed_duration_ns": 10965917
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 10,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 14791167,
+        "packed_duration_ns": 14074459
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 11,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12911875,
+        "packed_duration_ns": 10223500
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 12,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11579000,
+        "packed_duration_ns": 9030167
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 13,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 14392583,
+        "packed_duration_ns": 9232792
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 14,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11614208,
+        "packed_duration_ns": 9424375
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 15,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11770417,
+        "packed_duration_ns": 9412083
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 16,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12042667,
+        "packed_duration_ns": 10036458
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 17,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 14235792,
+        "packed_duration_ns": 11625625
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 18,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12061334,
+        "packed_duration_ns": 9619292
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 19,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12761667,
+        "packed_duration_ns": 10075958
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 20,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 14798917,
+        "packed_duration_ns": 10490292
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 21,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12306292,
+        "packed_duration_ns": 9764458
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 22,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12752583,
+        "packed_duration_ns": 9730083
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 23,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11674958,
+        "packed_duration_ns": 9595916
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 24,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 13401458,
+        "packed_duration_ns": 9782958
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 25,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11904209,
+        "packed_duration_ns": 9184291
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 26,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11949334,
+        "packed_duration_ns": 9328125
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 27,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12321750,
+        "packed_duration_ns": 9268041
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 28,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11870750,
+        "packed_duration_ns": 9875333
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 29,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11942792,
+        "packed_duration_ns": 9040125
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 30,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11849000,
+        "packed_duration_ns": 9743041
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 31,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11901250,
+        "packed_duration_ns": 9555917
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 32,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11940958,
+        "packed_duration_ns": 9446500
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 33,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11868417,
+        "packed_duration_ns": 10321750
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 34,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 13615167,
+        "packed_duration_ns": 12050625
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 35,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12046000,
+        "packed_duration_ns": 9456708
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 36,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12953250,
+        "packed_duration_ns": 9582125
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 37,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12166833,
+        "packed_duration_ns": 9068875
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 38,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12321167,
+        "packed_duration_ns": 9270250
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 39,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12235042,
+        "packed_duration_ns": 9417208
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 40,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 13646167,
+        "packed_duration_ns": 13485750
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 41,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 11896500,
+        "packed_duration_ns": 9278209
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 42,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 13006708,
+        "packed_duration_ns": 8713167
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 43,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12383625,
+        "packed_duration_ns": 9628667
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 44,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12621875,
+        "packed_duration_ns": 9963084
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 45,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 12020750,
+        "packed_duration_ns": 9864000
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 46,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 18304500,
+        "packed_duration_ns": 9098709
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 47,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 15971542,
+        "packed_duration_ns": 10158291
+      },
+      {
+        "kind": "pair",
+        "phase": "measure",
+        "case": "applets_list",
+        "pair": 48,
+        "order": [
+          "packed",
+          "directory"
+        ],
+        "exact_equal": true,
+        "directory_duration_ns": 13207625,
+        "packed_duration_ns": 10126084
+      }
+    ]
+  },
+  "source_commit": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+  "fixture_hash_before": "e567f24e1675646f1e93156377d84f0687b1277aae1748cd83cbdc4b31407e5b",
+  "manifest_count": 75,
+  "fixture_filenames": [
+    "awk.json",
+    "cat.json",
+    "cd.json",
+    "comm.json",
+    "core.color_parse_rgb.json",
+    "core.color_parse_rgb_result.json",
+    "core.color_rgb_to_hex.json",
+    "core.csv_parse.json",
+    "core.csv_stringify.json",
+    "core.fs_read.json",
+    "core.fs_snapshot.json",
+    "core.fs_transaction.json",
+    "core.fs_transaction_recover.json",
+    "core.fs_unlink_checked.json",
+    "core.fs_write_atomic.json",
+    "core.json_filter.json",
+    "core.json_get.json",
+    "core.json_map.json",
+    "core.json_parse.json",
+    "core.json_set.json",
+    "core.json_stringify.json",
+    "core.jsonc_edit_content.json",
+    "core.jsonc_remove.json",
+    "core.jsonc_set.json",
+    "core.number_add.json",
+    "core.number_compare.json",
+    "core.number_divide.json",
+    "core.number_multiply.json",
+    "core.number_parse_integer.json",
+    "core.number_parse_integer_result.json",
+    "core.number_subtract.json",
+    "core.number_to_text.json",
+    "core.path_basename.json",
+    "core.path_dirname.json",
+    "core.path_remove_suffix.json",
+    "core.text_concat.json",
+    "core.text_matches.json",
+    "core.text_trim_final_lf.json",
+    "count.lines.json",
+    "cut.json",
+    "desktop.clock_format.json",
+    "desktop.clock_local.json",
+    "desktop.clock_remote.json",
+    "desktop.fixture_sync.json",
+    "desktop.quickshell.json",
+    "false.json",
+    "gh.repo.json",
+    "git.commit.json",
+    "grep.json",
+    "head.json",
+    "jev.classify.json",
+    "jev.judge.json",
+    "jev.score.json",
+    "join.json",
+    "jq.json",
+    "jq.ps.json",
+    "llm.ask.json",
+    "llm.extract.json",
+    "ls.json",
+    "mkdir.json",
+    "omarchy.browser-refresh.json",
+    "omarchy.editor-install.json",
+    "omarchy.editor-list.json",
+    "paste.json",
+    "printf.json",
+    "ps.json",
+    "pwd.json",
+    "sed.json",
+    "sort.json",
+    "tail.follow.json",
+    "tail.json",
+    "tr.json",
+    "uniq.json",
+    "upper.json",
+    "wc.json"
+  ],
+  "packed_catalog_sha256": "268893a9fa473e23c4b1a2ed9f4c0c77817bee8d8f253e741648297acbaaedd7",
+  "measurement_started": true,
+  "preregistration_sha256": "177e9d3898be8093ff5958f257415a14c6b8cc099b3e7bf2894f6bb434dca76e",
+  "status": "passed",
+  "summary": {
+    "check_json": {
+      "pairs": 48,
+      "packed_wins": 47,
+      "packed_losses": 1,
+      "ties": 0,
+      "directory_median_ns": 8974979.0,
+      "packed_median_ns": 5848395.5,
+      "median_packed_over_directory_ratio": 0.6558862257527682
+    },
+    "applets_list": {
+      "pairs": 48,
+      "packed_wins": 46,
+      "packed_losses": 2,
+      "ties": 0,
+      "directory_median_ns": 12386208.0,
+      "packed_median_ns": 9748750.0,
+      "median_packed_over_directory_ratio": 0.7872000975759464
+    }
+  },
+  "raw_record_count": 327
+}

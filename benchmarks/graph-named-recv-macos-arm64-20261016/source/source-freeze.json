@@ -1,0 +1,11 @@
+{
+  "recorded_at": "2026-10-16T04:56:53.298609+00:00",
+  "base_commit": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+  "harness_sha256": "1faae3e5100c515bd752b55b569f5cd5bec04a304c0d53fbc18ee78fd1648521",
+  "identical_harness": true,
+  "source_paths": {
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-recv-baseline-c6/src/graph/transport.rs": "48eeff362dc4fda512386967ba20b6f184bd7d2fb8fb3e34f672e242acbbe180",
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-recv-worktree/src/graph/transport.rs": "451d42902b672a8e97e3f761112979782610e658def3161a345046e016579369"
+  },
+  "claim": "source-only until fresh builds and timings"
+}

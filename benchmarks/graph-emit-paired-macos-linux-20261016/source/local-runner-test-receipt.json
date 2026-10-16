@@ -1,0 +1,110 @@
+{
+  "checks": [
+    {
+      "command": "python3 -m unittest discover -s work/execute-thesis-2026-10-15/work/emit-perf-paired-runner -p 'test_emit_perf_pair.py' -v",
+      "coverage": [
+        "four-case raw report shape, exact counts, deliveries, and duration medians",
+        "reject malformed, duplicate, non-finite JSON; wrong sample/case counts; boolean counts; and oracle drift",
+        "pair order, exact 3+48 schedule, cross-arm oracle equality gate, and signed candidate losses",
+        "tracked .cargo/** and vendor/** source fingerprint coverage",
+        "prepare freezes binary/source/harness receipts; post-preregistration source changes are rejected",
+        "synthetic invocation raw-file/log retention and whole-process CPU/wall reporting",
+        "timeout partial output retention with no retry"
+      ],
+      "note": "Tests used temporary local Git repositories and fake Python executables/reports only; neither saved Rust test binary was executed.",
+      "status": "passed",
+      "tests_run": 11
+    },
+    {
+      "command": "python3 -m py_compile work/execute-thesis-2026-10-15/work/emit-perf-paired-runner/emit_perf_pair.py work/execute-thesis-2026-10-15/work/emit-perf-paired-runner/test_emit_perf_pair.py",
+      "status": "passed"
+    },
+    {
+      "command": "git apply --check --whitespace=error on exported patch in a fresh temporary Git repository",
+      "status": "passed"
+    },
+    {
+      "command": "emit_perf_pair.py prepare against final source freeze and attempt-2 binary receipts",
+      "note": "Reads/hashes inputs only; neither Rust test binary was started.",
+      "preregistration_sha256": "067bacb080a14de2fb8205f442cbca4d706e9e58f915e79b63a188cb4b1eb406",
+      "status": "passed"
+    },
+    {
+      "command": "_verify_preregistration against the final preregistration",
+      "note": "Read-only source, receipt, driver, harness, and binary hash checks.",
+      "status": "passed"
+    }
+  ],
+  "files": {
+    "driver": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+    "patch": "de5a8bce6b61841613b26256750a22dc5a33bcc90f569b85b0601bbfb02d58dd",
+    "tests": "dbc49bca6737dbf6268d64db87aacfe26bd7403bfc0a7ba055ec0d17a68c29c2",
+    "work_readme": "b602100a7a13fa27b9ca6563eee49fe7fac4c70a446eda02b1928cc7a5572917"
+  },
+  "frozen_inputs": {
+    "base_commit": "b78693294169c22892bb4f78539348a5755992ad",
+    "baseline_binary_sha256": "712d251a524618e903d0229a741212e1eaa8e1eea3b23b3de7cbdc3915270843",
+    "baseline_receipt_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/baseline-binary-receipt.json",
+    "baseline_receipt_sha256": "89547c0be9c4b1b7318c82fe2839b12e7767b551931bce60b6668209c54ad901",
+    "candidate_binary_sha256": "58ed0c96b2bae856f971eea29e29353c84af9ffafdf449404227964e78ef507f",
+    "candidate_receipt_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/candidate-binary-receipt.json",
+    "candidate_receipt_sha256": "cb8c998f7639bb8e23ce000157e8c5f994eb9318801d64b7a311b9615d146694",
+    "harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "preregistration_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/paired-run-preregistration.json",
+    "preregistration_sha256": "067bacb080a14de2fb8205f442cbca4d706e9e58f915e79b63a188cb4b1eb406",
+    "source_freeze_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/emit-source-freeze.json",
+    "source_freeze_sha256": "641d23f1a75fef02dbf8d7eed67f046e326634325760d6d333def3ed36b2881b"
+  },
+  "not_performed": [
+    "Cargo build/test by this task",
+    "execution of baseline or candidate saved Rust test binaries",
+    "benchmark timings",
+    "source or product edits",
+    "commit or push"
+  ],
+  "protocol": {
+    "correctness_gate": "input payload SHA-256 and every per-sink event count, length-prefixed full-stream SHA-256, and representative full envelope must match across each pair; harness performs full value and exact serialized-byte assertions for every event",
+    "fingerprints": "tracked src/**, vendor/**, .cargo/** and build config hashes before prepare/run and after all invocations; saved binary SHA before/after each invocation and after all invocations",
+    "inner_harness_samples_per_case_per_invocation": 3,
+    "inner_harness_warmups": 0,
+    "invocation_timeout_seconds": 60,
+    "measured_pairs": 48,
+    "metric": "median of 3 in-harness durations per case per invocation; paired candidate-minus-baseline duration delta; positive is slower",
+    "no_result_dependent_retries": true,
+    "pair_order": "AB/BA alternation spans warmup and measured pairs; measured pair 1 starts BA; 24 measured pairs of each order",
+    "retention": "one separate raw JSON, started/finished record, stdout, and stderr per scheduled invocation; failed attempts remain in place",
+    "scheduled_process_invocations": 102,
+    "test_name": "graph::transport::emit_perf_harness::emit_raw_samples_with_full_oracle",
+    "theoretical_timeout_bound": "102 invocations \u00d7 60 seconds = 102 minutes, plus process/report overhead",
+    "warmup_pairs": 3,
+    "whole_invocation_measurement": "subprocess wall duration and child user/system CPU delta, stored separately from inner emit durations"
+  },
+  "recorded_date": "2026-10-16",
+  "review_kind": "source_only_local_emit_paired_runner",
+  "root_gate": "Canonical preregistration is ready for review. No timing was run; wait for root to release the separate measurement gate.",
+  "schema_version": 1,
+  "source_directory": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/emit-perf-paired-runner",
+  "test_history": [
+    {
+      "final_status": "11 tests passed.",
+      "finding": "The first synthetic oracle-drift test mutated a list shared by all three samples, so its fixture did not actually contain drift.",
+      "fix": "Deep-copied synthetic oracle records per sample; final test asserts real per-sample divergence is rejected.",
+      "status": "failed_then_fixed"
+    },
+    {
+      "items": [
+        {
+          "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/paired-run-preregistration-superseded.json",
+          "reason": "Replaced after final harness receipt and strict input validations were applied.",
+          "sha256": "73dc2987361df89865cf39500009895994fa191c6056b34887b9808ebdc3af30"
+        },
+        {
+          "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/paired-run-preregistration-superseded-v2.json",
+          "reason": "Replaced after the final warmup-pair oracle gate was added.",
+          "sha256": "c9dc358dbefa0016c477301c28d9cd7d8c99bd3098375efb16044049c3e5b954"
+        }
+      ],
+      "status": "superseded_never_run_preregistrations_preserved"
+    }
+  ]
+}

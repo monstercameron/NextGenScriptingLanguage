@@ -1,0 +1,77 @@
+{
+  "files": [
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-named-recv/source-freeze.json",
+      "path": "source/source-freeze.json",
+      "sha256": "606c94ba666e0505fa5bc06c439206807e1e0560795c2e9b0a0fdad64c2c4572",
+      "size_bytes": 814
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-named-recv/baseline-final.patch",
+      "path": "source/baseline-final.patch",
+      "sha256": "ed64221aada6c33f33f8e7dcc2c8f0b79a2f518dbcafc4b7f895423b0d8d656e",
+      "size_bytes": 13258
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-named-recv/candidate-final.patch",
+      "path": "source/candidate-final.patch",
+      "sha256": "2d580bf46e6e9bacc76dfcce3ce4cde41e2a9350f6add4c614002e51080763dd",
+      "size_bytes": 18772
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-named-recv/harness-final.rs",
+      "path": "source/recv-named-harness.rs",
+      "sha256": "1faae3e5100c515bd752b55b569f5cd5bec04a304c0d53fbc18ee78fd1648521",
+      "size_bytes": 12731
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-recv-baseline-c6/src/graph/transport.rs",
+      "path": "source/baseline-transport.rs",
+      "sha256": "48eeff362dc4fda512386967ba20b6f184bd7d2fb8fb3e34f672e242acbbe180",
+      "size_bytes": 138746
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-recv-worktree/src/graph/transport.rs",
+      "path": "source/candidate-transport.rs",
+      "sha256": "451d42902b672a8e97e3f761112979782610e658def3161a345046e016579369",
+      "size_bytes": 139615
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-paired-runner/graph_recv_named_pair.py",
+      "path": "source/graph_recv_named_pair.py",
+      "sha256": "849872881f83068a2fd8f7319e8753c9994d33706ccc6c82f7e75dc191fa9199",
+      "size_bytes": 51235
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-paired-runner/test_graph_recv_named_pair.py",
+      "path": "source/test_graph_recv_named_pair.py",
+      "sha256": "855a47e794935e0421310659ce363da70317cf676d7039121195552bd9e0b984",
+      "size_bytes": 9097
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-paired-runner/README.md",
+      "path": "source/runner-README.md",
+      "sha256": "dd6e00d5ee973ce6df8173613cfd67562d3305e91ca94acd6f34aefb091d3842",
+      "size_bytes": 2820
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-paired-runner/run-plan.json",
+      "path": "source/run-plan.json",
+      "sha256": "1ddad3e74053f800c22ca16bf5db5114837f55cacbc4c8f4dd5e8cacc6b8986f",
+      "size_bytes": 2948
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-paired-runner/preparation-receipt.json",
+      "path": "source/preparation-receipt.json",
+      "sha256": "24b804ae4c5385bbf948b07b59c3632fe8141af0d639aa2978f718a0940a2fa6",
+      "size_bytes": 2227
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/build_named_pair.py",
+      "path": "source/build_named_pair.py",
+      "sha256": "7b1b329338624c16e771b86b1c37034d45016dfe9f52b6429f29d82b0063b2b7",
+      "size_bytes": 3288
+    }
+  ],
+  "source_revision": "c6f77a0cb199aedec564440a6a5b4b6170317831"
+}

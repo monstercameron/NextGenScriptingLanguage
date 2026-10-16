@@ -1555,3 +1555,12 @@ passed its registered 300-second window, source coverage, cancellation and
 worker-reaping checks. It retains process-local RSS/thread samples and the
 original preregistration; the fixed graph and whole-window coverage do not
 establish production endurance, churn or process-tree resource limits.
+
+## October 16 graph and catalog measurements
+
+These fixed paired comparisons retain raw samples, preregistrations, source and binary identities, independent audits, and observed losses. Each has its own workload and baseline.
+
+- [Any-input graph receive on Linux](graph-recv-any-ci-38851233022/README.md): preloaded bounded queues.
+- [Named graph receive on macOS arm64](graph-named-recv-macos-arm64-20261016/README.md): preloaded named receive and zero-timeout calls.
+- [Graph emission on macOS and Linux](graph-emit-paired-macos-linux-20261016/README.md): four payload/fanout cases, including a macOS eight-sink regression.
+- [Explicit packed manifest catalog](manifest-catalog-paired-2026-10-16/README.md): library representation and actual CLI selector comparisons; default discovery is unchanged.

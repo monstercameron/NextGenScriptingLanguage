@@ -1,0 +1,146 @@
+{
+  "flow": {
+    "artifact": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree#execute@0.9.0-rc.5",
+      "manifest_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/Cargo.toml",
+      "target": {
+        "kind": [
+          "lib"
+        ],
+        "crate_types": [
+          "lib"
+        ],
+        "name": "flow",
+        "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/src/lib.rs",
+        "edition": "2021",
+        "doc": true,
+        "doctest": true,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": true
+      },
+      "features": [],
+      "filenames": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/flow-157ff98eb6165fdc"
+      ],
+      "executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/flow-157ff98eb6165fdc",
+      "fresh": false
+    },
+    "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/flow-test-binary",
+    "sha256": "7162a1e30801bf564712ea896d0b540dc5acca7efe309b0cc63306153204ab9f"
+  },
+  "manifest_catalog": {
+    "artifact": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree#execute@0.9.0-rc.5",
+      "manifest_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/Cargo.toml",
+      "target": {
+        "kind": [
+          "test"
+        ],
+        "crate_types": [
+          "bin"
+        ],
+        "name": "manifest_catalog",
+        "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/tests/manifest_catalog.rs",
+        "edition": "2021",
+        "doc": false,
+        "doctest": false,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": true
+      },
+      "features": [],
+      "filenames": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/manifest_catalog-9c3e811e95666aa9"
+      ],
+      "executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/manifest_catalog-9c3e811e95666aa9",
+      "fresh": false
+    },
+    "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/manifest_catalog-test-binary",
+    "sha256": "bb25abe614a735cd75d961af043a90836ed9872a4a458602d0d0ebcdadb1b69c"
+  },
+  "manifest_catalog_cli": {
+    "artifact": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree#execute@0.9.0-rc.5",
+      "manifest_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/Cargo.toml",
+      "target": {
+        "kind": [
+          "test"
+        ],
+        "crate_types": [
+          "bin"
+        ],
+        "name": "manifest_catalog_cli",
+        "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/tests/manifest_catalog_cli.rs",
+        "edition": "2021",
+        "doc": false,
+        "doctest": false,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": true
+      },
+      "features": [],
+      "filenames": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/manifest_catalog_cli-5bc51295721b93ae"
+      ],
+      "executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/manifest_catalog_cli-5bc51295721b93ae",
+      "fresh": false
+    },
+    "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/manifest_catalog_cli-test-binary",
+    "sha256": "cac8c7d5d0e8c93a13f448ef3b2235dba67e3f3ac28bc0cb007000d94afcbff7"
+  },
+  "execute": {
+    "artifact": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree#execute@0.9.0-rc.5",
+      "manifest_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/Cargo.toml",
+      "target": {
+        "kind": [
+          "bin"
+        ],
+        "crate_types": [
+          "bin"
+        ],
+        "name": "execute",
+        "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/src/main.rs",
+        "edition": "2021",
+        "doc": true,
+        "doctest": false,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "features": [],
+      "filenames": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/execute"
+      ],
+      "executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/execute",
+      "fresh": false
+    },
+    "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/execute-binary",
+    "sha256": "63a063f6575dd330ae924cef6d4852fb9c98ba3c4766055db6b8b2f7bb5c6bc0"
+  }
+}

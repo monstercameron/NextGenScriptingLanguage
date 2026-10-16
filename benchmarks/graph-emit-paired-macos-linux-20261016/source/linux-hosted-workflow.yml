@@ -1,0 +1,198 @@
+name: Emit hosted Linux paired replication
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  emit-hosted-replication:
+    name: Fixed 48-pair Linux replication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      BASE_COMMIT: b78693294169c22892bb4f78539348a5755992ad
+      BASELINE_PATCH_SHA256: 3c7b691f8b0b88c4393f58105fea8d29a566dbbdf958d4eb4e063d20f93eb60e
+      BASELINE_PATCH_XZ_SHA256: f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974
+      CANDIDATE_PATCH_SHA256: 2c9bcd8ec874fed6f4798224f9d94b4fa5b59f208db16e7d8f60b81192f8d877
+      CANDIDATE_PATCH_XZ_SHA256: 239b3f3a19fcb65b2a2be490b32e7e9fb00acdbcb9f62a562693baebb8b7f9a3
+      BASELINE_SOURCE_SHA256: db5430bd3a8cd25ed5e20bac4395b56814ec1ad6e2189d4e89d2f152c180c17f
+      CANDIDATE_SOURCE_SHA256: 7cc3497231fd60d7c31ed7c98390281df4be0913398e7ccee1e6ffe75f4c48d3
+      HARNESS_SHA256: 098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3
+      DRIVER_SHA256: 1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6
+      INVOCATION_TIMEOUT_SECONDS: "60"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Check fixed inputs and offline evidence helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$INVOCATION_TIMEOUT_SECONDS" == "60" ]]
+          printf '%s  %s\n' "$DRIVER_SHA256" benchmarks/emit_perf/emit_perf_pair.py | sha256sum --check
+          printf '%s  %s\n' "$HARNESS_SHA256" benchmarks/emit_perf/emit-perf-harness-final.rs | sha256sum --check
+          printf '%s  %s\n' "$BASELINE_PATCH_XZ_SHA256" benchmarks/emit_perf/baseline-patch.xz | sha256sum --check
+          printf '%s  %s\n' "$CANDIDATE_PATCH_XZ_SHA256" benchmarks/emit_perf/candidate-patch.xz | sha256sum --check
+          python3 -m unittest discover -s benchmarks/emit_perf -p 'test_hosted_emit_support.py'
+          mkdir -p evidence/emit-perf/build evidence/emit-perf/paired-runs
+          {
+            printf 'purpose=independent hosted Linux replication of the frozen local paired run\n'
+            printf 'base_commit=%s\n' "$BASE_COMMIT"
+            printf 'measured_pairs=48\nwarmup_pairs=3\ninvocation_timeout_seconds=%s\n' "$INVOCATION_TIMEOUT_SECONDS"
+            printf 'no_result_dependent_retries=true\n'
+            printf 'event=workflow_dispatch\nrun_id=%s\nrun_attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+          } > evidence/emit-perf/hosted-request.txt
+          python3 --version > evidence/emit-perf/build/host-tool-versions.txt
+          cargo --version >> evidence/emit-perf/build/host-tool-versions.txt
+          rustc --version --verbose >> evidence/emit-perf/build/host-tool-versions.txt
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout exact common base for baseline
+        with:
+          ref: ${{ env.BASE_COMMIT }}
+          path: build-source/baseline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout exact common base for candidate
+        with:
+          ref: ${{ env.BASE_COMMIT }}
+          path: build-source/candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Apply exact frozen source patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_archive="$GITHUB_WORKSPACE/benchmarks/emit_perf/baseline-patch.xz"
+          candidate_archive="$GITHUB_WORKSPACE/benchmarks/emit_perf/candidate-patch.xz"
+          baseline_patch="$RUNNER_TEMP/emit-perf-baseline.patch"
+          candidate_patch="$RUNNER_TEMP/emit-perf-candidate.patch"
+          python3 benchmarks/emit_perf/hosted_emit_support.py unpack-patch \
+            --side baseline --archive "$baseline_archive" --output "$baseline_patch" \
+            > evidence/emit-perf/build/unpack-baseline-patch.json
+          python3 benchmarks/emit_perf/hosted_emit_support.py unpack-patch \
+            --side candidate --archive "$candidate_archive" --output "$candidate_patch" \
+            > evidence/emit-perf/build/unpack-candidate-patch.json
+          printf '%s  %s\n' "$BASELINE_PATCH_SHA256" "$baseline_patch" | sha256sum --check
+          printf '%s  %s\n' "$CANDIDATE_PATCH_SHA256" "$candidate_patch" | sha256sum --check
+          for side in baseline candidate; do
+            root="$GITHUB_WORKSPACE/build-source/$side"
+            log="$GITHUB_WORKSPACE/evidence/emit-perf/build/patch-$side.log"
+            mkdir -p "$(dirname "$log")"
+            [[ "$(git -C "$root" rev-parse HEAD)" == "$BASE_COMMIT" ]]
+            if [[ "$side" == baseline ]]; then
+              patch="$baseline_patch"
+            else
+              patch="$candidate_patch"
+            fi
+            git -C "$root" apply --check "$patch" > "$log" 2>&1
+            git -C "$root" apply "$patch" >> "$log" 2>&1
+            git -C "$root" diff --check
+            mapfile -t changed < <(git -C "$root" diff --name-only)
+            mapfile -t staged < <(git -C "$root" diff --cached --name-only)
+            mapfile -t untracked < <(git -C "$root" ls-files --others --exclude-standard)
+            [[ ${#changed[@]} -eq 1 && "${changed[0]}" == "src/graph/transport.rs" ]]
+            [[ ${#staged[@]} -eq 0 && ${#untracked[@]} -eq 0 ]]
+          done
+
+      - name: Extract and freeze both source arms and the shared harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/emit_perf/hosted_emit_support.py freeze \
+            --baseline-root "$GITHUB_WORKSPACE/build-source/baseline" \
+            --candidate-root "$GITHUB_WORKSPACE/build-source/candidate" \
+            --frozen-harness "$GITHUB_WORKSPACE/benchmarks/emit_perf/emit-perf-harness-final.rs" \
+            --output-dir "$GITHUB_WORKSPACE/evidence/emit-perf/build"
+          printf '%s  %s\n' "$BASELINE_SOURCE_SHA256" "$GITHUB_WORKSPACE/build-source/baseline/src/graph/transport.rs" | sha256sum --check
+          printf '%s  %s\n' "$CANDIDATE_SOURCE_SHA256" "$GITHUB_WORKSPACE/build-source/candidate/src/graph/transport.rs" | sha256sum --check
+          printf '%s  %s\n' "$HARNESS_SHA256" evidence/emit-perf/build/emit-perf-harness-extracted.rs | sha256sum --check
+
+      - name: Build both arms in separate fresh release target directories
+        shell: bash
+        run: |
+          set -uo pipefail
+          failed=0
+          for side in baseline candidate; do
+            root="$GITHUB_WORKSPACE/build-source/$side"
+            target="$RUNNER_TEMP/emit-perf-$side-target"
+            output="$GITHUB_WORKSPACE/evidence/emit-perf/build/$side"
+            mkdir -p "$output"
+            if [[ -e "$target" ]]; then
+              printf 'target directory was not fresh: %s\n' "$target" > "$output/target-freshness-error.txt"
+              failed=1
+              continue
+            fi
+            mkdir -p "$target"
+            cargo --version > "$output/tool-versions.txt"
+            rustc --version --verbose >> "$output/tool-versions.txt"
+            set +e
+            CARGO_TARGET_DIR="$target" CARGO_INCREMENTAL=0 \
+              cargo test --manifest-path "$root/Cargo.toml" --locked --release --lib --no-run \
+                --message-format=json > "$output/cargo-stdout.jsonl" 2> "$output/cargo-stderr.log"
+            status=$?
+            set -e
+            printf '%s\n' "$status" > "$output/cargo-exit-status.txt"
+            if [[ "$status" -ne 0 ]]; then
+              failed=1
+              continue
+            fi
+            set +e
+            python3 benchmarks/emit_perf/hosted_emit_support.py record-build \
+              --side "$side" \
+              --root "$root" \
+              --target-dir "$target" \
+              --cargo-json "$output/cargo-stdout.jsonl" \
+              --output-dir "$output" \
+              --fresh-target-dir-confirmed > "$output/receipt-command.json" 2> "$output/receipt-error.log"
+            receipt_status=$?
+            set -e
+            printf '%s\n' "$receipt_status" > "$output/receipt-exit-status.txt"
+            if [[ "$receipt_status" -ne 0 ]]; then
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Prepare the fixed preregistration
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$DRIVER_SHA256" benchmarks/emit_perf/emit_perf_pair.py | sha256sum --check
+          python3 benchmarks/emit_perf/emit_perf_pair.py prepare \
+            --source-freeze "$GITHUB_WORKSPACE/evidence/emit-perf/build/emit-source-freeze.json" \
+            --baseline-receipt "$GITHUB_WORKSPACE/evidence/emit-perf/build/baseline/build-receipt.json" \
+            --candidate-receipt "$GITHUB_WORKSPACE/evidence/emit-perf/build/candidate/build-receipt.json" \
+            --harness-source "$GITHUB_WORKSPACE/evidence/emit-perf/build/emit-perf-harness-extracted.rs" \
+            --preregistration "$GITHUB_WORKSPACE/evidence/emit-perf/hosted-preregistration.json"
+
+      - name: Run the single fixed 48-pair cross-platform replication
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$GITHUB_WORKSPACE/evidence/emit-perf/paired-runs/run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python3 benchmarks/emit_perf/emit_perf_pair.py run \
+            --preregistration "$GITHUB_WORKSPACE/evidence/emit-perf/hosted-preregistration.json" \
+            --report-dir "$report"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: emit-hosted-replication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/emit-perf
+          if-no-files-found: warn
+          retention-days: 90

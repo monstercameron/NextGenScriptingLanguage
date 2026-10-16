@@ -1,0 +1,39 @@
+{
+  "artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/emit-baseline-b786#execute@0.9.0-rc.5",
+    "manifest_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/emit-baseline-b786/Cargo.toml",
+    "target": {
+      "kind": [
+        "lib"
+      ],
+      "crate_types": [
+        "lib"
+      ],
+      "name": "flow",
+      "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/emit-baseline-b786/src/lib.rs",
+      "edition": "2021",
+      "doc": true,
+      "doctest": true,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": true
+    },
+    "features": [],
+    "filenames": [
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/flow-b56585bda01e751e"
+    ],
+    "executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/flow-b56585bda01e751e",
+    "fresh": false
+  },
+  "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/baseline-test-binary",
+  "sha256": "712d251a524618e903d0229a741212e1eaa8e1eea3b23b3de7cbdc3915270843",
+  "source_sha256": "db5430bd3a8cd25ed5e20bac4395b56814ec1ad6e2189d4e89d2f152c180c17f",
+  "source_stable": true,
+  "attempt": 2
+}

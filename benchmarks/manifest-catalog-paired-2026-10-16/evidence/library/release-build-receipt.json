@@ -1,0 +1,74 @@
+{
+  "manifest_catalog": {
+    "artifact": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-perf-worktree#execute@0.9.0-rc.5",
+      "manifest_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-perf-worktree/Cargo.toml",
+      "target": {
+        "kind": [
+          "test"
+        ],
+        "crate_types": [
+          "bin"
+        ],
+        "name": "manifest_catalog",
+        "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-perf-worktree/tests/manifest_catalog.rs",
+        "edition": "2021",
+        "doc": false,
+        "doctest": false,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": true
+      },
+      "features": [],
+      "filenames": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/manifest_catalog-9c3e811e95666aa9"
+      ],
+      "executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/manifest_catalog-9c3e811e95666aa9",
+      "fresh": true
+    },
+    "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-perf/manifest_catalog-test-binary",
+    "sha256": "3e70b77419d181e2955577be85ae51e195ed828e282c0828edc319068c33038b"
+  },
+  "catalog_load_paired_bench": {
+    "artifact": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-perf-worktree#execute@0.9.0-rc.5",
+      "manifest_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-perf-worktree/Cargo.toml",
+      "target": {
+        "kind": [
+          "test"
+        ],
+        "crate_types": [
+          "bin"
+        ],
+        "name": "catalog_load_paired_bench",
+        "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-perf-worktree/tests/catalog_load_paired_bench.rs",
+        "edition": "2021",
+        "doc": false,
+        "doctest": false,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": true
+      },
+      "features": [],
+      "filenames": [
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/catalog_load_paired_bench-07a364425c266c7d"
+      ],
+      "executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/catalog_load_paired_bench-07a364425c266c7d",
+      "fresh": false
+    },
+    "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-perf/catalog_load_paired_bench-test-binary",
+    "sha256": "6cd3651e6282c020794afd1b7c976eac75b22f785ac94b56256466e6d187967f"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "schema": "execute.manifest-catalog-publication-verification/1",
+  "status": "source-and-evidence-bundle-prepared",
+  "integrated_commit": {
+    "sha": "d66e412687d92b9cb21b1bc271ed36211055aa91",
+    "parent": "81bf9ba766a775cccf059007b19f5def9b9bfb03"
+  },
+  "library_pair_result": {
+    "pairs": 48,
+    "packed_wins": 48,
+    "packed_losses": 0,
+    "ties": 0,
+    "directory_median_ns_per_load": 4266820.8,
+    "packed_median_ns_per_load": 428720.9,
+    "median_pair_ratio_packed_over_directory": 0.10748240332145897
+  },
+  "cli_audit_result": "passed",
+  "cli_loss_count": 3,
+  "raw_archive_sha256": "999917321053a8d38b4e1328ccbe73a935fea8a9ffb8c70292241fbd330e86ea",
+  "raw_archive_member_count": 156,
+  "source_bundle_patch_sha256": {
+    "loader_patch_sha256": "061ecee4c3711c3c6bf5444b6d80005a14eb58c59bfbf13cc1c35d3c44089507",
+    "cli_integration_patch_sha256": "8f5570d901995e9e3a102cfcc363b79cddf19f56a8f8a0d56ae6b43c6e193e13",
+    "integrated_commit_patch_sha256": "bbbe3c5cb307c0a35f3078788279b581a4bae4dcb39b0905b143cd3869e2e0e3"
+  },
+  "build_artifacts_included": false,
+  "vendor_trees_included": false,
+  "product_executed_during_packaging": false,
+  "cargo_or_timing_run_during_packaging": false
+}

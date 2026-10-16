@@ -1,0 +1,193 @@
+{
+  "archive_audit": {
+    "archive": "raw-measurements.tar.gz",
+    "archive_bytes": 11290166,
+    "archive_sha256": "c050359e750ff0f1d2cccc3e578bbe3fb2d47ad845ed5bdf77fed4fc2e9d3007",
+    "every_member_matches_manifest_and_original": true,
+    "issues": [],
+    "manifest_file_entries": 1054,
+    "regular_files": 1054,
+    "safe_relative_posix_paths": true,
+    "tar_members": 1269
+  },
+  "bundle": "graph-emit-local-macos-and-hosted-linux",
+  "checks": {
+    "all_checks_pass": true,
+    "hosted_frozen_transport_hashes_match_claims": true,
+    "hosted_receipt_binary_and_source_hashes_match_claims": true,
+    "hosted_source_files_match_dispatch_pins": true,
+    "linux_audit_verification_issues_empty": true,
+    "linux_preregistration_is_byte_identical_to_hosted_copy": true,
+    "linux_report_bound_by_audit": true,
+    "linux_report_preregistration_matches_bundle": true,
+    "local_audit_errors_empty": true,
+    "local_frozen_transport_hashes_match_claims": true,
+    "local_harness_matches_source_freeze": true,
+    "local_receipt_binary_hashes_match_report": true,
+    "local_receipt_source_hashes_match_frozen_transport": true,
+    "local_report_bound_by_audit": true,
+    "local_report_preregistration_matches_bundle": true,
+    "raw_archive_inventory_valid": true
+  },
+  "format": "execute.benchmark_bundle_verification.v1",
+  "hosted_run_id": 38853304873,
+  "independent_audits": {
+    "hosted_linux": {
+      "raw_samples_verified": 1224,
+      "sha256": "30f1e20b59bc4347fc19a83a3981b847fa72629a84bf5d31ba2d79673f26ff36",
+      "successful_attempts": 102,
+      "verification_issues": []
+    },
+    "local_macos": {
+      "errors": [],
+      "oracle_mismatches": 0,
+      "raw_samples_checked": 1224,
+      "sha256": "bc82bc3e7933ad8179db3f14ccab64c68eb05f7e7494fc345cdbdb6f59b53a02"
+    }
+  },
+  "runs": {
+    "hosted_linux_x86_64": {
+      "attempts": 102,
+      "case_metrics": {
+        "fanout_4_text": {
+          "losses": 7,
+          "median_paired_delta_ns": -6136.5,
+          "ties": 0,
+          "wins": 41
+        },
+        "fanout_4_typed_record": {
+          "losses": 0,
+          "median_paired_delta_ns": -12253.0,
+          "ties": 0,
+          "wins": 48
+        },
+        "fanout_8_integer": {
+          "losses": 11,
+          "median_paired_delta_ns": -12494.0,
+          "ties": 0,
+          "wins": 37
+        },
+        "single_sink_integer": {
+          "losses": 1,
+          "median_paired_delta_ns": -25006.5,
+          "ties": 0,
+          "wins": 47
+        }
+      },
+      "failed": 0,
+      "format": "execute.graph.emit_paired_run.v1",
+      "measured_pairs": 48,
+      "preregistration_sha256": "4484980dc022811cff52b101577bf7d537cecdf7198c62e09eaccb431d2eef68",
+      "sha256": "fd2908ecac1a37d1b7aaa6ca3b87dddb08e529545cac42ae150450bb105ed9ec",
+      "status": "complete",
+      "successful": 102,
+      "warmup_pairs": 3
+    },
+    "local_macos_arm64": {
+      "attempts": 102,
+      "case_metrics": {
+        "fanout_4_text": {
+          "losses": 19,
+          "median_paired_delta_ns": -4563.0,
+          "ties": 0,
+          "wins": 29
+        },
+        "fanout_4_typed_record": {
+          "losses": 6,
+          "median_paired_delta_ns": -8479.0,
+          "ties": 0,
+          "wins": 42
+        },
+        "fanout_8_integer": {
+          "losses": 27,
+          "median_paired_delta_ns": 2520.5,
+          "ties": 0,
+          "wins": 21
+        },
+        "single_sink_integer": {
+          "losses": 0,
+          "median_paired_delta_ns": -28438.0,
+          "ties": 0,
+          "wins": 48
+        }
+      },
+      "failed": 0,
+      "format": "execute.graph.emit_paired_run.v1",
+      "measured_pairs": 48,
+      "preregistration_sha256": "067bacb080a14de2fb8205f442cbca4d706e9e58f915e79b63a188cb4b1eb406",
+      "sha256": "509bb6ec6ba0976d969e242611c3d7729d5a46bbaa558808142ffd055cccea30",
+      "status": "complete",
+      "successful": 102,
+      "warmup_pairs": 3
+    }
+  },
+  "source_commit": "b78693294169c22892bb4f78539348a5755992ad",
+  "source_identity": {
+    "harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "hosted_binaries": {
+      "baseline": "d356cca257f7735c83c68daabd065082899f34777001a36b8170426e3759cd3f",
+      "candidate": "8a45ad64ec80665b4ae2297ab45fbb4b0eba0df1300d6db246b150b39a2cc379"
+    },
+    "local_binaries": {
+      "baseline": "712d251a524618e903d0229a741212e1eaa8e1eea3b23b3de7cbdc3915270843",
+      "candidate": "58ed0c96b2bae856f971eea29e29353c84af9ffafdf449404227964e78ef507f"
+    },
+    "transport_sha256_baseline": "db5430bd3a8cd25ed5e20bac4395b56814ec1ad6e2189d4e89d2f152c180c17f",
+    "transport_sha256_candidate": "7cc3497231fd60d7c31ed7c98390281df4be0913398e7ccee1e6ffe75f4c48d3"
+  },
+  "source_pin_audit": {
+    "all_pinned_files_match": true,
+    "files": [
+      {
+        "actual_sha256": "493268bfc265648485e677eb5b5b831b6dfaba3476655f1958d9c1d3decf0956",
+        "bundle_path": "source/linux-hosted-workflow.yml",
+        "expected_sha256": "493268bfc265648485e677eb5b5b831b6dfaba3476655f1958d9c1d3decf0956",
+        "file_key": ".github/workflows/emit-perf-hosted-replication.yml",
+        "matches": true
+      },
+      {
+        "actual_sha256": "f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974",
+        "bundle_path": "source/hosted-baseline-patch.xz",
+        "expected_sha256": "f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974",
+        "file_key": "benchmarks/emit_perf/baseline-patch.xz",
+        "matches": true
+      },
+      {
+        "actual_sha256": "239b3f3a19fcb65b2a2be490b32e7e9fb00acdbcb9f62a562693baebb8b7f9a3",
+        "bundle_path": "source/hosted-candidate-patch.xz",
+        "expected_sha256": "239b3f3a19fcb65b2a2be490b32e7e9fb00acdbcb9f62a562693baebb8b7f9a3",
+        "file_key": "benchmarks/emit_perf/candidate-patch.xz",
+        "matches": true
+      },
+      {
+        "actual_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+        "bundle_path": "source/emit-benchmark-harness.rs",
+        "expected_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+        "file_key": "benchmarks/emit_perf/emit-perf-harness-final.rs",
+        "matches": true
+      },
+      {
+        "actual_sha256": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+        "bundle_path": "source/linux-hosted-runner.py",
+        "expected_sha256": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+        "file_key": "benchmarks/emit_perf/emit_perf_pair.py",
+        "matches": true
+      },
+      {
+        "actual_sha256": "9312c614193a648c7e6685459ad7b052470917bfcc22781fa57164f847f3edbe",
+        "bundle_path": "source/linux-hosted-support.py",
+        "expected_sha256": "9312c614193a648c7e6685459ad7b052470917bfcc22781fa57164f847f3edbe",
+        "file_key": "benchmarks/emit_perf/hosted_emit_support.py",
+        "matches": true
+      },
+      {
+        "actual_sha256": "f80769327622d39a7a6ba6cb01fc8025bb1f38a868ccce89ecf9221503516dce",
+        "bundle_path": "source/linux-hosted-support-tests.py",
+        "expected_sha256": "f80769327622d39a7a6ba6cb01fc8025bb1f38a868ccce89ecf9221503516dce",
+        "file_key": "benchmarks/emit_perf/test_hosted_emit_support.py",
+        "matches": true
+      }
+    ],
+    "issues": []
+  }
+}

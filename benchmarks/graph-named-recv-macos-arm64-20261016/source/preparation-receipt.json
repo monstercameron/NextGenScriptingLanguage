@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "status": "runner_prepared_no_benchmark_execution",
+  "source_freeze_sha256": "606c94ba666e0505fa5bc06c439206807e1e0560795c2e9b0a0fdad64c2c4572",
+  "base_commit": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+  "harness_sha256": "1faae3e5100c515bd752b55b569f5cd5bec04a304c0d53fbc18ee78fd1648521",
+  "transport_source_sha256": {
+    "baseline": "48eeff362dc4fda512386967ba20b6f184bd7d2fb8fb3e34f672e242acbbe180",
+    "candidate": "451d42902b672a8e97e3f761112979782610e658def3161a345046e016579369"
+  },
+  "patch_sha256": {
+    "baseline": "ed64221aada6c33f33f8e7dcc2c8f0b79a2f518dbcafc4b7f895423b0d8d656e",
+    "candidate": "2d580bf46e6e9bacc76dfcce3ce4cde41e2a9350f6add4c614002e51080763dd"
+  },
+  "build_workflow_sha256": "7b1b329338624c16e771b86b1c37034d45016dfe9f52b6429f29d82b0063b2b7",
+  "binary_receipts": {
+    "baseline": {
+      "receipt_sha256": "275ae810b7b127f0ca5eb5a5d4dbac16c10f38a697638e41f268ccfc1adf88d2",
+      "saved_binary_sha256": "93c536494d18de082707208c6294a906f49cf7a50148c65a7c530c105845fda0"
+    },
+    "candidate": {
+      "receipt_sha256": "043ce05008b502d00c5e8c95824c1b32b9f479bc5ddc3ac8858f6e1c7e9b5e82",
+      "saved_binary_sha256": "2cdfc0fe18f50e8064d8713146cbbeec1c32c0612660d590abb01b201c0708d7"
+    }
+  },
+  "runner_sha256": "849872881f83068a2fd8f7319e8753c9994d33706ccc6c82f7e75dc191fa9199",
+  "offline_test_sha256": "855a47e794935e0421310659ce363da70317cf676d7039121195552bd9e0b984",
+  "readme_sha256": "dd6e00d5ee973ce6df8173613cfd67562d3305e91ca94acd6f34aefb091d3842",
+  "run_plan_sha256": "1ddad3e74053f800c22ca16bf5db5114837f55cacbc4c8f4dd5e8cacc6b8986f",
+  "frozen_recv_any_runner_sha256": "abae841662216ebeff716b917f722dbf52951d589cead1f14b84f48f33983b29",
+  "verification": {
+    "python_compile": "passed",
+    "offline_unit_tests": "10 passed",
+    "source_freeze_baseline": "verified",
+    "source_freeze_candidate": "verified",
+    "baseline_patch_hash": "verified",
+    "candidate_patch_hash": "verified",
+    "sequential_fresh_build_receipts": "verified against pinned workflow, Cargo JSONL, per-arm clean/build logs, and distinct immutable saved binaries",
+    "cargo_builds": "not run by this runner agent",
+    "benchmark_timing": "not run"
+  }
+}

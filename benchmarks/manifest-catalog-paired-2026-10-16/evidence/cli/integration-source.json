@@ -1,0 +1,46 @@
+{
+  "worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree",
+  "base_commit": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+  "loader_patch": {
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-packed-loader-prototype.patch",
+    "sha256": "061ecee4c3711c3c6bf5444b6d80005a14eb58c59bfbf13cc1c35d3c44089507"
+  },
+  "cli_integration_patch": {
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-integration.patch",
+    "sha256": "8f5570d901995e9e3a102cfcc363b79cddf19f56a8f8a0d56ae6b43c6e193e13",
+    "bytes": 39913
+  },
+  "source_plan": {
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/packed-catalog-cli-integration-plan.json",
+    "sha256": "e203cde4be4e869fe837724cf44cc4d52c623fd30b858ac4cf291f66c2e08e76"
+  },
+  "selectors": {
+    "mutually_exclusive": [
+      "--manifest-dir",
+      "--manifest-catalog"
+    ],
+    "default": "no selector preserves the existing default_manifest_dir/Registry::load_optional path",
+    "packed_origin": "Registry::load_catalog uses the canonical catalog file as origin and its parent as module root",
+    "service": "generated service argv stores the canonical packed catalog path"
+  },
+  "surfaces": [
+    "ordinary finite and other workflow branches",
+    "JSON check snapshot",
+    "applets list/inspect/match",
+    "service generate",
+    "live serve"
+  ],
+  "tests_authored": [
+    "directory-vs-packed ordinary run output parity",
+    "applet list/inspect JSON parity",
+    "no-selector local directory authority",
+    "mutual-exclusion errors on ordinary/applets/service/live",
+    "live packed loader error precedes planning",
+    "service generated argv includes canonical catalog path"
+  ],
+  "source_only_validation": {
+    "rustfmt_check": "passed on modified Rust sources with Rust 1.98.1 rustfmt",
+    "git_diff_check": "passed",
+    "cargo_or_product_tests": "not run by scout per root gate"
+  }
+}

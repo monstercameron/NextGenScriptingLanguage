@@ -1,0 +1,40 @@
+{
+  "arm": "candidate",
+  "artifact": {
+    "executable": "/home/runner/work/_temp/emit-perf-candidate-target/release/deps/flow-ea36466c46f7fbc0",
+    "features": [],
+    "filenames": [
+      "/home/runner/work/_temp/emit-perf-candidate-target/release/deps/flow-ea36466c46f7fbc0"
+    ],
+    "fresh": false,
+    "manifest_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/candidate/Cargo.toml",
+    "package_id": "path+file:///home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/candidate#execute@0.9.0-rc.5",
+    "profile": {
+      "debug_assertions": false,
+      "debuginfo": 0,
+      "opt_level": "3",
+      "overflow_checks": false,
+      "test": true
+    },
+    "reason": "compiler-artifact",
+    "target": {
+      "crate_types": [
+        "lib"
+      ],
+      "doc": true,
+      "doctest": true,
+      "edition": "2021",
+      "kind": [
+        "lib"
+      ],
+      "name": "flow",
+      "src_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/candidate/src/lib.rs",
+      "test": true
+    }
+  },
+  "fresh_target_dir_confirmed": true,
+  "saved_binary": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/emit-perf/build/candidate/test-binary",
+  "sha256": "8a45ad64ec80665b4ae2297ab45fbb4b0eba0df1300d6db246b150b39a2cc379",
+  "source_sha256": "7cc3497231fd60d7c31ed7c98390281df4be0913398e7ccee1e6ffe75f4c48d3",
+  "source_stable": true
+}

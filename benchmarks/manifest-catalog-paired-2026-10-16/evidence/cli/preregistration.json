@@ -1,0 +1,38 @@
+{
+  "schema": "execute.catalog-cli-paired-benchmark-preregistration/1",
+  "status": "fixed before preflight and timing",
+  "estimand": "same-binary explicit directory-vs-packed representation comparison; not default-startup speedup",
+  "plan": {
+    "manifest_count": 75,
+    "warmup_pairs_per_case": 5,
+    "measured_pairs_per_case": 48,
+    "case_order": "AB/BA alternation, 24 each per case",
+    "A": "--manifest-dir",
+    "B": "--manifest-catalog",
+    "cases": [
+      "check --json fixed printf workflow",
+      "applets list"
+    ],
+    "timer": "perf_counter_ns around subprocess.run only; setup, parsing, comparison, hashes and journal writes are untimed"
+  },
+  "source_commit": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+  "paths": {
+    "binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/execute-binary",
+    "build_receipt": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/build-receipt.json",
+    "source_root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree",
+    "manifest_source": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-cli-worktree/manifests",
+    "output_dir": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1",
+    "raw_journal": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1/raw-invocations.jsonl",
+    "preregistration": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1/preregistration.json"
+  },
+  "identity": {
+    "source_hash": "78383ab13d5fcdf852542e1a5c15025d304fcc8f41cc6d27cf6d310a886f58da",
+    "source_hash_scope": "root-level files and src/tests/manifests/tools/vendor/.cargo/.github/.githooks/build trees",
+    "binary_sha256": "63a063f6575dd330ae924cef6d4852fb9c98ba3c4766055db6b8b2f7bb5c6bc0",
+    "build_receipt_sha256": "26752e7a12304a735aba68bc258b42f1c421989ae0ac32d99a68c169da87b92e",
+    "build_receipt_binary_sha256": "63a063f6575dd330ae924cef6d4852fb9c98ba3c4766055db6b8b2f7bb5c6bc0",
+    "fixture_hash": "e567f24e1675646f1e93156377d84f0687b1277aae1748cd83cbdc4b31407e5b",
+    "packed_catalog_sha256": "268893a9fa473e23c4b1a2ed9f4c0c77817bee8d8f253e741648297acbaaedd7",
+    "manifest_specs_sha256": "7cd62f994fdd7a8f87598855cef0539c6f605c3e94c605083bd87cc7dcb94e62"
+  }
+}

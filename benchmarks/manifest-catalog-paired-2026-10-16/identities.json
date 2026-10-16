@@ -1,0 +1,112 @@
+{
+  "schema": "execute.manifest-catalog-publication-identities/1",
+  "integrated_commit": {
+    "sha": "d66e412687d92b9cb21b1bc271ed36211055aa91",
+    "parent": "81bf9ba766a775cccf059007b19f5def9b9bfb03"
+  },
+  "library_representation": {
+    "base_commit": "54d3129c2547398f8c424cf8b00a7c8fb9c730de",
+    "candidate_test_binary_sha256": "6cd3651e6282c020794afd1b7c976eac75b22f785ac94b56256466e6d187967f",
+    "source_hash_file_count": 205,
+    "direct_manifest_count": 75,
+    "serialized_manifest_specs_sha256": "66b19b10aea5b14f37a5230ed72db4109b2419f5cf4cb8e3cbe9a6be1c1d4138",
+    "catalog_data_sha256": "96282f81ef0d50d57c0322dbf8e4a0866e6d905b9e5578a2106a8277b7b45258",
+    "raw_result_sha256": "352198dec3ee8191968e47a01fd9fa4912495c6a13d00c2a205b9d9b3686640e",
+    "binary_stable": true,
+    "source_stable": true,
+    "warmup_pairs": 5,
+    "measured_pairs": 48,
+    "loads_per_side_per_duration": 5,
+    "summary": {
+      "pairs": 48,
+      "packed_wins": 48,
+      "packed_losses": 0,
+      "ties": 0,
+      "directory_median_ns_per_load": 4266820.8,
+      "packed_median_ns_per_load": 428720.9,
+      "median_pair_ratio_packed_over_directory": 0.10748240332145897
+    },
+    "note": "The preregistration hashes two nested descriptor JSON files as source inputs; the registry benchmark counts and loads the 75 direct manifests only.",
+    "cli_fixture_manifest_hashes_match": true,
+    "direct_manifest_hash_set_sha256": "a72fe518e005fd48a5658b9b785a3bef2eff5371f9f0df5d6608ed3c4cb88f93"
+  },
+  "cli_representation": {
+    "source_commit": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+    "source_tree_sha256": "78383ab13d5fcdf852542e1a5c15025d304fcc8f41cc6d27cf6d310a886f58da",
+    "binary_sha256": "63a063f6575dd330ae924cef6d4852fb9c98ba3c4766055db6b8b2f7bb5c6bc0",
+    "build_receipt_sha256": "26752e7a12304a735aba68bc258b42f1c421989ae0ac32d99a68c169da87b92e",
+    "fixture_sha256": "e567f24e1675646f1e93156377d84f0687b1277aae1748cd83cbdc4b31407e5b",
+    "packed_catalog_sha256": "268893a9fa473e23c4b1a2ed9f4c0c77817bee8d8f253e741648297acbaaedd7",
+    "manifest_specs_sha256": "7cd62f994fdd7a8f87598855cef0539c6f605c3e94c605083bd87cc7dcb94e62",
+    "runner_sha256": "d12d4bd1bfc2a256372ddaf355106c7f60ada4c11a3885c47a2a7d6f8b478fd1",
+    "raw_journal_sha256": "77fa2a8251e634148195f2bc5b99653b6855c495c731476773fcbdb44d342133",
+    "preregistration_sha256": "177e9d3898be8093ff5958f257415a14c6b8cc099b3e7bf2894f6bb434dca76e",
+    "independent_audit_result": "passed",
+    "manifest_count": 75,
+    "warmup_pairs_per_case": 5,
+    "measured_pairs_per_case": 48,
+    "cases": {
+      "check_json": {
+        "pairs": 48,
+        "packed_wins": 47,
+        "packed_losses": 1,
+        "ties": 0,
+        "directory_median_ns": 8974979.0,
+        "packed_median_ns": 5848395.5,
+        "median_packed_over_directory_ratio": 0.6558862257527682
+      },
+      "applets_list": {
+        "pairs": 48,
+        "packed_wins": 46,
+        "packed_losses": 2,
+        "ties": 0,
+        "directory_median_ns": 12386208.0,
+        "packed_median_ns": 9748750.0,
+        "median_packed_over_directory_ratio": 0.7872000975759464
+      }
+    },
+    "all_three_losses": [
+      {
+        "case": "check_json",
+        "zero_based_pair_index": 23,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "directory_ns": 8420333,
+        "packed_ns": 8425208,
+        "packed_over_directory_ratio": 1.0005789557253852
+      },
+      {
+        "case": "applets_list",
+        "zero_based_pair_index": 5,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "directory_ns": 12555500,
+        "packed_ns": 69540500,
+        "packed_over_directory_ratio": 5.5386484010991195
+      },
+      {
+        "case": "applets_list",
+        "zero_based_pair_index": 7,
+        "order": [
+          "directory",
+          "packed"
+        ],
+        "directory_ns": 29662667,
+        "packed_ns": 31305500,
+        "packed_over_directory_ratio": 1.0553838601228946
+      }
+    ],
+    "note": "Explicit --manifest-dir vs --manifest-catalog selector comparison on one saved binary and one 75-manifest fixture; no default CLI startup claim."
+  },
+  "source_patches": {
+    "loader_patch_sha256": "061ecee4c3711c3c6bf5444b6d80005a14eb58c59bfbf13cc1c35d3c44089507",
+    "cli_integration_patch_sha256": "8f5570d901995e9e3a102cfcc363b79cddf19f56a8f8a0d56ae6b43c6e193e13",
+    "integrated_commit_patch_sha256": "bbbe3c5cb307c0a35f3078788279b581a4bae4dcb39b0905b143cd3869e2e0e3"
+  },
+  "shipped_build_artifacts": false,
+  "shipped_vendor_trees": false
+}

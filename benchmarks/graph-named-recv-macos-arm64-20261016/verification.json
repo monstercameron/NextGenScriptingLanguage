@@ -1,0 +1,42 @@
+{
+  "archive_member_format": "gzip-compressed PAX tar; gzip mtime=0; globally sorted POSIX paths; uid/gid and mtime normalized",
+  "claim_scope": "Darwin arm64 preloaded named NodeIo recv/recv_timeout(Duration::ZERO) microbenchmark only; no end-to-end claim.",
+  "original_binary_blobs_included": false,
+  "raw_archive": {
+    "directory_count_including_root": 104,
+    "duplicate_paths": false,
+    "file_count": 511,
+    "globally_sorted_paths": true,
+    "member_files_verified": 511,
+    "safe_paths": true,
+    "sha256": "bb661567d2aadf00633d56e667f6fc4cb181ae3183ab16cf2caef99ee7c09a04",
+    "size_bytes": 332971
+  },
+  "raw_data": {
+    "cases_per_invocation": 12,
+    "events": 199051776,
+    "events_per_sample": 54208,
+    "samples": 3672
+  },
+  "run": {
+    "attempts": 102,
+    "comparisons": 576,
+    "failures": 0,
+    "losses": 10,
+    "measured_pairs": 48,
+    "status": "complete",
+    "successes": 102,
+    "ties": 0,
+    "unrun": 0,
+    "warmup_pairs": 3,
+    "wins": 566
+  },
+  "source_inputs": {
+    "audit_sha256": "aff7b1acc1ebfe461df4b6554c443639d63bb45fed6b6138599e48e6d93ced5e",
+    "build_manifest_sha256": "c9a3899a5c48700ab83aa5c9d51a548dce04244c7d226e1c692700ffbd04901e",
+    "preregistration_sha256": "6af99f4e09e466cf742c32598ab9fcac7b335364d70c26da7703b28d83837b40",
+    "source_manifest_sha256": "61cc36f562e663f7095ad16d991091b4ba066ec6af626fc79f5d6aba5802724e"
+  },
+  "status": "verified",
+  "verification_method": "Offline SHA-256 and byte-for-byte archive-member checks against retained source evidence; raw statistical recomputation from archived originals. No build or benchmark was run during package preparation."
+}

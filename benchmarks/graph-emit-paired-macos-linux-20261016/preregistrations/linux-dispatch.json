@@ -1,0 +1,21 @@
+{
+  "registered_at": "2026-10-16T04:57:53.940639+00:00",
+  "purpose": "independent Linux x86_64 replication; local mixed outcomes including 8integer2percent median slowdown retained",
+  "workflow_commit": "b824aeaa7bccaa4d3d75d3fc6a363a99138287d4",
+  "base_commit": "b78693294169c22892bb4f78539348a5755992ad",
+  "warmup_pairs": 3,
+  "measured_pairs": 48,
+  "invocation_timeout_seconds": 60,
+  "retry_policy": "one fixed run; no outcome-dependent or timeout retries",
+  "claim": "bounded preallocated NodeIo.emit synthetic cases only",
+  "local_result_sha256": "509bb6ec6ba0976d969e242611c3d7729d5a46bbaa558808142ffd055cccea30",
+  "files": {
+    ".github/workflows/emit-perf-hosted-replication.yml": "493268bfc265648485e677eb5b5b831b6dfaba3476655f1958d9c1d3decf0956",
+    "benchmarks/emit_perf/baseline-patch.xz": "f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974",
+    "benchmarks/emit_perf/candidate-patch.xz": "239b3f3a19fcb65b2a2be490b32e7e9fb00acdbcb9f62a562693baebb8b7f9a3",
+    "benchmarks/emit_perf/emit-perf-harness-final.rs": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "benchmarks/emit_perf/emit_perf_pair.py": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+    "benchmarks/emit_perf/hosted_emit_support.py": "9312c614193a648c7e6685459ad7b052470917bfcc22781fa57164f847f3edbe",
+    "benchmarks/emit_perf/test_hosted_emit_support.py": "f80769327622d39a7a6ba6cb01fc8025bb1f38a868ccce89ecf9221503516dce"
+  }
+}

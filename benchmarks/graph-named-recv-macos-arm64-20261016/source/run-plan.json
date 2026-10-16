@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "purpose": "Reproducible paired driver for frozen named recv and recv_timeout hot-path benchmark",
+  "source_freeze": "../../evidence/graph-named-recv/source-freeze.json",
+  "base_commit": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+  "harness_sha256": "1faae3e5100c515bd752b55b569f5cd5bec04a304c0d53fbc18ee78fd1648521",
+  "build_workflow": {
+    "path": "../../work/build_named_pair.py",
+    "sha256": "7b1b329338624c16e771b86b1c37034d45016dfe9f52b6429f29d82b0063b2b7",
+    "shared_target": "../../work/perf-target-candidate",
+    "policy": "cargo clean --release -p execute before each arm; compile baseline then candidate sequentially; copy each arm to its own immutable evidence binary before the next clean",
+    "cargo_artifact_fresh": false,
+    "fresh_interpretation": "Cargo fresh=false confirms rustc compiled the artifact after the explicit package release clean"
+  },
+  "binary_receipts": {
+    "baseline": {
+      "path": "../../evidence/graph-named-recv/baseline-binary-receipt.json",
+      "sha256": "275ae810b7b127f0ca5eb5a5d4dbac16c10f38a697638e41f268ccfc1adf88d2",
+      "saved_binary": "../../evidence/graph-named-recv/baseline-test-binary",
+      "saved_binary_sha256": "93c536494d18de082707208c6294a906f49cf7a50148c65a7c530c105845fda0"
+    },
+    "candidate": {
+      "path": "../../evidence/graph-named-recv/candidate-binary-receipt.json",
+      "sha256": "043ce05008b502d00c5e8c95824c1b32b9f479bc5ddc3ac8858f6e1c7e9b5e82",
+      "saved_binary": "../../evidence/graph-named-recv/candidate-test-binary",
+      "saved_binary_sha256": "2cdfc0fe18f50e8064d8713146cbbeec1c32c0612660d590abb01b201c0708d7"
+    }
+  },
+  "benchmark_name": "recv_named_preloaded_bounded_queue_throughput",
+  "case_methods": ["recv", "recv_timeout_zero"],
+  "source_counts": [1, 16, 847],
+  "input_counts": [1, 8],
+  "events_per_case": 54208,
+  "raw_samples_per_case": 3,
+  "warmup_pairs": 3,
+  "measured_pairs": 48,
+  "invocation_timeout_seconds": 120,
+  "total_budget_seconds": 10800,
+  "retry_policy": "none; retain and report every invocation outcome",
+  "cross_arm_oracle": "canonical signature over all case/sample identities, counts, checksum, and queue-order metadata must match",
+  "freshness_checks": [
+    "source freeze and exact transport source hash before each arm receipt",
+    "source tree fingerprint, side-specific patch hash, harness hash, and exact side receipt",
+    "pinned sequential clean/build workflow, Cargo JSONL artifact, clean/build logs, and test list",
+    "distinct immutable saved binary paths and recorded full binary SHA-256 values",
+    "source, receipts, build provenance, and saved binary identities rechecked after all invocations"
+  ],
+  "report": "new report directory with per-attempt raw JSON, stdout, stderr, result, pair records, summary, and post-run identity check",
+  "execution_status": "source, build, receipt, and binary preflight passed; paired benchmark timing not run"
+}

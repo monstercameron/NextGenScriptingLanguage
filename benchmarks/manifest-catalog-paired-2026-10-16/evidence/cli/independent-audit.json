@@ -1,0 +1,89 @@
+{
+  "schema": "execute.catalog-cli-paired-benchmark-independent-audit/1",
+  "result": "passed",
+  "audit_scope": "Independent read-only recomputation from raw journal; no build or benchmark invocation.",
+  "paths": {
+    "run": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1",
+    "report": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1/paired-report.json",
+    "preregistration": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1/preregistration.json",
+    "raw_journal": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-paired-attempt-1/raw-invocations.jsonl",
+    "runner": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog_cli_paired_bench.py",
+    "binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/execute-binary",
+    "build_receipt": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/catalog-cli-validation/build-receipt.json"
+  },
+  "hashes": {
+    "report_sha256": "d39b8b999b5413be9927025201d0a184e7ed373a5f75e95b8f767628fb03b8d4",
+    "preregistration_sha256": "177e9d3898be8093ff5958f257415a14c6b8cc099b3e7bf2894f6bb434dca76e",
+    "raw_journal_sha256": "77fa2a8251e634148195f2bc5b99653b6855c495c731476773fcbdb44d342133",
+    "runner_sha256": "d12d4bd1bfc2a256372ddaf355106c7f60ada4c11a3885c47a2a7d6f8b478fd1",
+    "binary_sha256": "63a063f6575dd330ae924cef6d4852fb9c98ba3c4766055db6b8b2f7bb5c6bc0",
+    "build_receipt_sha256": "26752e7a12304a735aba68bc258b42f1c421989ae0ac32d99a68c169da87b92e",
+    "source_tree_sha256": "78383ab13d5fcdf852542e1a5c15025d304fcc8f41cc6d27cf6d310a886f58da",
+    "fixture_tree_sha256": "e567f24e1675646f1e93156377d84f0687b1277aae1748cd83cbdc4b31407e5b",
+    "packed_catalog_sha256": "268893a9fa473e23c4b1a2ed9f4c0c77817bee8d8f253e741648297acbaaedd7",
+    "manifest_specs_sha256": "7cd62f994fdd7a8f87598855cef0539c6f605c3e94c605083bd87cc7dcb94e62"
+  },
+  "pins": {
+    "source_commit": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+    "source_hash": "78383ab13d5fcdf852542e1a5c15025d304fcc8f41cc6d27cf6d310a886f58da",
+    "binary_sha256": "63a063f6575dd330ae924cef6d4852fb9c98ba3c4766055db6b8b2f7bb5c6bc0",
+    "build_receipt_sha256": "26752e7a12304a735aba68bc258b42f1c421989ae0ac32d99a68c169da87b92e",
+    "fixture_hash": "e567f24e1675646f1e93156377d84f0687b1277aae1748cd83cbdc4b31407e5b"
+  },
+  "raw_records": {
+    "total": 327,
+    "kind_phase_counts": {
+      "invocation:measure": 192,
+      "invocation:oracle": 4,
+      "invocation:warmup": 20,
+      "measurement_start:run": 1,
+      "pair:measure": 96,
+      "pair:oracle": 2,
+      "pair:warmup": 10,
+      "preregistration:run": 1,
+      "run_start:run": 1
+    },
+    "measurement_start_record_index": 8,
+    "preregistration_and_oracle_before_timing": true,
+    "measured_pairs_per_case": 48,
+    "warmup_pairs_per_case": 5,
+    "measured_invocations_total": 192,
+    "measured_pairs_total": 96,
+    "balanced_orders_per_case": {
+      "directory_then_packed": 24,
+      "packed_then_directory": 24
+    },
+    "all_invocations_exit_zero_valid_json_and_match_exact_preflight_stdout_stderr_and_parsed_object": true
+  },
+  "cases": {
+    "check_json": {
+      "pairs": 48,
+      "directory_median_ns": 8974979.0,
+      "packed_median_ns": 5848395.5,
+      "median_packed_over_directory_ratio": 0.6558862257527682,
+      "packed_wins": 47,
+      "packed_losses": 1,
+      "ties": 0,
+      "ratio_of_medians": 0.6516333352980548,
+      "pair_ratio_min": 0.2685459020235855,
+      "pair_ratio_max": 1.0005789557253852
+    },
+    "applets_list": {
+      "pairs": 48,
+      "directory_median_ns": 12386208.0,
+      "packed_median_ns": 9748750.0,
+      "median_packed_over_directory_ratio": 0.7872000975759464,
+      "packed_wins": 46,
+      "packed_losses": 2,
+      "ties": 0,
+      "ratio_of_medians": 0.7870649354507853,
+      "pair_ratio_min": 0.497074981561911,
+      "pair_ratio_max": 5.5386484010991195
+    }
+  },
+  "interpretation": "The raw journal independently reproduces the report. Evidence supports a narrow same-binary explicit --manifest-catalog versus --manifest-dir comparison for one 75-manifest fixture and two CLI cases on the recorded host. This is an opt-in representation comparison that includes each command launch; it is not evidence of unchanged-default startup speedup or a general runtime improvement.",
+  "limitations": [
+    "The output checks validate selected protocol and fixture-specific fields, then compare selector outputs byte-for-byte; they are not a separate oracle for every manifest metadata field.",
+    "One host, one fixture, two CLI cases, one 48-pair run per case."
+  ]
+}

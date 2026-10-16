@@ -1,0 +1,10 @@
+
+running 5 tests
+test generated_service_uses_canonical_explicit_catalog_path ... ok
+test live_serve_loads_the_explicit_packed_catalog_before_planning ... ok
+test no_selector_keeps_the_existing_local_manifest_directory_authoritative ... ok
+test ordinary_run_and_applet_metadata_match_directory_mode ... ok
+test selectors_conflict_for_ordinary_applets_service_and_live_serve ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+

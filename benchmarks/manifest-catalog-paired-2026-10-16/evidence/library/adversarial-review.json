@@ -1,0 +1,37 @@
+{
+  "review": "independent read-only source review",
+  "base_commit": "54d3129c2547398f8c424cf8b00a7c8fb9c730de",
+  "worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/catalog-perf-worktree",
+  "patch_sha256_reported_by_owner": "eb95e2f5a2b782cf7df7796022592ba5332cc012c642088cae811c8a58c0e856",
+  "reviewed_source_sha256": {
+    "src/manifest.rs": "5ddd902e1a273bdf7d0a1a598bc7bc447057ea43f7d83e3acdbef357e514d4ea",
+    "Cargo.toml": "2e2cd88356201ac07b3b8d68be1af9379d7c307bf2c5b67765a13d0f8e040874",
+    "tests/manifest_catalog.rs": "51d8643b543991b1b3afd3e762e8e7dd65b0dae42545633307fe5df32a296aaa",
+    "tests/opt_core_bench.rs": "b6231347260e6b4437fe0b8715bc681027fc42c93a0d0240208bf2b8e55bc511",
+    "tools/pack_manifest_catalog.py": "f3a64c8d41085dd971b08e693dc18822f8198d2083e72924943e85c7cd6d1073",
+    "tests/test_manifest_catalog_packer.py": "b63cc1bacdefd889053d59d701255d7b451384bf0e6f65b0e3f4c3edffa045d4"
+  },
+  "method": "Inspected source, tests, loader call sites, module path resolution, and packer behavior. No Cargo commands, tests, builds, benchmarks, or timings were run by this reviewer.",
+  "assessment": "No material functional blocker found for the current 75 shipped manifests or for ordinary co-located relative program/package references. The escaped-format fix using String is appropriate. The structural comparison serializes all 75 manifest specs except the intentionally skipped runtime origin; the representative argv assertion is a useful smoke check because argv construction consumes the compared manifest spec. The packer requires output in the resolved source root, sorts direct .json children, and the loader uses the canonical catalog parent as module root, preserving the relative-root behavior for this flat manifest layout. The feature remains an explicit API and this source review makes no performance or thesis-readiness claim.",
+  "non_blocking_review_notes": [
+    {
+      "kind": "diagnostic precedence boundary",
+      "file": "src/manifest.rs",
+      "lines": "274-302",
+      "detail": "The whole envelope is deserialized before the per-entry validation loop. Semantic validation and duplicate-alias errors are therefore reported in array order when the envelope is syntactically valid, as tested. If a later entry has malformed JSON syntax, envelope deserialization fails before an earlier schema-invalid entry is validated. This is a natural syntax-before-semantics boundary, but tests and wording should not imply first-error precedence across malformed JSON syntax.",
+      "recommendation": "No change is needed if array-order validation refers to semantic entries in a valid JSON envelope. If strict cross-entry first-error precedence is a requirement, parse entries incrementally or document this boundary."
+    },
+    {
+      "kind": "packer strict-JSON edge",
+      "file": "tools/pack_manifest_catalog.py",
+      "lines": "46-50",
+      "detail": "The generic str.strip() removes non-JSON Unicode whitespace before Python json.loads parses the source. Python json.loads also accepts non-standard NaN/Infinity constants by default. Consequently, some inputs rejected by the Rust directory loader may be accepted or packaged by this helper, after which the catalog loader can reject the emitted raw entry. This does not affect the current shipped JSON files, but the packer is not a strict validity oracle for arbitrary inputs.",
+      "recommendation": "If the helper is intended to reject every source the runtime rejects, strip only JSON whitespace or let json.loads handle whitespace, reject parse_constant values, and consider duplicate-key rejection. Otherwise document that it packages raw objects and the Rust loader remains authoritative."
+    }
+  ],
+  "unverified": [
+    "The owner-reported header fix and tests were not executed by this reviewer.",
+    "No benchmark or performance claim was independently validated.",
+    "This review does not establish full Bash replacement readiness or an overall thesis score."
+  ]
+}

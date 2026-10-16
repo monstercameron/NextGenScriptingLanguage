@@ -1,0 +1,197 @@
+{
+  "artifact_sha256": {
+    "driver": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+    "harness_source": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "paired_report": "509bb6ec6ba0976d969e242611c3d7729d5a46bbaa558808142ffd055cccea30",
+    "preregistration": "067bacb080a14de2fb8205f442cbca4d706e9e58f915e79b63a188cb4b1eb406",
+    "source_freeze": "641d23f1a75fef02dbf8d7eed67f046e326634325760d6d333def3ed36b2881b"
+  },
+  "assessment": "The fixed local macOS-arm64 NodeIo::emit microbenchmark is internally consistent: all 102 planned processes completed; saved binaries and frozen source fingerprints remain stable; independently reconstructed payload and full per-sink stream oracles match every raw sample; and raw-sample medians reproduce the stored paired summaries. The result supports only this synthetic in-process workload mix. It is mixed by case, with fanout_8_integer regressing (median paired ratio about 1.020; 27 losses vs 21 wins). It does not justify a blanket graph-fanout or whole-application speedup claim. A separate cross-host replication remains relevant.",
+  "build_provenance": {
+    "build_logs_report_release_profile": true,
+    "final_attempt": 2,
+    "receipt_artifact_profile": "release-optimized test harness (opt_level 3, debug_assertions false, test=true)",
+    "release_clean_logs_and_cargo_jsonl_sha256": {
+      "baseline-build-attempt-2.jsonl": {
+        "bytes": 165016,
+        "sha256": "c19943e64ff7c61837029e85b85d099acbe39a198f68ddf3ccaff457c4f18520"
+      },
+      "baseline-release-clean-attempt-2.log": {
+        "bytes": 35,
+        "sha256": "d44d3e9afc81bc87fddb562b4d8da42c77352ce48fddd9d80be82c7404e034bb"
+      },
+      "candidate-build-attempt-2.jsonl": {
+        "bytes": 164986,
+        "sha256": "a487736a3249a6a898d6aa8e716fdda9a593ff33b4650c5bab0495c29803d84b"
+      },
+      "candidate-release-clean-attempt-2.log": {
+        "bytes": 35,
+        "sha256": "d44d3e9afc81bc87fddb562b4d8da42c77352ce48fddd9d80be82c7404e034bb"
+      },
+      "pair-build-attempt-2.log": {
+        "bytes": 556,
+        "sha256": "c5eeffe850aff2444a2aeed3cd246a2e78c61c0b15e50017e100c3426f9b16f3"
+      }
+    }
+  },
+  "errors": [],
+  "format": "execute.adversarial_audit.local_emit_paired_run.v1",
+  "generated_at_utc": "2026-10-16T00:49:24.764042-04:00",
+  "host_and_run_window": {
+    "completed_at": "2026-10-16T04:43:46.626Z",
+    "machine": "arm64",
+    "python": "3.9.6 (default, May 22 2026, 11:13:45) \n[Clang 21.0.0 (clang-2100.1.1.101)]",
+    "release": "25.6.0",
+    "started_at": "2026-10-16T04:43:36.645Z",
+    "system": "Darwin"
+  },
+  "oracle_audit": {
+    "all_expected_input_hashes_and_full_sink_stream_hashes_match": true,
+    "cross_arm_oracle_mismatches": 0,
+    "independently_reconstructed_cases": [
+      "single_sink_integer",
+      "fanout_8_integer",
+      "fanout_4_text",
+      "fanout_4_typed_record"
+    ],
+    "measurement_case_cross_arm_comparisons": 192,
+    "measurement_sink_stream_cross_arm_comparisons": 816,
+    "raw_case_sample_oracles_checked": 1224
+  },
+  "protocol": {
+    "all_attempts_serial_nonoverlap": true,
+    "driver_sha256": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+    "harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "inner_samples": 3,
+    "measured_pairs": 48,
+    "order": "alternating AB/BA across the three warmup pairs and 48 measured pairs; first measured pair is BA",
+    "preregistration_sha256": "067bacb080a14de2fb8205f442cbca4d706e9e58f915e79b63a188cb4b1eb406",
+    "timeout_seconds": 60,
+    "warmup_pairs": 3
+  },
+  "recomputed_metrics": {
+    "fanout_4_text": {
+      "baseline_median_of_pair_medians_ns": 54937.5,
+      "candidate_losses": 19,
+      "candidate_median_of_pair_medians_ns": 51917.0,
+      "candidate_over_baseline_ratio_of_medians": 0.9450193401592719,
+      "candidate_wins": 29,
+      "max_pair_delta_ns": 49625.0,
+      "median_candidate_minus_baseline_ns": -4563.0,
+      "median_candidate_over_baseline_pair_ratio": 0.9229400993158303,
+      "min_pair_delta_ns": -37000.0,
+      "ties": 0
+    },
+    "fanout_4_typed_record": {
+      "baseline_median_of_pair_medians_ns": 51312.5,
+      "candidate_losses": 6,
+      "candidate_median_of_pair_medians_ns": 42833.0,
+      "candidate_over_baseline_ratio_of_medians": 0.834747868453106,
+      "candidate_wins": 42,
+      "max_pair_delta_ns": 14667.0,
+      "median_candidate_minus_baseline_ns": -8479.0,
+      "median_candidate_over_baseline_pair_ratio": 0.840657535032761,
+      "min_pair_delta_ns": -39874.0,
+      "ties": 0
+    },
+    "fanout_8_integer": {
+      "baseline_median_of_pair_medians_ns": 128395.5,
+      "candidate_losses": 27,
+      "candidate_median_of_pair_medians_ns": 130708.5,
+      "candidate_over_baseline_ratio_of_medians": 1.0180146500461464,
+      "candidate_wins": 21,
+      "max_pair_delta_ns": 28541.0,
+      "median_candidate_minus_baseline_ns": 2520.5,
+      "median_candidate_over_baseline_pair_ratio": 1.0201236777433487,
+      "min_pair_delta_ns": -33959.0,
+      "ties": 0
+    },
+    "single_sink_integer": {
+      "baseline_median_of_pair_medians_ns": 74229.5,
+      "candidate_losses": 0,
+      "candidate_median_of_pair_medians_ns": 45937.5,
+      "candidate_over_baseline_ratio_of_medians": 0.6188577317643255,
+      "candidate_wins": 48,
+      "max_pair_delta_ns": -16958.0,
+      "median_candidate_minus_baseline_ns": -28438.0,
+      "median_candidate_over_baseline_pair_ratio": 0.616186377182401,
+      "min_pair_delta_ns": -54250.0,
+      "ties": 0
+    }
+  },
+  "scope": {
+    "canonical_preregistration": "paired-run-preregistration.json",
+    "no_build_or_timing_performed": true,
+    "run_dir": "paired-run-attempt-1",
+    "source_only": true
+  },
+  "source_and_binary_identity": {
+    "attempts": 102,
+    "attempts_per_arm": {
+      "baseline": 51,
+      "candidate": 51
+    },
+    "baseline_candidate_source_file_differences": [
+      "src/graph/transport.rs"
+    ],
+    "exact_harness_bytes_embedded_in_frozen_sources": {
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/emit-perf-worktree/src/graph/transport.rs": {
+        "exact_harness_bytes_embedded": true,
+        "source_sha256_matches_freeze": true
+      },
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/emit-baseline-b786/src/graph/transport.rs": {
+        "exact_harness_bytes_embedded": true,
+        "source_sha256_matches_freeze": true
+      }
+    },
+    "first_attempt": "warmup-01-1-baseline",
+    "initial_and_post_run_identity_match": true,
+    "last_attempt": "measurement-48-2-candidate",
+    "phase_counts": {
+      "measurement": 96,
+      "warmup": 6
+    },
+    "sides": {
+      "baseline": {
+        "artifact_executable_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/flow-b56585bda01e751e",
+        "binary_sha256": "712d251a524618e903d0229a741212e1eaa8e1eea3b23b3de7cbdc3915270843",
+        "commit": "b78693294169c22892bb4f78539348a5755992ad",
+        "profile": {
+          "debug_assertions": false,
+          "debuginfo": 0,
+          "opt_level": "3",
+          "overflow_checks": false,
+          "test": true
+        },
+        "receipt_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/baseline-binary-receipt.json",
+        "receipt_sha256": "89547c0be9c4b1b7318c82fe2839b12e7767b551931bce60b6668209c54ad901",
+        "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/emit-baseline-b786",
+        "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/baseline-test-binary",
+        "source_fingerprint_sha256": "edd9a0b75862c218ca04010aa2f48212876dbf9dc71f9797039c918cebd986ff",
+        "tracked_build_input_count": 124,
+        "transport_sha256": "db5430bd3a8cd25ed5e20bac4395b56814ec1ad6e2189d4e89d2f152c180c17f"
+      },
+      "candidate": {
+        "artifact_executable_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/flow-b56585bda01e751e",
+        "binary_sha256": "58ed0c96b2bae856f971eea29e29353c84af9ffafdf449404227964e78ef507f",
+        "commit": "b78693294169c22892bb4f78539348a5755992ad",
+        "profile": {
+          "debug_assertions": false,
+          "debuginfo": 0,
+          "opt_level": "3",
+          "overflow_checks": false,
+          "test": true
+        },
+        "receipt_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/candidate-binary-receipt.json",
+        "receipt_sha256": "cb8c998f7639bb8e23ce000157e8c5f994eb9318801d64b7a311b9615d146694",
+        "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/emit-perf-worktree",
+        "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/candidate-test-binary",
+        "source_fingerprint_sha256": "3e6669943a803b6d0da281435e227a03061c1434729c7473cf3685606b9b06da",
+        "tracked_build_input_count": 124,
+        "transport_sha256": "7cc3497231fd60d7c31ed7c98390281df4be0913398e7ccee1e6ffe75f4c48d3"
+      }
+    },
+    "start_records_match_attempt_schedule": true,
+    "successful_attempts": 102
+  }
+}

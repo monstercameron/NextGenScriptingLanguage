@@ -1,0 +1,13 @@
+
+running 8 tests
+test catalog_header_does_not_accept_non_object_entries ... ok
+test catalog_module_origin_keeps_relative_program_source_under_same_root ... ok
+test catalog_syntax_is_parsed_before_manifest_semantics ... ok
+test legacy_directory_and_single_manifest_loaders_keep_their_existing_shape ... ok
+test packed_catalog_matches_all_75_manifest_specs_and_representative_argv ... ok
+test packed_duplicate_alias_error_identifies_the_later_entry ... ok
+test packed_entries_validate_in_array_order_and_report_entry_context ... ok
+test packed_envelope_rejects_malformed_unknown_and_unsupported_headers ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

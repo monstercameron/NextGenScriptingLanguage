@@ -1,0 +1,3 @@
+d66e412687d92b9cb21b1bc271ed36211055aa91
+81bf9ba766a775cccf059007b19f5def9b9bfb03
+Add an explicit packed manifest catalog for registry-backed commands

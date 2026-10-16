@@ -1,0 +1,23 @@
+{
+  "review": "named graph receive optimization",
+  "reviewed_at": "2026-10-16",
+  "worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-named-recv-worktree",
+  "base_commit": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+  "worktree_head": "c6f77a0cb199aedec564440a6a5b4b6170317831",
+  "product_patch": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-perf/graph-named-recv-product.patch",
+  "product_patch_sha256": "3d034444bffbd5cdf480c6a7b9699f84720d1af2eac0bc0a0ceb1eaa2c9c9992",
+  "reviewed_source_sha256": "2fa1544b5e39935d71b1618b9c5034852ac94f2b8e762c63a10471a7ec9e09dd",
+  "scope": [
+    "borrowed per-port queue slices instead of cloning Vec<Arc<BoundedQueue>> in named recv/recv_timeout",
+    "per-port edge cursor sharing with recv_any/recv_any_timeout",
+    "closed-and-empty aggregation and error order",
+    "timeout, cancellation, seed-consumption order"
+  ],
+  "findings": [],
+  "assessment": "No concrete non-security correctness blocker found in the product delta. The named helper starts from the existing per-port cursor, scans the same queue order, and advances that cursor only when it dequeues an event (src/graph/transport.rs:471-492); the existing mixed-method regression demonstrates cursor continuity across named and any-input calls (lines 2960-3042). The single-queue blocking path retains the same cancellation-token receive and event observation behavior (lines 494-531). Both named receive methods keep cancellation/deadline checks, seed handling, empty-input behavior, and polling order around the refactor (lines 496-573). The new EOF reducer uses non-short-circuit boolean accumulation, so it continues through open queues and preserves first-error propagation in queue order, matching the prior Result<Vec<_>> collection behavior (lines 355-362). The patch removes the temporary Arc-vector clone and the temporary closed-state vector. Benchmark additions are separate and are not assessed as product performance evidence here.",
+  "verification": "Read-only source inspection; no Cargo, tests, build, or timing run was performed, per instruction. Existing focused cursor tests were inspected but not executed.",
+  "limitations": [
+    "This review does not establish a speedup or a whole-application runtime improvement.",
+    "This review does not independently verify benchmark validity or CI results."
+  ]
+}

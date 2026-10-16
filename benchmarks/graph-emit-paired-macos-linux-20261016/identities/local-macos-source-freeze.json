@@ -1,0 +1,11 @@
+{
+  "recorded_at": "2026-10-16T04:37:43.136698+00:00",
+  "base_commit": "b78693294169c22892bb4f78539348a5755992ad",
+  "identical_harness": true,
+  "harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+  "source_paths": {
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/emit-baseline-b786/src/graph/transport.rs": "db5430bd3a8cd25ed5e20bac4395b56814ec1ad6e2189d4e89d2f152c180c17f",
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/emit-perf-worktree/src/graph/transport.rs": "7cc3497231fd60d7c31ed7c98390281df4be0913398e7ccee1e6ffe75f4c48d3"
+  },
+  "claim": "unmeasured; release rebuild after identical harness-only Clippy fix; first build artifacts retained"
+}

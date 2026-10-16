@@ -1,0 +1,10 @@
+{
+  "finished_at": "2026-10-16T04:45:26.893187+00:00",
+  "returncode": 0,
+  "whole_invocation_wall_ns": 1751593375,
+  "whole_invocation_child_user_seconds": 0.285176,
+  "whole_invocation_child_system_seconds": 0.827197,
+  "binary_stable": true,
+  "source_stable": true,
+  "raw_sha256": "352198dec3ee8191968e47a01fd9fa4912495c6a13d00c2a205b9d9b3686640e"
+}

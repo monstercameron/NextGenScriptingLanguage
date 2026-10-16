@@ -35,6 +35,17 @@ impl ResolvedStdio {
         }
     }
 
+    /// Apply a source-level override after manifest defaults. Callers must
+    /// validate that the override is supported for this invocation before
+    /// launch; discarded bytes use the same null-device path as manifest
+    /// `stdio.stderr = "discard"`.
+    pub fn discard_stderr(mut self, discard: bool) -> Self {
+        if discard {
+            self.stderr = StdioDisposition::Discard;
+        }
+        self
+    }
+
     /// Intermediate stdout is always the next child's stdin; only the final
     /// process in a pipeline uses its configured stdout disposition.
     pub fn stdout_for_stage(self, terminal_stage: bool) -> StdioDisposition {

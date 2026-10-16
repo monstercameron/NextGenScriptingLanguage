@@ -71,7 +71,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
 
     def compare(self, workspace_id=2, layout="dwindle", *, first=None, second=None,
                 eval_response=None, keyword_response=None, notification=None,
-                args=(), diagnostic=False, eval_stderr_gap=False, workspace_responses=None,
+                args=(), diagnostic=False, workspace_responses=None,
                 layout_symlink=False):
         config = {
             "workspaces": [
@@ -92,9 +92,6 @@ class WorkspaceLayoutTests(unittest.TestCase):
         if diagnostic:
             self.assertTrue(rewrite["stderr"].startswith(original["stderr"]))
             self.assertIn("failed", rewrite["stderr"])
-        elif eval_stderr_gap:
-            self.assertEqual(original["stderr"], "")
-            self.assertEqual(rewrite["stderr"], config["eval"]["stderr"])
         else:
             self.assertEqual(original["stderr"], rewrite["stderr"])
         if original["files"]:
@@ -235,9 +232,26 @@ class WorkspaceLayoutTests(unittest.TestCase):
             {"stdout": '{"id":2}\n'}, {"stdout": "", "status": 7},
         ])
 
-    def test_eval_stderr_is_documented_runtime_gap(self):
-        self.compare(eval_response={"status": 7, "stdout": "hidden\n", "stderr": "eval warning\n"},
-                     eval_stderr_gap=True)
+    def test_eval_stderr_redirection_matches_bash_on_success_and_fallback(self):
+        for status in (0, 7):
+            with self.subTest(status=status):
+                original, rewrite = self.compare(eval_response={
+                    "status": status,
+                    "stdout": "hidden eval stdout\n",
+                    "stderr": "eval warning\n",
+                })
+                self.assertEqual(original["stderr"], "")
+                self.assertEqual(rewrite["stderr"], "")
+                if status == 7:
+                    self.assertEqual(
+                        original["commands"][3]["argv"],
+                        ["keyword", "workspace", "2, layout:scrolling"],
+                    )
+                else:
+                    self.assertFalse(any(
+                        command["argv"][:2] == ["keyword", "workspace"]
+                        for command in original["commands"]
+                    ))
 
 
 if __name__ == "__main__":

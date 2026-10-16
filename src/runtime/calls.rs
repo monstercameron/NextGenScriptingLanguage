@@ -57,6 +57,9 @@ pub(super) fn validate_arguments(
     inputs: &[InputDeclaration],
     flow: &control::FlowState,
 ) -> Result<()> {
+    if call.discard_stderr {
+        bail!("program calls cannot use `and discard stderr`");
+    }
     if call.direct || call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
         bail!(
             "program calls cannot be direct binaries, cached or capture native status or execution results"
@@ -191,6 +194,7 @@ pub(super) fn preflight(
             Cow::Owned(Invocation {
                 operation: call.operation.clone(),
                 direct: call.direct,
+                discard_stderr: call.discard_stderr,
                 parameters: call
                     .parameters
                     .iter()
@@ -608,6 +612,7 @@ mod tests {
                 Cow::Owned(Invocation {
                     operation: call.operation.clone(),
                     direct: call.direct,
+                    discard_stderr: call.discard_stderr,
                     parameters: call
                         .parameters
                         .iter()

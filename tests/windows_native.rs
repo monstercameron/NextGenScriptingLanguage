@@ -139,6 +139,42 @@ fn real_native_statuses_propagate_or_can_be_handled() {
     ok(&output);
     assert_eq!(serde_json::from_slice::<i64>(&output.stdout).unwrap(), 42);
 }
+
+#[test]
+fn native_stderr_discard_preserves_child_status_result_and_interpreter_diagnostics() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = format!(
+        "{} and discard stderr and keep status as code and keep result as execution\nthen encode execution as json\n",
+        native(&["exit", "7", "kept"]).trim_end()
+    );
+    let handled = invoke(folder.path(), &source, &[]);
+    ok(&handled);
+    let result: serde_json::Value = serde_json::from_slice(&handled.stdout).unwrap();
+    assert_eq!(result["status"], 7);
+    assert_eq!(result["stdout_captured"], true);
+    assert_eq!(result["stdout"], serde_json::json!(b"kept"));
+    assert_eq!(result["stderr_captured"], false);
+    assert_eq!(result["stderr"], serde_json::json!([]));
+    assert!(!String::from_utf8_lossy(&handled.stderr).contains("fixture failed"));
+
+    let unhandled = invoke(
+        folder.path(),
+        &format!(
+            "{} and discard stderr\n",
+            native(&["exit", "7", ""]).trim_end()
+        ),
+        &[],
+    );
+    assert_eq!(unhandled.status.code(), Some(7));
+    let diagnostic = String::from_utf8_lossy(&unhandled.stderr);
+    assert!(
+        diagnostic.contains("failed (exit status: 7)"),
+        "{diagnostic}"
+    );
+    assert!(diagnostic.starts_with("execute: line 1:"), "{diagnostic}");
+    assert!(!diagnostic.contains("fixture failed"), "{diagnostic}");
+}
+
 #[test]
 fn repeat_foreach_and_while_use_native_windows_applets_and_file_paths() {
     let folder = tempfile::tempdir().unwrap();

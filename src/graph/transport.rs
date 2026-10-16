@@ -2293,6 +2293,7 @@ fn invoke_for_graph(
     let call = Invocation {
         operation: name.to_owned(),
         direct: false,
+        discard_stderr: false,
         parameters: parameters.clone(),
         binding: None,
         cache: false,

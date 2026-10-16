@@ -234,8 +234,14 @@ class AudioVolumeTests(unittest.TestCase):
         original, _ = self.compare(overrides={"osd": {"status": 13, "stdout": "partial\n", "stderr": "osd error\n"}}, diagnostic=True, stdout_gap=True)
         self.assertEqual(original["status"], 13)
 
-    def test_pactl_stderr_redirection_gap(self):
-        self.compare(overrides={"get-sink-mute": {"status": 7, "stderr": "mute warning\n"}}, stderr_gap=True)
+    def test_pactl_query_stderr_redirection_matches_bash(self):
+        self.compare(overrides={
+            "get-sink-volume": [
+                {"stdout": "Volume: front-left: 32768 / 50% / -18.06 dB\n", "stderr": "volume warning\n"},
+                {"stdout": "Volume: front-left: 32768 / 55% / -18.06 dB\n", "stderr": "volume warning\n"},
+            ],
+            "get-sink-mute": {"status": 7, "stderr": "mute warning\n"},
+        })
 
     def test_octal_step_matches_bash_literal(self):
         original, rewrite = self.compare(("+010",), after="58")

@@ -38,9 +38,11 @@ Lua save, layout application and notification. Native argv preserves spaces.
 
 Known runtime differences:
 
-- Execute has no per-command stderr redirection. Eval stdout is discarded,
-  but eval stderr is visible; upstream redirects both. A differential test
-  records this gap explicitly rather than claiming exact stderr parity.
+- The direct eval invocation suppresses stdout from its result and sends child
+  stderr to the null device, matching the upstream's visible output while
+  keeping its native status for the keyword fallback. Execute still emits its
+  contextual diagnostic when a native
+  failure is unhandled; this fixture's eval failure is deliberately handled.
 - Native failures preserve status and add Execute diagnostics. Invalid ids
   therefore return the same status 1 and make no changes, with extra stderr.
 - A failed notification's stdout, and earlier fallback stdout if notification

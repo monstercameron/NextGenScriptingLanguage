@@ -256,6 +256,38 @@ test('native status capture distinguishes stdout, integer status and keep parame
   scope('run worker with value 1 and keep 2', 'keep', 'variable.parameter');
 });
 
+test('direct native stderr discard keeps modifier and result binding scopes distinct from applet names and parameters', () => {
+  const direct = 'run "./renderer" with text label and discard stderr and keep status as code and keep result as execution';
+  scope(direct, './renderer', 'entity.name.function.applet');
+  scope(direct, 'text', 'variable.parameter');
+  scope(direct, 'label', 'variable.other.readwrite');
+  scope(direct, 'and', 'keyword.operator.parameter');
+  scope(direct, 'discard', 'storage.modifier.stderr');
+  scope(direct, 'stderr', 'storage.modifier.stderr');
+  scope(direct, 'keep status', 'storage.modifier.status');
+  scope(direct, 'code', 'variable.other.definition');
+  scope(direct, 'keep result', 'storage.modifier.result');
+  scope(direct, 'execution', 'variable.other.definition');
+
+  const namedParameters = 'run renderer with text label and discard "stderr"';
+  scope(namedParameters, 'renderer', 'entity.name.function.applet');
+  scope(namedParameters, 'text', 'variable.parameter');
+  scope(namedParameters, 'label', 'variable.other.readwrite');
+  scope(namedParameters, 'discard', 'variable.parameter');
+  scope(namedParameters, 'stderr', 'string.quoted.double');
+  assert.ok(!scopesAt(namedParameters, 'discard').includes('storage.modifier.stderr.execute'));
+  assert.ok(!scopesAt(namedParameters, 'stderr').includes('storage.modifier.stderr.execute'));
+
+  const namedOperation = 'run renderer and discard stderr';
+  scope(namedOperation, 'renderer and discard stderr', 'entity.name.function.applet');
+  assert.ok(!scopesAt(namedOperation, 'discard').includes('storage.modifier.stderr.execute'));
+
+  const namedResult = 'run renderer and keep result as execution';
+  scope(namedResult, 'renderer', 'entity.name.function.applet');
+  scope(namedResult, 'keep result', 'storage.modifier.result');
+  scope(namedResult, 'execution', 'variable.other.definition');
+});
+
 test('scalar conditions preserve operand roles and indent their branches', () => {
   for (const line of ['if code is 0', '  if enabled is not false', 'if "a b" is "c"', 'if is is true']) {
     scope(line, 'if', 'keyword.control.condition');

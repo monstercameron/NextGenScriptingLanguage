@@ -637,6 +637,7 @@ mod tests {
         let call = Invocation {
             operation: "probe".to_owned(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::new(),
             binding: None,
             cache: false,

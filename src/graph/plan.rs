@@ -512,6 +512,16 @@ impl GraphPlan {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(node) = self
+            .nodes
+            .iter()
+            .find(|node| node.invocations().iter().any(|call| call.discard_stderr))
+        {
+            bail!(
+                "graph node {:?} does not support `and discard stderr`",
+                node.id
+            );
+        }
         let diagnostics = self.diagnostics();
         if diagnostics.is_empty() {
             Ok(())

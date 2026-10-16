@@ -8,10 +8,11 @@ for executable lookup, quoting, cancellation, checkpoints and live IPC.
 Persistent native streams have a [separate guide](streaming.md); managed runtime
 and widget edits are covered by the [live-control API](live-control.md).
 
-This reference describes the current native source. Loop blocks and named
-background jobs are unreleased and require a source build; other forms are
-available in the 0.9.0-rc.4 release candidate. Historical `bin/execute` 0.8.0 lacks several newer forms; use a matching
-[release or source build](releases.md). The [browser host](playground.md) has its
+This reference describes the current native 0.9.0-rc.5 source candidate, which
+has not been released. Features added since the published 0.9.0-rc.4 candidate,
+including loop blocks, named background jobs and per-command stderr discard,
+require a source build. Historical `bin/execute` 0.8.0 lacks several newer forms;
+use a matching [release or source build](releases.md). The [browser host](playground.md) has its
 own explicit applet and lifecycle limits.
 
 ## Language and Unix contracts
@@ -77,6 +78,14 @@ Text does not implicitly become an integer, boolean, or list parameter.
 Lists of string arguments may contain named text results. `as name` precedes
 `and cache` when both are used.
 
+Quoted direct native invocations may add `and discard stderr` after an optional
+`as name` binding and before `and keep status/result as name`. It connects only
+that command's stderr to the null device; stdout and exit-status behavior stay
+unchanged. The modifier is unsupported for named applets, reusable-program
+calls, task groups, background jobs, graph nodes, and listener sources, and it
+cannot be combined with `and cache`. It is supported on finite and stream
+native command stages. This modifier requires the unreleased source candidate.
+
 <a id="native-exit-status-pending-source-candidate"></a>
 
 ### Native exit status
@@ -93,7 +102,8 @@ keeps its complete bounded stdout as the pipeline value, binds its exit code
 change Execute's own final exit code. Without this suffix a nonzero command
 still stops execution. Timeout, cancellation, signal termination, missing tools,
 I/O failures and output-limit errors still stop execution; none becomes an
-ordinary status. Native stderr keeps the existing foreground/managed transport.
+ordinary status. Without `and discard stderr`, native stderr keeps the existing
+foreground/managed transport.
 
 The explicit `and keep result as name` suffix binds a JSON record after an
 applet invocation. On a pipeline, put it on the terminal `pipe to` call to

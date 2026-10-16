@@ -314,6 +314,7 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
         .validate(&Invocation {
             operation: "typed".into(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::new(),
             binding: Some("raw".into()),
             cache: false,
@@ -325,6 +326,7 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
         .validate(&Invocation {
             operation: "typed".into(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::new(),
             binding: None,
             cache: false,
@@ -337,6 +339,7 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
         .validate(&Invocation {
             operation: "typed".into(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::new(),
             binding: Some("raw".into()),
             cache: false,
@@ -642,6 +645,7 @@ fn number_ports_refine_json_parameters_before_invocation_and_dispatch() {
     let invocation = |left, right| Invocation {
         operation: "typed".into(),
         direct: false,
+        discard_stderr: false,
         parameters: BTreeMap::from([("left".into(), left), ("right".into(), right)]),
         binding: None,
         cache: false,

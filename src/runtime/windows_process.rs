@@ -79,7 +79,7 @@ fn windows_statuses(
                 if index + 1 == calls.len() {
                     *last_status = code;
                 }
-                let stderr = captured_stage_stderr(calls[index].1, signals)
+                let stderr = captured_stage_stderr(calls[index].0, calls[index].1, signals)
                     .then(|| managed.diagnostic.clone());
                 observed_stages[index] = Some(if let Some(code) = code {
                     execution_result::StageResult::exited(
@@ -122,7 +122,7 @@ fn windows_statuses(
                         diagnostic: String::from_utf8_lossy(&managed.diagnostic)
                             .trim()
                             .to_owned(),
-                        stderr: captured_stage_stderr(calls[index].1, signals)
+                        stderr: captured_stage_stderr(calls[index].0, calls[index].1, signals)
                             .then(|| managed.diagnostic.clone()),
                         stdout: None,
                         stages: collect_native_stages(calls, observed_stages, children, signals),
@@ -287,15 +287,7 @@ fn execute_group_with_sink(
                     cwd,
                 )?,
             };
-            let resolved_io = invocation_io::ResolvedStdio::resolve(
-                manifest.stdio(),
-                invocation_io::StdioDisposition::Capture,
-                if signals.capture_diagnostics {
-                    invocation_io::StdioDisposition::Capture
-                } else {
-                    invocation_io::StdioDisposition::Inherit
-                },
-            );
+            let resolved_io = resolved_call_stdio(call, manifest, signals);
             let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
             command
                 .current_dir(cwd)

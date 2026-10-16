@@ -35,6 +35,7 @@ fn opt_manifest_list_type_errors_keep_precedence_over_nul_errors() {
     let invocation = Invocation {
         operation: "check".into(),
         direct: false,
+        discard_stderr: false,
         parameters: BTreeMap::from([("items".into(), invalid.clone())]),
         binding: None,
         cache: false,
@@ -74,6 +75,7 @@ fn opt_manifest_unknown_and_required_errors_keep_their_order() {
     let invocation = Invocation {
         operation: "check".into(),
         direct: false,
+        discard_stderr: false,
         parameters: with_unknown.clone(),
         binding: None,
         cache: false,
@@ -97,6 +99,7 @@ fn opt_manifest_unknown_and_required_errors_keep_their_order() {
     let invocation = Invocation {
         operation: "check".into(),
         direct: false,
+        discard_stderr: false,
         parameters: wrong_later_value.clone(),
         binding: None,
         cache: false,

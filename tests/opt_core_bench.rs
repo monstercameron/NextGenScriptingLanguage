@@ -46,6 +46,7 @@ fn core_operations() {
     let invocation = Invocation {
         operation: "ls".into(),
         direct: false,
+        discard_stderr: false,
         parameters: params,
         binding: None,
         cache: false,

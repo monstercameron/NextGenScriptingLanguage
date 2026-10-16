@@ -1051,6 +1051,12 @@ fn is_status_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
         && word_is(tokens.get(cursor + 2), "status")
 }
 
+fn is_discard_stderr_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
+    word_is(tokens.get(cursor), "and")
+        && word_is(tokens.get(cursor + 1), "discard")
+        && word_is(tokens.get(cursor + 2), "stderr")
+}
+
 fn is_result_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
     word_is(tokens.get(cursor), "and")
         && word_is(tokens.get(cursor + 1), "keep")
@@ -1086,6 +1092,7 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
             if cursor > operation_start
                 && word_is(tokens.get(cursor), "and")
                 && ((word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
+                    || (direct && is_discard_stderr_suffix(tokens, cursor))
                     || is_status_suffix(tokens, cursor)
                     || is_result_suffix(tokens, cursor))
             {
@@ -1143,6 +1150,7 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
             }
             if word_is(tokens.get(cursor), "and")
                 && !(word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
+                && !(direct && is_discard_stderr_suffix(tokens, cursor))
                 && !is_status_suffix(tokens, cursor)
                 && !is_result_suffix(tokens, cursor)
             {
@@ -1160,6 +1168,12 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
         Some(name)
     } else {
         None
+    };
+    let discard_stderr = if direct && is_discard_stderr_suffix(tokens, cursor) {
+        cursor += 3;
+        true
+    } else {
+        false
     };
     let status_binding = if is_status_suffix(tokens, cursor) {
         if !word_is(tokens.get(cursor + 2), "status") || !word_is(tokens.get(cursor + 3), "as") {
@@ -1192,12 +1206,16 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
     } else {
         false
     };
+    if discard_stderr && cache {
+        bail!("`and discard stderr` cannot be combined with `and cache`");
+    }
     ensure_end(tokens, cursor)?;
 
     Ok(StepKind::Invoke {
         call: Invocation {
             operation,
             direct,
+            discard_stderr,
             parameters,
             binding,
             cache,
@@ -1401,17 +1419,90 @@ mod tests {
 
     #[test]
     fn strings_keep_keywords_comments_and_escapes_as_literals() {
-        let program =
-            parse(r##"run printf with text "and # as then \"quoted\"" as output # comment"##)
-                .unwrap();
+        let program = parse(
+            r##"run printf with text "and discard stderr # as then \"quoted\"" as output # comment"##,
+        )
+        .unwrap();
         let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
             panic!()
         };
         assert_eq!(
             call.parameters.get("text"),
-            Some(&Value::String("and # as then \"quoted\"".into()))
+            Some(&Value::String(
+                "and discard stderr # as then \"quoted\"".into()
+            ))
         );
         assert_eq!(call.binding.as_deref(), Some("output"));
+    }
+
+    #[test]
+    fn direct_stderr_discard_precedes_status_and_result_and_keeps_legacy_serde() {
+        let program = parse(
+            "run \"printf\" with arguments [\"x\"] as output and discard stderr and keep status as code and keep result as execution\n",
+        )
+        .unwrap();
+        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+            panic!();
+        };
+        assert!(call.direct);
+        assert!(call.discard_stderr);
+        assert_eq!(call.binding.as_deref(), Some("output"));
+        assert_eq!(call.status_binding.as_deref(), Some("code"));
+        assert_eq!(call.result_binding.as_deref(), Some("execution"));
+        assert!(serde_json::to_string(&program)
+            .unwrap()
+            .contains("\"discard_stderr\":true"));
+
+        let legacy = parse("run printf with arguments [\"x\"]\n").unwrap();
+        let serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(!serialized.to_string().contains("discard_stderr"));
+        let decoded: Program = serde_json::from_value(serialized).unwrap();
+        assert_eq!(legacy, decoded);
+
+        let comment =
+            parse("run \"printf\" with arguments [\"x\"] # and discard stderr\n").unwrap();
+        let StepKind::Invoke { call, .. } = &comment.steps[0].kind else {
+            panic!();
+        };
+        assert!(!call.discard_stderr);
+    }
+
+    #[test]
+    fn stderr_discard_is_restricted_to_supported_direct_calls() {
+        for source in [
+            "run \"printf\" with arguments [\"x\"] and discard stderr and cache\n",
+            "spawn as child\n  run \"printf\" with arguments [\"x\"] and discard stderr\n",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("discard stderr")
+                    || format!("{error:#}").contains("discard stdout"),
+                "unexpected error for {source:?}: {error:#}"
+            );
+        }
+        assert!(parse("run program child and discard stderr\n").is_err());
+    }
+
+    #[test]
+    fn named_app_parameters_and_operations_keep_discard_words_as_literals() {
+        let program = parse("run renderer with text label and discard \"stderr\"\n").unwrap();
+        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+            panic!();
+        };
+        assert!(!call.direct);
+        assert!(!call.discard_stderr);
+        assert_eq!(call.operation, "renderer");
+        assert_eq!(
+            call.parameters.get("discard"),
+            Some(&Value::String("stderr".into()))
+        );
+
+        let program = parse("run renderer and discard stderr\n").unwrap();
+        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+            panic!();
+        };
+        assert!(!call.discard_stderr);
+        assert_eq!(call.operation, "renderer and discard stderr");
     }
 
     #[test]

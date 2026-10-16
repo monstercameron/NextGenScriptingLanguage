@@ -254,7 +254,7 @@
       }
     },
     "bindings": {
-      "match": "\\b(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:and[ \\t]+keep[ \\t]+status[ \\t]+as[ \\t]+[A-Za-z_][A-Za-z0-9_]*[ \\t]*)?(?:and[ \\t]+cache[ \\t]*)?(?:#.*)?$)",
+      "match": "\\b(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:and[ \\t]+keep[ \\t]+status[ \\t]+as[ \\t]+[A-Za-z_][A-Za-z0-9_]*[ \\t]*)?(?:and[ \\t]+keep[ \\t]+result[ \\t]+as[ \\t]+[A-Za-z_][A-Za-z0-9_]*[ \\t]*)?(?:and[ \\t]+cache[ \\t]*)?(?:#.*)?$)",
       "captures": {
         "1": {
           "name": "keyword.operator.binding.execute"
@@ -281,6 +281,17 @@
           "include": "#values"
         }
       ]
+    },
+    "direct-bindings": {
+      "match": "\\b(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:and[ \\t]+discard[ \\t]+stderr[ \\t]*)?(?:and[ \\t]+keep[ \\t]+status[ \\t]+as[ \\t]+[A-Za-z_][A-Za-z0-9_]*[ \\t]*)?(?:and[ \\t]+keep[ \\t]+result[ \\t]+as[ \\t]+[A-Za-z_][A-Za-z0-9_]*[ \\t]*)?(?:and[ \\t]+cache[ \\t]*)?(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.binding.execute"
+        },
+        "2": {
+          "name": "variable.other.definition.execute"
+        }
+      }
     },
     "unsupported": {
       "match": "^[ \\t]*(?:else|for|loop)\\b",
@@ -951,7 +962,7 @@
     },
     "invocation": {
       "name": "meta.invocation.execute",
-      "begin": "^[ \\t]*(run|then|pipe[ \\t]+to|listen[ \\t]+to|stream[ \\t]+from)[ \\t]+([^\\s\\[\\],\"#]+(?:[ \\t]+(?!(?:with|as)\\b|and[ \\t]+keep[ \\t]+status\\b|and[ \\t]+cache[ \\t]*(?:#|$))[^\\s\\[\\],\"#]+)*)",
+      "begin": "^[ \\t]*(run|then|pipe[ \\t]+to|listen[ \\t]+to|stream[ \\t]+from)[ \\t]+([^\\s\\[\\],\"#]+(?:[ \\t]+(?!(?:with|as)\\b|and[ \\t]+keep[ \\t]+(?:status|result)\\b|and[ \\t]+cache[ \\t]*(?:#|$))[^\\s\\[\\],\"#]+)*)",
       "end": "$",
       "patterns": [
         {
@@ -959,6 +970,9 @@
         },
         {
           "include": "#status-binding"
+        },
+        {
+          "include": "#result-binding"
         },
         {
           "include": "#cache"
@@ -984,7 +998,7 @@
     },
     "implicit-invocation": {
       "name": "meta.implicit-invocation.execute",
-      "begin": "^[ \\t]*([^\\s\\[\\],\"#]+(?:[ \\t]+(?!(?:with|as)\\b|and[ \\t]+keep[ \\t]+status\\b|and[ \\t]+cache[ \\t]*(?:#|$))[^\\s\\[\\],\"#]+)*)",
+      "begin": "^[ \\t]*([^\\s\\[\\],\"#]+(?:[ \\t]+(?!(?:with|as)\\b|and[ \\t]+keep[ \\t]+(?:status|result)\\b|and[ \\t]+cache[ \\t]*(?:#|$))[^\\s\\[\\],\"#]+)*)",
       "end": "$",
       "patterns": [
         {
@@ -992,6 +1006,9 @@
         },
         {
           "include": "#status-binding"
+        },
+        {
+          "include": "#result-binding"
         },
         {
           "include": "#cache"
@@ -1021,7 +1038,16 @@
           "include": "#comments"
         },
         {
+          "include": "#discard-stderr"
+        },
+        {
           "include": "#status-binding"
+        },
+        {
+          "include": "#result-binding"
+        },
+        {
+          "include": "#direct-bindings"
         },
         {
           "include": "#cache"
@@ -1111,13 +1137,44 @@
       ]
     },
     "status-binding": {
-      "match": "\\b(and)[ \\t]+(keep[ \\t]+status)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:and[ \\t]+cache[ \\t]*)?(?:#.*)?$)",
+      "match": "\\b(and)[ \\t]+(keep[ \\t]+status)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:and[ \\t]+keep[ \\t]+result[ \\t]+as[ \\t]+[A-Za-z_][A-Za-z0-9_]*[ \\t]*)?(?:and[ \\t]+cache[ \\t]*)?(?:#.*)?$)",
       "captures": {
         "1": {
           "name": "keyword.operator.parameter.execute"
         },
         "2": {
           "name": "storage.modifier.status.execute"
+        },
+        "3": {
+          "name": "keyword.operator.binding.execute"
+        },
+        "4": {
+          "name": "variable.other.definition.execute"
+        }
+      }
+    },
+    "discard-stderr": {
+      "match": "\\b(and)[ \\t]+(discard)[ \\t]+(stderr)(?=[ \\t]*(?:and[ \\t]+keep[ \\t]+status[ \\t]+as[ \\t]+[A-Za-z_][A-Za-z0-9_]*[ \\t]*)?(?:and[ \\t]+keep[ \\t]+result[ \\t]+as[ \\t]+[A-Za-z_][A-Za-z0-9_]*[ \\t]*)?(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.parameter.execute"
+        },
+        "2": {
+          "name": "storage.modifier.stderr.execute"
+        },
+        "3": {
+          "name": "storage.modifier.stderr.execute"
+        }
+      }
+    },
+    "result-binding": {
+      "match": "\\b(and)[ \\t]+(keep[ \\t]+result)[ \\t]+(as)[ \\t]+([A-Za-z_][A-Za-z0-9_]*)(?=[ \\t]*(?:and[ \\t]+cache[ \\t]*)?(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.parameter.execute"
+        },
+        "2": {
+          "name": "storage.modifier.result.execute"
         },
         "3": {
           "name": "keyword.operator.binding.execute"

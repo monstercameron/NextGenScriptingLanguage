@@ -894,7 +894,7 @@ fn scan_child_statuses(
                 kill_group(&managed.child);
                 managed.reaped = true;
                 let code = status.code();
-                let stderr = captured_stage_stderr(calls[index].1, signals)
+                let stderr = captured_stage_stderr(calls[index].0, calls[index].1, signals)
                     .then(|| managed.diagnostic.clone());
                 observed_stages[index] = Some(if let Some(code) = code {
                     execution_result::StageResult::exited(
@@ -937,7 +937,7 @@ fn scan_child_statuses(
                         diagnostic: String::from_utf8_lossy(&managed.diagnostic)
                             .trim()
                             .to_owned(),
-                        stderr: captured_stage_stderr(calls[index].1, signals)
+                        stderr: captured_stage_stderr(calls[index].0, calls[index].1, signals)
                             .then(|| managed.diagnostic.clone()),
                         stdout: None,
                         stages: collect_native_stages(calls, observed_stages, children, signals),
@@ -990,7 +990,11 @@ struct GroupOutput {
     stages: Vec<execution_result::StageResult>,
 }
 
-fn captured_stage_stderr(manifest: &Manifest, signals: &Signals) -> bool {
+fn resolved_call_stdio(
+    call: &Invocation,
+    manifest: &Manifest,
+    signals: &Signals,
+) -> invocation_io::ResolvedStdio {
     invocation_io::ResolvedStdio::resolve(
         manifest.stdio(),
         invocation_io::StdioDisposition::Capture,
@@ -1000,7 +1004,11 @@ fn captured_stage_stderr(manifest: &Manifest, signals: &Signals) -> bool {
             invocation_io::StdioDisposition::Inherit
         },
     )
-    .captures_stderr()
+    .discard_stderr(call.discard_stderr)
+}
+
+fn captured_stage_stderr(call: &Invocation, manifest: &Manifest, signals: &Signals) -> bool {
+    resolved_call_stdio(call, manifest, signals).captures_stderr()
 }
 
 fn collect_native_stages(
@@ -1023,7 +1031,7 @@ fn collect_native_stages(
                         execution_result::StageResult::not_started(*line, manifest.name_for(call))
                     }
                 });
-            if captured_stage_stderr(manifest, signals) {
+            if captured_stage_stderr(call, manifest, signals) {
                 stage.stderr = children.0.get(index).map(|child| child.diagnostic.clone());
             }
             stage
@@ -1334,15 +1342,7 @@ fn execute_group_with_sink(
                 cwd,
             )?,
         };
-        let resolved_io = invocation_io::ResolvedStdio::resolve(
-            manifest.stdio(),
-            invocation_io::StdioDisposition::Capture,
-            if signals.capture_diagnostics {
-                invocation_io::StdioDisposition::Capture
-            } else {
-                invocation_io::StdioDisposition::Inherit
-            },
-        );
+        let resolved_io = resolved_call_stdio(call, manifest, signals);
         let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
         command
             .current_dir(cwd)
@@ -2990,6 +2990,7 @@ pub fn invoke_applet(
     let call = Invocation {
         operation: name.to_owned(),
         direct: false,
+        discard_stderr: false,
         parameters,
         binding: None,
         cache: false,
@@ -3026,6 +3027,7 @@ pub fn invoke_applet_with_module_session(
     let call = Invocation {
         operation: name.to_owned(),
         direct: false,
+        discard_stderr: false,
         parameters: parameters.clone(),
         binding: None,
         cache: false,
@@ -3064,6 +3066,7 @@ pub(crate) fn invoke_applet_with_context(
     let call = Invocation {
         operation: name.to_owned(),
         direct: false,
+        discard_stderr: false,
         parameters,
         binding: None,
         cache: false,
@@ -3134,7 +3137,7 @@ pub(crate) fn invoke_applet_with_context(
                         &error,
                         outcome.clone(),
                         completed.stdout_captured.then(|| completed.bytes.clone()),
-                        captured_stage_stderr(manifest, &signals)
+                        captured_stage_stderr(&call, manifest, &signals)
                             .then(|| completed.diagnostic.clone()),
                         completed.stages.clone(),
                     )
@@ -4511,6 +4514,7 @@ pub fn run_with_context(
     if program.trigger.is_some() {
         bail!("triggered programs require run_service");
     }
+    validate_discard_stderr_usage(program)?;
     let cwd = fs::canonicalize(&options.working_directory)?;
     crate::capabilities::preflight_with_cache_directory(
         program,
@@ -4665,6 +4669,7 @@ mod argv_construction_tests {
         let literal = Invocation {
             operation: "check".into(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::from([("text".into(), Value::String("literal".into()))]),
             binding: None,
             cache: false,

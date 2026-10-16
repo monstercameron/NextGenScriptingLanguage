@@ -165,6 +165,7 @@ pub(super) fn preflight_group(
         let resolved = Invocation {
             operation: task.operation.clone(),
             direct: false,
+            discard_stderr: false,
             parameters,
             binding: None,
             cache: false,

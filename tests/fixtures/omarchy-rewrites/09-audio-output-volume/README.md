@@ -55,9 +55,10 @@ Known limits:
   partial stdout disappears. Those tests assert the gap and retain the Bash
   output in evidence. Earlier successful setter stdout is concatenated exactly
   when the OSD succeeds. Failure statuses add Execute's contextual diagnostics.
-- Execute cannot redirect only an individual command's stderr to `/dev/null`.
-  pactl query stderr is visible; a dedicated test asserts this gap. Upstream
-  custom error messages are emitted to stderr with native awk and preserved.
+- Quoted direct native commands can discard only their own stderr with
+  `and discard stderr`; the two pactl queries use it to match upstream's
+  `2>/dev/null`. Upstream custom error messages are emitted to stderr with
+  native awk and preserved.
 - Malformed current-volume identifiers and invalid octal steps are explicitly
   rejected and reported before audio writes. The Bash oracle treats some such
   strings as arithmetic variable names and continues; that behavior is a

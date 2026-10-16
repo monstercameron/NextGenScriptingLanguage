@@ -201,6 +201,7 @@ fn arithmetic_contracts_refine_json_parameters_to_number() {
         let make_invocation = |left, right| Invocation {
             operation: name.to_owned(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::from([("left".to_owned(), left), ("right".to_owned(), right)]),
             binding: None,
             cache: false,
@@ -233,6 +234,7 @@ fn arithmetic_contracts_refine_json_parameters_to_number() {
     let valid = Invocation {
         operation: "number.to_text".to_owned(),
         direct: false,
+        discard_stderr: false,
         parameters: BTreeMap::from([(
             "value".to_owned(),
             AstValue::Number(serde_json::Number::from_f64(12.5).unwrap()),

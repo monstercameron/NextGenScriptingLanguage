@@ -84,11 +84,12 @@ pub(super) fn parse_spawn<'arena, 'source: 'arena>(
         }
         if call.binding.is_some()
             || call.cache
+            || call.discard_stderr
             || call.status_binding.is_some()
             || call.result_binding.is_some()
         {
             bail!(
-                "line {}: background pipeline stages cannot bind output, status, or result, or use `and cache`",
+                "line {}: background pipeline stages cannot bind output, status, or result, use `and cache`, or discard stderr",
                 child.number
             );
         }

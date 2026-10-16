@@ -93,6 +93,7 @@ pub(super) fn has_job_operations(program: &Program) -> bool {
 
 /// Validate the complete script before launching any command or saving files.
 pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
+    validate_discard_stderr_usage(program)?;
     crate::inputs::validate(&program.inputs)?;
     let has_jobs = has_job_operations(program);
     #[cfg(target_arch = "wasm32")]
@@ -202,6 +203,72 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
     validate_finite(program, registry, None)
 }
 
+/// Validate the AST-level stderr modifier before any catalog lookup or other
+/// preflight can obscure an unsupported context. Parsed source is checked by
+/// the parser too; this pass also covers deserialized and library-built ASTs.
+fn validate_discard_stderr_usage(program: &Program) -> Result<()> {
+    fn check_direct(call: &Invocation, line: usize) -> Result<()> {
+        if !call.discard_stderr {
+            return Ok(());
+        }
+        if !call.direct {
+            bail!("line {line}: `and discard stderr` requires a quoted direct native invocation");
+        }
+        if call.cache {
+            bail!("line {line}: `and discard stderr` cannot be combined with `and cache`");
+        }
+        Ok(())
+    }
+
+    for (name, steps) in std::iter::once((None, program.steps.as_slice())).chain(
+        program
+            .definitions
+            .iter()
+            .map(|(name, definition)| (Some(name.as_str()), definition.steps.as_slice())),
+    ) {
+        for step in steps {
+            let unsupported = match &step.kind {
+                StepKind::Invoke { call, .. } => {
+                    check_direct(call, step.line)?;
+                    None
+                }
+                StepKind::CallProgram { call, .. } if call.discard_stderr => {
+                    Some("program calls cannot use `and discard stderr`")
+                }
+                StepKind::TaskGroup { tasks, .. }
+                    if tasks.iter().any(|call| call.discard_stderr) =>
+                {
+                    Some("task groups do not support `and discard stderr`")
+                }
+                StepKind::SpawnJob { stages, .. }
+                    if stages.iter().any(|stage| stage.call.discard_stderr) =>
+                {
+                    Some("background pipeline stages require captured stderr and cannot discard it")
+                }
+                _ => None,
+            };
+            if let Some(message) = unsupported {
+                if let Some(name) = name {
+                    bail!("program {name:?}, line {}: {message}", step.line);
+                }
+                bail!("line {}: {message}", step.line);
+            }
+        }
+    }
+
+    if let Some(Trigger::Listen {
+        source: ListenSource::Applet(call),
+        line,
+        ..
+    }) = &program.trigger
+    {
+        if call.discard_stderr {
+            bail!("line {line}: listener sources cannot use `and discard stderr`");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn validate_worker_support(program: &Program, registry: &Registry) -> Result<()> {
     if worker_backend::WorkerPool::supported() {
@@ -279,6 +346,7 @@ fn validate_inputs(
     has_data: bool,
     allow_rebinding: bool,
 ) -> Result<()> {
+    validate_discard_stderr_usage(program)?;
     calls::validate_definitions(program, registry)?;
     crate::inputs::validate(&program.inputs)?;
     let types = program
@@ -838,6 +906,7 @@ fn validate_range(
                     let mut task_names = BTreeSet::new();
                     for task in tasks {
                         if task.direct
+                            || task.discard_stderr
                             || task.cache
                             || task.status_binding.is_some()
                             || task.result_binding.is_some()
@@ -883,7 +952,8 @@ fn validate_range(
                     flow.unresolved_jobs.insert(name.clone());
                     for (stage_index, stage) in stages.iter().enumerate() {
                         let call = &stage.call;
-                        if call.cache
+                        if call.discard_stderr
+                            || call.cache
                             || call.binding.is_some()
                             || call.status_binding.is_some()
                             || call.result_binding.is_some()
@@ -1435,7 +1505,7 @@ pub fn explain_with_inputs(
                     ),
                 };
                 format!(
-                    "{connection:?}: {:?} argv={argv}{}{}{}{}{}",
+                    "{connection:?}: {:?} argv={argv}{}{}{}{}{}{}",
                     manifest.binary_for(call),
                     if manifest.builtin.is_some() {
                         " [interpreter builtin]"
@@ -1454,7 +1524,12 @@ pub fn explain_with_inputs(
                     call.result_binding
                         .as_ref()
                         .map(|name| format!(" and keep result as {name}"))
-                        .unwrap_or_default()
+                        .unwrap_or_default(),
+                    if call.discard_stderr {
+                        " [stderr discarded]"
+                    } else {
+                        ""
+                    }
                 )
             }
         };

@@ -162,6 +162,7 @@ fn report_release_allocation_counts() {
     let invocation = Invocation {
         operation: "ls".to_owned(),
         direct: false,
+        discard_stderr: false,
         parameters,
         binding: None,
         cache: false,

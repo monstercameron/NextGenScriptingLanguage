@@ -2214,6 +2214,7 @@ mod tests {
         let invocation = Invocation {
             operation: "commit".into(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::from([
                 ("message".into(), Value::Reference("message".into())),
                 (
@@ -2276,6 +2277,7 @@ mod tests {
         let missing = Invocation {
             operation: "say".into(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::new(),
             binding: None,
             cache: false,
@@ -2286,6 +2288,7 @@ mod tests {
         let wrong = Invocation {
             operation: "say".into(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::from([("text".into(), Value::Integer(1))]),
             binding: None,
             cache: false,
@@ -2311,6 +2314,7 @@ mod tests {
         let invocation = Invocation {
             operation: "files".into(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::from([(
                 "paths".into(),
                 Value::List(vec![Value::Reference("path".into())]),
@@ -2351,6 +2355,7 @@ mod tests {
         let invocation = |name: &str, value: Value| Invocation {
             operation: "typed".into(),
             direct: false,
+            discard_stderr: false,
             parameters: BTreeMap::from([(name.into(), value)]),
             binding: None,
             cache: false,
@@ -2584,6 +2589,7 @@ mod tests {
             let invocation = Invocation {
                 operation: "strings".into(),
                 direct: false,
+                discard_stderr: false,
                 parameters: BTreeMap::from([(parameter.into(), value.clone())]),
                 binding: None,
                 cache: false,

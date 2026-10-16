@@ -8,7 +8,7 @@ accept runtime_directory as text from environment "XDG_RUNTIME_DIR" with default
 
 define a program named percent
   accept sink as text
-  run "pactl" with arguments ["get-sink-volume", sink] and keep status as volume_status
+  run "pactl" with arguments ["get-sink-volume", sink] and discard stderr and keep status as volume_status
   then "awk" with arguments ["NR == 1 {for (i = 1; i <= NF; i++) if ($i ~ /%$/) {sub(\"%\", \"\", $i); print $i; exit}}"]
   then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"]
 
@@ -20,7 +20,7 @@ define a program named osd
     run "printf" with arguments ["0"] as display_volume
   otherwise
     run "printf" with arguments ["%s", volume] as display_volume
-  run "pactl" with arguments ["get-sink-mute", sink] and keep status as mute_status
+  run "pactl" with arguments ["get-sink-mute", sink] and discard stderr and keep status as mute_status
   then "jq" with arguments ["-Rs", "sub(\"\\n+$\"; \"\") | {muted: endswith(\"yes\")}"]
   then parse json as mute_data
   take boolean at "/muted" from mute_data as muted

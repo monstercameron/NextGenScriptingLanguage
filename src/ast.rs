@@ -28,6 +28,9 @@ pub struct Invocation {
     /// A quoted executable name bypasses the named applet catalog.
     #[serde(default, skip_serializing_if = "is_false")]
     pub direct: bool,
+    /// Attach native stderr to the operating system's null device.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub discard_stderr: bool,
     pub parameters: BTreeMap<String, Value>,
     pub binding: Option<String>,
     pub cache: bool,

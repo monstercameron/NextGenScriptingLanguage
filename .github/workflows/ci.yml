@@ -11,21 +11,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: typed-json-carry
-            base: e5fa5162b9bdca608f7f3c9d0d273db40a93c17b
-            patch: typed-json-carry.patch.xz
-            xz_sha256: a996c966828a0fd89c433e977fcea60af9988c24dffc6224e9c1055fd1db7c84
-            patch_sha256: c43a56eab9556f454175c03ca7e7739f4af0f51cc542dd640eb1152a6e1b698c
-          - name: program-cache-v3
+          - name: program-cache-v3-1
             base: 0735e4bf2f10b4d366bd31cd0140acd574b80ee4
-            patch: program-cache-v3.patch.xz
-            xz_sha256: d295845b7855649639be1eda0313e2e4ab66d8e3b499f63f08d4f4dedb6cbc27
-            patch_sha256: 48d03d43fd1bb1bb34415ac44ab38fdbe2ae197bb85bc0fc9708821deea72e0a
-          - name: borrowed-response
-            base: a884f6561fd43f45e43b25a3cc2233be17ee3944
-            patch: borrowed-response.patch.xz
-            xz_sha256: d505d6c23b49faf484135d886e7ae6bb156e8dd89c23c570cf3bcc6e70c69374
-            patch_sha256: ebe7e81accfd8b80568943aa30f2451435945a76d239eb30cd88042fd373121a
+            patch: program-cache-v3-1.patch.xz
+            xz_sha256: 195aed61c68c6b9aa1da44a44dbd04959f918667b44ee051234e0e083b51fdd8
+            patch_sha256: a0d2d16d6efc40ee71a687bfd926874f6a5204d279edb5b15091876eab5c862e
     env:
       CANDIDATE_NAME: ${{ matrix.name }}
       BASE_COMMIT: ${{ matrix.base }}
@@ -86,7 +76,7 @@ jobs:
           targets=(--lib)
           case "$CANDIDATE_NAME" in
             typed-json-carry) targets+=(--test typed_contracts) ;;
-            program-cache-v3) targets+=(--test program_modules) ;;
+            program-cache-v3-1) targets+=(--test program_modules) ;;
             borrowed-response) targets+=(--test worker_backend) ;;
             *) exit 2 ;;
           esac

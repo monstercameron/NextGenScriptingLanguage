@@ -102,10 +102,18 @@ After reviewing the smoke report and confirming the runner budget, the same
 command can be repeated with a fresh report name and `--nodes 1000`. Do not
 overlap the build, the mixed run, or the existing graph stress measurement.
 The manual `Mixed runtime lifecycle probe` workflow follows that order: it
-always requires the 32-actor smoke first, and its boolean `run_1000` input is
-the only path to one capped 1,000-actor run. Both successful raw reports and
-failure checkpoints are uploaded even when a step fails. The workflow runs on
-Ubuntu CI only; it does not infer desktop or Omarchy capacity.
+always runs the 32-actor, 1,000 ms correctness smoke first. Its boolean
+`run_1000` input gates the optional 1,000-actor trials; the fixed choices are
+one or three trials and a 1,000 or 10,000 ms active window. Defaults remain
+one trial and 1,000 ms; the 1,000-actor run stays opt-in. Every declared trial
+runs even after a failure, reports have unique run/trial names, all
+failure sidecars are retained, and the job fails if any trial fails. A 10 s
+window repeated three times is a bounded replication check under one Linux CI
+environment. It is not a long-running or churn test, a process-tree resource
+measurement, evidence for 1,000 independent capabilities, or a general
+capacity guarantee. Successful reports and failure checkpoints are uploaded
+even when a step fails. The workflow runs on Ubuntu CI only; it does not infer
+desktop or Omarchy capacity.
 
 Compile each ignored release test target in a separate, quiet build window:
 

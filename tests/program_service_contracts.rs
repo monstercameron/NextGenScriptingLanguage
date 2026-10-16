@@ -258,17 +258,149 @@ fn v2_schedule_package_and_direct_source_select_the_real_program_root() {
 }
 
 #[test]
+fn v2_listener_export_uses_the_persistent_service_root_and_typed_contract() {
+    let source = "accept threshold as integer\nlisten to test.producer with count threshold\nwhenever a line arrives as message\n  then encode threshold as json\n";
+    let root = tempdir().unwrap();
+    let mut manifest = service_package(source);
+    manifest.name = "example.listener".into();
+    manifest.exports.get_mut("poll").unwrap().lifecycle = ModuleLifecycle::Listener;
+    let path = write_package(root.path(), source, &manifest);
+
+    let loaded_package = load_program_module_package(&path, root.path(), None).unwrap();
+    let exported = loaded_package.export("poll").unwrap();
+    assert!(matches!(
+        &exported.entry,
+        flow::modules::LoadedProgramEntry::ProgramService
+    ));
+    assert!(matches!(
+        &exported.program.trigger,
+        Some(flow::ast::Trigger::Listen {
+            source: flow::ast::ListenSource::Applet(_),
+            ..
+        })
+    ));
+    assert_eq!(exported.reference.entry, "poll");
+
+    let reference = ProgramModule {
+        source: PathBuf::from("../package/src/service.program"),
+        entry: "poll".into(),
+        interface_version: PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+        package_manifest: Some(PathBuf::from("../package/program.modules.json")),
+        package_lock: Some(PathBuf::from("../package/program.modules.lock.json")),
+    };
+    fs::write(
+        root.path().join("package/program.modules.lock.json"),
+        serde_json::to_vec_pretty(&loaded_package.lock_snapshot(root.path()).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let applet_manifest = root.path().join("applets/listener.json");
+    fs::create_dir_all(applet_manifest.parent().unwrap()).unwrap();
+    fs::write(&applet_manifest, "{}").unwrap();
+    let loaded_source = load_program_module(&reference, &applet_manifest, root.path()).unwrap();
+    let contract: AppletContract =
+        serde_json::from_value(contract_json(&reference, &exported.export)).unwrap();
+    assert_eq!(
+        contract.lifecycle,
+        flow::contracts::Lifecycle::ProgramService
+    );
+    loaded_source.validate_contract(&contract).unwrap();
+}
+
+#[test]
+fn listener_trigger_applet_is_retained_in_the_verified_package_scope() {
+    let root = tempdir().unwrap();
+    let catalog = root.path().join("catalog");
+    fs::create_dir_all(&catalog).unwrap();
+    let source = "accept threshold as integer\nlisten to test.producer with count threshold\nwhenever a line arrives as message\n  then encode threshold as json\n";
+    let mut package_manifest = service_package(source);
+    package_manifest.name = "example.listener".into();
+    package_manifest.exports.get_mut("poll").unwrap().lifecycle = ModuleLifecycle::Listener;
+    let package_path = write_package(&catalog, source, &package_manifest);
+    let package = load_program_module_package(&package_path, &catalog, None).unwrap();
+    fs::write(
+        catalog.join("package/program.modules.lock.json"),
+        serde_json::to_vec_pretty(&package.lock_snapshot(&catalog).unwrap()).unwrap(),
+    )
+    .unwrap();
+
+    let reference = ProgramModule {
+        source: PathBuf::from("package/src/service.program"),
+        entry: "poll".into(),
+        interface_version: PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+        package_manifest: Some(PathBuf::from("package/program.modules.json")),
+        package_lock: Some(PathBuf::from("package/program.modules.lock.json")),
+    };
+    let export = package.export("poll").unwrap();
+    let applet = json!({
+        "name": "test.listener_module",
+        "binary": "@program-module",
+        "accepts_stdin": false,
+        "parameters": {"threshold": {"type": "integer", "required": true}},
+        "arguments": [],
+        "contract": contract_json(&reference, &export.export)
+    });
+    fs::write(
+        catalog.join("listener_module.json"),
+        serde_json::to_vec_pretty(&applet).unwrap(),
+    )
+    .unwrap();
+    let producer = json!({
+        "name": "test.producer",
+        "binary": "/bin/true",
+        "parameters": {"count": {"type": "integer", "required": true}},
+        "arguments": [{"parameter": "count"}],
+        "contract": {"version": 1, "output": {"type": "bytes", "encoding": "raw"}}
+    });
+    fs::write(
+        catalog.join("producer.json"),
+        serde_json::to_vec_pretty(&producer).unwrap(),
+    )
+    .unwrap();
+
+    let registry = Registry::load(&catalog).unwrap();
+    let caller = flow::parser::parse("run test.listener_module with threshold 7\n").unwrap();
+    let flow::ast::StepKind::Invoke { call, .. } = &caller.steps[0].kind else {
+        panic!("expected a graph service invocation");
+    };
+    let session =
+        ProgramModuleSession::preload_invocations(&registry, std::iter::once(call)).unwrap();
+    let trigger = session
+        .scoped_body_invocations()
+        .iter()
+        .find(|(_, invocation)| invocation.operation == "test.producer")
+        .expect("listener trigger call is part of scoped module preflight");
+    assert_eq!(
+        trigger.0.resolve_call(&trigger.1).unwrap().name,
+        "test.producer"
+    );
+
+    let manifest_path = catalog.join("listener_module.json");
+    let mut applet: JsonValue = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    applet["accepts_stdin"] = json!(true);
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&applet).unwrap()).unwrap();
+    let stdin_registry = Registry::load(&catalog).unwrap();
+    let error = ProgramModuleSession::preload_invocations(&stdin_registry, std::iter::once(call))
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("cannot accept ambient stdin"));
+}
+
+#[test]
 fn scheduled_source_rejects_missing_or_listener_trigger_and_wrong_root_selector() {
     let root = tempdir().unwrap();
     let missing = "accept threshold as integer\nrun \"true\"\n";
     let (path, _) = load_service_package(root.path(), missing);
     let error = load_program_module_package(&path, root.path(), None).unwrap_err();
-    assert!(format!("{error:#}").contains("requires an every or cron trigger"));
+    assert!(format!("{error:#}").contains("requires a schedule or applet-listener trigger"));
 
     let listening = "accept threshold as integer\nlisten to stdin\nwhenever a line arrives as message\n  then tr with from \"a\" and to \"b\"\n";
     let (path, _) = load_service_package(root.path(), listening);
     let error = load_program_module_package(&path, root.path(), None).unwrap_err();
-    assert!(format!("{error:#}").contains("supports only every or cron triggers"));
+    assert!(format!("{error:#}").contains("cannot read ambient stdin"));
+
+    let listening = "accept threshold as integer\nlisten to test.producer with count threshold\nwhenever a line arrives as message\n  then encode threshold as json\n";
+    let (path, _) = load_service_package(root.path(), listening);
+    let error = load_program_module_package(&path, root.path(), None).unwrap_err();
+    assert!(format!("{error:#}").contains("scheduled program module export"));
 
     let (reference, applet_manifest) = source_direct_applet(root.path(), service_source());
     let mut reference = reference;
@@ -284,7 +416,7 @@ fn schedule_and_finite_exports_cannot_cross_interface_versions() {
     let mut manifest = service_package(finite);
     let path = write_package(root.path(), finite, &manifest);
     let error = load_program_module_package(&path, root.path(), None).unwrap_err();
-    assert!(format!("{error:#}").contains("requires an every or cron trigger"));
+    assert!(format!("{error:#}").contains("requires a schedule or applet-listener trigger"));
 
     manifest.interface_version = PROGRAM_MODULE_INTERFACE_VERSION;
     let export = manifest.exports.get_mut("poll").unwrap();
@@ -303,7 +435,7 @@ fn schedule_and_finite_exports_cannot_cross_interface_versions() {
     let path = write_package(root.path(), service_source(), &manifest);
     let error = load_program_module_package(&path, root.path(), None).unwrap_err();
     assert!(format!("{error:#}")
-        .contains("unsupported OneShot lifecycle for scheduled interface version 2"));
+        .contains("unsupported OneShot lifecycle for service interface version 2"));
 
     manifest.interface_version = 3;
     let path = write_package(root.path(), service_source(), &manifest);

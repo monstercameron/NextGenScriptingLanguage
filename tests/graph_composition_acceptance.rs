@@ -7,16 +7,17 @@ use flow::graph::{
     NodeIo, PortValue, RuntimeGraphExecutor,
 };
 use flow::manifest::Registry;
-use flow::modules::ProgramModuleSession;
+use flow::modules::{load_program_module_package, ProgramModuleSession};
 use flow::runtime::RunOptions;
 use serde_json::{json, Value as JsonValue};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 const COMPOSITION_DIR: &str = "examples/composition/graph-runtime";
@@ -74,6 +75,8 @@ impl GraphExecutor for HeadlessTuiFixture {
 struct LoopbackSseServer {
     address: SocketAddr,
     stop: Arc<AtomicBool>,
+    activity: Arc<Mutex<Vec<String>>>,
+    thread_error: Arc<Mutex<Option<String>>>,
     closed: mpsc::Receiver<u64>,
     thread: Option<thread::JoinHandle<Result<()>>>,
 }
@@ -84,62 +87,140 @@ impl LoopbackSseServer {
         let address = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
+        let activity = Arc::new(Mutex::new(Vec::new()));
+        let thread_activity = Arc::clone(&activity);
+        let thread_error = Arc::new(Mutex::new(None));
+        let thread_thread_error = Arc::clone(&thread_error);
         let (closed_sender, closed) = mpsc::channel();
-        let worker = thread::spawn(move || -> Result<()> {
-            for generation in 1..=generations {
-                let Some(mut discovery) = accept_until_stopped(&listener, &thread_stop) else {
-                    break;
-                };
-                let request = read_request(&mut discovery)?;
-                if !request.starts_with("GET /.well-known/execute-applet/v1 ") {
-                    bail!("unexpected discovery request: {request:?}");
-                }
-                write_response(
-                    &mut discovery,
-                    "application/vnd.execute.applet+json;version=1",
-                    &descriptor,
-                )?;
-                drop(discovery);
+        let worker = thread::spawn(move || {
+            let result = (|| -> Result<()> {
+                for generation in 1..=generations {
+                    let Some(mut discovery) = accept_until_stopped(&listener, &thread_stop) else {
+                        break;
+                    };
+                    let discovery_accepted_at = Instant::now();
+                    note_server_activity(
+                        &thread_activity,
+                        format!("generation {generation}: discovery accepted"),
+                    );
+                    let request = match read_request(&mut discovery) {
+                        Ok(request) => request,
+                        Err(error) => {
+                            note_server_activity(
+                                &thread_activity,
+                                format!(
+                                    "generation {generation}: discovery read failed after {:?}: {:?} ({error})",
+                                    discovery_accepted_at.elapsed(),
+                                    error.kind()
+                                ),
+                            );
+                            return Err(error).with_context(|| {
+                                format!(
+                                    "reading generation {generation} discovery request after {:?}",
+                                    discovery_accepted_at.elapsed()
+                                )
+                            });
+                        }
+                    };
+                    note_server_activity(
+                        &thread_activity,
+                        format!(
+                            "generation {generation}: discovery request after {:?}: {request:?}",
+                            discovery_accepted_at.elapsed()
+                        ),
+                    );
+                    if !request.starts_with("GET /.well-known/execute-applet/v1 ") {
+                        bail!("unexpected discovery request: {request:?}");
+                    }
+                    write_response(
+                        &mut discovery,
+                        "application/vnd.execute.applet+json;version=1",
+                        &descriptor,
+                    )?;
+                    drop(discovery);
 
-                let Some(mut events) = accept_until_stopped(&listener, &thread_stop) else {
-                    break;
-                };
-                let request = read_request(&mut events)?;
-                if !request.starts_with("GET /events/updates ") {
-                    bail!("unexpected event request: {request:?}");
-                }
-                events.set_write_timeout(Some(Duration::from_millis(250)))?;
-                events.write_all(
+                    let Some(mut events) = accept_until_stopped(&listener, &thread_stop) else {
+                        break;
+                    };
+                    let events_accepted_at = Instant::now();
+                    note_server_activity(
+                        &thread_activity,
+                        format!("generation {generation}: event connection accepted"),
+                    );
+                    let request = match read_request(&mut events) {
+                        Ok(request) => request,
+                        Err(error) => {
+                            note_server_activity(
+                                &thread_activity,
+                                format!(
+                                    "generation {generation}: event read failed after {:?}: {:?} ({error})",
+                                    events_accepted_at.elapsed(),
+                                    error.kind()
+                                ),
+                            );
+                            return Err(error).with_context(|| {
+                                format!(
+                                    "reading generation {generation} event request after {:?}",
+                                    events_accepted_at.elapsed()
+                                )
+                            });
+                        }
+                    };
+                    note_server_activity(
+                        &thread_activity,
+                        format!(
+                            "generation {generation}: event request after {:?}: {request:?}",
+                            events_accepted_at.elapsed()
+                        ),
+                    );
+                    if !request.starts_with("GET /events/updates ") {
+                        bail!("unexpected event request: {request:?}");
+                    }
+                    events.set_write_timeout(Some(Duration::from_millis(250)))?;
+                    events.write_all(
                     b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n",
                 )?;
-                events.flush()?;
+                    events.flush()?;
 
-                for sequence in 1..=3 {
-                    let data = json!({"text": format!("remote-{sequence}")});
-                    let frame = format!(
-                        "id: {generation}-{sequence}\nevent: update\ndata: {}\n\n",
-                        serde_json::to_string(&data)?
-                    );
-                    write_chunk(&mut events, frame.as_bytes())?;
+                    for sequence in 1..=3 {
+                        let data = json!({"text": format!("remote-{sequence}")});
+                        let frame = format!(
+                            "id: {generation}-{sequence}\nevent: update\ndata: {}\n\n",
+                            serde_json::to_string(&data)?
+                        );
+                        write_chunk(&mut events, frame.as_bytes())?;
+                        note_server_activity(
+                            &thread_activity,
+                            format!("generation {generation}: sent remote-{sequence}"),
+                        );
+                    }
+
+                    loop {
+                        if thread_stop.load(Ordering::Acquire) {
+                            break;
+                        }
+                        if write_chunk(&mut events, b": keepalive\n\n").is_err() {
+                            let _ = closed_sender.send(generation);
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
                 }
-
-                loop {
-                    if thread_stop.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if write_chunk(&mut events, b": keepalive\n\n").is_err() {
-                        let _ = closed_sender.send(generation);
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(10));
+                Ok(())
+            })();
+            if let Err(error) = &result {
+                if let Ok(mut thread_error) = thread_thread_error.lock() {
+                    *thread_error = Some(format!("{error:#}"));
                 }
             }
-            Ok(())
+            result
         });
 
         Ok(Self {
             address,
             stop,
+            activity,
+            thread_error,
             closed,
             thread: Some(worker),
         })
@@ -158,6 +239,20 @@ impl LoopbackSseServer {
         Ok(())
     }
 
+    fn activity(&self) -> Vec<String> {
+        self.activity
+            .lock()
+            .map(|activity| activity.clone())
+            .unwrap_or_default()
+    }
+
+    fn thread_error(&self) -> Option<String> {
+        self.thread_error
+            .lock()
+            .ok()
+            .and_then(|error| error.clone())
+    }
+
     fn finish(mut self) -> Result<()> {
         self.stop.store(true, Ordering::Release);
         let _ = TcpStream::connect(self.address);
@@ -167,6 +262,12 @@ impl LoopbackSseServer {
                 .map_err(|_| anyhow!("loopback SSE fixture panicked"))??;
         }
         Ok(())
+    }
+}
+
+fn note_server_activity(activity: &Mutex<Vec<String>>, note: String) {
+    if let Ok(mut activity) = activity.lock() {
+        activity.push(note);
     }
 }
 
@@ -194,9 +295,18 @@ fn accept_until_stopped(listener: &TcpListener, stop: &AtomicBool) -> Option<Tcp
 }
 
 fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
+    read_request_with_ready(stream, || {})
+}
+
+fn read_request_with_ready(
+    stream: &mut TcpStream,
+    on_read_start: impl FnOnce(),
+) -> std::io::Result<String> {
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_millis(300)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut first_line = String::new();
+    on_read_start();
     reader.read_line(&mut first_line)?;
     if first_line.is_empty() {
         return Ok(first_line);
@@ -209,6 +319,46 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<String> {
         }
     }
     Ok(first_line.trim_end().to_owned())
+}
+
+#[test]
+fn read_request_waits_for_a_delayed_request_on_a_nonblocking_socket() -> Result<()> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    listener.set_nonblocking(true)?;
+    let mut client = TcpStream::connect(listener.local_addr()?)?;
+    let accept_deadline = Instant::now() + Duration::from_secs(1);
+    let (mut accepted, _) = loop {
+        match listener.accept() {
+            Ok(connection) => break connection,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= accept_deadline {
+                    bail!("timed out accepting the delayed-request regression socket");
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    accepted.set_nonblocking(true)?;
+
+    let (read_started_sender, read_started_receiver) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        read_request_with_ready(&mut accepted, || {
+            let _ = read_started_sender.send(());
+        })
+    });
+    read_started_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .context("waiting for the request reader to start")?;
+    thread::sleep(Duration::from_millis(30));
+    let write_result = client.write_all(b"GET /delayed HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    let read_result = reader
+        .join()
+        .map_err(|_| anyhow!("delayed-request reader thread panicked"))?;
+    let request = read_result?;
+    write_result?;
+    assert_eq!(request, "GET /delayed HTTP/1.1");
+    Ok(())
 }
 
 fn write_response(stream: &mut TcpStream, content_type: &str, body: &[u8]) -> std::io::Result<()> {
@@ -254,6 +404,105 @@ fn remote_contract(endpoint: &str) -> JsonValue {
             }
         }
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_projection_module(
+    applets: &Path,
+    package_name: &str,
+    applet_name: &str,
+    source: &str,
+    module_inputs: JsonValue,
+    graph_inputs: JsonValue,
+    parameters: JsonValue,
+    accepts_stdin: bool,
+) -> Result<()> {
+    let package_root = applets.join(format!("{package_name}.package"));
+    let package_source = package_root.join("src/library.program");
+    let package_manifest = package_root.join("package/program.modules.json");
+    let package_lock = package_root.join("package/program.modules.lock.json");
+    fs::create_dir_all(package_source.parent().expect("source has a directory"))?;
+    fs::create_dir_all(package_manifest.parent().expect("manifest has a directory"))?;
+    fs::write(&package_source, source)?;
+    let source_sha256 = format!("{:x}", Sha256::digest(source.as_bytes()));
+    let value_schema = record_schema();
+    let ports = json!({
+        "inputs": graph_inputs,
+        "events": {
+            "result": {
+                "schema": value_schema,
+                "delivery": "events"
+            }
+        }
+    });
+    let output = json!({
+        "type": "record",
+        "encoding": "json",
+        "fields": { "text": { "type": "text" } },
+        "required": ["text"]
+    });
+    let package = json!({
+        "format_version": 1,
+        "name": format!("fixture.{package_name}"),
+        "version": "1.0.0",
+        "interface_version": 1,
+        "source": "../src/library.program",
+        "source_sha256": source_sha256,
+        "exports": {
+            "convert": {
+                "entry": "convert",
+                "interface_version": 1,
+                "inputs": module_inputs,
+                "output": output,
+                "lifecycle": { "kind": "one_shot" },
+                "capabilities": [],
+                "ports": ports
+            }
+        },
+        "dependencies": {}
+    });
+    fs::write(&package_manifest, serde_json::to_vec_pretty(&package)?)?;
+    let loaded_package = load_program_module_package(&package_manifest, applets, None)?;
+    fs::write(
+        &package_lock,
+        serde_json::to_vec_pretty(&loaded_package.lock_snapshot(applets)?)?,
+    )?;
+
+    let module_source = package_source
+        .strip_prefix(applets)
+        .expect("package lives under the applet module root");
+    let module_manifest = package_manifest
+        .strip_prefix(applets)
+        .expect("package lives under the applet module root");
+    let module_lock = package_lock
+        .strip_prefix(applets)
+        .expect("package lives under the applet module root");
+    let descriptor = json!({
+        "name": applet_name,
+        "binary": "@program-module",
+        "accepts_stdin": accepts_stdin,
+        "parameters": parameters,
+        "arguments": [],
+        "contract": {
+            "version": 1,
+            "backend": "program_module",
+            "program": {
+                "source": module_source,
+                "entry": "convert",
+                "interface_version": 1,
+                "package_manifest": module_manifest,
+                "package_lock": module_lock
+            },
+            "lifecycle": { "kind": "oneshot" },
+            "output": output,
+            "ports": ports
+        }
+    });
+    fs::write(
+        applets.join(format!("{package_name}.json")),
+        serde_json::to_vec_pretty(&descriptor)?,
+    )?;
+    Ok(())
 }
 
 fn python3() -> PathBuf {
@@ -399,13 +648,14 @@ fn collect_until(
     while !has_generation_evidence(events, generation) {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            bail!("timed out waiting for generation {generation} composition updates");
+            bail!(
+                "timed out waiting for generation {generation} composition updates; observed: {events:?}"
+            );
         }
-        events.push(
-            receiver
-                .recv_timeout(remaining)
-                .with_context(|| format!("waiting for generation {generation} renderer data"))?,
-        );
+        let event = receiver.recv_timeout(remaining).with_context(|| {
+            format!("waiting for generation {generation} renderer data; observed: {events:?}")
+        })?;
+        events.push(event);
     }
     Ok(())
 }
@@ -559,6 +809,27 @@ fn read_effects(path: &Path) -> Vec<String> {
         .collect()
 }
 
+fn graph_failure_diagnostic(
+    error: anyhow::Error,
+    session: &mut GraphSession,
+    server: &LoopbackSseServer,
+    worker_pids: &Path,
+    worker_effects: &Path,
+    observed: &[ObservedUpdate],
+    launched_processes: impl FnOnce() -> usize,
+) -> anyhow::Error {
+    let graph_probe = session.recv_output().map(|event| format!("{event:?}"));
+    let launches = launched_processes();
+    let pids = read_pids(worker_pids);
+    let effects = read_effects(worker_effects);
+    let source_activity = server.activity();
+    let source_error = server.thread_error();
+    let joined = session.cancel_and_join();
+    anyhow!(
+        "{error:#}; diagnostic launches={launches} worker_pids={pids:?} worker_effects={effects:?} observed={observed:?} source_activity={source_activity:?} source_error={source_error:?} graph_probe={graph_probe:#?} graph_join={joined:#?}"
+    )
+}
+
 #[test]
 fn parsed_runtime_graph_composes_services_workers_streams_and_reconfiguration() -> Result<()> {
     let root = tempfile::tempdir()?;
@@ -597,7 +868,17 @@ fn parsed_runtime_graph_composes_services_workers_streams_and_reconfiguration() 
     assert_eq!(session.context().revision, 1);
     let first_metrics = Arc::clone(&session.context().metrics);
     let mut observed = Vec::new();
-    collect_until(&updates_receiver, &mut observed, 1, Duration::from_secs(8))?;
+    if let Err(error) = collect_until(&updates_receiver, &mut observed, 1, Duration::from_secs(8)) {
+        return Err(graph_failure_diagnostic(
+            error,
+            &mut session,
+            &server,
+            &worker_pids,
+            &worker_effects,
+            &observed,
+            || first_metrics.launched_processes(),
+        ));
+    }
     wait_for_metric(
         || first_metrics.launched_processes(),
         2,
@@ -628,7 +909,17 @@ fn parsed_runtime_graph_composes_services_workers_streams_and_reconfiguration() 
     assert_process_reaped(first_worker_pid);
 
     let second_metrics = Arc::clone(&session.context().metrics);
-    collect_until(&updates_receiver, &mut observed, 2, Duration::from_secs(8))?;
+    if let Err(error) = collect_until(&updates_receiver, &mut observed, 2, Duration::from_secs(8)) {
+        return Err(graph_failure_diagnostic(
+            error,
+            &mut session,
+            &server,
+            &worker_pids,
+            &worker_effects,
+            &observed,
+            || second_metrics.launched_processes(),
+        ));
+    }
     wait_for_metric(
         || second_metrics.launched_processes(),
         2,
@@ -649,5 +940,210 @@ fn parsed_runtime_graph_composes_services_workers_streams_and_reconfiguration() 
     assert_generation_events(&observed, 2, 2);
     assert_eq!(read_effects(&worker_effects).len(), 8);
     assert_eq!(read_pids(&worker_pids).len(), 2);
+    Ok(())
+}
+
+#[test]
+fn native_listener_projects_imported_finite_program_result_to_typed_event() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let applets = root.path().join("applets");
+    fs::create_dir_all(&applets)?;
+    write_projection_module(
+        &applets,
+        "native_projection",
+        "composition.native_module",
+        "define a program named convert\n  accept payload as json\n  then encode payload as json\n",
+        json!([{ "name": "payload", "type": "json", "required": true }]),
+        json!({
+            "payload": {
+                "schema": record_schema(),
+                "delivery": "events"
+            }
+        }),
+        json!({ "payload": { "type": "json", "required": true } }),
+        false,
+    )?;
+    fs::write(
+        applets.join("native_decode.json"),
+        serde_json::to_vec_pretty(&json!({
+            "name": "composition.native_decode",
+            "binary": "jq",
+            "accepts_stdin": true,
+            "parameters": {},
+            "arguments": [{ "literal": "." }],
+            "contract": {
+                "version": 1,
+                "output": {
+                    "type": "record",
+                    "encoding": "json",
+                    "fields": { "text": { "type": "text" } },
+                    "required": ["text"]
+                },
+                "ports": {
+                    "inputs": {
+                        "stdin": {
+                            "schema": { "type": "bytes" },
+                            "delivery": "events",
+                            "encoding": "raw"
+                        }
+                    },
+                    "events": {
+                        "result": {
+                            "schema": record_schema(),
+                            "delivery": "events"
+                        }
+                    }
+                }
+            }
+        }))?,
+    )?;
+    let native_source = json!({
+        "name": "composition.native_source",
+        "binary": "/bin/echo",
+        "accepts_stdin": false,
+        "parameters": {},
+        "arguments": [{ "literal": "{\"text\":\"native-listener\"}" }],
+        "contract": {
+            "version": 1,
+            "output": { "type": "bytes", "encoding": "raw" }
+        }
+    });
+    fs::write(
+        applets.join("native_source.json"),
+        serde_json::to_vec_pretty(&native_source)?,
+    )?;
+    let registry = Registry::load(&applets)?;
+    let plan = graph::parse(
+        "graph native_result_events\n  listen to composition.native_source as source\n  run composition.native_decode as decoded\n  emit result from decoded to result\n  run composition.native_module as mapped\n  emit result from mapped to result\n  bind source.line to decoded.stdin with capacity 1 lossless\n  bind decoded.result to mapped.payload with capacity 1 lossless\nend graph\n",
+        &registry,
+    )?;
+    plan.validate_with_registry(&registry)?;
+    let module_session = Arc::new(ProgramModuleSession::preload_invocations(
+        &registry,
+        plan.invocations(),
+    )?);
+    let executor = RuntimeGraphExecutor::with_module_session(
+        registry,
+        RunOptions {
+            inputs: BTreeMap::new(),
+            working_directory: root.path().to_path_buf(),
+            cache_directory: None,
+            trace: false,
+            max_output_bytes: 1024 * 1024,
+            command_timeout: Some(Duration::from_secs(3)),
+            total_timeout: None,
+        },
+        module_session,
+    );
+    let session = GraphSession::start(plan, Arc::new(executor), graph_options())?;
+    let result = session.run_to_completion()?;
+    assert_eq!(result.outputs.len(), 1, "{:?}", result.outputs);
+    let event = &result.outputs[0];
+    assert_eq!(event.port, flow::graph::PortRef::new("mapped", "result"));
+    assert_eq!(event.generation, 1);
+    assert_eq!(event.revision, 1);
+    assert!(matches!(
+        &event.payload,
+        PortValue::Value(Value::Record(fields))
+            if fields.get("text") == Some(&Value::String("native-listener".into()))
+    ));
+    Ok(())
+}
+
+#[test]
+fn remote_typed_events_flow_through_imported_module_result_projection_and_cancel() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let applets = root.path().join("applets");
+    fs::create_dir_all(&applets)?;
+    write_projection_module(
+        &applets,
+        "remote_projection",
+        "composition.remote_module",
+        "define a program named convert\n  accept payload as json\n  then encode payload as json\n",
+        json!([{ "name": "payload", "type": "json", "required": true }]),
+        json!({
+            "payload": {
+                "schema": record_schema(),
+                "delivery": "events"
+            }
+        }),
+        json!({"payload": {"type": "json", "required": true}}),
+        false,
+    )?;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let contract = remote_contract(&endpoint);
+    let descriptor = serde_json::to_vec(&json!({
+        "protocol_version": 1,
+        "identity": { "name": "composition.remote_feed", "version": "1" },
+        "contract": contract,
+        "events": [{
+            "port": "updates",
+            "format": "sse",
+            "max_event_bytes": 4096,
+            "resumable": false,
+            "backpressure": "pull"
+        }]
+    }))?;
+    let server = LoopbackSseServer::start(listener, descriptor, 1)?;
+    let remote_manifest = json!({
+        "name": "composition.remote_feed",
+        "binary": "@remote-applet",
+        "parameters": {},
+        "arguments": [],
+        "contract": remote_contract(&endpoint)
+    });
+    fs::write(
+        applets.join("remote_feed.json"),
+        serde_json::to_vec_pretty(&remote_manifest)?,
+    )?;
+    let registry = Registry::load(&applets)?;
+    let plan = graph::parse(
+        "graph remote_result_events\n  listen to composition.remote_feed as source\n  run composition.remote_module as mapped\n  emit result from mapped to result\n  bind source.updates to mapped.payload with capacity 1 lossless\nend graph\n",
+        &registry,
+    )?;
+    plan.validate_with_registry(&registry)?;
+    let module_session = Arc::new(ProgramModuleSession::preload_invocations(
+        &registry,
+        plan.invocations(),
+    )?);
+    let executor = RuntimeGraphExecutor::with_module_session(
+        registry,
+        RunOptions {
+            inputs: BTreeMap::new(),
+            working_directory: root.path().to_path_buf(),
+            cache_directory: None,
+            trace: false,
+            max_output_bytes: 1024 * 1024,
+            command_timeout: Some(Duration::from_secs(3)),
+            total_timeout: None,
+        },
+        module_session,
+    );
+    let mut session = GraphSession::start(plan, Arc::new(executor), graph_options())?;
+    let mut observed = Vec::new();
+    for expected in 1..=3 {
+        let event = session
+            .recv_output()
+            .with_context(|| format!("receiving projected remote event {expected}"))?
+            .ok_or_else(|| anyhow!("remote result-event graph closed early"))?;
+        observed.push(event);
+        let event = observed.last().expect("just pushed output");
+        assert_eq!(event.port, flow::graph::PortRef::new("mapped", "result"));
+        assert_eq!(event.generation, 1);
+        assert_eq!(event.revision, 1);
+        assert!(matches!(
+            &event.payload,
+            PortValue::Value(Value::Record(fields))
+                if fields.get("text") == Some(&Value::String(format!("remote-{expected}")))
+        ));
+    }
+    assert!(observed
+        .windows(2)
+        .all(|pair| pair[0].sequence < pair[1].sequence));
+    session.cancel_and_join()?;
+    server.wait_closed(1)?;
+    server.finish()?;
     Ok(())
 }

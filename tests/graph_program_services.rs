@@ -109,6 +109,30 @@ fn service_fixture(source: &str) -> (TempDir, Registry) {
 }
 
 #[cfg(unix)]
+fn listener_source_registry(root: &TempDir, script: &str, outcomes: Option<JsonValue>) -> Registry {
+    let mut source_applet = json!({
+        "name": "test.snapshot_source",
+        "binary": "/bin/sh",
+        "accepts_stdin": false,
+        "parameters": {},
+        "arguments": [{"literal": "-c"}, {"literal": script}]
+    });
+    if let Some(outcomes) = outcomes {
+        source_applet["contract"] = json!({
+            "version": 1,
+            "output": {"type": "bytes", "encoding": "raw"},
+            "outcomes": outcomes
+        });
+    }
+    fs::write(
+        root.path().join("applets/snapshot_source.json"),
+        serde_json::to_vec_pretty(&source_applet).unwrap(),
+    )
+    .unwrap();
+    Registry::load(&root.path().join("applets")).unwrap()
+}
+
+#[cfg(unix)]
 fn worker_manifest(name: &str, marker: &Path) -> JsonValue {
     let python = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|directory| directory.join("python3"))
@@ -174,6 +198,21 @@ fn service_fixture_with_workers(
 }
 
 fn service_with_v1_dependency_fixture() -> (TempDir, Registry) {
+    let service_source =
+        "accept snapshot as json\nevery 20 milliseconds\n  run dep.echo with payload snapshot\n";
+    package_service_with_v1_dependency_fixture(service_source, "schedule", false)
+}
+
+fn listener_with_v1_dependency_fixture() -> (TempDir, Registry) {
+    let service_source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  run dep.echo with payload snapshot\n";
+    package_service_with_v1_dependency_fixture(service_source, "listener", true)
+}
+
+fn package_service_with_v1_dependency_fixture(
+    service_source: &str,
+    lifecycle: &str,
+    include_listener_source: bool,
+) -> (TempDir, Registry) {
     let root = tempfile::tempdir().unwrap();
     let catalog = root.path().join("catalog");
     let service_dir = catalog.join("packages/service");
@@ -213,8 +252,6 @@ fn service_with_v1_dependency_fixture() -> (TempDir, Registry) {
     let dependency_manifest_bytes = serde_json::to_vec_pretty(&dependency_package).unwrap();
     fs::write(&dependency_manifest_path, &dependency_manifest_bytes).unwrap();
 
-    let service_source =
-        "accept snapshot as json\nevery 20 milliseconds\n  run dep.echo with payload snapshot\n";
     fs::write(service_dir.join("src/service.program"), service_source).unwrap();
     let service_package = json!({
         "format_version": 1,
@@ -231,7 +268,7 @@ fn service_with_v1_dependency_fixture() -> (TempDir, Registry) {
                     { "name": "snapshot", "type": "json", "required": true }
                 ],
                 "output": count_output_schema(),
-                "lifecycle": { "kind": "schedule" },
+                "lifecycle": { "kind": lifecycle },
                 "ports": {
                     "inputs": {
                         "snapshot": {
@@ -313,6 +350,21 @@ fn service_with_v1_dependency_fixture() -> (TempDir, Registry) {
         serde_json::to_vec_pretty(&applet).unwrap(),
     )
     .unwrap();
+    if include_listener_source {
+        let source_applet = json!({
+            "name": "test.snapshot_source",
+            "binary": "printf",
+            "accepts_stdin": false,
+            "parameters": {},
+            "arguments": [{"literal": "{\"count\":11}"}],
+            "contract": {"version": 1, "output": {"type": "bytes", "encoding": "raw"}}
+        });
+        fs::write(
+            catalog.join("snapshot_source.json"),
+            serde_json::to_vec_pretty(&source_applet).unwrap(),
+        )
+        .unwrap();
+    }
     (root, Registry::load(&catalog).unwrap())
 }
 
@@ -374,6 +426,99 @@ fn scheduled_program_service_emits_successive_typed_events() {
     ));
     assert!(second.sequence > first.sequence);
     assert_eq!(second.payload, first.payload);
+    session.cancel_and_join().unwrap();
+}
+
+#[test]
+fn native_listener_program_service_emits_a_typed_event_and_counts_its_source() {
+    let source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  then encode snapshot as json\n";
+    let (root, registry) = service_fixture(source);
+    let plan = service_plan(&registry, r#"{"count":7}"#, None);
+    plan.validate_with_registry(&registry).unwrap();
+    let mut session = start_session(plan, &registry, root.path(), GraphRunOptions::default());
+
+    let event = session.recv_output().unwrap().unwrap();
+    assert_eq!(event.port.node, "service");
+    assert_eq!(event.port.port, "updated");
+    assert!(matches!(
+        event.payload,
+        PortValue::Value(Value::Record(ref record))
+            if record.get("count") == Some(&Value::Integer(7))
+    ));
+    assert!(session.recv_output().unwrap().is_none());
+    assert_eq!(session.context().metrics.launched_processes(), 1);
+    session.cancel_and_join().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn native_listener_honors_a_declared_nonzero_success_status() {
+    let source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  then parse json as payload\n  then encode payload as json\n";
+    let (root, _) = service_fixture(source);
+    let registry = listener_source_registry(
+        &root,
+        r#"printf '%s\n' '{"count":11}'; exit 7"#,
+        Some(json!([{"status": 7, "name": "complete", "kind": "success"}])),
+    );
+    let plan = service_plan(&registry, r#"{"count":7}"#, None);
+    plan.validate_with_registry(&registry).unwrap();
+    let mut session = start_session(plan, &registry, root.path(), GraphRunOptions::default());
+
+    let event = session.recv_output().unwrap().unwrap();
+    assert!(matches!(
+        event.payload,
+        PortValue::Value(Value::Record(ref record))
+            if record.get("count") == Some(&Value::Integer(11))
+    ));
+    assert!(session.recv_output().unwrap().is_none());
+    assert_eq!(session.context().metrics.launched_processes(), 1);
+    session.cancel_and_join().unwrap();
+}
+
+#[cfg(unix)]
+fn assert_listener_source_failure_status_is_rejected(status: i32, outcomes: Option<JsonValue>) {
+    let source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  then parse json as payload\n  then encode payload as json\n";
+    let (root, _) = service_fixture(source);
+    let registry = listener_source_registry(&root, &format!("exit {status}"), outcomes);
+    let plan = service_plan(&registry, r#"{"count":7}"#, None);
+    plan.validate_with_registry(&registry).unwrap();
+    let mut session = start_session(plan, &registry, root.path(), GraphRunOptions::default());
+
+    let error = session.recv_output().unwrap_err();
+    assert!(format!("{error:#}").contains("listener failed"));
+    assert_eq!(session.context().metrics.launched_processes(), 1);
+    session.cancel_and_join().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn native_listener_rejects_declared_failure_and_unmapped_statuses() {
+    let outcomes = Some(json!([
+        {"status": 7, "name": "complete", "kind": "success"},
+        {"status": 8, "name": "failed", "kind": "failure"}
+    ]));
+    assert_listener_source_failure_status_is_rejected(8, outcomes);
+    assert_listener_source_failure_status_is_rejected(
+        9,
+        Some(json!([{"status": 7, "name": "complete", "kind": "success"}])),
+    );
+    assert_listener_source_failure_status_is_rejected(9, None);
+}
+
+#[test]
+fn listener_output_decode_failure_keeps_the_successful_source_spawn_count() {
+    let source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  then encode \"not-a-record\" as json\n";
+    let (root, registry) = service_fixture(source);
+    let plan = service_plan(&registry, r#"{"count":7}"#, None);
+    plan.validate_with_registry(&registry).unwrap();
+    let mut session = start_session(plan, &registry, root.path(), GraphRunOptions::default());
+
+    let error = session.recv_output().unwrap_err();
+    assert!(
+        format!("{error:#}").contains("expected JSON object"),
+        "{error:#}"
+    );
+    assert_eq!(session.context().metrics.launched_processes(), 1);
     session.cancel_and_join().unwrap();
 }
 
@@ -690,6 +835,53 @@ fn graph_service_cancellation_reaps_only_its_retained_json_lines_worker() {
 
 #[cfg(unix)]
 #[test]
+fn cancelling_native_listener_service_reaps_source_and_keeps_immediate_spawn_count() {
+    let source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  then encode snapshot as json\n";
+    let (root, _) = service_fixture(source);
+    let pid_file = root.path().join("listener.pid");
+    let script = format!(
+        "printf '%s\\n' $$ > '{}'; printf '{{\"count\":11}}\\n'; exec sleep 30",
+        pid_file.display()
+    );
+    let source_applet = json!({
+        "name": "test.snapshot_source",
+        "binary": "/bin/sh",
+        "accepts_stdin": false,
+        "parameters": {},
+        "arguments": [{"literal": "-c"}, {"literal": script}],
+        "contract": {"version": 1, "output": {"type": "bytes", "encoding": "raw"}}
+    });
+    fs::write(
+        root.path().join("applets/snapshot_source.json"),
+        serde_json::to_vec_pretty(&source_applet).unwrap(),
+    )
+    .unwrap();
+    let registry = Registry::load(&root.path().join("applets")).unwrap();
+    let plan = service_plan(&registry, r#"{"count":7}"#, None);
+    let mut session = start_session(plan, &registry, root.path(), GraphRunOptions::default());
+
+    let pid = wait_for_pid_file(&pid_file, Instant::now() + Duration::from_secs(3))
+        .expect("listener producer should start");
+    let event = session.recv_output().unwrap().unwrap();
+    assert!(matches!(
+        event.payload,
+        PortValue::Value(Value::Record(ref record))
+            if record.get("count") == Some(&Value::Integer(7))
+    ));
+    assert_eq!(session.context().metrics.launched_processes(), 1);
+
+    let started = Instant::now();
+    session.cancel_and_join().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "graph cancellation waited for the native listener source"
+    );
+    assert_eq!(session.context().metrics.launched_processes(), 1);
+    assert_process_reaped(pid);
+}
+
+#[cfg(unix)]
+#[test]
 fn service_finally_keeps_module_worker_context_and_exact_process_accounting() {
     let marker_root = tempfile::tempdir().unwrap();
     let worker_marker = marker_root.path().join("worker.pids");
@@ -870,6 +1062,50 @@ fn scheduled_package_handler_can_invoke_a_pinned_v1_dependency_alias() {
         PortValue::Value(Value::Record(record)) if record.get("count") == Some(&Value::Integer(9))
     ));
     session.cancel_and_join().unwrap();
+}
+
+#[test]
+fn package_listener_preflights_its_native_source_and_invokes_a_pinned_v1_alias() {
+    let (root, registry) = listener_with_v1_dependency_fixture();
+    let plan = graph::parse(
+        "graph package_listener\n  run test.scheduled_queue with snapshot {\"count\":9} as service\nend graph\n",
+        &registry,
+    )
+    .unwrap();
+    plan.validate_with_registry(&registry).unwrap();
+    let module_session =
+        Arc::new(ProgramModuleSession::preload_invocations(&registry, plan.invocations()).unwrap());
+    for required in ["test.snapshot_source", "dep.echo"] {
+        assert!(
+            module_session
+                .scoped_body_invocations()
+                .iter()
+                .any(|(scope, invocation)| {
+                    invocation.operation == required && scope.resolve_call(invocation).is_ok()
+                }),
+            "module preflight should retain {required:?} in its package scope"
+        );
+    }
+
+    let executor = RuntimeGraphExecutor::with_module_session(
+        registry.clone(),
+        options(root.path()),
+        module_session,
+    );
+    let graph_options = GraphRunOptions {
+        deadline: Some(Instant::now() + Duration::from_secs(5)),
+        ..GraphRunOptions::default()
+    };
+    let session = GraphSession::start(plan, Arc::new(executor), graph_options).unwrap();
+    let result = session.run_to_completion().unwrap();
+    assert_eq!(result.outputs.len(), 1);
+    assert_eq!(result.outputs[0].port, PortRef::new("service", "updated"));
+    assert!(matches!(
+        &result.outputs[0].payload,
+        PortValue::Value(Value::Record(record))
+            if record.get("count") == Some(&Value::Integer(9))
+    ));
+    assert_eq!(result.launched_processes, 1);
 }
 
 struct HoldAfterFirstEvent {

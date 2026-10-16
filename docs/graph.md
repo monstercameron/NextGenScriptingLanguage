@@ -99,6 +99,33 @@ process stdin. Cancelling or reconfiguring a `GraphSession`, or reaching its
 total deadline, cancels and joins listener workers and closes their bounded
 queues.
 
+A finite applet can opt into publishing its result on one declared event port:
+
+~~~text
+graph result_events
+  listen to feed as source
+  run records.normalize as normalized
+  emit result from normalized to changed
+  bind source.updates to normalized.payload with capacity 1 lossless
+end graph
+~~~
+
+`emit result` is a graph projection over the ordinary finite invocation. The
+applet contract must declare exactly one `Events` port, that port's schema must
+exactly equal the canonical decoded result schema (or the declared result
+envelope schema), and the applet must declare no ordinary output ports. The
+graph suppresses its generated `status` output in this mode, so every successful
+invocation publishes exactly one event and cannot also publish a result or
+status output. A stream-triggered invocation emits one event for each incoming
+message; a returned list remains one list payload rather than being split into
+several events. Byte results cross unchanged as bytes. Non-success outcomes
+without a result envelope fail the graph with the applet's outcome and effect
+certainty and publish no event. With a result envelope, its typed value,
+including failure metadata, is the one event payload. Projection uses the
+existing bounded queues, revision and sequence accounting, sensitivity flow,
+invocation context, module session, and graph cancellation path; it does not
+give a finite applet a persistent event-source lifecycle.
+
 `render tui:text`, `render tui:button`, `render quickshell:text` and
 `render quickshell:button` describe the current generic renderer components.
 `text` has a typed text property. `button` has text and enabled properties and
@@ -129,13 +156,18 @@ policies are `lossless`, `drop newest`, `drop oldest` and `latest`. Lossless
 queues backpressure their producer. The lossy policies discard new, oldest or
 all queued messages respectively when full. Every edge has a bounded queue.
 
-An interface-2 scheduled `.program` applet runs as a persistent graph node. Its
-handler output is decoded through the applet contract and published as one
-typed event per successful tick; its declared `Single` inputs are read when the
-graph starts. Cancellation, deadlines and reconfiguration stop and join the
-service through the graph's existing bounded queues. See the
+An interface-2 scheduled or listener `.program` applet runs as a persistent
+graph node using the ordinary `run <applet> as <node>` form; `listen to` is the
+trigger inside the module source. Its handler output is decoded through the
+applet contract and published as one typed event per successful tick or input
+line; its declared `Single` inputs are read when the graph starts. A listener service starts one
+registered native command producer, rejects ambient stdin and other backend
+protocols, and runs handlers sequentially. The graph's bounded queues provide
+backpressure before the next line is read. Cancellation, deadlines and
+reconfiguration stop and join the service, terminate/reap its source child,
+and close downstream event ports. See the
 [scheduled queue monitor](../examples/modules/queue_monitor/README.md) for a
-package, graph source and typed event contract.
+schedule package, graph source and typed event contract.
 
 Each port declares a canonical value schema and a delivery mode: `single`,
 `records` or `events`. Validation checks names, required inputs, schemas,

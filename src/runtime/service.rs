@@ -16,7 +16,7 @@ pub struct ServiceLimits {
     pub max_record_bytes: usize,
 }
 
-/// Runtime-owned inputs that bind an imported scheduled program to its graph
+/// Runtime-owned inputs that bind an imported persistent program to its graph
 /// execution without creating a second scheduler or registry scope.
 pub(crate) struct ProgramServiceContext {
     pub(crate) cancelled: Arc<AtomicBool>,
@@ -192,6 +192,16 @@ fn authorize_service_checkpoint(
 fn limit_reached(limits: &ServiceLimits, result: &ServiceResult) -> bool {
     limits.max_runs.is_some_and(|limit| result.runs >= limit)
 }
+
+fn listener_source_exited_successfully(
+    manifest: &Manifest,
+    status: std::process::ExitStatus,
+) -> bool {
+    status
+        .code()
+        .is_some_and(|code| manifest.outcome_for(code).kind == OutcomeKind::Success)
+}
+
 fn trace_event(
     enabled: bool,
     signals: &Signals,
@@ -535,10 +545,11 @@ fn run_service_internal(
     )
 }
 
-/// Run one imported scheduled `.program` service inside its owning graph.
+/// Run one imported interface-2 `.program` service inside its owning graph.
 /// The graph supplies cancellation, deadline, preloaded module sources and
 /// input provenance; handler execution and scheduling still use the ordinary
-/// service runtime and native process supervisor.
+/// service runtime and native process supervisor. The source trigger selects
+/// either schedule ticks or one sequential handler per native listener line.
 pub(crate) fn run_program_module_service(
     loaded: &crate::modules::LoadedProgramSource,
     registry: &Registry,
@@ -548,15 +559,16 @@ pub(crate) fn run_program_module_service(
 ) -> Result<ServiceResult> {
     if !loaded.is_program_service() {
         bail!(
-            "program module {:?} is a finite export, not a scheduled service",
+            "program module {:?} is a finite export, not a persistent service",
             loaded.reference.entry
         );
     }
-    if !matches!(
-        loaded.program.trigger.as_ref(),
-        Some(Trigger::Every { .. } | Trigger::Cron { .. })
-    ) {
-        bail!("scheduled program service requires an `every` or `cron` trigger");
+    match loaded.program.trigger.as_ref() {
+        Some(Trigger::Every { .. } | Trigger::Cron { .. }) => {}
+        Some(Trigger::Listen { .. }) => {
+            crate::modules::validate_program_module_listener_source(&loaded.program, registry)?;
+        }
+        None => bail!("program module service requires a schedule or applet-listener trigger"),
     }
     let deadline = context.deadline;
     let mut signals = Signals::with_cancellation_and_deadline(context.cancelled, false, deadline)?;

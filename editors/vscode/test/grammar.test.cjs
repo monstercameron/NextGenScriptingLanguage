@@ -132,6 +132,13 @@ test('highlights lifetime declarations and stream directives', () => {
   scope('take the first 3 lines', 'take', 'keyword.control.limit');
   scope('show each line', 'show each line', 'keyword.control.output');
 });
+test('highlights finite result-event graph projections', () => {
+  const line = 'emit result from normalized to changed';
+  scope(line, 'emit', 'keyword.control.graph');
+  scope(line, 'result', 'keyword.other.result');
+  scope(line, 'normalized', 'variable.other.graph-node');
+  scope(line, 'changed', 'variable.other.graph-port');
+});
 test('highlights components, all nine widget types, ports, and UI event actions', () => {
   scope('define a program named monitor', 'monitor', 'entity.name.type.component');
   for (const type of ['heading', 'text field', 'list', 'table', 'text panel', 'badge', 'button', 'line chart', 'bar chart']) {

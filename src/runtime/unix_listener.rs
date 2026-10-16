@@ -55,10 +55,12 @@ fn listen(
     mut journal: Option<&mut Journal>,
 ) -> Result<()> {
     let mut children = Children::default();
+    let mut source_manifest: Option<&Manifest> = None;
     let mut reader = match source {
         ListenSource::Stdin => Reader::Stdin(std::io::stdin()),
         ListenSource::Applet(call) => {
             let manifest = registry.resolve_call(call)?;
+            source_manifest = Some(manifest);
             crate::security::authorize_declared_filesystem_write(
                 registry,
                 manifest,
@@ -82,6 +84,8 @@ fn listen(
                 .process_group(0)
                 .spawn()
                 .with_context(|| format!("starting listener {:?}", manifest.name))?;
+            signals.record_process_launch();
+            result.launched_processes += 1;
             let pid = child.id();
             let reader = Reader::Applet(child.stdout.take().expect("listener stdout"));
             children.0.push(ManagedChild {
@@ -92,7 +96,6 @@ fn listen(
                 diagnostic_truncated: false,
             });
             stopped(signals)?;
-            result.launched_processes += 1;
             trace_event(
                 options.trace,
                 signals,
@@ -113,7 +116,9 @@ fn listen(
                 if let Some(status) = managed.child.try_wait()? {
                     kill_group(&managed.child);
                     managed.reaped = true;
-                    if !status.success() {
+                    if !source_manifest.is_some_and(|manifest| {
+                        listener_source_exited_successfully(manifest, status)
+                    }) {
                         bail!("listener failed ({status})");
                     }
                 }

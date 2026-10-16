@@ -35,6 +35,11 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(35));
             }
         }
+        "produce-exit" => {
+            println!("event");
+            std::io::stdout().flush().unwrap();
+            std::process::exit(args[1].parse().unwrap());
+        }
         "sleep" => std::thread::sleep(std::time::Duration::from_millis(
             args[1].parse::<u64>().unwrap().min(10000),
         )),

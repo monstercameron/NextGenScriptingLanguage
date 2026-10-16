@@ -5,7 +5,7 @@ use super::plan::{
     PortValue,
 };
 use crate::ast::{Invocation, ListenSource, StepKind, Value};
-use crate::contracts::{OutputEncoding, OutputType, PortDelivery, Sensitivity};
+use crate::contracts::{OutcomeKind, OutputEncoding, OutputType, PortDelivery, Sensitivity};
 use crate::manifest::Registry;
 use crate::runtime::{self, AppletInvocationResult, RunOptions};
 use crate::security::SensitivitySet;
@@ -320,7 +320,8 @@ pub struct NodeIo {
     inputs: BTreeMap<String, Vec<Arc<BoundedQueue>>>,
     input_schemas: BTreeMap<String, PortSchema>,
     initial_inputs: BTreeMap<String, Value>,
-    input_cursor: usize,
+    input_name_cursor: usize,
+    input_queue_cursors: BTreeMap<String, usize>,
     output_sinks: BTreeMap<String, Vec<QueueSink>>,
     schemas: BTreeMap<String, PortSchema>,
     generation: u64,
@@ -422,11 +423,16 @@ impl NodeIo {
         }
         loop {
             self.check_cancelled()?;
-            let start = self.input_cursor % queues.len();
+            let start = self
+                .input_queue_cursors
+                .get(port)
+                .copied()
+                .unwrap_or_default()
+                % queues.len();
             for offset in 0..queues.len() {
                 let index = (start + offset) % queues.len();
                 if let Some(event) = queues[index].try_recv()? {
-                    self.input_cursor = index + 1;
+                    self.input_queue_cursors.insert(port.to_owned(), index + 1);
                     return Ok(Some(self.observe_input(event)));
                 }
             }
@@ -457,11 +463,16 @@ impl NodeIo {
         }
         loop {
             self.check_cancelled()?;
-            let start = self.input_cursor % queues.len();
+            let start = self
+                .input_queue_cursors
+                .get(port)
+                .copied()
+                .unwrap_or_default()
+                % queues.len();
             for offset in 0..queues.len() {
                 let index = (start + offset) % queues.len();
                 if let Some(event) = queues[index].try_recv()? {
-                    self.input_cursor = index + 1;
+                    self.input_queue_cursors.insert(port.to_owned(), index + 1);
                     return Ok(Some(self.observe_input(event)));
                 }
             }
@@ -502,11 +513,11 @@ impl NodeIo {
         }
         loop {
             self.check_cancelled()?;
-            let start = self.input_cursor % names.len();
+            let start = self.input_name_cursor % names.len();
             for offset in 0..names.len() {
                 let index = (start + offset) % names.len();
                 if let Some(event) = self.take_initial_input(&names[index])? {
-                    self.input_cursor = index + 1;
+                    self.input_name_cursor = index + 1;
                     return Ok(Some(event));
                 }
                 let queues = self
@@ -514,11 +525,18 @@ impl NodeIo {
                     .get(&names[index])
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                let queue_start = self.input_cursor % queues.len().max(1);
+                let queue_start = self
+                    .input_queue_cursors
+                    .get(&names[index])
+                    .copied()
+                    .unwrap_or_default()
+                    % queues.len().max(1);
                 for queue_offset in 0..queues.len() {
                     let queue_index = (queue_start + queue_offset) % queues.len();
                     if let Some(event) = queues[queue_index].try_recv()? {
-                        self.input_cursor = index + 1;
+                        self.input_name_cursor = index + 1;
+                        self.input_queue_cursors
+                            .insert(names[index].clone(), queue_index + 1);
                         return Ok(Some(self.observe_input(event)));
                     }
                 }
@@ -556,11 +574,11 @@ impl NodeIo {
         }
         loop {
             self.check_cancelled()?;
-            let start = self.input_cursor % names.len();
+            let start = self.input_name_cursor % names.len();
             for offset in 0..names.len() {
                 let index = (start + offset) % names.len();
                 if let Some(event) = self.take_initial_input(&names[index])? {
-                    self.input_cursor = index + 1;
+                    self.input_name_cursor = index + 1;
                     return Ok(Some(event));
                 }
                 let queues = self
@@ -568,9 +586,19 @@ impl NodeIo {
                     .get(&names[index])
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                for queue in queues {
+                let queue_start = self
+                    .input_queue_cursors
+                    .get(&names[index])
+                    .copied()
+                    .unwrap_or_default()
+                    % queues.len().max(1);
+                for queue_offset in 0..queues.len() {
+                    let queue_index = (queue_start + queue_offset) % queues.len();
+                    let queue = &queues[queue_index];
                     if let Some(event) = queue.try_recv()? {
-                        self.input_cursor = index + 1;
+                        self.input_name_cursor = index + 1;
+                        self.input_queue_cursors
+                            .insert(names[index].clone(), queue_index + 1);
                         return Ok(Some(self.observe_input(event)));
                     }
                 }
@@ -947,7 +975,8 @@ impl GraphSession {
                 inputs: node_inputs,
                 input_schemas: node.inputs.clone(),
                 initial_inputs,
-                input_cursor: 0,
+                input_name_cursor: 0,
+                input_queue_cursors: BTreeMap::new(),
                 output_sinks: node_outputs,
                 schemas,
                 generation: context.generation,
@@ -1299,7 +1328,9 @@ fn event_size(event: &EventEnvelope) -> Result<usize> {
 
 fn initial_input_sensitivity(node: &GraphNode) -> Option<SensitivitySet> {
     let call = match &node.kind {
-        GraphNodeKind::Applet { call } | GraphNodeKind::ProgramService { call } => call,
+        GraphNodeKind::Applet { call }
+        | GraphNodeKind::AppletResultEvent { call, .. }
+        | GraphNodeKind::ProgramService { call } => call,
         _ => return None,
     };
     let labels = call
@@ -1440,7 +1471,7 @@ impl RuntimeGraphExecutor {
                 ),
                 &context.metrics,
             )?;
-            emit_applet_result(node, &result, io)?;
+            emit_applet_result(node, &result, io, &self.registry)?;
             return Ok(());
         }
         let mut emitted = BTreeMap::<String, usize>::new();
@@ -1477,7 +1508,7 @@ impl RuntimeGraphExecutor {
                 ),
                 &context.metrics,
             )?;
-            emit_applet_result_counted(node, &result, io, &mut emitted)?;
+            emit_applet_result_counted(node, &result, io, &mut emitted, &self.registry)?;
         }
         if received == 0 && streams.iter().any(|name| node.inputs[name].required) {
             bail!(
@@ -1513,7 +1544,7 @@ impl RuntimeGraphExecutor {
             })?;
         if !loaded.is_program_service() {
             bail!(
-                "graph node {:?} resolves to a finite program module, not a scheduled service",
+                "graph node {:?} resolves to a finite program module, not a persistent service",
                 node.id
             );
         }
@@ -1553,7 +1584,7 @@ impl RuntimeGraphExecutor {
                     }
                     PortValue::Bytes(_) => {
                         bail!(
-                            "scheduled program service startup input {}.{} must be a typed value",
+                            "program service startup input {}.{} must be a typed value",
                             node.id,
                             name
                         )
@@ -1617,7 +1648,7 @@ impl RuntimeGraphExecutor {
                     crate::contracts::AppletOutput::Value(value) => PortValue::Value(value),
                     crate::contracts::AppletOutput::Bytes(_) => {
                         let error = anyhow!(
-                            "scheduled program service {:?} decoded output as raw bytes; its event port requires a typed value",
+                            "program service {:?} decoded output as raw bytes; its event port requires a typed value",
                             manifest.name
                         );
                         return Err(crate::runtime::execution_result::contract_decode_failure(
@@ -1639,7 +1670,7 @@ impl RuntimeGraphExecutor {
                         ));
                     }
                     return Err(error).context(format!(
-                        "emitting scheduled event {}.{}",
+                        "emitting program service event {}.{}",
                         node.id, event_port
                     ));
                 }
@@ -2289,7 +2320,9 @@ fn invoke_for_graph(
 impl GraphExecutor for RuntimeGraphExecutor {
     fn execute(&self, node: &GraphNode, io: &mut NodeIo, context: &GraphContext) -> Result<()> {
         match &node.kind {
-            GraphNodeKind::Applet { call } => self.run_applet(node, call, io, context),
+            GraphNodeKind::Applet { call } | GraphNodeKind::AppletResultEvent { call, .. } => {
+                self.run_applet(node, call, io, context)
+            }
             GraphNodeKind::ProgramService { call } => {
                 self.run_program_service(node, call, io, context)
             }
@@ -2421,8 +2454,9 @@ fn emit_applet_result(
     node: &GraphNode,
     result: &AppletInvocationResult,
     io: &mut NodeIo,
+    registry: &Registry,
 ) -> Result<()> {
-    emit_applet_result_counted(node, result, io, &mut BTreeMap::new())
+    emit_applet_result_counted(node, result, io, &mut BTreeMap::new(), registry)
 }
 
 fn emit_applet_result_counted(
@@ -2430,7 +2464,53 @@ fn emit_applet_result_counted(
     result: &AppletInvocationResult,
     io: &mut NodeIo,
     emitted: &mut BTreeMap<String, usize>,
+    registry: &Registry,
 ) -> Result<()> {
+    if let GraphNodeKind::AppletResultEvent { call, event_port } = &node.kind {
+        let manifest = registry.resolve_call(call)?;
+        let contract = manifest.execution_contract().ok_or_else(|| {
+            anyhow!(
+                "result projection for node {:?} lost its applet contract",
+                node.id
+            )
+        })?;
+        if result.outcome.kind != OutcomeKind::Success && !contract.result_envelope {
+            runtime::check_retained_status(
+                call,
+                manifest,
+                node.line.unwrap_or(1),
+                result.status,
+                &String::from_utf8_lossy(&result.stderr),
+                Some(result.output.clone()),
+                Some(result.stderr.clone()),
+                registry,
+            )?;
+            bail!(
+                "result projection for node {:?} received a non-success outcome without a result envelope",
+                node.id
+            );
+        }
+        let schema = node.events.get(event_port).ok_or_else(|| {
+            anyhow!(
+                "result projection for node {:?} has no selected event port {:?}",
+                node.id,
+                event_port
+            )
+        })?;
+        let payload = if schema.schema.kind == OutputType::Bytes {
+            PortValue::Bytes(result.output.clone())
+        } else {
+            PortValue::Value(result.value.clone().ok_or_else(|| {
+                anyhow!(
+                    "applet result for node {:?} has no decoded value for event port {:?}",
+                    node.id,
+                    event_port
+                )
+            })?)
+        };
+        io.emit(event_port, payload)?;
+        return Ok(());
+    }
     for (name, schema) in &node.outputs {
         let payload = if name == "status" {
             Some(PortValue::Value(Value::Integer(i64::from(result.status))))
@@ -2703,4 +2783,161 @@ fn check_preflight_budget(cancelled: &AtomicBool, deadline: Option<Instant>) -> 
         bail!("graph execution deadline exceeded during preflight");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod input_cursor_tests {
+    use super::*;
+
+    fn queued_event(source: String, sequence: u64) -> EventEnvelope {
+        EventEnvelope {
+            port: PortRef::new(source, "tick"),
+            input: None,
+            generation: 1,
+            revision: 1,
+            sequence,
+            sensitivity: SensitivitySet::empty(),
+            remote: None,
+            payload: PortValue::Value(Value::Integer(sequence as i64)),
+        }
+    }
+
+    fn enqueue(
+        queue: &BoundedQueue,
+        source: String,
+        input: &str,
+        sequence: u64,
+        token: &CancellationToken,
+    ) {
+        queue
+            .send(
+                queued_event(source, sequence),
+                Some(PortRef::new("collector", input)),
+                token,
+            )
+            .unwrap();
+    }
+
+    fn node_io(
+        inputs: BTreeMap<String, Vec<Arc<BoundedQueue>>>,
+        token: CancellationToken,
+    ) -> NodeIo {
+        let cancelled = token.cancellation_flag();
+        NodeIo {
+            node: "collector".into(),
+            inputs,
+            input_schemas: BTreeMap::new(),
+            initial_inputs: BTreeMap::new(),
+            input_name_cursor: 0,
+            input_queue_cursors: BTreeMap::new(),
+            output_sinks: BTreeMap::new(),
+            schemas: BTreeMap::new(),
+            generation: 1,
+            revision: 1,
+            next_sequence: Arc::new(AtomicU64::new(1)),
+            token,
+            external_cancelled: cancelled,
+            deadline: None,
+            input_sensitivity: None,
+            max_message_bytes: 1024,
+        }
+    }
+
+    fn lossless_queue() -> Arc<BoundedQueue> {
+        BoundedQueue::new(1, BufferPolicy::Lossless)
+    }
+
+    #[test]
+    fn recv_any_rotates_across_many_edges_on_one_port() {
+        const EDGE_COUNT: usize = 64;
+        let task_scope = TaskScope::new(1, None).unwrap();
+        let token = task_scope.cancellation_token();
+        let queues = (0..EDGE_COUNT)
+            .map(|_| lossless_queue())
+            .collect::<Vec<_>>();
+        for (index, queue) in queues.iter().enumerate() {
+            enqueue(
+                queue,
+                format!("source_{index:04}"),
+                "ticks",
+                index as u64,
+                &token,
+            );
+        }
+        let mut io = node_io(
+            BTreeMap::from([("ticks".into(), queues.clone())]),
+            token.clone(),
+        );
+
+        for turn in 0..EDGE_COUNT * 2 {
+            let event = io.recv_any().unwrap().unwrap();
+            let index = event
+                .port
+                .node
+                .strip_prefix("source_")
+                .unwrap()
+                .parse::<usize>()
+                .unwrap();
+            assert_eq!(
+                index,
+                turn % EDGE_COUNT,
+                "edge receive order at turn {turn}"
+            );
+            enqueue(
+                &queues[index],
+                format!("source_{index:04}"),
+                "ticks",
+                (EDGE_COUNT + turn) as u64,
+                &token,
+            );
+        }
+    }
+
+    #[test]
+    fn recv_any_timeout_rotates_each_port_and_its_edges_independently() {
+        const EDGES_PER_PORT: usize = 4;
+        let task_scope = TaskScope::new(1, None).unwrap();
+        let token = task_scope.cancellation_token();
+        let mut all_queues = BTreeMap::<String, Vec<Arc<BoundedQueue>>>::new();
+        for port in ["alpha", "beta"] {
+            let queues = (0..EDGES_PER_PORT)
+                .map(|index| {
+                    let queue = lossless_queue();
+                    enqueue(
+                        &queue,
+                        format!("source_{port}_{index}"),
+                        port,
+                        index as u64,
+                        &token,
+                    );
+                    queue
+                })
+                .collect();
+            all_queues.insert(port.into(), queues);
+        }
+        let mut io = node_io(all_queues.clone(), token.clone());
+
+        for turn in 0..EDGES_PER_PORT * 4 {
+            let event = io
+                .recv_any_timeout(Duration::from_millis(1))
+                .unwrap()
+                .unwrap();
+            let port = event.input.as_ref().unwrap().port.as_str();
+            let expected_port = if turn % 2 == 0 { "alpha" } else { "beta" };
+            let expected_edge = (turn / 2) % EDGES_PER_PORT;
+            assert_eq!(port, expected_port, "input port at turn {turn}");
+            assert_eq!(
+                event.port.node,
+                format!("source_{expected_port}_{expected_edge}"),
+                "input edge at turn {turn}"
+            );
+            enqueue(
+                &all_queues[expected_port][expected_edge],
+                format!("source_{expected_port}_{expected_edge}"),
+                expected_port,
+                (turn + EDGES_PER_PORT * 2) as u64,
+                &token,
+            );
+        }
+    }
 }

@@ -5,7 +5,7 @@ NPM ?= npm
 PORT ?= 8080
 
 .DEFAULT_GOAL := help
-.PHONY: help setup format format-check docs-check applet-boundaries-harness-check check rust-check build omarchy-rewrite-check proof-smoke unix-smoke playground-build playground-check playground-browser-check site-serve
+.PHONY: help setup format format-check docs-check applet-boundaries-harness-check stress-evidence-harness-check check rust-check build omarchy-rewrite-check proof-smoke unix-smoke playground-build playground-check playground-browser-check site-serve
 
 help:
 	@printf '%s\n' \
@@ -17,6 +17,7 @@ help:
 	  '  make omarchy-rewrite-check    Run isolated Omarchy replacement acceptance tests' \
 	  '  make docs-check               Check maintained local documentation links' \
 	  '  make applet-boundaries-harness-check Test benchmark wrappers without measuring' \
+	  '  make stress-evidence-harness-check Test mixed stress receipts without measuring' \
 	  '  make format                   Format owned Rust and playground source' \
 	  '  make format-check             Check formatting without modifying files' \
 	  '  make playground-build         Build native CLI and Rust/WASM playground assets' \
@@ -53,8 +54,11 @@ applet-boundaries-harness-check:
 	$(PYTHON) tests/source_pair_bench.py
 	$(PYTHON) tests/matched_language.py
 
+stress-evidence-harness-check:
+	$(PYTHON) tests/mixed_stress_evidence.py
+
 # Keep this sequence shared by local development and macOS/Linux CI.
-check: rust-check docs-check applet-boundaries-harness-check
+check: rust-check docs-check applet-boundaries-harness-check stress-evidence-harness-check
 	$(PYTHON) tests/staged_rust.py
 	$(PYTHON) tests/releases.py
 	$(PYTHON) -O tests/releases.py

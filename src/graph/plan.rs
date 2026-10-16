@@ -160,7 +160,15 @@ pub enum GraphNodeKind {
     Applet {
         call: Invocation,
     },
-    /// A scheduled `.program` module whose lifetime belongs to this graph.
+    /// A finite applet invocation whose canonical result is published as one
+    /// graph event. This is an explicit graph projection, not a backend event
+    /// lifecycle; invocation and cancellation still use the ordinary finite
+    /// applet path.
+    AppletResultEvent {
+        call: Invocation,
+        event_port: String,
+    },
+    /// A persistent interface-2 `.program` module whose lifetime belongs to this graph.
     ProgramService {
         call: Invocation,
     },
@@ -214,7 +222,9 @@ impl GraphNode {
 
     pub fn invocations(&self) -> Vec<&Invocation> {
         match &self.kind {
-            GraphNodeKind::Applet { call } => vec![call],
+            GraphNodeKind::Applet { call } | GraphNodeKind::AppletResultEvent { call, .. } => {
+                vec![call]
+            }
             GraphNodeKind::ProgramService { call } => vec![call],
             GraphNodeKind::Listener {
                 source: crate::ast::ListenSource::Applet(call),
@@ -305,6 +315,53 @@ impl GraphPlan {
         Ok(())
     }
 
+    /// Opt a finite applet node into emitting its single canonical result as
+    /// one typed graph event. Registry-backed validation checks the selected
+    /// event against the applet contract before execution.
+    pub(super) fn project_result_event(
+        &mut self,
+        node_id: &str,
+        event_port: &str,
+        line: usize,
+    ) -> Result<()> {
+        let node = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == node_id)
+            .ok_or_else(|| {
+                anyhow!("line {line}: result projection names unknown node {node_id:?}")
+            })?;
+        let call = match &node.kind {
+            GraphNodeKind::Applet { call } => call.clone(),
+            GraphNodeKind::AppletResultEvent { .. } => {
+                bail!("line {line}: node {node_id:?} already projects its result")
+            }
+            _ => bail!("line {line}: result projection requires a finite `run` applet node"),
+        };
+        if node.events.len() != 1
+            || node
+                .events
+                .get(event_port)
+                .is_none_or(|port| port.delivery != PortDelivery::Events)
+        {
+            bail!(
+                "line {line}: node {node_id:?} must declare exactly one Events port named {event_port:?}"
+            );
+        }
+        // `run` normally exposes a generated status output. Projection mode
+        // suppresses that generated port, then rejects every remaining
+        // ordinary output so no result or status path is ambiguous.
+        node.outputs.remove("status");
+        if !node.outputs.is_empty() {
+            bail!("line {line}: result projection on {node_id:?} cannot mix ordinary output ports");
+        }
+        node.kind = GraphNodeKind::AppletResultEvent {
+            call,
+            event_port: event_port.to_owned(),
+        };
+        Ok(())
+    }
+
     /// Return a plan with supplied input references replaced by typed values.
     /// Defaults are available in both modes. Partial mode leaves required
     /// inputs unresolved so static inspection can proceed; complete mode also
@@ -322,9 +379,9 @@ impl GraphPlan {
         let mut plan = self.clone();
         for node in &mut plan.nodes {
             match &mut node.kind {
-                GraphNodeKind::Applet { call } | GraphNodeKind::ProgramService { call } => {
-                    resolve_call_inputs(call, &values)
-                }
+                GraphNodeKind::Applet { call }
+                | GraphNodeKind::AppletResultEvent { call, .. }
+                | GraphNodeKind::ProgramService { call } => resolve_call_inputs(call, &values),
                 GraphNodeKind::Listener {
                     source: crate::ast::ListenSource::Applet(call),
                     ..
@@ -504,15 +561,22 @@ impl GraphPlan {
                 validate_input_references(&call, &input_types, &node.id)?;
                 if matches!(
                     &node.kind,
-                    GraphNodeKind::Applet { .. } | GraphNodeKind::ProgramService { .. }
+                    GraphNodeKind::Applet { .. }
+                        | GraphNodeKind::AppletResultEvent { .. }
+                        | GraphNodeKind::ProgramService { .. }
                 ) {
                     let is_program_service =
                         matches!(&node.kind, GraphNodeKind::ProgramService { .. });
-                    if !is_program_service && !node.events.is_empty() {
+                    let projects_result =
+                        matches!(&node.kind, GraphNodeKind::AppletResultEvent { .. });
+                    if !is_program_service && !projects_result && !node.events.is_empty() {
                         bail!(
                             "graph applet node {:?} declares event outputs, but generic one-shot applets cannot publish backend events",
                             node.id
                         );
+                    }
+                    if projects_result {
+                        validate_result_event_node(node, &call, registry)?;
                     }
                     if is_program_service {
                         if !node.outputs.is_empty() {
@@ -611,7 +675,7 @@ impl GraphPlan {
                             || contract.lifecycle != crate::contracts::Lifecycle::ProgramService
                         {
                             bail!(
-                                "graph node {:?} is declared as a program service, but its applet contract is not a scheduled `.program` service",
+                                "graph node {:?} is declared as a program service, but its applet contract is not an interface-2 `.program` service",
                                 node.id
                             );
                         }
@@ -670,13 +734,13 @@ impl GraphPlan {
                             );
                         }
                     }
-                    GraphNodeKind::Applet { .. }
+                    GraphNodeKind::Applet { .. } | GraphNodeKind::AppletResultEvent { .. }
                         if manifest.execution_contract().is_some_and(|contract| {
                             contract.lifecycle == crate::contracts::Lifecycle::ProgramService
                         }) =>
                     {
                         bail!(
-                            "scheduled `.program` service {:?} must run as a graph program service node",
+                            "persistent `.program` service {:?} must run as a graph program service node",
                             manifest.name
                         );
                     }
@@ -903,8 +967,9 @@ impl GraphPlan {
                     insert_sensitivity(&mut incoming, port.sensitivity);
                 }
             }
-            if let GraphNodeKind::Applet { call } | GraphNodeKind::ProgramService { call } =
-                &node.kind
+            if let GraphNodeKind::Applet { call }
+            | GraphNodeKind::AppletResultEvent { call, .. }
+            | GraphNodeKind::ProgramService { call } = &node.kind
             {
                 for name in call.parameters.keys() {
                     if !self
@@ -1230,6 +1295,97 @@ impl GraphPlan {
     }
 }
 
+fn validate_result_event_node(
+    node: &GraphNode,
+    call: &Invocation,
+    registry: &Registry,
+) -> Result<()> {
+    let GraphNodeKind::AppletResultEvent { event_port, .. } = &node.kind else {
+        unreachable!("result-event validation is called only for result projection nodes");
+    };
+    if call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
+        bail!(
+            "graph result-event node {:?} cannot use cache, status, or result bindings",
+            node.id
+        );
+    }
+    if !node.outputs.is_empty() {
+        bail!(
+            "graph result-event node {:?} cannot declare ordinary output ports",
+            node.id
+        );
+    }
+    let manifest = registry
+        .resolve_call(call)
+        .map_err(|error| anyhow!("node {:?}: {error:#}", node.id))?;
+    let contract = manifest.execution_contract().ok_or_else(|| {
+        anyhow!(
+            "graph result-event node {:?} requires an explicit applet port contract",
+            node.id
+        )
+    })?;
+    if contract.lifecycle == crate::contracts::Lifecycle::ProgramService {
+        bail!(
+            "persistent `.program` service {:?} must use its service event lifecycle",
+            manifest.name
+        );
+    }
+    let ports = contract.ports.as_ref().ok_or_else(|| {
+        anyhow!(
+            "graph result-event node {:?} requires a declared Events output port",
+            node.id
+        )
+    })?;
+    if !ports.outputs.is_empty() {
+        bail!(
+            "graph result-event node {:?} cannot mix declared ordinary outputs with a projected result",
+            node.id
+        );
+    }
+    let expected_events = ports
+        .events
+        .iter()
+        .map(|(name, port)| (name.clone(), PortSchema::from_applet(port, false)))
+        .collect::<BTreeMap<_, _>>();
+    if expected_events.len() != 1
+        || expected_events
+            .get(event_port)
+            .is_none_or(|port| port.delivery != PortDelivery::Events)
+        || node.events != expected_events
+    {
+        bail!(
+            "graph result-event node {:?} must select its single declared Events port",
+            node.id
+        );
+    }
+    let canonical_result_schema = if let Some(envelope) = contract.result_envelope_schema() {
+        envelope
+    } else if let Some(output) = contract
+        .output
+        .as_ref()
+        .filter(|output| output.kind != OutputType::Bytes)
+    {
+        value_schema_from_output(output)
+    } else {
+        ValueSchema {
+            kind: OutputType::Bytes,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+        }
+    };
+    if node.events[event_port].schema != canonical_result_schema {
+        bail!(
+            "graph result-event port {}.{} schema must exactly match the applet's canonical result schema",
+            node.id,
+            event_port
+        );
+    }
+    Ok(())
+}
+
 fn dot_escape(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace('"', "\\\"")
@@ -1239,6 +1395,7 @@ fn dot_escape(text: &str) -> String {
 fn node_kind_name(kind: &GraphNodeKind) -> &'static str {
     match kind {
         GraphNodeKind::Applet { .. } => "applet/oneshot",
+        GraphNodeKind::AppletResultEvent { .. } => "applet/result-event",
         GraphNodeKind::ProgramService { .. } => "program-service/persistent",
         GraphNodeKind::Timer { .. } => "timer/persistent",
         GraphNodeKind::Listener { .. } => "listener/persistent",
@@ -1387,9 +1544,9 @@ fn delivery_compatible(
 
 fn node_has_literal_input(node: &GraphNode, name: &str) -> bool {
     match &node.kind {
-        GraphNodeKind::Applet { call } | GraphNodeKind::ProgramService { call } => {
-            call.parameters.contains_key(name)
-        }
+        GraphNodeKind::Applet { call }
+        | GraphNodeKind::AppletResultEvent { call, .. }
+        | GraphNodeKind::ProgramService { call } => call.parameters.contains_key(name),
         _ => false,
     }
 }

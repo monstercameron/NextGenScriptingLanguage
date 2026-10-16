@@ -32,7 +32,7 @@ pub(super) fn execute(
 ) -> Result<GroupOutput> {
     if loaded.is_program_service() {
         bail!(
-            "scheduled .program services can run only as graph service nodes, not as finite applet calls"
+            "persistent .program services can run only as graph service nodes, not as finite applet calls"
         );
     }
     if !crate::modules::supports_program_module_finite_interface(loaded.reference.interface_version)

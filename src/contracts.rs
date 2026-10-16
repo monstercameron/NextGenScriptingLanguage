@@ -95,7 +95,7 @@ pub enum AppletBackend {
     /// Keep a JSON-lines worker alive across calls.
     JsonLinesWorker,
     /// Execute a finite program entry selected from a verified local module,
-    /// or supervise a scheduled module service when paired with its v2
+    /// or supervise a scheduled/listener module service when paired with its v2
     /// interface.
     ProgramModule,
     /// Invoke the versioned `execute.applet/1` HTTP protocol.
@@ -109,8 +109,8 @@ pub enum Lifecycle {
     #[serde(rename = "oneshot")]
     #[default]
     OneShot,
-    /// Run a scheduled `.program` module under the host's service supervisor.
-    /// This is valid only with a ProgramModule interface-version-2 descriptor.
+    /// Run an interface-2 `.program` schedule or listener under the host's
+    /// service supervisor. The source trigger selects the service driver.
     ProgramService,
     #[serde(rename = "json_lines")]
     JsonLines {
@@ -190,7 +190,7 @@ impl Lifecycle {
     }
 }
 
-/// Reference to a finite or scheduled program exported by a local `.program` module.
+/// Reference to a finite or persistent program exported by a local `.program` module.
 /// Paths are resolved relative to the applet manifest and confined to the
 /// configured module root by the module loader.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,7 +217,7 @@ impl ProgramModule {
     pub fn validate(&self) -> Result<()> {
         if !matches!(self.interface_version, 1 | 2) {
             bail!(
-                "unsupported program module interface version {}; supported versions are 1 (finite) and 2 (scheduled service)",
+                "unsupported program module interface version {}; supported versions are 1 (finite) and 2 (persistent service)",
                 self.interface_version
             );
         }

@@ -454,6 +454,9 @@
           "include": "#graph-edge"
         },
         {
+          "include": "#graph-result-event"
+        },
+        {
           "include": "#graph-timer"
         },
         {
@@ -463,6 +466,29 @@
           "include": "#graph-render"
         }
       ]
+    },
+    "graph-result-event": {
+      "match": "^[ \\t]*(emit)[ \\t]+(result)[ \\t]+(from)[ \\t]+([A-Za-z_][A-Za-z0-9_-]*)[ \\t]+(to)[ \\t]+([A-Za-z_][A-Za-z0-9_-]*)(?=[ \\t]*(?:#.*)?$)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.graph.execute"
+        },
+        "2": {
+          "name": "keyword.other.result.execute"
+        },
+        "3": {
+          "name": "keyword.operator.connection.execute"
+        },
+        "4": {
+          "name": "variable.other.graph-node.execute"
+        },
+        "5": {
+          "name": "keyword.operator.connection.execute"
+        },
+        "6": {
+          "name": "variable.other.graph-port.execute"
+        }
+      }
     },
     "graph-edge": {
       "name": "meta.graph-edge.execute",

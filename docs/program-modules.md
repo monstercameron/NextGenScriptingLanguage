@@ -1,7 +1,8 @@
 # Importable `.program` modules
 
 A finite `.program` definition can be exposed as a named applet. A scheduled
-`.program` source can also be exposed as a lifecycle-owned graph service.
+or native-listener `.program` source can also be exposed as a lifecycle-owned
+graph service.
 Callers keep the ordinary applet syntax:
 
 ```program
@@ -42,7 +43,7 @@ the caller's current directory. The runtime resolves and hashes source during
 preflight. For interface 1, the entry must be a top-level
 `define a program named ...` in a definitions-only file. Its `accept`
 declarations are checked against the exported input contract. Interface 2
-selects the scheduled source root `main`, as described below. Unknown entries,
+selects the persistent source root `main`, as described below. Unknown entries,
 unsupported interface versions, invalid input/output schemas, recursive
 definitions and unsupported lifecycle declarations fail before effects begin.
 
@@ -146,13 +147,15 @@ making it available to a caller.
 Module-local inputs, bindings and current-directory changes stay in a child
 scope, and the caller's scope is restored when the export returns.
 
-## Scheduled service interface 2
+## Persistent service interface 2
 
-Interface 2 opts into a scheduled service lifecycle. Interface 1 remains the
-finite, definitions-only format. Package format and lock format stay at
-version 1; `interface_version: 2` is the explicit compatibility boundary, and
-an older runtime that supports only interface 1 rejects it instead of treating
-it as a finite export.
+Interface 2 opts into a graph-owned persistent service lifecycle. Its root may
+use a schedule trigger or `listen to <applet>`; this guide documents the
+existing schedule form and the bounded native-app listener form.
+Interface 1 remains the finite, definitions-only format. Package and lock
+formats stay at version 1; `interface_version: 2` is the explicit compatibility
+boundary. Older schedule-only runtimes reject the new listener lifecycle and
+trigger rather than treating it as a finite export.
 
 A direct service descriptor selects the reserved source root `main`:
 
@@ -195,7 +198,7 @@ A direct service descriptor selects the reserved source root `main`:
 }
 ```
 
-The source declares startup inputs and one periodic or cron trigger:
+The scheduled source declares startup inputs and one periodic or cron trigger:
 
 ```program
 accept threshold as integer
@@ -203,12 +206,39 @@ every 5 seconds
   run "printf" with arguments ["{\"count\":1}"]
 ```
 
-The service root is not a reusable finite definition. It must declare exactly
-one `every` or `on schedule` trigger; `listen` sources are not part of this
-interface. Input declarations are bound once when the graph starts. Each must
-have a corresponding typed `Single` input port, and the graph rejects records
-or event inputs rather than inferring a join or changing startup values while
-the service is running. Defaults remain available for optional inputs.
+The service root is not a reusable finite definition. It declares exactly one
+supported persistent trigger. Input declarations are bound once when the graph
+starts. Each must have a corresponding typed `Single` input port, and the graph
+rejects records or event inputs rather than inferring a join or changing
+startup values while the service is running. Defaults remain available for
+optional inputs.
+
+A listener service uses one registered external native command applet as its
+line producer:
+
+```program
+accept source_path as text
+listen to files.tail with path source_path
+whenever a line arrives as record
+  parse json record as event
+  then encode event as json
+```
+
+The listener root must use `listen to <named applet>`; direct executables,
+ambient `stdin`, remote applets, JSON-lines workers, builtins, and nested
+program-module sources are rejected during preflight. The source's stdout is
+framed as UTF-8 lines by the existing listener driver. Each completed line runs
+one handler synchronously, and the handler's full output is decoded through the
+declared output contract into the sole typed Events port. The graph's bounded
+queues apply backpressure before the listener reads the next line. EOF closes
+the event source; cancellation, deadlines, handler failures and reconfiguration
+join the graph node and terminate/reap its source child. The listener child
+remains in the runtime's local process guard; no child handle or job is stored
+in the reusable module or package session. A declared `success` outcome status
+marks normal producer exit; declared absence/failure/retryable outcomes and
+unmapped statuses fail the listener. Without outcome metadata, only status 0
+is successful. Producer bytes remain line-framed input; the typed event comes
+from the decoded handler output.
 
 Each service declares exactly one typed event port and no stdout output ports.
 After a handler completes, its entire output is decoded through the declared
@@ -218,15 +248,18 @@ the canonical result-envelope record. Raw byte outputs are rejected because
 they do not provide a typed event schema. This keeps output meaning in the
 applet contract and does not infer channel names from fields in returned JSON.
 
-For a package, declare exactly one export with interface 2, `lifecycle:
-{"kind":"schedule"}` and `entry: "main"`. The applet descriptor's `entry`
-remains the public export name, such as `poll`; it does not select a private
-finite definition. The export declares the same input, output, outcome,
-result-envelope, capability, effect and port metadata as the applet contract.
+For a package, declare exactly one interface-2 export with `entry: "main"` and
+`lifecycle: {"kind":"schedule"}` or `{"kind":"listener"}`. The applet
+descriptor's `entry` remains the public export name, such as `poll`; it does not
+select a private finite definition. The export declares the same input, output,
+outcome, result-envelope, capability, effect and port metadata as the applet
+contract.
 The loader requires exact equality, so a package update cannot silently change
 the applet's published interface. `ports` is optional package metadata for
 legacy interface-1 exports and is omitted from their serialized form when
-absent; it is required for interface 2.
+absent; it is required for interface 2. A listener's source applet is resolved
+in the package-scoped registry and included in preflight before graph nodes
+start, alongside its handler calls and declared module dependencies.
 
 The package export contains that same contract metadata:
 

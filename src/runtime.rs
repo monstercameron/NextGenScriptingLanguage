@@ -2063,7 +2063,7 @@ fn decode_call_output(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn check_retained_status(
+pub(crate) fn check_retained_status(
     call: &Invocation,
     manifest: &Manifest,
     line: usize,

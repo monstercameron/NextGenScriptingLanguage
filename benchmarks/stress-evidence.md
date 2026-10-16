@@ -52,8 +52,26 @@ Native invocations are capped at 64, worker identities at the default pool's
 16, and remote listener/readers at 8. Graph metrics and worker PID markers
 record process starts and registry-drop reaping. RSS and thread receipts cover
 only the Rust test process; child RSS, peak concurrent process-tree size, and
-remote fixture resources are not measured. A mixed report is lifecycle/resource
-evidence, not a throughput or whole-host capacity claim.
+remote fixture resources are not measured. Before its active window, the probe
+waits up to ten seconds for every expected terminal actor and every timer source
+to emit once. The report records readiness status, exact missing source IDs,
+and warm-up duration separately. A dedicated watchdog cancels the graph at the
+readiness deadline even while terminal output is stalled; its final status and
+join are recorded. Readiness claimed after the deadline fails and does not start
+or validate an active window. The active window therefore starts after the
+first observed output from every declared source. The report requires its
+measured active duration to meet the requested window and remain within the
+graph deadline budget plus an explicit one-second observation tolerance. The
+Rust collector snapshots monotonic event counters at readiness, window start,
+window end, and total completion; the wrapper checks nonnegative counter
+receipts, exact deltas, and positive progress during the active window. While
+the window is active, a bounded source-ID set records which timer nodes actually
+delivered an event; every declared timer must progress during that window.
+Events counted during readiness warm-up are reported separately and do not
+satisfy active-window progress. This source tracking uses a mutex in the
+collector and adds instrumentation overhead. A mixed report is lifecycle and
+resource evidence, not a cross-revision throughput or whole-host capacity
+claim.
 The graph admits at most the requested number of actor tasks; remote event
 readers add at most eight tasks, and the probe itself adds three helper threads.
 Runtime command I/O helpers are sampled but have no separate probe-wide thread

@@ -1,4 +1,4 @@
-//! Local, integrity-checked packages for finite and scheduled `.program` applet modules.
+//! Local, integrity-checked packages for finite and persistent `.program` applet modules.
 //!
 //! This module deliberately performs no installation or network access. A
 //! package is loaded from an explicit manifest path, all paths are resolved
@@ -22,10 +22,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 pub const PROGRAM_MODULE_INTERFACE_VERSION: u32 = 1;
-/// Scheduled service exports use an explicit v2 boundary. V1 continues to
+/// Persistent service exports use an explicit v2 boundary. V1 continues to
 /// describe finite reusable definitions and is never reinterpreted.
 pub const PROGRAM_MODULE_SERVICE_INTERFACE_VERSION: u32 = 2;
-/// Reserved root selector for a v2 scheduled source; it is not a definition.
+/// Reserved root selector for a v2 persistent source; it is not a definition.
 pub const PROGRAM_MODULE_SERVICE_ROOT_ENTRY: &str = "main";
 pub const PROGRAM_MODULE_PACKAGE_FORMAT: u32 = 1;
 pub const PROGRAM_MODULE_LOCK_FORMAT: u32 = 1;
@@ -83,7 +83,7 @@ pub struct ProgramModuleExport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<String>,
     /// Typed graph ports are optional for legacy finite exports. When present
-    /// on a scheduled service, inputs describe startup bindings and one event
+    /// on a persistent service, inputs describe startup bindings and one event
     /// port describes the value emitted by each handler run.
     #[serde(
         default,
@@ -212,7 +212,7 @@ pub struct LoadedProgramSource {
     pub checkpoint_fingerprint: String,
 }
 
-/// The selected executable unit in a loaded module. Scheduled services use
+/// The selected executable unit in a loaded module. Persistent services use
 /// the source's top-level `Program`; the `ProgramService` variant deliberately
 /// carries no copied/fabricated finite definition.
 #[derive(Debug, Clone)]
@@ -291,7 +291,7 @@ impl LoadedProgramSource {
         }
         if self.is_program_service() {
             let output = contract.output.as_ref().ok_or_else(|| {
-                anyhow!("scheduled program module requires a typed output contract")
+                anyhow!("program module service requires a typed output contract")
             })?;
             validate_service_ports(
                 "applet contract",
@@ -312,6 +312,9 @@ impl LoadedProgramSource {
             anyhow!("program module applet requires a versioned execution contract")
         })?;
         self.validate_contract(contract)?;
+        if self.is_program_service() && manifest.accepts_stdin {
+            bail!("program module services cannot accept ambient stdin");
+        }
         let inputs = self
             .input_declarations()
             .iter()
@@ -395,7 +398,7 @@ impl ProgramModuleSession {
                 .with_context(|| format!("preflighting module call {:?}", call.operation))?;
             if manifest_is_program_service(manifest) {
                 bail!(
-                    "scheduled `.program` service {:?} can run only as a graph service node, not as a finite program call",
+                    "persistent `.program` service {:?} can run only as a graph service node, not as a finite program call",
                     manifest.name
                 );
             }
@@ -499,6 +502,15 @@ impl ProgramModuleSession {
             Some(package) => build_dependency_scope(registry, package)?,
             None => (registry.clone(), BTreeMap::new()),
         };
+        if loaded.is_program_service() {
+            validate_program_module_listener_source(&loaded.program, &child_registry)
+                .with_context(|| {
+                    format!(
+                        "preflighting listener source for module {:?}",
+                        manifest.name
+                    )
+                })?;
+        }
         self.modules.insert(key.clone(), Arc::clone(&loaded));
         self.child_registries
             .insert(key.clone(), child_registry.clone());
@@ -554,7 +566,7 @@ impl ProgramModuleSession {
             })?;
             if manifest_is_program_service(child_manifest) {
                 bail!(
-                    "scheduled `.program` service {:?} can run only as a graph service node; module {:?} invokes it as a finite applet",
+                    "persistent `.program` service {:?} can run only as a graph service node; module {:?} invokes it as a finite applet",
                     child_manifest.name,
                     manifest.name
                 );
@@ -863,7 +875,10 @@ fn generated_export_manifest(
         "version": 1,
         "backend": "program_module",
         "program": reference,
-        "lifecycle": if export.lifecycle == ModuleLifecycle::Schedule {
+        "lifecycle": if matches!(
+            export.lifecycle,
+            ModuleLifecycle::Schedule | ModuleLifecycle::Listener
+        ) {
             serde_json::json!({ "kind": "program_service" })
         } else {
             serde_json::json!({ "kind": "oneshot" })
@@ -932,6 +947,17 @@ fn program_invocations_for_source(
     // helpers closes over definitions reachable only through a helper call.
     for definition in program.definitions.values() {
         collect_step_invocations_owned(&definition.steps, &mut calls);
+    }
+    if matches!(selected, LoadedProgramEntry::ProgramService) {
+        if let Some(Trigger::Listen {
+            source: crate::ast::ListenSource::Applet(call),
+            ..
+        }) = &program.trigger
+        {
+            // The listener producer belongs to the same package-scoped
+            // preflight, sensitivity, and invocation inventory as its handler.
+            calls.push(call.clone());
+        }
     }
     calls
 }
@@ -1021,11 +1047,14 @@ impl LoadedProgramModulePackage {
                 validate_export_inputs(name, &export.inputs, &definition.inputs)?;
                 LoadedProgramEntry::Finite(definition)
             }
-            (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, ModuleLifecycle::Schedule) => {
-                validate_service_source(&self.program, name)?;
+            (
+                PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+                lifecycle @ (ModuleLifecycle::Schedule | ModuleLifecycle::Listener),
+            ) => {
+                validate_service_source(&self.program, name, Some(lifecycle))?;
                 if export.entry != PROGRAM_MODULE_SERVICE_ROOT_ENTRY {
                     bail!(
-                        "scheduled program module export {name:?} must select reserved root entry {:?}",
+                        "program module service export {name:?} must select reserved root entry {:?}",
                         PROGRAM_MODULE_SERVICE_ROOT_ENTRY
                     );
                 }
@@ -1047,7 +1076,7 @@ impl LoadedProgramModulePackage {
             }
             (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, lifecycle) => {
                 bail!(
-                    "program module export {name:?} uses unsupported {:?} lifecycle for scheduled interface version 2",
+                    "program module export {name:?} uses unsupported {:?} lifecycle for service interface version 2",
                     lifecycle
                 )
             }
@@ -1197,14 +1226,14 @@ pub fn load_program_module(
                     PROGRAM_MODULE_SERVICE_INTERFACE_VERSION => {
                         if reference.entry != PROGRAM_MODULE_SERVICE_ROOT_ENTRY {
                             bail!(
-                            "scheduled program module source must select reserved root entry {:?}",
+                            "program module service source must select reserved root entry {:?}",
                             PROGRAM_MODULE_SERVICE_ROOT_ENTRY
                         );
                         }
                         let program = crate::parser::parse(source).with_context(|| {
                             format!("parsing program module source {}", source_path.display())
                         })?;
-                        validate_service_source(&program, "direct source")?;
+                        validate_service_source(&program, "direct source", None)?;
                         (program, LoadedProgramEntry::ProgramService)
                     }
                     version => bail!("unsupported program module interface version {version}"),
@@ -1410,7 +1439,7 @@ fn load_package_inner(
                 }
             }
             PROGRAM_MODULE_SERVICE_INTERFACE_VERSION => {
-                validate_service_source(&program, &source_path.display().to_string())?;
+                validate_service_source(&program, &source_path.display().to_string(), None)?;
             }
             version => bail!("unsupported program module interface version {version}"),
         }
@@ -1428,10 +1457,18 @@ fn load_package_inner(
                     })?;
                     validate_export_inputs(export_name, &export.inputs, &definition.inputs)?;
                 }
-                (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, ModuleLifecycle::Schedule) => {
+                (
+                    PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+                    lifecycle @ (ModuleLifecycle::Schedule | ModuleLifecycle::Listener),
+                ) => {
+                    validate_service_source(
+                        &program,
+                        export_name,
+                        Some(lifecycle),
+                    )?;
                     if export.entry != PROGRAM_MODULE_SERVICE_ROOT_ENTRY {
                         bail!(
-                            "scheduled program module export {export_name:?} must select reserved root entry {:?}",
+                            "program module service export {export_name:?} must select reserved root entry {:?}",
                             PROGRAM_MODULE_SERVICE_ROOT_ENTRY
                         );
                     }
@@ -1564,7 +1601,7 @@ fn validate_package_manifest(manifest: &ProgramModulePackageManifest) -> Result<
     if supports_program_module_service_interface(manifest.interface_version)
         && manifest.exports.len() != 1
     {
-        bail!("scheduled program module package must declare exactly one root export");
+        bail!("program module service package must declare exactly one root export");
     }
     Ok(())
 }
@@ -1586,13 +1623,16 @@ fn validate_export_declaration(
     }
     match (package.interface_version, export.lifecycle) {
         (PROGRAM_MODULE_INTERFACE_VERSION, ModuleLifecycle::OneShot)
-        | (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, ModuleLifecycle::Schedule) => {}
+        | (
+            PROGRAM_MODULE_SERVICE_INTERFACE_VERSION,
+            ModuleLifecycle::Schedule | ModuleLifecycle::Listener,
+        ) => {}
         (PROGRAM_MODULE_INTERFACE_VERSION, lifecycle) => bail!(
             "program module export {name:?} uses unsupported {:?} lifecycle for finite interface version 1",
             lifecycle
         ),
         (PROGRAM_MODULE_SERVICE_INTERFACE_VERSION, lifecycle) => bail!(
-            "program module export {name:?} uses unsupported {:?} lifecycle for scheduled interface version 2",
+            "program module export {name:?} uses unsupported {:?} lifecycle for service interface version 2",
             lifecycle
         ),
         (version, _) => bail!("unsupported program module interface version {version}"),
@@ -1690,22 +1730,73 @@ fn validate_export_inputs(
     Ok(())
 }
 
-fn validate_service_source(program: &Program, label: &str) -> Result<()> {
+fn validate_service_source(
+    program: &Program,
+    label: &str,
+    lifecycle: Option<ModuleLifecycle>,
+) -> Result<()> {
     crate::inputs::validate(&program.inputs)
-        .with_context(|| format!("validating scheduled program module inputs in {label}"))?;
-    match &program.trigger {
-        Some(Trigger::Every { interval_ms, .. }) if *interval_ms > 0 => {}
-        Some(Trigger::Every { .. }) => bail!("scheduled program module interval must be positive"),
-        Some(Trigger::Cron { expression, line }) => {
+        .with_context(|| format!("validating program module service inputs in {label}"))?;
+    match (&program.trigger, lifecycle) {
+        (Some(Trigger::Every { .. }), Some(ModuleLifecycle::Listener))
+        | (Some(Trigger::Cron { .. }), Some(ModuleLifecycle::Listener)) => {
+            bail!("listener program module export {label:?} requires a `listen to` trigger")
+        }
+        (Some(Trigger::Listen { .. }), Some(ModuleLifecycle::Schedule)) => {
+            bail!("scheduled program module export {label:?} requires an `every` or `cron` trigger")
+        }
+        (Some(Trigger::Every { interval_ms, .. }), _) if *interval_ms > 0 => {}
+        (Some(Trigger::Every { .. }), _) => {
+            bail!("program module schedule interval must be positive")
+        }
+        (Some(Trigger::Cron { expression, line }), _) => {
             crate::schedule::CronSchedule::parse(expression)
-                .with_context(|| format!("scheduled program module trigger at line {line}"))?;
+                .with_context(|| format!("program module schedule trigger at line {line}"))?;
         }
-        Some(Trigger::Listen { .. }) => {
-            bail!(
-                "scheduled program module interface version 2 supports only every or cron triggers"
-            )
+        (Some(Trigger::Listen { source, .. }), _) => {
+            if !matches!(source, crate::ast::ListenSource::Applet(_)) {
+                bail!("program module listeners cannot read ambient stdin");
+            }
         }
-        None => bail!("scheduled program module requires an every or cron trigger"),
+        (None, _) => bail!("program module service requires a schedule or applet-listener trigger"),
+    }
+    Ok(())
+}
+
+/// Resolve the trigger producer only after a package-local registry has been
+/// constructed. A persistent module may own one external native command
+/// producer; other backends have different input and lifetime protocols.
+pub(crate) fn validate_program_module_listener_source(
+    program: &Program,
+    registry: &crate::manifest::Registry,
+) -> Result<()> {
+    let Some(Trigger::Listen {
+        source: crate::ast::ListenSource::Applet(call),
+        ..
+    }) = &program.trigger
+    else {
+        if matches!(
+            &program.trigger,
+            Some(Trigger::Listen {
+                source: crate::ast::ListenSource::Stdin,
+                ..
+            })
+        ) {
+            bail!("program module listeners cannot read ambient stdin");
+        }
+        return Ok(());
+    };
+    if call.direct {
+        bail!("program module listener source must name a registered native command applet");
+    }
+    let manifest = registry
+        .resolve_call(call)
+        .context("resolving program module listener source in its package scope")?;
+    if manifest.execution_backend() != AppletBackend::Command || manifest.builtin.is_some() {
+        bail!(
+            "program module listener source {:?} must be an external native command applet; remote, worker, builtin, and program-module sources are unsupported",
+            manifest.name
+        );
     }
     Ok(())
 }
@@ -1718,42 +1809,42 @@ fn validate_service_ports(
     ports: Option<&AppletPorts>,
 ) -> Result<()> {
     let ports = ports.ok_or_else(|| {
-        anyhow!("scheduled program module {name:?} requires typed input and event ports")
+        anyhow!("program module service {name:?} requires typed input and event ports")
     })?;
     if !ports.outputs.is_empty() {
-        bail!("scheduled program module {name:?} does not support stdout output ports");
+        bail!("program module service {name:?} does not support stdout output ports");
     }
     if ports.events.len() != 1 {
-        bail!("scheduled program module {name:?} must declare exactly one event port");
+        bail!("program module service {name:?} must declare exactly one event port");
     }
     if ports.inputs.len() != inputs.len() {
         bail!(
-            "scheduled program module {name:?} must declare one Single input port for each of its {} startup inputs",
+            "program module service {name:?} must declare one Single input port for each of its {} startup inputs",
             inputs.len()
         );
     }
     for declaration in inputs {
         if declaration.source.is_some() {
             bail!(
-                "scheduled program module {name:?} input {:?} must be supplied as a startup port value",
+                "program module service {name:?} input {:?} must be supplied as a startup port value",
                 declaration.name
             );
         }
         let port = ports.inputs.get(&declaration.name).ok_or_else(|| {
             anyhow!(
-                "scheduled program module {name:?} has no input port for {:?}",
+                "program module service {name:?} has no input port for {:?}",
                 declaration.name
             )
         })?;
         if port.delivery != PortDelivery::Single {
             bail!(
-                "scheduled program module {name:?} startup input {:?} must use single delivery",
+                "program module service {name:?} startup input {:?} must use single delivery",
                 declaration.name
             );
         }
         if !port_schema_accepts_input(&port.schema, declaration.kind) {
             bail!(
-                "scheduled program module {name:?} input port {:?} is incompatible with its source declaration",
+                "program module service {name:?} input port {:?} is incompatible with its source declaration",
                 declaration.name
             );
         }
@@ -1766,7 +1857,7 @@ fn validate_service_ports(
     let expected = decoded_event_schema(output, result_envelope)?;
     if event.schema != expected {
         bail!(
-            "scheduled program module {name:?} event port {event_name:?} schema must match its decoded handler output"
+            "program module service {name:?} event port {event_name:?} schema must match its decoded handler output"
         );
     }
     Ok(())
@@ -1792,7 +1883,7 @@ fn port_schema_accepts_input(schema: &ValueSchema, input: InputType) -> bool {
 
 fn decoded_event_schema(output: &OutputSchema, result_envelope: bool) -> Result<ValueSchema> {
     if output.kind == OutputType::Bytes {
-        bail!("scheduled program module event output cannot contain raw bytes");
+        bail!("program module service event output cannot contain raw bytes");
     }
     let value_schema = ValueSchema {
         kind: output.kind,
@@ -2649,5 +2740,85 @@ mod tests {
             fs::read(package_dir.join("src/library.program")).unwrap(),
             source_before
         );
+    }
+
+    #[test]
+    fn listener_sources_require_a_named_external_command_or_are_rejected() {
+        let source = "listen to test.source\nwhenever a line arrives as record\n  then cat\n";
+        let program = crate::parser::parse(source).unwrap();
+        let command = serde_json::json!({
+            "name": "test.source",
+            "binary": "/bin/cat",
+            "parameters": {},
+            "arguments": [],
+            "contract": {"version": 1, "output": {"type": "bytes", "encoding": "raw"}}
+        });
+        let registry = crate::manifest::Registry::from_sources(&[command.to_string()]).unwrap();
+        validate_program_module_listener_source(&program, &registry).unwrap();
+
+        let remote = serde_json::json!({
+            "name": "test.source",
+            "binary": "@remote-applet",
+            "parameters": {},
+            "arguments": [],
+            "contract": {
+                "version": 1,
+                "backend": "remote",
+                "remote": {
+                    "endpoint": "http://127.0.0.1:1",
+                    "allow_loopback_http_fixture": true
+                },
+                "ports": {
+                    "events": {
+                        "line": {"schema": {"type": "text"}, "delivery": "events"}
+                    }
+                }
+            }
+        });
+        let remote_registry =
+            crate::manifest::Registry::from_sources(&[remote.to_string()]).unwrap();
+        let error =
+            validate_program_module_listener_source(&program, &remote_registry).unwrap_err();
+        assert!(format!("{error:#}").contains("external native command applet"));
+
+        let stdin = crate::parser::parse(
+            "listen to stdin\nwhenever a line arrives as record\n  then cat\n",
+        )
+        .unwrap();
+        let error = validate_program_module_listener_source(&stdin, &registry).unwrap_err();
+        assert!(format!("{error:#}").contains("cannot read ambient stdin"));
+
+        let direct = crate::parser::parse(
+            "listen to \"cat\"\nwhenever a line arrives as record\n  then cat\n",
+        )
+        .unwrap();
+        let error = validate_program_module_listener_source(&direct, &registry).unwrap_err();
+        assert!(format!("{error:#}").contains("must name a registered native command applet"));
+    }
+
+    #[test]
+    fn path_ports_supply_program_text_inputs() {
+        let path_schema = ValueSchema {
+            kind: OutputType::Path,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+        };
+        assert!(port_schema_accepts_input(&path_schema, InputType::Text));
+
+        let path_list_schema = ValueSchema {
+            kind: OutputType::List,
+            nullable: false,
+            items: Some(Box::new(path_schema)),
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+        };
+        assert!(port_schema_accepts_input(
+            &path_list_schema,
+            InputType::TextList
+        ));
     }
 }

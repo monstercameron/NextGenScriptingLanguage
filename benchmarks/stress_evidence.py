@@ -36,6 +36,9 @@ SAFE_ENV = (
     "CARGO_PROFILE_RELEASE_LTO",
     "TZ",
 )
+MIXED_GRAPH_DEADLINE_GRACE_MS = 20_000
+MIXED_ACTIVE_WINDOW_OBSERVATION_TOLERANCE_MS = 1_000
+MAX_U64 = (1 << 64) - 1
 
 
 def sha256_file(path: Path) -> str:
@@ -257,6 +260,34 @@ def _mixed_actor_layout(total: int) -> dict[str, int]:
     }
 
 
+def _validate_mixed_readiness(readiness: object, expected_timer_count: int) -> int:
+    if not isinstance(readiness, dict):
+        raise ValueError("mixed graph probe omitted its actor-readiness receipt")
+    if readiness.get("status") != "ready":
+        raise ValueError(f"mixed graph actor readiness did not complete: {readiness.get('status')!r}")
+    if readiness.get("active_window_started_after_readiness") is not True:
+        raise ValueError("mixed graph active window did not begin after all actors were ready")
+    if readiness.get("timeout_ms") != 10_000:
+        raise ValueError("mixed graph probe changed its bounded actor-readiness timeout")
+    if readiness.get("watchdog_status") != "stopped_after_ready" or readiness.get("watchdog_joined") is not True:
+        raise ValueError("mixed graph readiness watchdog did not stop and join after readiness")
+    expected_timer_ids = [f"timer_{index:04d}" for index in range(expected_timer_count)]
+    observed_timer_ids = readiness.get("observed_timer_source_ids")
+    if observed_timer_ids != expected_timer_ids or readiness.get("missing_actor_sources") != []:
+        raise ValueError("mixed graph did not observe every expected actor source before the active window")
+    warmup_us = readiness.get("warmup_elapsed_us")
+    if type(warmup_us) is not int or not 0 <= warmup_us <= 10_100_000:
+        raise ValueError("mixed graph actor-readiness warm-up exceeded its bounded interval")
+    return warmup_us
+
+
+def _mixed_counter(outputs: dict[str, object], key: str) -> int:
+    value = outputs.get(key)
+    if type(value) is not int or not 0 <= value <= MAX_U64:
+        raise ValueError(f"mixed graph probe returned an invalid nonnegative counter: {key}")
+    return value
+
+
 def _validate_mixed(raw: dict[str, object], args: argparse.Namespace) -> dict[str, object]:
     if raw.get("schema") != "execute.graph-mixed-lifecycle.raw/1" or raw.get("trial_type") != "measurement":
         raise ValueError("mixed graph probe returned an unknown raw schema")
@@ -276,6 +307,17 @@ def _validate_mixed(raw: dict[str, object], args: argparse.Namespace) -> dict[st
     for key, value in expected_layout.items():
         if layout.get(key) != value:
             raise ValueError(f"mixed graph probe returned unexpected {key}: {layout.get(key)!r}")
+    readiness = raw.get("readiness")
+    warmup_us = _validate_mixed_readiness(readiness, expected_layout["timers"])
+    expected_timer_ids = [f"timer_{index:04d}" for index in range(expected_layout["timers"])]
+    timings = raw.get("timings_us")
+    if not isinstance(timings, dict) or timings.get("actor_readiness_warmup") != warmup_us:
+        raise ValueError("mixed graph warm-up timing is missing or inconsistent")
+    active_elapsed_us = timings.get("active_window_observed")
+    if type(active_elapsed_us) is not int or active_elapsed_us < 0:
+        raise ValueError("mixed graph active-window duration is missing or invalid")
+    if active_elapsed_us < args.window_ms * 1_000:
+        raise ValueError("mixed graph active window was shorter than requested")
     graph = raw.get("graph")
     if not isinstance(graph, dict):
         raise ValueError("mixed graph probe omitted graph admission receipts")
@@ -287,16 +329,36 @@ def _validate_mixed(raw: dict[str, object], args: argparse.Namespace) -> dict[st
         raise ValueError("mixed graph timer fan-in was not bounded by capacity-one lossless edges")
     if graph.get("listener_reader_admission") != expected_layout["loopback_remote_listeners"]:
         raise ValueError("mixed graph listener-reader admission does not match the remote listener count")
+    expected_deadline_ms = args.window_ms + MIXED_GRAPH_DEADLINE_GRACE_MS
+    if graph.get("graph_deadline_budget_ms") != expected_deadline_ms:
+        raise ValueError("mixed graph deadline budget does not match the bounded active window")
+    if graph.get("active_window_observation_tolerance_ms") != MIXED_ACTIVE_WINDOW_OBSERVATION_TOLERANCE_MS:
+        raise ValueError("mixed graph active-window observation tolerance is unexpected")
+    maximum_active_elapsed_us = (
+        expected_deadline_ms + MIXED_ACTIVE_WINDOW_OBSERVATION_TOLERANCE_MS
+    ) * 1_000
+    if active_elapsed_us > maximum_active_elapsed_us:
+        raise ValueError("mixed graph active window exceeded its graph-deadline observation bound")
     correctness = raw.get("correctness")
     if not isinstance(correctness, dict):
         raise ValueError("mixed graph probe omitted correctness receipts")
     expected_checks = (
+        "all_actor_sources_ready_before_active_window",
         "all_native_finite_nodes_emitted",
         "all_worker_nodes_emitted",
         "all_in_process_nodes_emitted",
         "all_program_services_emitted",
         "all_remote_listeners_emitted",
         "all_timer_nodes_emitted",
+        "readiness_watchdog_joined",
+        "active_window_duration_at_least_requested",
+        "active_window_duration_within_graph_deadline",
+        "timer_event_counter_monotonic",
+        "active_timer_counter_matches_window_delta",
+        "positive_active_timer_progress",
+        "all_expected_timer_sources_progressed_during_active_window",
+        "active_window_watchdog_fired",
+        "active_window_watchdog_joined",
         "timer_events_consumed",
         "remote_requests_complete",
         "worker_pool_capacity_respected",
@@ -309,6 +371,12 @@ def _validate_mixed(raw: dict[str, object], args: argparse.Namespace) -> dict[st
     for key in expected_checks:
         if correctness.get(key) is not True:
             raise ValueError(f"mixed graph probe failed {key}")
+    if type(correctness.get("expected_graph_actor_count")) is not int or correctness.get(
+        "expected_graph_actor_count"
+    ) != args.nodes:
+        raise ValueError("mixed graph correctness receipt has an unexpected actor count")
+    if correctness.get("unexpected_output_reader_error") is not None:
+        raise ValueError("mixed graph probe reported an output reader error")
     outputs = raw.get("outputs")
     if not isinstance(outputs, dict):
         raise ValueError("mixed graph probe omitted output receipts")
@@ -326,6 +394,41 @@ def _validate_mixed(raw: dict[str, object], args: argparse.Namespace) -> dict[st
             raise ValueError(f"mixed graph probe returned an incomplete {key} output count")
     if outputs.get("distinct_timer_sources_with_output") != expected_layout["timers"]:
         raise ValueError("mixed graph probe did not observe output from every distinct timer node")
+    if outputs.get("timer_source_ids_with_output") != expected_timer_ids:
+        raise ValueError("mixed graph probe returned an unexpected timer source identity set")
+    if outputs.get("missing_timer_source_ids") != [] or outputs.get("unexpected_timer_source_ids") != []:
+        raise ValueError("mixed graph probe reported missing or unexpected timer source ids")
+    if outputs.get("active_timer_source_ids") != expected_timer_ids:
+        raise ValueError("mixed graph active window did not observe every expected timer source")
+    if outputs.get("missing_active_timer_source_ids") != []:
+        raise ValueError("mixed graph active window omitted expected timer source ids")
+    if outputs.get("unexpected_active_timer_source_id") is not None:
+        raise ValueError("mixed graph active window observed an unexpected timer source")
+    if outputs.get("active_window_watchdog_fired") is not True or outputs.get("active_window_watchdog_joined") is not True:
+        raise ValueError("mixed graph active-window watchdog did not fire and join")
+
+    barrier_count = _mixed_counter(outputs, "timer_events_consumed_at_readiness_barrier")
+    start_count = _mixed_counter(outputs, "timer_events_consumed_before_active_window")
+    end_count = _mixed_counter(outputs, "timer_events_consumed_at_active_window_end")
+    total_count = _mixed_counter(outputs, "timer_events_consumed_total_including_warmup")
+    active_delta = _mixed_counter(outputs, "timer_events_consumed_during_active_window")
+    active_recorded = _mixed_counter(outputs, "timer_events_recorded_during_active_window")
+    after_count = _mixed_counter(outputs, "timer_events_consumed_after_active_window_end")
+    if type(readiness.get("timer_events_consumed_at_barrier")) is not int or readiness.get(
+        "timer_events_consumed_at_barrier"
+    ) != barrier_count:
+        raise ValueError("mixed graph readiness and output barrier counters disagree")
+    if not barrier_count <= start_count <= end_count <= total_count:
+        raise ValueError("mixed graph timer event counters are non-monotonic")
+    if active_delta != end_count - start_count or active_recorded != active_delta:
+        raise ValueError("mixed graph active timer count does not match the exact counter delta")
+    if after_count != total_count - end_count:
+        raise ValueError("mixed graph post-window timer count does not match the exact counter delta")
+    if active_delta == 0:
+        raise ValueError("mixed graph active window recorded no timer progress")
+    total_receipt = _mixed_counter(outputs, "timer_events_consumed_by_capacity_one_lossless_collector")
+    if total_receipt != total_count:
+        raise ValueError("mixed graph overall timer event total is inconsistent")
     remote_fixture = raw.get("remote_fixture")
     if not isinstance(remote_fixture, dict):
         raise ValueError("mixed graph probe omitted loopback server receipts")
@@ -348,8 +451,11 @@ def _validate_mixed(raw: dict[str, object], args: argparse.Namespace) -> dict[st
         "actor_count": args.nodes,
         "actor_layout": expected_layout,
         "active_window_ms": args.window_ms,
+        "active_window_observed_us": active_elapsed_us,
         "distinct_backend_nodes_with_output": distinct,
-        "timer_events_consumed": outputs.get("timer_events_consumed_by_capacity_one_lossless_collector"),
+        "timer_events_consumed_total_including_warmup": total_count,
+        "timer_events_consumed_during_active_window": active_delta,
+        "actor_readiness_warmup_us": warmup_us,
         "loopback_requests": remote_fixture,
         "registry_worker_reap": {
             "count": len(pids),

@@ -81,6 +81,20 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
             saw_node_or_edge = true;
             continue;
         }
+        if let Some(body) = line.strip_prefix("emit result from ") {
+            let words = body.split_whitespace().collect::<Vec<_>>();
+            let [node, "to", event_port] = words.as_slice() else {
+                bail!("line {line_number}: expected `emit result from <node> to <event_port>`");
+            };
+            if !identifier(node) || !identifier(event_port) {
+                bail!("line {line_number}: invalid result projection node or event port");
+            }
+            graph
+                .as_mut()
+                .expect("graph header was parsed")
+                .project_result_event(node, event_port, line_number)?;
+            continue;
+        }
         if line.starts_with("run ") {
             let mut program =
                 parser::parse(line).map_err(|error| anyhow!("line {line_number}: {error:#}"))?;
@@ -266,7 +280,7 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
             continue;
         }
         bail!(
-            "line {line_number}: expected `run ... as <node>`, `stream from ... as <node>`, `listen to ... as <node>`, `every ... as <node>`, `render quickshell|tui:<component> as <node>`, `bind <node.port> to <node.port>`, or `end graph`"
+            "line {line_number}: expected `run ... as <node>`, `emit result from <node> to <event_port>`, `stream from ... as <node>`, `listen to ... as <node>`, `every ... as <node>`, `render quickshell|tui:<component> as <node>`, `bind <node.port> to <node.port>`, or `end graph`"
         );
     }
 
@@ -898,6 +912,135 @@ mod tests {
             r#"{"name":"sink","binary":"sink","accepts_stdin":true,"arguments":[],"parameters":{},"contract":{"version":1,"output":{"type":"bytes","encoding":"raw"}}}"#,
         ])
         .unwrap()
+    }
+
+    fn result_projection_registry(
+        event_schema: serde_json::Value,
+        ordinary_output: bool,
+    ) -> Registry {
+        let mut outputs = serde_json::Map::new();
+        if ordinary_output {
+            outputs.insert(
+                "summary".into(),
+                serde_json::json!({
+                    "schema": { "type": "text" },
+                    "delivery": "single",
+                    "pointer": "/text"
+                }),
+            );
+        }
+        let descriptor = serde_json::json!({
+            "name": "result.transform",
+            "binary": "transform",
+            "arguments": [],
+            "parameters": {},
+            "contract": {
+                "version": 1,
+                "output": {
+                    "type": "record",
+                    "encoding": "json",
+                    "fields": { "text": { "type": "text" } },
+                    "required": ["text"]
+                },
+                "ports": {
+                    "outputs": outputs,
+                    "events": {
+                        "result": {
+                            "schema": event_schema,
+                            "delivery": "events"
+                        }
+                    }
+                }
+            }
+        });
+        let raw = serde_json::to_string(&descriptor).unwrap();
+        Registry::from_sources(&[raw]).unwrap()
+    }
+
+    #[test]
+    fn finite_result_projection_uses_one_declared_typed_event_and_suppresses_status() {
+        let schema = serde_json::json!({
+            "type": "record",
+            "fields": { "text": { "type": "text" } },
+            "required": ["text"]
+        });
+        let registry = result_projection_registry(schema, false);
+        let plan = parse(
+            "graph result_projection\n  run result.transform as mapped\n  emit result from mapped to result\nend graph\n",
+            &registry,
+        )
+        .unwrap();
+        let node = plan
+            .nodes()
+            .iter()
+            .find(|node| node.id == "mapped")
+            .unwrap();
+        assert!(node.outputs.is_empty());
+        assert_eq!(node.events.len(), 1);
+        assert!(matches!(
+            &node.kind,
+            GraphNodeKind::AppletResultEvent { call, event_port }
+                if call.operation == "result.transform" && event_port == "result"
+        ));
+        assert!(plan.to_json().unwrap().contains("applet_result_event"));
+    }
+
+    #[test]
+    fn finite_result_projection_rejects_ambiguous_or_mismatched_contracts() {
+        let record = serde_json::json!({
+            "type": "record",
+            "fields": { "text": { "type": "text" } },
+            "required": ["text"]
+        });
+        let text = serde_json::json!({ "type": "text" });
+        let source = |port: &str| {
+            format!(
+            "graph result_projection\n  run result.transform as mapped\n  emit result from mapped to {port}\nend graph\n"
+        )
+        };
+        let mixed = result_projection_registry(record.clone(), true);
+        assert!(parse(&source("result"), &mixed)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot mix ordinary output ports"));
+
+        let mismatched = result_projection_registry(text, false);
+        assert!(parse(&source("result"), &mismatched)
+            .unwrap_err()
+            .to_string()
+            .contains("canonical result schema"));
+
+        let mut multiple = serde_json::json!({
+            "name": "result.transform",
+            "binary": "transform",
+            "arguments": [],
+            "parameters": {},
+            "contract": {
+                "version": 1,
+                "output": {
+                    "type": "record",
+                    "encoding": "json",
+                    "fields": { "text": { "type": "text" } },
+                    "required": ["text"]
+                },
+                "ports": {
+                    "events": {
+                        "result": { "schema": record, "delivery": "events" },
+                        "other": { "schema": record, "delivery": "events" }
+                    }
+                }
+            }
+        });
+        multiple["contract"]["ports"]["events"]["other"] = serde_json::json!({
+            "schema": record,
+            "delivery": "events"
+        });
+        let raw = serde_json::to_string(&multiple).unwrap();
+        let registry = Registry::from_sources(&[raw]).unwrap();
+        assert!(parse(&source("result"), &registry)
+            .unwrap_err()
+            .to_string()
+            .contains("exactly one Events port"));
     }
 
     #[test]

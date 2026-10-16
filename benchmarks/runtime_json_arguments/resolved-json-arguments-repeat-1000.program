@@ -1,0 +1,7 @@
+# Fixed public runtime workload for JSON-argument resolution.
+# Keep the source identical when pairing runtime builds. The final explicit
+# JSON encoding should produce the exact byte string `3`, without a newline.
+accept sum as json with default 0
+repeat 1000 times
+  run number.add with left 1 and right 2 as sum
+then encode sum as json

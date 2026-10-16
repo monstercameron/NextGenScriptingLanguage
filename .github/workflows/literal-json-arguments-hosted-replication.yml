@@ -1,0 +1,120 @@
+name: Literal JSON arguments hosted Linux replication
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixed-runtime-replication:
+    name: Fixed 48-pair literal argument comparison
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Verify frozen inputs and run offline contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$GITHUB_WORKSPACE/evidence/literal-json-arguments"
+          package="$GITHUB_WORKSPACE/benchmarks/runtime_json_arguments"
+          mkdir -p "$evidence/build" "$evidence/paired-runs"
+          printf '%s  %s\n' '00afb9395517d065a90344eb1635bbbfaa20d3d0bb3f32b4cbe93b7fa7862571' "$package/resolved_json_arguments_pair.py" | sha256sum --check
+          printf '%s  %s\n' 'f483c11e9785ec8d53cb3ff8e85377c08b4842dbd48560669657fb3b09f442f4' "$package/test_resolved_json_arguments_pair.py" | sha256sum --check
+          printf '%s  %s\n' '627d8466f0c0ef8264e483d456118bb7eb6f4e14757a752fbd226efecf917003' "$package/resolved_json_arguments_bench.rs" | sha256sum --check
+          printf '%s  %s\n' 'a2a95cfb03e55164e459467b088eeffd1d8034fb7023a7e3dfcd806274177b1d' "$package/resolved-json-arguments-repeat-1000.program" | sha256sum --check
+          printf '%s  %s\n' '32eb170c8a3394710759765a063d379685f30285786bca5fdc0b923adf360b17' "$package/hosted_support.py" | sha256sum --check
+          printf '%s  %s\n' '19bea65c6f3ec252205332d4c21d68b68e6a24ca800aa9330151b27245a82ebf' "$package/test_hosted_support.py" | sha256sum --check
+          python3 -B -m unittest discover -s "$package" -p 'test_resolved_json_arguments_pair.py'
+          python3 -B -m unittest discover -s "$package" -p 'test_hosted_support.py'
+          PYTHONDONTWRITEBYTECODE=1 python3 -B "$package/hosted_support.py" verify-inputs \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --evidence-root "$evidence" > "$evidence/build/verified-inputs-command.json"
+          {
+            printf 'purpose=fixed hosted replication of the literal-only JSON-argument runtime workload\n'
+            printf 'profile=literal-json-arguments\nbase_commit=b824aeaa7bccaa4d3d75d3fc6a363a99138287d4\n'
+            printf 'warmup_pairs=3\nmeasured_pairs=48\ninvocation_timeout_seconds=120\n'
+            printf 'no_retries=true\nevent=workflow_dispatch\nrun_id=%s\nrun_attempt=%s\nworkflow_commit=%s\n' \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA"
+          } > "$evidence/hosted-request.txt"
+          python3 --version > "$evidence/build/host-tool-versions.txt"
+          cargo --version >> "$evidence/build/host-tool-versions.txt"
+          rustc --version --verbose >> "$evidence/build/host-tool-versions.txt"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout the frozen base for baseline
+        with:
+          ref: b824aeaa7bccaa4d3d75d3fc6a363a99138287d4
+          path: build-source/baseline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout the frozen base for candidate
+        with:
+          ref: b824aeaa7bccaa4d3d75d3fc6a363a99138287d4
+          path: build-source/candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Apply frozen source patches and save source fingerprints
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -B benchmarks/runtime_json_arguments/hosted_support.py apply-patches \
+            --repo-root "$GITHUB_WORKSPACE" \
+            --source-parent "$GITHUB_WORKSPACE/build-source" \
+            --evidence-root "$GITHUB_WORKSPACE/evidence/literal-json-arguments" \
+            > "$GITHUB_WORKSPACE/evidence/literal-json-arguments/build/apply-patches-command.json"
+
+      - name: Build each arm once in a separate fresh release target
+        shell: bash
+        timeout-minutes: 100
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -B benchmarks/runtime_json_arguments/hosted_support.py build-pair \
+            --source-parent "$GITHUB_WORKSPACE/build-source" \
+            --evidence-root "$GITHUB_WORKSPACE/evidence/literal-json-arguments" \
+            --target-parent "$RUNNER_TEMP/literal-json-targets" \
+            > "$GITHUB_WORKSPACE/evidence/literal-json-arguments/build/build-pair-command.json"
+
+      - name: Freeze receipts before timing
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$GITHUB_WORKSPACE/benchmarks/runtime_json_arguments"
+          evidence="$GITHUB_WORKSPACE/evidence/literal-json-arguments"
+          printf '%s  %s\n' '00afb9395517d065a90344eb1635bbbfaa20d3d0bb3f32b4cbe93b7fa7862571' "$package/resolved_json_arguments_pair.py" | sha256sum --check
+          PYTHONDONTWRITEBYTECODE=1 python3 -B "$package/resolved_json_arguments_pair.py" prepare \
+            --baseline-receipt "$evidence/build/baseline/build-receipt.json" \
+            --candidate-receipt "$evidence/build/candidate/build-receipt.json" \
+            --preregistration "$evidence/hosted-preregistration.json" \
+            > "$evidence/build/prepare-command.json"
+
+      - name: Run the one fixed three-warmup and 48-pair sequence
+        shell: bash
+        timeout-minutes: 185
+        run: |
+          set -euo pipefail
+          evidence="$GITHUB_WORKSPACE/evidence/literal-json-arguments"
+          PYTHONDONTWRITEBYTECODE=1 python3 -B benchmarks/runtime_json_arguments/resolved_json_arguments_pair.py run \
+            --preregistration "$evidence/hosted-preregistration.json" \
+            --report-dir "$evidence/paired-runs/run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: literal-json-arguments-hosted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/literal-json-arguments
+          if-no-files-found: warn
+          retention-days: 90

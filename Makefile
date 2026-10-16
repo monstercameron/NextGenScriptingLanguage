@@ -66,6 +66,8 @@ check: rust-check docs-check applet-boundaries-harness-check stress-evidence-har
 	$(PYTHON) -O tests/releases.py
 	$(PYTHON) tests/model_catalog.py
 	$(PYTHON) -O tests/model_catalog.py
+	$(PYTHON) tests/test_manifest_catalog_packer.py
+	$(PYTHON) -O tests/test_manifest_catalog_packer.py
 	$(PYTHON) tests/desktop_acceptance.py
 	$(PYTHON) tools/desktop_ci/pam_transform.py --self-test
 	$(PYTHON) tests/ai_productivity_real_bash_100.py

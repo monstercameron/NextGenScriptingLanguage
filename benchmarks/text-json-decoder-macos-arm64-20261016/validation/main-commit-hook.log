@@ -1,0 +1,14 @@
+Rust staged check: cargo fmt --check
+Rust staged check: cargo fmt --manifest-path browser/Cargo.toml --check
+Rust staged check: rustfmt --edition 2021 --check src/runtime/shared.rs
+Rust staged check: cargo clippy --offline --locked --all-targets -- -D warnings
+    Checking iana-time-zone v0.1.65 (/private/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/execute-staged-rust-pcb6tyr8/vendor/iana-time-zone)
+    Checking chrono v0.4.45
+    Checking execute v0.9.0-rc.5 (/private/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/execute-staged-rust-pcb6tyr8)
+    Finished `dev` profile [unoptimized] target(s) in 13.76s
+Rust staged check: cargo clippy --manifest-path browser/Cargo.toml --offline --locked --target wasm32-unknown-unknown -- -D warnings
+    Checking execute v0.9.0-rc.5 (/private/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/execute-staged-rust-pcb6tyr8)
+    Checking execute-browser v0.1.0 (/private/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/execute-staged-rust-pcb6tyr8/browser)
+    Finished `dev` profile [unoptimized] target(s) in 1.71s
+[main 690c5aa] perf(contracts): move owned JSON strings into text validation
+ 1 file changed, 4 insertions(+), 4 deletions(-)

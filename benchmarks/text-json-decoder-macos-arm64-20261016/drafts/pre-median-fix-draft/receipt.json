@@ -1,0 +1,6 @@
+{
+  "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/pre-median-fix-draft/text_json_decoder_pair.py",
+  "reason": "Preserved before replacing integer truncation of an even-count median with the exact half-integer statistic.",
+  "schema": "output_schema_text_json_decode_pre_median_fix_draft/1",
+  "sha256": "b0ebcc82ad9901ce1be0fc49dc692697e1669bcc7442a35b7d3c2dd890d40a4f"
+}

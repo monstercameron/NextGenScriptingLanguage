@@ -1,0 +1,8 @@
+{
+  "audit_report_sha256": "0431d2259efec63a9a55cc4903512e91842c3f7fbc4a2c3c0f878ab327ad66f2",
+  "auditor_artifact_sha256": "6361da1c1cd7b25e4ffe7f1de13bd65c57505e06fb5f5dce05c548e873bb1271",
+  "review_summary": "Independent audit passed: both 5,917-path source maps, both saved benchmark binaries, all 102 raw invocations/306 sample oracles, balanced order, and paired outcomes.",
+  "schema": "text_json_decoder_independent_audit_receipt/1",
+  "scope": "The supplied audit.py and audit.json bytes are retained unchanged; this receipt only makes their identities explicit.",
+  "status": "passed"
+}

@@ -1,0 +1,3 @@
+Command: python3 -m unittest discover -s work/text-json-decoder-paired-runner -p test_*.py -v
+Result: 12 tests passed, 0 failed. Includes full deployed source/build-provenance check.
+Executed after fixing the fixture descriptor; did not build or execute product code.

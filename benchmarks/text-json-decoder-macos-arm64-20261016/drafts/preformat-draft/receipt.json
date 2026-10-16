@@ -1,0 +1,32 @@
+{
+  "current_source_bindings_sha256": "3e414d06b9f1fa78f0dc70df25b958d439329636450fd67141d36bd7a140c57a",
+  "files": {
+    "baseline_harness.rs": {
+      "bytes": 5197,
+      "sha256": "4f7570cfef9725bd05edfeb0a0689a47ebbdfabd7c269aecbf1731f559933b5b"
+    },
+    "build_text_json_decoder_pair.py": {
+      "bytes": 21749,
+      "sha256": "2c25beda9297988a24a86af1dc411c588c29e9c2f0a3c55f8996d22db9c44c06"
+    },
+    "candidate_harness.rs": {
+      "bytes": 5197,
+      "sha256": "4f7570cfef9725bd05edfeb0a0689a47ebbdfabd7c269aecbf1731f559933b5b"
+    },
+    "source-fingerprints.json": {
+      "bytes": 2155740,
+      "sha256": "4340579b282090b3819862d0929a2bcab624f5f38f14fbc1af50b210cc69de76"
+    },
+    "test_text_json_decoder_pair.py": {
+      "bytes": 6804,
+      "sha256": "ca7286cfdf8f2a6c275d850e9494c88fedcd6cb4eec19d6a8b345a38c4d3819b"
+    },
+    "text_json_decoder_pair.py": {
+      "bytes": 48596,
+      "sha256": "f94df497d9d59a9f59afa26588ce68bd888a33a8caba1566afd762bce088bace"
+    }
+  },
+  "formatted_harness_sha256": "2293bc1e04377fdf23b430655ec51bf41643723f9133c3cf181136edbc6c146d",
+  "reason": "Root rustfmt attempt 1 found harness-only formatting differences; these are exact before-format copies.",
+  "schema": "output_schema_text_json_decode_preformat_draft/1"
+}

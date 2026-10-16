@@ -1,0 +1,20 @@
+{
+  "status": "failed_validation_before_candidate_smoke_or_any_paired_trial",
+  "planned_smoke_arms": [
+    "baseline",
+    "candidate"
+  ],
+  "attempted": [
+    "baseline"
+  ],
+  "unattempted": [
+    "candidate"
+  ],
+  "baseline_test_returncode": 0,
+  "baseline_test_passed": 1,
+  "failure": "runner descriptor differs from exact pinned Rust-harness fixture descriptor; identical bytes and hashes",
+  "wrapper_sha256": "45da0480c237516894f1418d6277c9f19d9619af887819f648bc3afc494c54b2",
+  "raw_sha256": "bb9a3c233b476631596c020a5d9af2ed833d4e58fbdaf1829d161da9095e8f91",
+  "product_harness_binaries_unchanged": true,
+  "scheduled_trial_started": false
+}

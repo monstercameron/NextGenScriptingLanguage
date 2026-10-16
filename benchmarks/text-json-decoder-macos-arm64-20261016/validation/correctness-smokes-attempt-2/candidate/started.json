@@ -1,0 +1,42 @@
+{
+  "binary_sha256_before": "122af934a7d090eeaeff1879f337b07dfaeacf84f4bc34dcd734e6fdc1901d63",
+  "build_metadata": {
+    "base_commit": "3be9fe7eac71c371d3ec5c5a5fadb3161a83ea6c",
+    "build_driver_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/build_text_json_decoder_pair.py",
+    "build_driver_sha256": "2c25beda9297988a24a86af1dc411c588c29e9c2f0a3c55f8996d22db9c44c06",
+    "build_pair_command_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/build-attempt-1/build-pair-command.json",
+    "build_pair_command_sha256": "840bc108e52419524670ac2377bdfd55c08903f9161c888ecb7f94b7d2c1c4bc",
+    "build_pair_receipt_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/build-attempt-1/build-pair-receipt.json",
+    "build_pair_receipt_sha256": "73e4d9ca3de7483dc31ce273ec4f4aadb10e951177db71157b8b7a695271cdb7",
+    "build_run": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/build-attempt-1",
+    "harness_patch_sha256": "8b1b7ed84822cf364c84febf5c0f898c4d4b4bf3cce9f13c03cc6b416e6aa920",
+    "harness_source_sha256": "2293bc1e04377fdf23b430655ec51bf41643723f9133c3cf181136edbc6c146d",
+    "product_patch_sha256": "95f4d413f86f0905421500f182e372e55a3c30163dc3364810ca71386ca03f36",
+    "source_bindings_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/source-fingerprints.json",
+    "source_bindings_sha256": "3e414d06b9f1fa78f0dc70df25b958d439329636450fd67141d36bd7a140c57a",
+    "tool_environment_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/build-attempt-1/tool-environment.json",
+    "tool_environment_sha256": "229402541710a53a8834c495b03f90f08cfb7a7d7c80f134bddc25c0b4fcfb36"
+  },
+  "command": [
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/build-attempt-1/candidate/binaries/output_schema_text_json_decode",
+    "--exact",
+    "text_json_decode_10000",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "cwd": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/text-json-decoder-candidate-3be9fe",
+  "execution_environment": {
+    "LC_ALL": "C",
+    "OPT_BENCH_REPORT": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/correctness-smokes-attempt-2/candidate/raw.json",
+    "TZ": "UTC"
+  },
+  "execution_environment_sha256": "1bf28ad71bb97be4883011d50b72c6467669039d28d0466192a1f63f4d2de4b5",
+  "phase": "correctness_smoke",
+  "raw_report_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/correctness-smokes-attempt-2/candidate/raw.json",
+  "retry": 0,
+  "runner_sha256": "6dd826353dff66d318ae57b9cddaf7e08eeb529210f82f6f421af47992e893eb",
+  "side": "candidate",
+  "started_at": "2026-10-16T11:13:25.266Z",
+  "timeout_seconds": 120
+}

@@ -1,0 +1,16 @@
+{
+  "created_at": "2026-10-16T11:17:33.816785+00:00",
+  "product_commit": "690c5aa11d05976caa43447be2c7a75bafd34b67",
+  "parent": "3be9fe7eac71c371d3ec5c5a5fadb3161a83ea6c",
+  "committed_patch_byte_identical_to_measured": true,
+  "patch_sha256": "95f4d413f86f0905421500f182e372e55a3c30163dc3364810ca71386ca03f36",
+  "native_fmt_clippy": "passed --all-targets -D warnings",
+  "wasm_fmt_clippy": "passed -D warnings",
+  "library_tests_passed": 313,
+  "library_ignored": 20,
+  "smokes_attempt_2": "bothpassedexact1test3samplesfulloracles",
+  "independent_audit_sha256": "0431d2259efec63a9a55cc4903512e91842c3f7fbc4a2c3c0f878ab327ad66f2",
+  "hook_log_sha256": "07f8d383072e3bd7087b3b8d78dd36fefd74e5ca3f0cda8dad61b2f8891e9623",
+  "scope": "one4KiBASCIIpublictextdecoderfixtureonly; all6lossesretained",
+  "published_remote": false
+}

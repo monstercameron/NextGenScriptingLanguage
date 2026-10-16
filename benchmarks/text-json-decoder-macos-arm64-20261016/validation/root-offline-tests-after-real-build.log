@@ -1,0 +1,15 @@
+test_actual_build_provenance_when_root_has_prepared_it (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+test_build_driver_rejects_optimized_python (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+test_builder_filters_environment_and_pins_campaign_target (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+test_deployed_root_full_source_bindings_and_one_file_delta (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+test_pair_summary_preserves_half_integer_medians (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+test_protocol_has_three_warmup_and_fixed_balanced_48_pairs (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+test_raw_report_accepts_exact_decoder_oracles (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+test_raw_report_rejects_fixture_oracle_and_percentile_drift (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+test_strict_json_rejects_duplicate_keys_nonfinite_and_invalid_utf8 (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+test_workload_is_a_fixed_4k_ascii_json_string (test_text_json_decoder_pair.TextJsonDecoderPairTests) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 20.278s
+
+OK

@@ -1,0 +1,10 @@
+{
+  "base_commit": "3be9fe7eac71c371d3ec5c5a5fadb3161a83ea6c",
+  "measured_product_patch_sha256": "95f4d413f86f0905421500f182e372e55a3c30163dc3364810ca71386ca03f36",
+  "exact_measured_patch_applied": true,
+  "all_product_file_bytes_equal_to_tested_candidate": true,
+  "product_file": "src/contracts.rs",
+  "product_file_sha256": "08a3ef35049d3679c810767f2f28fc374f5ed8e81c7b202688a47d43a858ef72",
+  "shared_benchmark_harness_not_part_of_product_change": true,
+  "pending": "independent raw audit and staged native/WASM hook before commit"
+}

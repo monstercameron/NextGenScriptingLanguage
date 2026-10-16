@@ -1,0 +1,16 @@
+{
+  "base_commit": "3be9fe7eac71c371d3ec5c5a5fadb3161a83ea6c",
+  "build_driver_sha256": "2c25beda9297988a24a86af1dc411c588c29e9c2f0a3c55f8996d22db9c44c06",
+  "failed_smoke_attempt_preserved": true,
+  "harness_patch_sha256": "8b1b7ed84822cf364c84febf5c0f898c4d4b4bf3cce9f13c03cc6b416e6aa920",
+  "harness_sha256": "2293bc1e04377fdf23b430655ec51bf41643723f9133c3cf181136edbc6c146d",
+  "no_cargo_or_product_execution_by_source_scout": true,
+  "offline_test_sha256": "27aa417b0a3a8933ebc680daae6de7a848ea0d893f50a5f047a17e5be875e9cf",
+  "pre_median_runner_draft_receipt_sha256": "b4b57f48aecb58ed6ab4bf1cbb4eeaad485d098b672625827e20af737bea29e2",
+  "prior_fixture_descriptor_draft_receipt_sha256": "6d497d51579ce930efc0e124f086ed69d090f9ea2f0abe54b7b9680a8c4a0106",
+  "product_patch_sha256": "95f4d413f86f0905421500f182e372e55a3c30163dc3364810ca71386ca03f36",
+  "runner_sha256": "6dd826353dff66d318ae57b9cddaf7e08eeb529210f82f6f421af47992e893eb",
+  "schema": "output_schema_text_json_decode_source_freeze/1",
+  "scope": "Candidate diff is only src/contracts.rs Value::String move; ignored public OutputSchema::decode harness is identical in baseline/candidate.; runner fixture label matches the identical pinned harness source exactly",
+  "source_bindings_sha256": "3e414d06b9f1fa78f0dc70df25b958d439329636450fd67141d36bd7a140c57a"
+}

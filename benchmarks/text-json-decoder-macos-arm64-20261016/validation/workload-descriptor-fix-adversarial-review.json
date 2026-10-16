@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "review": "Source-only follow-up: text JSON decoder workload descriptor correction",
+  "reviewed_at_utc": "2026-10-16T11:13:00Z",
+  "scope": "Metadata-only correction to the paired runner and a regression for descriptor mismatch. No product execution, build, Cargo, or timing was performed by reviewer.",
+  "pins": {
+    "runner_sha256": "6dd826353dff66d318ae57b9cddaf7e08eeb529210f82f6f421af47992e893eb",
+    "runner_tests_sha256": "27aa417b0a3a8933ebc680daae6de7a848ea0d893f50a5f047a17e5be875e9cf",
+    "build_driver_sha256": "2c25beda9297988a24a86af1dc411c588c29e9c2f0a3c55f8996d22db9c44c06",
+    "source_map_sha256": "3e414d06b9f1fa78f0dc70df25b958d439329636450fd67141d36bd7a140c57a",
+    "product_patch_sha256": "95f4d413f86f0905421500f182e372e55a3c30163dc3364810ca71386ca03f36",
+    "harness_sha256": "2293bc1e04377fdf23b430655ec51bf41643723f9133c3cf181136edbc6c146d",
+    "harness_patch_sha256": "8b1b7ed84822cf364c84febf5c0f898c4d4b4bf3cce9f13c03cc6b416e6aa920"
+  },
+  "finding": {
+    "status": "resolved",
+    "previous_issue": "The runner expected a semicolon-form fixture description, while the Rust harness report emitted the comma-form exact fixture string. The strict raw report validator therefore rejected an otherwise semantically correct baseline smoke report.",
+    "correction": "The runner now expects the exact descriptor emitted by the pinned Rust harness: `ASCII byte x repeated 4096 times, JSON encoded once before timing`.",
+    "regression": "A test mutates the raw fixture descriptor back to the previous semicolon wording and asserts that validation rejects it. The runner/hash and test/hash were independently checked against the reported pins; source, product patch, harness, source map, and build-driver hashes remain unchanged.",
+    "retained_failed_smoke": "The earlier metadata-only smoke rejection remains a failed smoke record, not a timed pair; the candidate arm was not attempted in that smoke. Do not count it as a measurement or erase it."
+  },
+  "assessment": "The narrow descriptor mismatch is fixed at the source level and the test protects exact consistency with the Rust harness. This is not a benchmark result and does not certify the subsequent paired trial."
+}

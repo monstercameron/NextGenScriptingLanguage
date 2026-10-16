@@ -55,3 +55,8 @@ benchmarks/graph-collector-hosted-linux-proof-20261016/**/*.diff binary
 benchmarks/line-framing-memchr-macos-arm64-20261016/** -text
 benchmarks/line-framing-memchr-macos-arm64-20261016/**/*.log binary
 benchmarks/line-framing-memchr-macos-arm64-20261016/**/*.diff binary
+
+# Immutable public decoder source snapshots, reports, and retained failures.
+benchmarks/text-json-decoder-macos-arm64-20261016/** -text
+benchmarks/text-json-decoder-macos-arm64-20261016/**/*.log binary
+benchmarks/text-json-decoder-macos-arm64-20261016/**/*.diff binary

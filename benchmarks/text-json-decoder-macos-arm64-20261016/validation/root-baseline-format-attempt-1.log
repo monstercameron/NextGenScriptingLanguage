@@ -1,0 +1,69 @@
+Diff in /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/text-json-decoder-baseline-3be9fe/tests/output_schema_text_json_decode.rs:14:
+ use serde_json::json;
+ use sha2::{Digest, Sha256};
+ use std::{
+-    collections::BTreeMap,
+-    fs::OpenOptions,
+-    hint::black_box,
+-    io::Write,
+-    path::PathBuf,
++    collections::BTreeMap, fs::OpenOptions, hint::black_box, io::Write, path::PathBuf,
+     time::Instant,
+ };
+ 
+Diff in /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/text-json-decoder-baseline-3be9fe/tests/output_schema_text_json_decode.rs:34:
+ fn verify_value(output: AppletOutput, expected: &str) {
+     match output {
+         AppletOutput::Value(Value::String(actual)) => {
+-            assert_eq!(actual.len(), expected.len(), "decoded string length changed");
+-            assert_eq!(actual.as_bytes(), expected.as_bytes(), "decoded string bytes changed");
++            assert_eq!(
++                actual.len(),
++                expected.len(),
++                "decoded string length changed"
++            );
++            assert_eq!(
++                actual.as_bytes(),
++                expected.as_bytes(),
++                "decoded string bytes changed"
++            );
+         }
+         other => panic!("expected decoded text value, got {other:?}"),
+     }
+Diff in /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/text-json-decoder-baseline-3be9fe/tests/output_schema_text_json_decode.rs:50:
+         std::env::var("OPT_BENCH_REPORT")
+             .expect("set OPT_BENCH_REPORT to a new absolute JSON report path"),
+     );
+-    assert!(report_path.is_absolute(), "OPT_BENCH_REPORT must be absolute");
+     assert!(
++        report_path.is_absolute(),
++        "OPT_BENCH_REPORT must be absolute"
++    );
++    assert!(
+         !report_path.exists(),
+         "refusing to overwrite benchmark report {}",
+         report_path.display()
+Diff in /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/text-json-decoder-baseline-3be9fe/tests/output_schema_text_json_decode.rs:59:
+ 
+     let expected = "x".repeat(STRING_BYTES);
+     let input = serde_json::to_vec(&expected).expect("encode fixed JSON string fixture");
+-    assert_eq!(input.len(), STRING_BYTES + 2, "ASCII JSON fixture size changed");
++    assert_eq!(
++        input.len(),
++        STRING_BYTES + 2,
++        "ASCII JSON fixture size changed"
++    );
+     let schema = OutputSchema {
+         kind: OutputType::Text,
+         encoding: OutputEncoding::Json,
+Diff in /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/text-json-decoder-baseline-3be9fe/tests/output_schema_text_json_decode.rs:77:
+     for _ in 0..SAMPLES {
+         let started = Instant::now();
+         for _ in 0..ITERATIONS {
+-            let output = schema.decode(black_box(input.as_slice())).expect("decode fixed JSON text");
++            let output = schema
++                .decode(black_box(input.as_slice()))
++                .expect("decode fixed JSON text");
+             verify_value(output, black_box(expected.as_str()));
+         }
+         let elapsed_ns = started.elapsed().as_nanos() as u64;

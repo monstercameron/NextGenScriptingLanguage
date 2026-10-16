@@ -1,0 +1,24 @@
+{
+  "library_tests_passed": 313,
+  "ignored": 20,
+  "failed": 0,
+  "source_worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/text-json-decoder-candidate-3be9fe",
+  "source_bindings_sha256": "3e414d06b9f1fa78f0dc70df25b958d439329636450fd67141d36bd7a140c57a",
+  "contracts_source_sha256": "08a3ef35049d3679c810767f2f28fc374f5ed8e81c7b202688a47d43a858ef72",
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "--release",
+    "--lib",
+    "--",
+    "--test-threads=1"
+  ],
+  "log_sha256": "71e0241e320d3c49243e611912f38f0546ba181886d07248e845d41c7f41eeac",
+  "original_cargo_executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/flow-483cde837fb056b7",
+  "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/root-candidate-library-test-binary",
+  "saved_binary_sha256": "6dc438b60134b0edb36251e40dc5ed1721e97a538fc66326d4f272677f5ace92",
+  "source_compilation_observed_in_log": true,
+  "cargo_json_artifact_stream_captured_for_this_library_test": false
+}

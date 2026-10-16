@@ -1,0 +1,31 @@
+{
+  "attempt_id": "measurement-25-1-candidate",
+  "binary_sha256": "122af934a7d090eeaeff1879f337b07dfaeacf84f4bc34dcd734e6fdc1901d63",
+  "binary_sha256_before": "122af934a7d090eeaeff1879f337b07dfaeacf84f4bc34dcd734e6fdc1901d63",
+  "build_receipt_sha256": "ecdc3a4b788ca0a79faff980f479b6ee4d220f758106f68a0147f0d81479d6b6",
+  "command": [
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/build-attempt-1/candidate/binaries/output_schema_text_json_decode",
+    "--exact",
+    "text_json_decode_10000",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "cwd": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/text-json-decoder-candidate-3be9fe",
+  "execution_environment": {
+    "LC_ALL": "C",
+    "OPT_BENCH_REPORT": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/paired-run-attempt-1/attempts/measurement-25-1-candidate/raw.json",
+    "TZ": "UTC"
+  },
+  "execution_environment_sha256": "d0bb8d3d33fc9d1069c3c9b96651165bd6e1aceb9c9a7be0525dd33d5d3e5f2a",
+  "global_pair_index": 27,
+  "phase": "measurement",
+  "phase_pair_index": 25,
+  "position_in_pair": 1,
+  "raw_report_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/paired-run-attempt-1/attempts/measurement-25-1-candidate/raw.json",
+  "retry": 0,
+  "side": "candidate",
+  "source_fingerprint_sha256": "8b88db34cfea96b78e6fba143543d36e5f39aa97be02b06ccd0cc208a91dc102",
+  "started_at": "2026-10-16T11:14:12.818Z",
+  "timeout_seconds": 120
+}

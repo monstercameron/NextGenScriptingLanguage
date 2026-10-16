@@ -1,0 +1,86 @@
+{
+  "attempt_dir": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/paired-run-attempt-1/attempts/measurement-39-1-candidate",
+  "attempt_id": "measurement-39-1-candidate",
+  "binary_sha256": "122af934a7d090eeaeff1879f337b07dfaeacf84f4bc34dcd734e6fdc1901d63",
+  "binary_sha256_after": "122af934a7d090eeaeff1879f337b07dfaeacf84f4bc34dcd734e6fdc1901d63",
+  "build_receipt_sha256": "ecdc3a4b788ca0a79faff980f479b6ee4d220f758106f68a0147f0d81479d6b6",
+  "command": [
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/build-attempt-1/candidate/binaries/output_schema_text_json_decode",
+    "--exact",
+    "text_json_decode_10000",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "cwd": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/text-json-decoder-candidate-3be9fe",
+  "execution_environment": {
+    "LC_ALL": "C",
+    "OPT_BENCH_REPORT": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/paired-run-attempt-1/attempts/measurement-39-1-candidate/raw.json",
+    "TZ": "UTC"
+  },
+  "execution_environment_sha256": "d0cf2b2721a5728cce6f90561ab3c8beb563420cfa54cd6cde326e739c58adb6",
+  "execution_error": null,
+  "finished_at": "2026-10-16T11:14:15.540Z",
+  "global_pair_index": 41,
+  "invocation_wall_ns_not_benchmark_metric": 42134333,
+  "median_duration_ns": 7662250,
+  "phase": "measurement",
+  "phase_pair_index": 39,
+  "position_in_pair": 1,
+  "raw_report_bytes": 2137,
+  "raw_report_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/paired-run-attempt-1/attempts/measurement-39-1-candidate/raw.json",
+  "raw_report_sha256": "20a9db965655e0441e7445e3f76c181fc4dee690bbdc81ab37b4f41b4dbbe8ef",
+  "raw_sample_ns": [
+    7662250,
+    7686167,
+    7661292
+  ],
+  "retry": 0,
+  "returncode": 0,
+  "semantic_oracles": [
+    {
+      "decoded_string_bytes": 4096,
+      "decoded_string_sha256": "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e",
+      "decoded_values": 10000,
+      "errors": 0,
+      "exact_value_matches": 10000
+    },
+    {
+      "decoded_string_bytes": 4096,
+      "decoded_string_sha256": "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e",
+      "decoded_values": 10000,
+      "errors": 0,
+      "exact_value_matches": 10000
+    },
+    {
+      "decoded_string_bytes": 4096,
+      "decoded_string_sha256": "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e",
+      "decoded_values": 10000,
+      "errors": 0,
+      "exact_value_matches": 10000
+    }
+  ],
+  "side": "candidate",
+  "source_fingerprint_sha256": "8b88db34cfea96b78e6fba143543d36e5f39aa97be02b06ccd0cc208a91dc102",
+  "started_at": "2026-10-16T11:14:15.497Z",
+  "stderr_bytes": 0,
+  "stderr_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/paired-run-attempt-1/attempts/measurement-39-1-candidate/stderr.log",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_bytes": 147,
+  "stdout_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/text-json-decoder/paired-run-attempt-1/attempts/measurement-39-1-candidate/stdout.log",
+  "stdout_sha256": "43f6be8822b1ac7bf6ee26f069b881f0734d960c5a97ad03ab512ad81126b71f",
+  "successful": true,
+  "timed_out": false,
+  "workload": {
+    "api": "flow::contracts::OutputSchema::decode",
+    "case": "text_json_decode_10000",
+    "decoded_string_bytes": 4096,
+    "decoded_string_sha256": "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e",
+    "encoding": "json",
+    "fixture": "ASCII byte x repeated 4096 times, JSON encoded once before timing",
+    "iterations_per_sample": 10000,
+    "json_payload_bytes": 4098,
+    "json_payload_sha256": "7f7531f0adf93194f8cc5ae6be03bfb000b4621fb0bebaa53cecfb1e48a68bcd",
+    "output_type": "text"
+  }
+}

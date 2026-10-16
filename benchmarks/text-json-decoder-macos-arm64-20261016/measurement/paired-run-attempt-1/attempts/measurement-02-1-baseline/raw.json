@@ -1,0 +1,52 @@
+{
+  "measured_samples": 3,
+  "method": "Public flow::contracts::OutputSchema::decode API; 10,000 decodes per sample of one fixed 4,096-byte ASCII JSON string. Each returned Value::String is checked byte-for-byte and dropped before the next decode. Includes JSON parsing, decoded string ownership, byte-equality verification, and dropping each returned value within its iteration. Excludes schema/fixture construction, payload serialization, hashing, and report writing. No filesystem reads or child processes.",
+  "results": {
+    "text_json_decode_10000": {
+      "p50_ns": 9286875,
+      "p95_ns": 9640500,
+      "raw_sample_ns": [
+        9640500,
+        8887000,
+        9286875
+      ],
+      "semantic_oracles": [
+        {
+          "decoded_string_bytes": 4096,
+          "decoded_string_sha256": "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e",
+          "decoded_values": 10000,
+          "errors": 0,
+          "exact_value_matches": 10000
+        },
+        {
+          "decoded_string_bytes": 4096,
+          "decoded_string_sha256": "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e",
+          "decoded_values": 10000,
+          "errors": 0,
+          "exact_value_matches": 10000
+        },
+        {
+          "decoded_string_bytes": 4096,
+          "decoded_string_sha256": "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e",
+          "decoded_values": 10000,
+          "errors": 0,
+          "exact_value_matches": 10000
+        }
+      ]
+    }
+  },
+  "schema": "output_schema_text_json_decode_bench/v1",
+  "warmup_runs": 0,
+  "workload": {
+    "api": "flow::contracts::OutputSchema::decode",
+    "case": "text_json_decode_10000",
+    "decoded_string_bytes": 4096,
+    "decoded_string_sha256": "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e",
+    "encoding": "json",
+    "fixture": "ASCII byte x repeated 4096 times, JSON encoded once before timing",
+    "iterations_per_sample": 10000,
+    "json_payload_bytes": 4098,
+    "json_payload_sha256": "7f7531f0adf93194f8cc5ae6be03bfb000b4621fb0bebaa53cecfb1e48a68bcd",
+    "output_type": "text"
+  }
+}

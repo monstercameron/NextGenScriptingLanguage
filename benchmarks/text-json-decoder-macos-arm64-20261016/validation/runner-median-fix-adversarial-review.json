@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "review": "Source-only follow-up: exact median accounting in text JSON decoder paired runner",
+  "reviewed_at_utc": "2026-10-16T10:58:05Z",
+  "review_scope": "Only the accounting change to paired summary median and its regression tests; no Cargo, product execution, or timing was run by reviewer.",
+  "pins": {
+    "runner_sha256": "54930cef0b743cede6b70b5577697228a028058348de928d30b1ed3c2607afce",
+    "runner_tests_sha256": "bc9f49efbef1f73bcf6f6cff5190654a1ab685c5028ca147f5be8800b2417771",
+    "build_driver_sha256": "2c25beda9297988a24a86af1dc411c588c29e9c2f0a3c55f8996d22db9c44c06",
+    "product_patch_sha256": "95f4d413f86f0905421500f182e372e55a3c30163dc3364810ca71386ca03f36",
+    "harness_source_sha256": "2293bc1e04377fdf23b430655ec51bf41643723f9133c3cf181136edbc6c146d",
+    "harness_patch_sha256": "8b1b7ed84822cf364c84febf5c0f898c4d4b4bf3cce9f13c03cc6b416e6aa920",
+    "source_map_sha256": "3e414d06b9f1fa78f0dc70df25b958d439329636450fd67141d36bd7a140c57a"
+  },
+  "finding": {
+    "status": "resolved",
+    "previous_issue": "The runner converted statistics.median(valid) to int, discarding a possible half-nanosecond median for an even number of paired deltas.",
+    "current_behavior": "The summary now stores statistics.median(valid) directly, preserving integer medians for odd counts and half-valued medians for even counts. JSON supports the resulting .5 numeric value.",
+    "regression_coverage": "Added odd- and even-count median assertions; source was inspected but tests were not rerun by this reviewer. Owner reports 10 tests passing with one expected prebuild-provenance skip."
+  },
+  "assessment": "Clear for the reported median-accounting fix. Product, harness, build driver, and source-map pins are unchanged from the prior review; runner/test hashes bind the follow-up. This review does not certify build outputs or any benchmark result."
+}

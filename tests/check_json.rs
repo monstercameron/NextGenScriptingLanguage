@@ -143,6 +143,55 @@ fn read_manifest_and_input_errors_share_the_same_framed_protocol() {
 }
 
 #[test]
+fn check_json_defers_missing_and_invalid_catalog_errors_until_authoritative_validation() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("valid.program"), "run \"printf\"\n").unwrap();
+    fs::write(
+        root.path().join("broken.program"),
+        "run \"printf\"\nread \"unterminated\n",
+    )
+    .unwrap();
+    fs::write(root.path().join("invalid.json"), "{bad manifest}").unwrap();
+
+    for manifest in ["missing-manifests", "invalid.json"] {
+        let valid = report(
+            &invoke(
+                root.path(),
+                &[
+                    "check",
+                    "valid.program",
+                    "--json",
+                    "--manifest-dir",
+                    manifest,
+                ],
+            ),
+            false,
+        );
+        assert!(valid["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("could not load manifests"));
+
+        let broken = report(
+            &invoke(
+                root.path(),
+                &[
+                    "check",
+                    "broken.program",
+                    "--json",
+                    "--manifest-dir",
+                    manifest,
+                ],
+            ),
+            false,
+        );
+        let message = broken["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(message.contains("could not parse workflow"), "{message}");
+        assert!(!message.contains("could not load manifests"), "{message}");
+    }
+}
+
+#[test]
 fn json_file_uri_preserves_non_utf8_path_bytes() {
     use std::os::unix::ffi::OsStringExt;
     let root = tempfile::tempdir().unwrap();

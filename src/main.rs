@@ -41,6 +41,11 @@ struct Args {
     max_record_bytes_set: bool,
 }
 
+struct FiniteCheckSnapshot {
+    source: String,
+    registry: Registry,
+}
+
 struct SignalRegistration(signal_hook::SigId);
 
 impl Drop for SignalRegistration {
@@ -140,21 +145,26 @@ fn execute() -> Result<()> {
         let path = args.file.to_string_lossy().into_owned();
         let path_bytes = args.file.as_os_str().as_encoded_bytes().to_vec();
         let source = fs::read_to_string(&args.file).ok();
-        let static_diagnostics = source
-            .as_deref()
-            .filter(|source| {
-                !flow::ui::syntax::is_screen(source)
-                    && !flow::stream::is_stream(source)
-                    && !flow::graph::is_graph(source)
-            })
-            .and_then(|source| {
-                load_registry(args.manifest_dir.clone())
-                    .ok()
-                    .map(|registry| flow::diagnostics::analyze_source(source, &registry))
-            })
-            .unwrap_or_default();
+        let (static_diagnostics, finite_check_snapshot) = match source {
+            Some(source)
+                if !flow::ui::syntax::is_screen(&source)
+                    && !flow::stream::is_stream(&source)
+                    && !flow::graph::is_graph(&source) =>
+            {
+                match load_registry(args.manifest_dir.clone()) {
+                    Ok(registry) => {
+                        let diagnostics = flow::diagnostics::analyze_source(&source, &registry);
+                        (diagnostics, Some(FiniteCheckSnapshot { source, registry }))
+                    }
+                    // Diagnostics are best effort. Keep the authoritative load at
+                    // its existing point so catalog errors retain their ordering.
+                    Err(_) => (Vec::new(), None),
+                }
+            }
+            _ => (Vec::new(), None),
+        };
         let data_flow_warning = args.capability_policy.is_some() && args.data_flow_policy.is_none();
-        let result = execute_workflow(args);
+        let result = execute_workflow(args, finite_check_snapshot);
         let mut diagnostics = static_diagnostics
             .iter()
             .map(serde_json::to_value)
@@ -190,7 +200,7 @@ fn execute() -> Result<()> {
         }
         return Ok(());
     }
-    execute_workflow(args)
+    execute_workflow(args, None)
 }
 
 fn remote_resolve(arguments: &[String]) -> Result<()> {
@@ -222,7 +232,7 @@ fn remote_resolve(arguments: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn execute_workflow(args: Args) -> Result<()> {
+fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapshot>) -> Result<()> {
     let capability_policy = args
         .capability_policy
         .as_deref()
@@ -238,8 +248,14 @@ fn execute_workflow(args: Args) -> Result<()> {
             b"warning: --capability-policy grants applet capabilities only; without --data-flow-policy, remote egress and persistence are not protected by data-flow grants\n",
         );
     }
-    let source = fs::read_to_string(&args.file)
-        .with_context(|| format!("could not read workflow {}", args.file.display()))?;
+    let (source, registry_hint) = match finite_check_snapshot {
+        Some(snapshot) => (snapshot.source, Some(snapshot.registry)),
+        None => (
+            fs::read_to_string(&args.file)
+                .with_context(|| format!("could not read workflow {}", args.file.display()))?,
+            None,
+        ),
+    };
     if flow::graph::is_graph(&source) {
         if args.command == "resume"
             || args.checkpoint_dir.is_some()
@@ -570,11 +586,18 @@ fn execute_workflow(args: Args) -> Result<()> {
     {
         bail!("--max-record-bytes applies only to listener programs");
     }
-    let registry = load_workflow_registry(
-        args.manifest_dir,
-        capability_policy.as_ref(),
-        data_flow_policy.as_ref(),
-    )?;
+    let registry = match registry_hint {
+        Some(registry) => install_workflow_policy_state(
+            registry,
+            capability_policy.as_ref(),
+            data_flow_policy.as_ref(),
+        ),
+        None => load_workflow_registry(
+            args.manifest_dir,
+            capability_policy.as_ref(),
+            data_flow_policy.as_ref(),
+        )?,
+    };
     if capability_policy.is_some() {
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
         flow::capabilities::preflight(&program, &registry, &env::current_dir()?)?;
@@ -1568,13 +1591,25 @@ fn load_workflow_registry(
     data_flow_policy: Option<&flow::security::DataFlowPolicy>,
 ) -> Result<Registry> {
     let registry = load_registry(explicit_path)?;
+    Ok(install_workflow_policy_state(
+        registry,
+        capability_policy,
+        data_flow_policy,
+    ))
+}
+
+fn install_workflow_policy_state(
+    registry: Registry,
+    capability_policy: Option<&CapabilityPolicy>,
+    data_flow_policy: Option<&flow::security::DataFlowPolicy>,
+) -> Registry {
     if let Some(policy) = capability_policy {
         registry.set_host_state(Some(policy.clone()));
     }
     if let Some(policy) = data_flow_policy {
         registry.set_host_state(policy.clone());
     }
-    Ok(registry)
+    registry
 }
 
 fn default_manifest_dir() -> PathBuf {

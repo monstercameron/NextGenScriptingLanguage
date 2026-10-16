@@ -2,6 +2,15 @@ name: Emit hosted Linux paired replication
 
 on:
   workflow_dispatch:
+    inputs:
+      experiment_profile:
+        description: Frozen emit benchmark profile
+        type: choice
+        required: true
+        default: emit-sync
+        options:
+          - emit-sync
+          - payload-size
 
 permissions:
   contents: read
@@ -12,16 +21,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:
-      BASE_COMMIT: b78693294169c22892bb4f78539348a5755992ad
-      BASELINE_PATCH_SHA256: 3c7b691f8b0b88c4393f58105fea8d29a566dbbdf958d4eb4e063d20f93eb60e
-      BASELINE_PATCH_XZ_SHA256: f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974
-      CANDIDATE_PATCH_SHA256: 2c9bcd8ec874fed6f4798224f9d94b4fa5b59f208db16e7d8f60b81192f8d877
-      CANDIDATE_PATCH_XZ_SHA256: 239b3f3a19fcb65b2a2be490b32e7e9fb00acdbcb9f62a562693baebb8b7f9a3
-      BASELINE_SOURCE_SHA256: db5430bd3a8cd25ed5e20bac4395b56814ec1ad6e2189d4e89d2f152c180c17f
-      CANDIDATE_SOURCE_SHA256: 7cc3497231fd60d7c31ed7c98390281df4be0913398e7ccee1e6ffe75f4c48d3
-      HARNESS_SHA256: 098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3
-      DRIVER_SHA256: 1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6
-      INVOCATION_TIMEOUT_SECONDS: "60"
+      EXPERIMENT_PROFILE: ${{ github.event.inputs.experiment_profile || 'emit-sync' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,6 +29,17 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Select a literal frozen experiment profile
+        id: profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/emit-perf/build evidence/emit-perf/paired-runs
+          python3 benchmarks/emit_perf/hosted_emit_support.py select-profile \
+            --profile "$EXPERIMENT_PROFILE" --github-env "$GITHUB_ENV" \
+            --github-output "$GITHUB_OUTPUT" \
+            > evidence/emit-perf/build/profile-selection.json
 
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
@@ -39,15 +50,17 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$BASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPERIMENT_PROFILE" == "emit-sync" || "$EXPERIMENT_PROFILE" == "payload-size" ]]
           [[ "$INVOCATION_TIMEOUT_SECONDS" == "60" ]]
           printf '%s  %s\n' "$DRIVER_SHA256" benchmarks/emit_perf/emit_perf_pair.py | sha256sum --check
           printf '%s  %s\n' "$HARNESS_SHA256" benchmarks/emit_perf/emit-perf-harness-final.rs | sha256sum --check
-          printf '%s  %s\n' "$BASELINE_PATCH_XZ_SHA256" benchmarks/emit_perf/baseline-patch.xz | sha256sum --check
-          printf '%s  %s\n' "$CANDIDATE_PATCH_XZ_SHA256" benchmarks/emit_perf/candidate-patch.xz | sha256sum --check
+          printf '%s  %s\n' "$BASELINE_PATCH_XZ_SHA256" benchmarks/emit_perf/$BASELINE_PATCH_ARCHIVE | sha256sum --check
+          printf '%s  %s\n' "$CANDIDATE_PATCH_XZ_SHA256" benchmarks/emit_perf/$CANDIDATE_PATCH_ARCHIVE | sha256sum --check
           python3 -m unittest discover -s benchmarks/emit_perf -p 'test_hosted_emit_support.py'
           mkdir -p evidence/emit-perf/build evidence/emit-perf/paired-runs
           {
-            printf 'purpose=independent hosted Linux replication of the frozen local paired run\n'
+            printf 'purpose=independent hosted Linux replication of one frozen emit profile\n'
+            printf 'experiment_profile=%s\n' "$EXPERIMENT_PROFILE"
             printf 'base_commit=%s\n' "$BASE_COMMIT"
             printf 'measured_pairs=48\nwarmup_pairs=3\ninvocation_timeout_seconds=%s\n' "$INVOCATION_TIMEOUT_SECONDS"
             printf 'no_result_dependent_retries=true\n'
@@ -60,7 +73,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         name: Checkout exact common base for baseline
         with:
-          ref: ${{ env.BASE_COMMIT }}
+          ref: ${{ steps.profile.outputs.base_commit }}
           path: build-source/baseline
           fetch-depth: 1
           persist-credentials: false
@@ -68,7 +81,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         name: Checkout exact common base for candidate
         with:
-          ref: ${{ env.BASE_COMMIT }}
+          ref: ${{ steps.profile.outputs.base_commit }}
           path: build-source/candidate
           fetch-depth: 1
           persist-credentials: false
@@ -77,15 +90,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          baseline_archive="$GITHUB_WORKSPACE/benchmarks/emit_perf/baseline-patch.xz"
-          candidate_archive="$GITHUB_WORKSPACE/benchmarks/emit_perf/candidate-patch.xz"
+          baseline_archive="$GITHUB_WORKSPACE/benchmarks/emit_perf/$BASELINE_PATCH_ARCHIVE"
+          candidate_archive="$GITHUB_WORKSPACE/benchmarks/emit_perf/$CANDIDATE_PATCH_ARCHIVE"
           baseline_patch="$RUNNER_TEMP/emit-perf-baseline.patch"
           candidate_patch="$RUNNER_TEMP/emit-perf-candidate.patch"
           python3 benchmarks/emit_perf/hosted_emit_support.py unpack-patch \
-            --side baseline --archive "$baseline_archive" --output "$baseline_patch" \
+            --profile "$EXPERIMENT_PROFILE" --side baseline --archive "$baseline_archive" --output "$baseline_patch" \
             > evidence/emit-perf/build/unpack-baseline-patch.json
           python3 benchmarks/emit_perf/hosted_emit_support.py unpack-patch \
-            --side candidate --archive "$candidate_archive" --output "$candidate_patch" \
+            --profile "$EXPERIMENT_PROFILE" --side candidate --archive "$candidate_archive" --output "$candidate_patch" \
             > evidence/emit-perf/build/unpack-candidate-patch.json
           printf '%s  %s\n' "$BASELINE_PATCH_SHA256" "$baseline_patch" | sha256sum --check
           printf '%s  %s\n' "$CANDIDATE_PATCH_SHA256" "$candidate_patch" | sha256sum --check
@@ -114,6 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 benchmarks/emit_perf/hosted_emit_support.py freeze \
+            --profile "$EXPERIMENT_PROFILE" \
             --baseline-root "$GITHUB_WORKSPACE/build-source/baseline" \
             --candidate-root "$GITHUB_WORKSPACE/build-source/candidate" \
             --frozen-harness "$GITHUB_WORKSPACE/benchmarks/emit_perf/emit-perf-harness-final.rs" \
@@ -153,6 +167,7 @@ jobs:
             fi
             set +e
             python3 benchmarks/emit_perf/hosted_emit_support.py record-build \
+              --profile "$EXPERIMENT_PROFILE" \
               --side "$side" \
               --root "$root" \
               --target-dir "$target" \
@@ -192,7 +207,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: emit-hosted-replication-${{ github.run_id }}-${{ github.run_attempt }}
+          name: emit-hosted-replication-${{ github.event.inputs.experiment_profile || 'emit-sync' }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/emit-perf
           if-no-files-found: warn
           retention-days: 90

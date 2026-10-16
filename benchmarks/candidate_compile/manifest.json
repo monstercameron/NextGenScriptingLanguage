@@ -42,5 +42,10 @@
       "previous_validation_run": 38863436578,
       "reason": "Correct unsupported test keyword number to integer; runtime source unchanged. Workflow now builds bundled helper bins before regressions."
     }
-  ]
+  ],
+  "validation_infrastructure": {
+    "previous_run": 38864781164,
+    "outcome": "308 library and eight typed integration tests passed; deep cache fixture could not find helper beside integration test executable",
+    "correction": "After building version-matched bins, copy execute-applet beside release/deps integration executables and verify exact bytes. Product source unchanged."
+  }
 }

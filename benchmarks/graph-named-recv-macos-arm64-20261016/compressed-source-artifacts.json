@@ -1,0 +1,47 @@
+{
+  "format": "xz lossless source evidence; decompress with xz -dk or Python lzma",
+  "artifacts": [
+    {
+      "original_path": "build/baseline/cargo-build.log",
+      "stored_path": "build/baseline/cargo-build.log.xz",
+      "original_sha256": "18882de1398538bc0f27cc1efc283e81e0a818e36f1040f6b1d51234134d3e5e",
+      "stored_sha256": "a24618e35ec842d16aced414d325ca8d159cb9a7b80961e83b723f6cda0323f4"
+    },
+    {
+      "original_path": "build/baseline/cargo-clean.log",
+      "stored_path": "build/baseline/cargo-clean.log.xz",
+      "original_sha256": "d44d3e9afc81bc87fddb562b4d8da42c77352ce48fddd9d80be82c7404e034bb",
+      "stored_sha256": "4e4b2ea1c44a057d97d40f6955078112bdf4f8ce1d980e20e376744551de9af0"
+    },
+    {
+      "original_path": "build/candidate/cargo-build.log",
+      "stored_path": "build/candidate/cargo-build.log.xz",
+      "original_sha256": "fab304960d9c1e6dde21bb9df0df250417a9011d366ad492843817ae36556498",
+      "stored_sha256": "1521f46d7e1ee5183ef1e955590de759cb16eb49de359233e53b3735693ca65c"
+    },
+    {
+      "original_path": "build/candidate/cargo-clean.log",
+      "stored_path": "build/candidate/cargo-clean.log.xz",
+      "original_sha256": "d44d3e9afc81bc87fddb562b4d8da42c77352ce48fddd9d80be82c7404e034bb",
+      "stored_sha256": "4e4b2ea1c44a057d97d40f6955078112bdf4f8ce1d980e20e376744551de9af0"
+    },
+    {
+      "original_path": "run/paired-run-attempt-1.log",
+      "stored_path": "run/paired-run-attempt-1.log.xz",
+      "original_sha256": "f18d73db693b0ba060b15b2ceffec0e5210bbc4ee4002f0d2ee7d34499283d11",
+      "stored_sha256": "4389650ba58b7bde1159b7207f063a49d28b6c67acba7c74afb5e82acb15a1c9"
+    },
+    {
+      "original_path": "source/baseline-final.patch",
+      "stored_path": "source/baseline-final.patch.xz",
+      "original_sha256": "ed64221aada6c33f33f8e7dcc2c8f0b79a2f518dbcafc4b7f895423b0d8d656e",
+      "stored_sha256": "4407eab439414bea857374d23c0dbb4f70d19046123a821bde2591aada61a6e8"
+    },
+    {
+      "original_path": "source/candidate-final.patch",
+      "stored_path": "source/candidate-final.patch.xz",
+      "original_sha256": "2d580bf46e6e9bacc76dfcce3ce4cde41e2a9350f6add4c614002e51080763dd",
+      "stored_sha256": "087dd1fe788c41c0d710cb8b30efbd3d05bc6fee66d1d7aa8f546650d66449b0"
+    }
+  ]
+}

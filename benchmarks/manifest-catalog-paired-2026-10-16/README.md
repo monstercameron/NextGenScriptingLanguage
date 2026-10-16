@@ -35,3 +35,5 @@ These results cover explicit selector use for the recorded host, binary, two com
 - `raw-artifacts.SHA256SUMS` verifies the raw archive. `bundle.SHA256SUMS` verifies every other bundle file except itself.
 
 All binary identities are recorded in the original reports, preregistrations, independent audit, and build receipts. The binary files and vendored source trees are intentionally not included.
+
+Patch and build-log source artifacts are stored losslessly as `.xz` files. `compressed-source-artifacts.json` maps their original names and SHA-256 values to the stored files; decompression reproduces the exact reviewed bytes. Historical receipts retain the original source names and hashes.

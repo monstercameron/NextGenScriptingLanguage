@@ -24,3 +24,5 @@ The local run therefore retained 52 losses across 192 case-pair comparisons; Lin
 - `bundle.SHA256SUMS` verifies all bundle files except itself.
 
 The local Mac timing used the attempt-2 binaries recorded in the receipts, after the harness-only Clippy correction; the earlier build attempt was not used for the paired result. This run is the local result and Linux is a separate replication. No cross-platform aggregate is claimed.
+
+Patch and build-log source artifacts are stored losslessly as `.xz` files. `compressed-source-artifacts.json` maps their original names and SHA-256 values to the stored files; decompression reproduces the exact reviewed bytes. Historical receipts retain the original source names and hashes.

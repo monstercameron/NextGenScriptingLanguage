@@ -51,3 +51,5 @@ The recorded candidate patch is the exact benchmark arm patch and includes the i
 - `bundle.SHA256SUMS` verifies every other file in this staging package and omits only itself.
 
 No Cargo, benchmark, API, or source-tree write was performed to prepare this package. It was assembled from retained evidence and independently recomputed raw data only.
+
+Patch and build-log source artifacts are stored losslessly as `.xz` files. `compressed-source-artifacts.json` maps their original names and SHA-256 values to the stored files; decompression reproduces the exact reviewed bytes. Historical receipts retain the original source names and hashes.

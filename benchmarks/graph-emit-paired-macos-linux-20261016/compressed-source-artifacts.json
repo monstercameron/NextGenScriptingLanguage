@@ -1,0 +1,53 @@
+{
+  "format": "xz lossless source evidence; decompress with xz -dk or Python lzma",
+  "artifacts": [
+    {
+      "original_path": "identities/local-macos-build-provenance/baseline-release-clean-attempt-2.log",
+      "stored_path": "identities/local-macos-build-provenance/baseline-release-clean-attempt-2.log.xz",
+      "original_sha256": "d44d3e9afc81bc87fddb562b4d8da42c77352ce48fddd9d80be82c7404e034bb",
+      "stored_sha256": "4e4b2ea1c44a057d97d40f6955078112bdf4f8ce1d980e20e376744551de9af0"
+    },
+    {
+      "original_path": "identities/local-macos-build-provenance/candidate-clippy-native-attempt-2.log",
+      "stored_path": "identities/local-macos-build-provenance/candidate-clippy-native-attempt-2.log.xz",
+      "original_sha256": "800fe09f5aabec3a0065912b7e43f9a7475916eb5a10a7934f9a0efa093a9e5b",
+      "stored_sha256": "e2c3f67e66186b30726c801f1f30f1c4aef3091f3a17f169e9c1467adfe2268f"
+    },
+    {
+      "original_path": "identities/local-macos-build-provenance/candidate-library-attempt-2.log",
+      "stored_path": "identities/local-macos-build-provenance/candidate-library-attempt-2.log.xz",
+      "original_sha256": "cbab6e424a887d048f3d4c015bec117df707dbac80110cb6ec2de5a71266ee3b",
+      "stored_sha256": "5c543ffefa9c19b648850f5da20d0d5de2661e65d9502590ee11e72177f6b770"
+    },
+    {
+      "original_path": "identities/local-macos-build-provenance/candidate-release-clean-attempt-2.log",
+      "stored_path": "identities/local-macos-build-provenance/candidate-release-clean-attempt-2.log.xz",
+      "original_sha256": "d44d3e9afc81bc87fddb562b4d8da42c77352ce48fddd9d80be82c7404e034bb",
+      "stored_sha256": "4e4b2ea1c44a057d97d40f6955078112bdf4f8ce1d980e20e376744551de9af0"
+    },
+    {
+      "original_path": "identities/local-macos-build-provenance/pair-build-attempt-2.log",
+      "stored_path": "identities/local-macos-build-provenance/pair-build-attempt-2.log.xz",
+      "original_sha256": "c5eeffe850aff2444a2aeed3cd246a2e78c61c0b15e50017e100c3426f9b16f3",
+      "stored_sha256": "2018f50d863003a58c6b6cede31a7fda02b43fbf92caf7909d535ee8f40eab05"
+    },
+    {
+      "original_path": "source/emit-benchmark-harness.patch",
+      "stored_path": "source/emit-benchmark-harness.patch.xz",
+      "original_sha256": "3c7b691f8b0b88c4393f58105fea8d29a566dbbdf958d4eb4e063d20f93eb60e",
+      "stored_sha256": "d63f722825848ace5fa8b2e8ec72ac52ef1b85aa6e4489da0017dbd554384d5a"
+    },
+    {
+      "original_path": "source/emit-candidate-full.patch",
+      "stored_path": "source/emit-candidate-full.patch.xz",
+      "original_sha256": "2c9bcd8ec874fed6f4798224f9d94b4fa5b59f208db16e7d8f60b81192f8d877",
+      "stored_sha256": "b375266bb646ef7711561d90a95a5e9cd4fd099948b3dbe40f769007b82e3217"
+    },
+    {
+      "original_path": "source/hosted-candidate-full.patch",
+      "stored_path": "source/hosted-candidate-full.patch.xz",
+      "original_sha256": "2c9bcd8ec874fed6f4798224f9d94b4fa5b59f208db16e7d8f60b81192f8d877",
+      "stored_sha256": "b375266bb646ef7711561d90a95a5e9cd4fd099948b3dbe40f769007b82e3217"
+    }
+  ]
+}

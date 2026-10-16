@@ -1,0 +1,59 @@
+{
+  "format": "xz lossless source evidence; decompress with xz -dk or Python lzma",
+  "artifacts": [
+    {
+      "original_path": "evidence/cli/cli-paired-attempt-1.log",
+      "stored_path": "evidence/cli/cli-paired-attempt-1.log.xz",
+      "original_sha256": "8f401118a69e65fdea4697ebcdefd82d13a8f76bbca9ea59e6c5eebd11b1d6cf",
+      "stored_sha256": "2ce801e1c08fedbf00c3d38da339df224523b8a25be5ce13583a036da4a7db20"
+    },
+    {
+      "original_path": "evidence/cli/clippy-attempt-1.log",
+      "stored_path": "evidence/cli/clippy-attempt-1.log.xz",
+      "original_sha256": "160bc177f99fddcd4119fd6de161c5668df2a55cea028b62409ce507a995517b",
+      "stored_sha256": "9833fe05902a6e6f91ec0d7a6d25138e383fa91660cf562fb7bdf8c2ef105b60"
+    },
+    {
+      "original_path": "evidence/cli/integration-commit-staged-checks.log",
+      "stored_path": "evidence/cli/integration-commit-staged-checks.log.xz",
+      "original_sha256": "718fd030f5fadae6c28462cfc921262b6e7b55fd3513e61b171fb2fce2a03a93",
+      "stored_sha256": "070296b8b2bf13e245033aff75b58aeeca1a2449532d3a8d3252a5418947b92b"
+    },
+    {
+      "original_path": "evidence/cli/manifest-catalog-cli-tests-attempt-1.log",
+      "stored_path": "evidence/cli/manifest-catalog-cli-tests-attempt-1.log.xz",
+      "original_sha256": "887864b502651b09d284616f00eb244a032f80907ab71640e361120fb167e80b",
+      "stored_sha256": "dbbf848f02d93515431439641b512e9f68e13b92214a1b4ac954a443cdf10618"
+    },
+    {
+      "original_path": "evidence/cli/manifest-catalog-tests-attempt-1.log",
+      "stored_path": "evidence/cli/manifest-catalog-tests-attempt-1.log.xz",
+      "original_sha256": "7671ad31b8d4a6bac25d82232fac9ee828ca20684bafd1397a3ccdc7a501c11b",
+      "stored_sha256": "8b4c51efe35d6bf265b36c3aeb7326fc2e6e583f46f94abc787c714149c4f55f"
+    },
+    {
+      "original_path": "evidence/library/manifest-catalog-tests-attempt-1.log",
+      "stored_path": "evidence/library/manifest-catalog-tests-attempt-1.log.xz",
+      "original_sha256": "7671ad31b8d4a6bac25d82232fac9ee828ca20684bafd1397a3ccdc7a501c11b",
+      "stored_sha256": "8b4c51efe35d6bf265b36c3aeb7326fc2e6e583f46f94abc787c714149c4f55f"
+    },
+    {
+      "original_path": "source/integrated-commit-d66e412.patch",
+      "stored_path": "source/integrated-commit-d66e412.patch.xz",
+      "original_sha256": "bbbe3c5cb307c0a35f3078788279b581a4bae4dcb39b0905b143cd3869e2e0e3",
+      "stored_sha256": "49ce4cad534d4f840a09b71cb45096a7ab2626477b9601dd7571ae4f0d186e10"
+    },
+    {
+      "original_path": "source/packed-catalog-cli-integration.patch",
+      "stored_path": "source/packed-catalog-cli-integration.patch.xz",
+      "original_sha256": "8f5570d901995e9e3a102cfcc363b79cddf19f56a8f8a0d56ae6b43c6e193e13",
+      "stored_sha256": "2538dd21993a0da1728b2b5ccadec070e797ea74487830d1db9fb2006b1bba34"
+    },
+    {
+      "original_path": "source/packed-catalog-loader.patch",
+      "stored_path": "source/packed-catalog-loader.patch.xz",
+      "original_sha256": "061ecee4c3711c3c6bf5444b6d80005a14eb58c59bfbf13cc1c35d3c44089507",
+      "stored_sha256": "b653c7b9776c4ff417228f449dee7952438ec616f88c5cad8a805e6486ad80f8"
+    }
+  ]
+}

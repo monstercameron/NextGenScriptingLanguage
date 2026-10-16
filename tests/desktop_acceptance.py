@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -98,6 +99,89 @@ class HyprlandFocusCompatibilityTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail")
         self.assertEqual(result["focus_form"], "lua_dispatcher_object")
         self.assertFalse(result.get("active_window_verified", False))
+
+
+class RendererLogDiagnosticsTests(unittest.TestCase):
+    def test_startup_failure_logs_survive_temp_cleanup_with_bounded_utf8_tails(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="desktop renderer diagnostics ") as raw:
+            root = pathlib.Path(raw)
+            runtime_dir = root / "runtime"
+            runtime_dir.mkdir(mode=0o700)
+            runtime_dir = runtime_dir.resolve()
+            binary = root / "execute"
+            binary.write_bytes(b"offline fixture")
+            binary.chmod(0o700)
+            observed: dict[str, pathlib.Path] = {}
+            limit = ACCEPTANCE.RENDERER_LOG_TAIL_BYTES
+            stdout_payload = b"a" * limit + b"TAIL"
+            stderr_payload = b"z" * (limit - 1) + b"\xff!"
+
+            def start_renderer(_qs: str, _config: pathlib.Path, log_path: pathlib.Path, _environment: dict[str, str]):
+                stdout_path = log_path.with_suffix(".stdout.log")
+                stderr_path = log_path.with_suffix(".stderr.log")
+                stdout = stdout_path.open("wb")
+                stderr = stderr_path.open("wb")
+                stdout.write(stdout_payload)
+                stderr.write(stderr_payload)
+                stdout.flush()
+                stderr.flush()
+                observed["temporary_directory"] = log_path.parent.parent
+                process = SimpleNamespace(pid=1234, poll=lambda: 255, returncode=255)
+                return process, stdout, stderr
+
+            tools = {name: f"/usr/bin/{name}" for name in ("qs", "hyprctl", "busctl", "loginctl")}
+            environment = {
+                "XDG_SESSION_TYPE": "wayland",
+                "WAYLAND_DISPLAY": "wayland-1",
+                "HYPRLAND_INSTANCE_SIGNATURE": "offline-test",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/dbus-offline-test",
+                "XDG_SESSION_ID": "42",
+                "EXECUTE_OMARCHY_SESSION_ID": "disposable-offline-test",
+            }
+            report = ACCEPTANCE.base_report(binary)
+            with (
+                mock.patch.dict(ACCEPTANCE.os.environ, environment),
+                mock.patch.object(ACCEPTANCE, "read_os_release", return_value={"ID": "arch"}),
+                mock.patch.object(ACCEPTANCE, "check_runtime_dir", return_value=(runtime_dir, None)),
+                mock.patch.object(ACCEPTANCE, "inspect_live_session", return_value=({"session": {"status": "pass"}}, [])),
+                mock.patch.object(ACCEPTANCE, "command_version", return_value={"available": True, "returncode": 0, "stdout": "Hyprland 0.56.2", "stderr": ""}),
+                mock.patch.object(ACCEPTANCE.shutil, "which", side_effect=lambda name: tools.get(name)),
+                mock.patch.object(ACCEPTANCE, "start_quickshell", side_effect=start_renderer),
+            ):
+                ACCEPTANCE.invoke_live(binary, report)
+
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["failure"], "Quickshell exited before IPC readiness (255)")
+            self.assertEqual(report["cleanup"]["temporary_directory"]["status"], "removed", report["cleanup"])
+            self.assertFalse(observed["temporary_directory"].exists())
+            self.assertEqual(report["renderer_launch"]["argv"][:2], ["/usr/bin/qs", "--path"])
+            self.assertEqual(len(report["renderer_launch"]["launched_qml_sha256"]), 64)
+
+            diagnostics = report["renderer_diagnostics"]
+            self.assertEqual(diagnostics["tail_limit_bytes_per_stream"], limit)
+            self.assertEqual([item["stage"] for item in diagnostics["logs"]], ["initial"])
+            stdout = diagnostics["logs"][0]["stdout"]
+            self.assertEqual(stdout["status"], "captured")
+            self.assertEqual(stdout["total_bytes"], limit + 4)
+            self.assertEqual(stdout["captured_bytes"], limit)
+            self.assertTrue(stdout["truncated"])
+            self.assertTrue(stdout["tail_utf8"].endswith("TAIL"))
+            stderr = diagnostics["logs"][0]["stderr"]
+            self.assertEqual(stderr["status"], "captured")
+            self.assertEqual(stderr["total_bytes"], limit + 1)
+            self.assertEqual(stderr["captured_bytes"], limit)
+            self.assertTrue(stderr["truncated"])
+            self.assertTrue(stderr["tail_utf8"].endswith("\ufffd!"))
+
+    def test_missing_and_unreadable_logs_have_structured_errors(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="desktop renderer log errors ") as raw:
+            missing = ACCEPTANCE.capture_renderer_log_tail(pathlib.Path(raw) / "missing.stderr.log")
+            self.assertEqual(missing["status"], "missing")
+            self.assertEqual(missing["error"]["type"], "FileNotFoundError")
+            with mock.patch.object(ACCEPTANCE.Path, "open", side_effect=PermissionError("denied")):
+                unreadable = ACCEPTANCE.capture_renderer_log_tail(pathlib.Path(raw) / "locked.stderr.log")
+            self.assertEqual(unreadable["status"], "read_error")
+            self.assertEqual(unreadable["error"]["type"], "PermissionError")
 
 
 class DesktopAcceptanceHarnessTests(unittest.TestCase):

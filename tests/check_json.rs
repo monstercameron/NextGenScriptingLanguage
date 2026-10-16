@@ -1,9 +1,9 @@
-#![cfg(unix)]
 //! Static diagnostics are one JSON document, with no application execution.
 use serde_json::{json, Value};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 use std::{
     fs,
-    os::unix::ffi::OsStrExt,
     path::Path,
     process::{Command, Output},
 };
@@ -191,6 +191,7 @@ fn check_json_defers_missing_and_invalid_catalog_errors_until_authoritative_vali
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn json_file_uri_preserves_non_utf8_path_bytes() {
     use std::os::unix::ffi::OsStringExt;

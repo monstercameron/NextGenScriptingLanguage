@@ -1966,6 +1966,13 @@ fn resolved_json_arguments(
     manifest: &Manifest,
     bindings: &BTreeMap<String, Value>,
 ) -> Result<serde_json::Map<String, serde_json::Value>> {
+    // Literal-only arguments are already in the shape expected by the
+    // manifest validator. Avoid cloning every key and nested Value into a
+    // temporary map before the required JSON conversion.
+    if !call.parameters.values().any(contains_reference) {
+        return manifest.parameters_json(&call.parameters);
+    }
+
     let values = call
         .parameters
         .iter()
@@ -5520,5 +5527,136 @@ mod in_process_budget_tests {
             message: "ordinary applet failure".into(),
         };
         assert!(in_process_budget_failure(&ordinary, 17, "fixture.transform").is_none());
+    }
+}
+
+#[cfg(test)]
+mod resolved_json_argument_tests {
+    use super::*;
+
+    fn json_manifest() -> Manifest {
+        let source = serde_json::json!({
+            "name": "test.json_arguments",
+            "binary": "unused",
+            "parameters": {
+                "first": {"type": "json", "required": true},
+                "second": {"type": "json", "required": true}
+            },
+            "arguments": [{"literal": "test.json_arguments"}]
+        })
+        .to_string();
+        Registry::from_sources(&[source])
+            .unwrap()
+            .resolve("test.json_arguments")
+            .unwrap()
+            .clone()
+    }
+
+    fn invocation(parameters: BTreeMap<String, Value>) -> Invocation {
+        Invocation {
+            operation: "test.json_arguments".into(),
+            direct: false,
+            discard_stderr: false,
+            parameters,
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+        }
+    }
+
+    #[test]
+    fn literal_json_arguments_preserve_nested_typed_values() {
+        let manifest = json_manifest();
+        let call = invocation(BTreeMap::from([
+            (
+                "first".into(),
+                Value::Record(BTreeMap::from([
+                    ("enabled".into(), Value::Bool(true)),
+                    (
+                        "items".into(),
+                        Value::List(vec![
+                            Value::Integer(4),
+                            Value::Null,
+                            Value::Number(serde_json::Number::from_f64(2.5).unwrap()),
+                        ]),
+                    ),
+                ])),
+            ),
+            (
+                "second".into(),
+                Value::List(vec![
+                    Value::String("literal".into()),
+                    Value::Record(BTreeMap::from([(
+                        "nested".into(),
+                        Value::String("value".into()),
+                    )])),
+                ]),
+            ),
+        ]));
+
+        let actual = resolved_json_arguments(&call, &manifest, &BTreeMap::new()).unwrap();
+        let expected = serde_json::json!({
+            "first": {"enabled": true, "items": [4, null, 2.5]},
+            "second": ["literal", {"nested": "value"}]
+        });
+        assert_eq!(actual, expected.as_object().unwrap().clone());
+    }
+
+    #[test]
+    fn direct_and_nested_references_resolve_inside_mixed_json_arguments() {
+        let manifest = json_manifest();
+        let call = invocation(BTreeMap::from([
+            ("first".into(), Value::Reference("source".into())),
+            (
+                "second".into(),
+                Value::Record(BTreeMap::from([
+                    ("literal".into(), Value::Bool(false)),
+                    (
+                        "items".into(),
+                        Value::List(vec![
+                            Value::Reference("count".into()),
+                            Value::Record(BTreeMap::from([(
+                                "label".into(),
+                                Value::Reference("label".into()),
+                            )])),
+                        ]),
+                    ),
+                ])),
+            ),
+        ]));
+        let bindings = BTreeMap::from([
+            ("source".into(), Value::String("resolved".into())),
+            ("count".into(), Value::Integer(7)),
+            ("label".into(), Value::String("nested".into())),
+        ]);
+
+        let actual = resolved_json_arguments(&call, &manifest, &bindings).unwrap();
+        let expected = serde_json::json!({
+            "first": "resolved",
+            "second": {"literal": false, "items": [7, {"label": "nested"}]}
+        });
+        assert_eq!(actual, expected.as_object().unwrap().clone());
+    }
+
+    #[test]
+    fn literal_validation_and_reference_resolution_keep_existing_error_order() {
+        let manifest = json_manifest();
+        let unknown = invocation(BTreeMap::from([(
+            "unknown".into(),
+            Value::String("value".into()),
+        )]));
+        let error = resolved_json_arguments(&unknown, &manifest, &BTreeMap::new()).unwrap_err();
+        assert!(error.to_string().contains("has no parameter \"unknown\""));
+
+        let referenced = invocation(BTreeMap::from([
+            ("first".into(), Value::Integer(1)),
+            (
+                "second".into(),
+                Value::List(vec![Value::Reference("missing".into())]),
+            ),
+        ]));
+        let error = resolved_json_arguments(&referenced, &manifest, &BTreeMap::new()).unwrap_err();
+        assert!(error.to_string().contains("undefined result \"missing\""));
     }
 }

@@ -1,10 +1,13 @@
 use anyhow::{anyhow, Result};
 use flow::tasks::TaskScope;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 #[test]
 fn scope_enforces_bound_and_preserves_typed_join_results() -> Result<()> {
@@ -226,6 +229,31 @@ fn independent_task_groups_reject_sibling_binding_reads() -> Result<()> {
     let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
     let error = flow::runtime::validate(&program, &registry).unwrap_err();
     assert!(format!("{error:#}").contains("first"));
+    Ok(())
+}
+
+#[test]
+fn repeated_number_add_public_workload_has_exact_output() -> Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let program = flow::parser::parse(include_str!(
+        "../benchmarks/workloads/resolved-json-arguments-repeat-1000.program"
+    ))?;
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    let cwd = tempfile::tempdir()?;
+    let options = flow::runtime::RunOptions {
+        inputs: BTreeMap::new(),
+        working_directory: cwd.path().to_path_buf(),
+        cache_directory: None,
+        trace: false,
+        max_output_bytes: 1024 * 1024,
+        command_timeout: Some(Duration::from_secs(5)),
+        total_timeout: Some(Duration::from_secs(10)),
+    };
+
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    assert_eq!(result.output, b"3");
+    assert_eq!(result.launched_processes, 0);
+    assert_eq!(result.executions.len() + result.dropped_executions, 1000);
     Ok(())
 }
 

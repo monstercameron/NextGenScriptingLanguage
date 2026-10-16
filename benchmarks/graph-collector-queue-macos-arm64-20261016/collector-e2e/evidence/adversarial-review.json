@@ -1,0 +1,76 @@
+{
+  "schema": "execute.graph-transport-e2e-adversarial-review/1",
+  "review_mode": "read-only source and worktree audit; no Cargo/build/test/timing/API was run",
+  "overall": "changes_requested_before_using_as_transport-performance evidence",
+  "source": {
+    "harness": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/graph_transport_e2e_bench.rs",
+    "harness_sha256": "8e2663f0ab6a9426929548418ab0a1e6442f71bf8a66c65bafccea8e173de242",
+    "notes": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/source-notes.md",
+    "notes_sha256": "954166817dea3c98554a1b6ad261dde6b010478dab949a49c1ce15af8005a337",
+    "baseline_head": "b78693294169c22892bb4f78539348a5755992ad",
+    "baseline_expected": "b78693294169c22892bb4f78539348a5755992ad",
+    "candidate_head": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+    "candidate_expected": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+    "baseline_status": "M src/graph/transport.rs\n?? tests/graph_transport_e2e_bench.rs",
+    "candidate_status": "?? tests/graph_transport_e2e_bench.rs",
+    "harness_copied_identically_to_both_worktrees": true,
+    "run_to_completion_loop_identical_between_arms": true,
+    "product_source_commits_touching_graph_transport_between_pins": [
+      "0735e4b Cache graph input names and shared receive cursors",
+      "5558708 Count serialized graph payload bytes without allocating a buffer",
+      "ef3ecad Borrow graph output sinks and move the final fanout envelope",
+      "81bf9ba Receive named graph inputs without cloning queue handles"
+    ]
+  },
+  "findings": [
+    {
+      "priority": "P1",
+      "area": "source completion/status oracle",
+      "file": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/graph_transport_e2e_bench.rs",
+      "lines": [
+        593,
+        595
+      ],
+      "detail": "The graph source applies `take the first 4096 lines` even though the generated input fixture has exactly 4096 lines (562-569). In the Unix runtime, reaching a line limit is treated as successful deliberate termination: runtime.rs around 1533-1556 returns GroupOutput with no child exit status; its Children owner kills/reaps any child not already observed exited. The graph stream executor then emits status integer 0 after the stream call returns Ok (transport.rs around 1869-1900). Thus the harness assertion that the source status payload is 0 does not establish that /bin/cat reached EOF or exited successfully. Remove the redundant take directive so the finite source completes at EOF, or add direct process-exit evidence. This is a false positive in the stated normal-source-completion oracle."
+    },
+    {
+      "priority": "P1_for_transport_signal",
+      "area": "timed boundary / collector throttle",
+      "file": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/emit-baseline-b786/src/graph/transport.rs",
+      "lines": [
+        1158,
+        1178,
+        1201,
+        1203
+      ],
+      "detail": "run_to_completion drains at most one event from each terminal per loop, then sleeps 2 ms while any worker remains. Two consumer terminal streams each contain 4096 events and capacity is 16; lossless backpressure prevents either consumer from finishing until the collector drains its full terminal queue. This imposes roughly 4096 poll iterations × 2 ms (~8.2 s) per sample before tail work, independent of the transport optimization. That is truthful run_to_completion end-to-end latency, but it will be dominated by the collector polling cadence and is a poor signal for transport throughput. Prefer measuring a recv_output drain loop (or explicitly scope interpretation to poll-bound run_to_completion latency); do not infer receive/emit speed from a small delta."
+    },
+    {
+      "priority": "P2",
+      "area": "failure evidence retention",
+      "file": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/graph_transport_e2e_bench.rs",
+      "lines": [
+        531,
+        539,
+        610,
+        639
+      ],
+      "detail": "The report is create_new only after all runs complete. Each warmup/sample uses `?`, so one failed run or a stale preexisting report path can abort after timed work without persisting completed samples or failure diagnostics. Preflight report and fixture freshness before timing; preferably journal each completed sample and failures incrementally."
+    }
+  ],
+  "cross_arm_read": {
+    "baseline_head_matches_b786": true,
+    "candidate_head_matches_81bf9ba": true,
+    "shared_harness_sha256_matches_both_copies": true,
+    "run_to_completion_method_text_identical": true,
+    "baseline_extra_worktree_delta": "The baseline worktree is not clean: it has an uncommitted `#[cfg(test)]` emit_perf_harness module in src/graph/transport.rs plus the shared untracked integration test. This is test-only and does not change production behavior for the dedicated integration test target, but source-notes should not call the whole worktree clean.",
+    "attribution_scope": "Candidate product endpoint is the integrated b786→81bf9ba graph transport set (the four commits listed above); an E2E delta cannot be attributed to named receive alone. This integrated scope is consistent with the “optimized integration worktree” description but should stay explicit."
+  },
+  "clear_points": [
+    "The harness is byte-identical in both worktrees (SHA-256 8e2663f0ab6a9426929548418ab0a1e6442f71bf8a66c65bafccea8e173de242).",
+    "Plan parsing/registry validation and per-sample setup happen before the timer; timer starts immediately before GraphSession::start and verification follows after elapsed time is read.",
+    "Queue slot budget is consistent: two 8-slot lossless edges plus three 16-slot terminal queues equals 64 slots; expected terminal events are two 4096-event consumer outputs plus one source status.",
+    "Fanout sequence identity, per-consumer order, full payload equality, generations/revisions, metadata, drops, and payload byte/event limits are checked after timing; the `run_to_completion` implementation segment is byte-identical across baseline and candidate."
+  ],
+  "limitations": "Source-only review; no compile/test or runtime evidence. No conclusion is made about performance direction."
+}

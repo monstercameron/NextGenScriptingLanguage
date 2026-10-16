@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "status": "independent_source_review_complete",
+  "review_date": "2026-10-16",
+  "reviewer": "collector_cpu_diagnostic_adversarial_source_review",
+  "scope": {
+    "source_notes": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/collector-cpu-diagnostic/source-notes.md",
+      "sha256": "d1d68aedfc436ef0eb2cde517c0ad7be054ea6feb6fdd12ec0c52193358ad50a"
+    },
+    "paired_protocol": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/collector-cpu-diagnostic/paired-protocol.json",
+      "sha256": "7cdff9067841c3ccc2ee64b95d986a2c96f6004dc49192cdc9d59aefb54c9152"
+    },
+    "preparation_receipt": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/collector-cpu-diagnostic/preparation-receipt.json",
+      "sha256": "ddebe10a886eacbe1644886ecf1a401b29e2f6cfcab79a9934447591e77fa9d2"
+    },
+    "harness": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/collector-cpu-diagnostic/collector_cpu_diag_bench.rs",
+      "sha256_expected": "92367dba900ed5c8ea113138e86d625b848791331978b16bde69f5fd4137a36f",
+      "sha256_observed": "92367dba900ed5c8ea113138e86d625b848791331978b16bde69f5fd4137a36f"
+    },
+    "baseline": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/collector-cpu-baseline-81bf",
+      "commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+      "transport_sha256": "049b2b13a6c82ba0c98f20b57a44e76c420d631815f1b673ba70d7902f24610c"
+    },
+    "candidate": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/collector-cpu-candidate-81bf",
+      "commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+      "transport_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c"
+    },
+    "candidate_patch": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-collector-sleep-candidate-v2.patch",
+      "sha256_expected": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4",
+      "sha256_observed": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4"
+    },
+    "build_driver": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/build_collector_cpu_diag_pair.py",
+      "sha256_expected": "407e588d2b0106523b16488cc4e8653b059056b5cdd848aa600f9270eb2078f3",
+      "sha256_observed": "407e588d2b0106523b16488cc4e8653b059056b5cdd848aa600f9270eb2078f3"
+    },
+    "paired_runner": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/collector-cpu-diagnostic-paired-runner/collector_cpu_pair.py",
+      "sha256_expected": "2767c7a53b48c2ddc0163e0bcef0bcce9c7684cbb9f5fb33ba9041bdfb6fd616",
+      "sha256_observed": "2767c7a53b48c2ddc0163e0bcef0bcce9c7684cbb9f5fb33ba9041bdfb6fd616"
+    }
+  },
+  "verdict": {
+    "harness_compile_error_found_by_inspection": false,
+    "build_or_runtime_validation_performed": false,
+    "numeric_conversion_error_found": false,
+    "full_output_oracle_is_sufficient_for_workload": true,
+    "reaping_assumption_supported_by_source": true,
+    "strict_build_environment_provenance_gap": true,
+    "blocks_strict_provenance_claim_until_resolved": true,
+    "paired_schedule_matches_three_warmup_and_twelve_measured_pairs": true,
+    "cpu_claim_scope": "host and fixed-workload diagnostic; no per-thread CPU, CPU percentage, energy, sustained, portable, or capacity claim"
+  },
+  "findings": [
+    {
+      "severity": "blocking_for_strict_build_provenance",
+      "topic": "inherited_build_environment_is_not_fully_pinned_or_recorded",
+      "detail": "The build driver copies all of os.environ into cargo_env, then overwrites a small set of values. selected_environment records only a whitelist. Variables that can alter Cargo's effective compiler or target, including RUSTC, RUSTC_WRAPPER, RUSTC_WORKSPACE_WRAPPER, CARGO_BUILD_TARGET, target-specific linker/RUSTFLAGS variables, and RUSTC_BOOTSTRAP, are neither removed nor recorded/validated. build_metadata obtains rustc -Vv from the explicit CARGO_BIN/rustc path, which may differ from Cargo's compiler if RUSTC or a wrapper is inherited. The paired runner validates the same selected subset, so later receipts cannot detect such an unrecorded override. This does not establish that an override is present, but source alone cannot prove it absent. Before asserting strict compiler/target provenance, sanitize build environment to a controlled allowlist or capture and validate the complete effective toolchain/target environment, including the actual Cargo rustc selection."
+    },
+    {
+      "severity": "positive",
+      "topic": "CPU_counter_units_and_checked_arithmetic",
+      "detail": "The harness converts timeval as tv_sec * 1,000,000 + tv_usec, checks tv_usec is in [0, 1,000,000), uses checked multiply/add/subtract, rejects decreasing or negative deltas, and converts context-switch counters without scaling them. JSON counters remain signed 64-bit microseconds or integer switch counts; the paired runner rejects bool/non-integer values and values above i64::MAX. Wall duration remains nanoseconds and is range-checked into u64. No unit or arithmetic error was found by source inspection."
+    },
+    {
+      "severity": "positive",
+      "topic": "timer_boundaries_and_counter_scope",
+      "detail": "Graph/runtime/executor/options construction and fixture generation occur before the sample snapshots. RUSAGE_SELF and RUSAGE_CHILDREN are sampled immediately before Instant::now; the timer covers GraphSession::start through run_to_completion return; elapsed time is read before the after snapshots. Verification, hashing, journal writes, and final report serialization follow the after snapshot and are outside both the wall timer and the measured CPU delta. RUSAGE_SELF is labeled process-wide including threads; RUSAGE_CHILDREN is labeled cumulative usage of children already reaped. The harness does not claim CPU percentage or per-thread attribution."
+    },
+    {
+      "severity": "positive",
+      "topic": "child_reaping_before_rusage_children_snapshot",
+      "detail": "GraphSession::run_to_completion joins finished node tasks and calls join_all before returning. The native stream worker does not return until terminal stdout reaches EOF and every managed child is marked reaped; its Children owner kills/waits unreaped children on error/drop, and the input writer is joined on success. The fixed graph asserts exactly one launched native process. These source paths support taking the RUSAGE_CHILDREN after-snapshot after the /bin/cat producer has been reaped; this remains a fixed-workload source assumption, not a runtime result from this review."
+    },
+    {
+      "severity": "positive",
+      "topic": "full_8193_event_and_payload_oracle",
+      "detail": "The Rust harness requires 8,193 terminal outputs, one successful producer status, 4,096 ordered inputs and outputs per consumer, zero drops, exactly one launched process, typed output equality against every expected record, identical fanout input sequence lists, unique ordered emission sequences, expected generation/revision/ports/sensitivity/remote metadata, and a per-consumer JSONL payload SHA-256 equal to the fixture hash. The paired runner revalidates the complete identity arrays and oracle, then normalizes only scheduler sequence values for cross-arm comparison. Collected event and byte limits are exact inclusive bounds; event_size is payload_size and the harness computes the corresponding typed-payload byte total."
+    },
+    {
+      "severity": "positive_with_wording_caveat",
+      "topic": "report_and_journal_IO",
+      "detail": "No report/journal I/O occurs per graph event or inside the timed interval. The harness accumulates raw sample data in memory, serializes the final report after the timer, and writes/flushed the one sample journal entry after the timer. It uses File directly rather than BufWriter; describing this as buffered I/O would be inaccurate, while describing the report value as accumulated in memory is accurate."
+    },
+    {
+      "severity": "positive",
+      "topic": "paired_protocol_and_timeout_cleanup",
+      "detail": "The 15-pair schedule alternates AB/BA, giving three warmup pairs and twelve measured pairs with six measured pairs in each order and one raw sample per invocation. A failed pair is retained and stops later pairs without retries; all remaining slots are recorded. Each test binary runs in a new process session; timeout cleanup sends SIGKILL to its process group, drains pipes and attempts bounded reaping, then aborts remaining slots if cleanup is unconfirmed. Runner source/hash, source fingerprints, build logs, build receipts, raw report, fixture, journal, and per-attempt output are pinned or retained."
+    },
+    {
+      "severity": "limitation",
+      "topic": "interpretation_of_child_cpu_and_workload",
+      "detail": "RUSAGE_CHILDREN is cumulative, not per-child, though this test invocation runs only one graph sample and source joins/reaps its one cat process. A short cat may yield zero microsecond counters; the runner suppresses ratios when a baseline counter is zero. RUSAGE_SELF includes the graph/test process threads and the fixed custom receiver work, not just transport internals. The protocol correctly limits any result to this host and this workload."
+    }
+  ],
+  "protocol_review": {
+    "warmup_pairs": 3,
+    "measured_pairs": 12,
+    "planned_invocations": 30,
+    "inner_samples_per_invocation": 1,
+    "retry_policy": "none",
+    "measured_order_balance": "six baseline/candidate and six candidate/baseline pairs",
+    "source_hashes_match_notes_and_receipts": true
+  },
+  "actions_performed": {
+    "read_source_and_hashes_only": true,
+    "cargo_or_rust_build": false,
+    "tests_or_benchmarks": false,
+    "process_fixtures_or_probes": false,
+    "heavy_hash_workload": false,
+    "timing_or_api_calls": false,
+    "product_patch_or_harness_modified": false,
+    "commit_or_push": false
+  }
+}

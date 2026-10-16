@@ -1,0 +1,52 @@
+{
+  "schema": "execute.graph-recv-any-single-queue-paired-runner-source-freeze/1",
+  "status": "prepared-source-only-no-build-or-timing",
+  "base_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "arms": {
+    "baseline_root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-baseline-a884",
+    "baseline_transport_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c",
+    "candidate_root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884",
+    "candidate_transport_sha256": "743a24390f38dfae54c04cb061054b78ba20f056351aa33ed790c7d4aad0bafa",
+    "shared_collector_patch_sha256": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4",
+    "candidate_queue_patch_sha256": "3fdb7b11062ebca674b314e046bab9f71ce1656712c231c92a0b18a280c2fa12",
+    "shared_harness_path": "evidence/graph-recv-any-single-queue/graph_recv_any_e2e_bench.rs",
+    "shared_harness_sha256": "4294e731012d4f3d28d3deea61e40fcb92a5a4b77ea32c3fc8bdae37f12095e8"
+  },
+  "paired_runner": {
+    "source": "work/graph-recv-any-e2e-paired-runner/graph_recv_any_e2e_pair.py",
+    "source_sha256": "028b5e8395ba19799ed39df3d037893c02e2a9db04314511baee35dec68a7eae",
+    "tests": "work/graph-recv-any-e2e-paired-runner/test_graph_recv_any_e2e_pair.py",
+    "tests_sha256": "a4be5589f2e4ecfb3de8d66a9b4f36171897d56888f41fdf2bd525c49f029d3c",
+    "readme": "work/graph-recv-any-e2e-paired-runner/README.md",
+    "readme_sha256": "3733b8a00a5191b9c58090baf01b99080a47703ba4e74ac185236860cb618f4e",
+    "build_driver": "work/build_graph_recv_any_e2e_pair.py",
+    "build_driver_sha256": "11a533a381d4dbc08355afbf964b4ea4573a8c575b17d7d4d796bf1d1c4c3375",
+    "comparison_diff": "evidence/graph-recv-any-single-queue/paired-runner-review.diff",
+    "comparison_diff_sha256": "1a9bf733496a82423f49a50f9deb3e31580d48fab5f8c18ca65c267b912b939f",
+    "build_instructions_sha256": "9ffb9995bccc1ff986b705aea0cd6e82f351b07c959df50dc50d4926e7566b9d",
+    "source_bindings_sha256": "c0a123bfaefa42492bbed30f25b1fd48444136d320259f43ef713b4f9e69f1e6"
+  },
+  "runner_protocol": {
+    "format": "execute.graph.recv_any_e2e.v1",
+    "test_name": "bounded_native_stream_recv_any_has_exact_end_to_end_samples",
+    "warmup_pairs": 3,
+    "measured_pairs": 48,
+    "ordering": "alternating AB/BA",
+    "inner_warmups": 0,
+    "raw_samples_per_invocation": 3,
+    "invocation_timeout_seconds": 120,
+    "retry_count": 0,
+    "minimum_free_bytes": 3221225472,
+    "cargo_target_policy": "campaign/work/perf-target-candidate shared by both arms to reuse dependency artifacts; cargo clean --release --package execute between arms; save immutable baseline binary and receipt before candidate clean",
+    "cargo_target_dir": "work/perf-target-candidate"
+  },
+  "offline_validation": {
+    "ast_parse": "passed for runner, tests, and build driver",
+    "python_unittests": "13 passed in 0.730 seconds",
+    "cargo_or_rust_tests": "not_run",
+    "builds": "not_run",
+    "timings": "not_run",
+    "product_worktrees_mutated": false,
+    "older_frozen_runners_or_harnesses_mutated": false
+  }
+}

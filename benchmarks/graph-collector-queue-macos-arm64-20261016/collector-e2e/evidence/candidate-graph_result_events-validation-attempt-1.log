@@ -1,0 +1,9 @@
+
+running 4 tests
+test event_schema_mismatch_is_rejected_before_the_applet_can_make_effects ... ok
+test failed_non_enveloped_results_emit_no_event_and_retain_effect_certainty ... ok
+test failure_result_envelope_is_emitted_as_one_typed_event ... ok
+test raw_bytes_and_list_results_are_each_one_event ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+

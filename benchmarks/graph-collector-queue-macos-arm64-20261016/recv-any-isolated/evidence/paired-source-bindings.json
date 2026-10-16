@@ -1,0 +1,156 @@
+{
+  "base_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "build_instructions": {
+    "build_environment_receipt": "evidence/graph-recv-any-single-queue/build-environment-attempt-1.json",
+    "cargo_target_dir": "campaign/work/perf-target-candidate shared by both arms to reuse dependency artifacts",
+    "clean_between_arms": [
+      "cargo",
+      "clean",
+      "--release",
+      "--package",
+      "execute"
+    ],
+    "environment": {
+      "EXECUTE_GRAPH_RECV_ANY_E2E_REPORT": "fresh absolute JSON path for every invocation",
+      "EXECUTE_GRAPH_RECV_ANY_E2E_SAMPLES": "3",
+      "EXECUTE_GRAPH_RECV_ANY_E2E_WARMUPS": "0"
+    },
+    "exact_ignored_test": "bounded_native_stream_recv_any_has_exact_end_to_end_samples",
+    "package": "execute",
+    "path": "evidence/graph-recv-any-single-queue/paired-build-instructions.md",
+    "release_build_command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--release",
+      "--package",
+      "execute",
+      "--test",
+      "graph_recv_any_e2e_bench",
+      "--test",
+      "graph_runtime",
+      "--test",
+      "graph_lifecycles",
+      "--test",
+      "graph_result_events",
+      "--lib",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "run_arguments": [
+      "--exact",
+      "bounded_native_stream_recv_any_has_exact_end_to_end_samples",
+      "--ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "schedule": {
+      "measured_pairs": 48,
+      "ordering": "alternating AB/BA",
+      "retries": 0,
+      "timeout_seconds": 120,
+      "warmup_pairs": 3
+    },
+    "sha256": "8bcd1324fd8a7e1ceebeb44daf27bab52660525c4737e97210a1198499eeb616",
+    "test_target": "graph_recv_any_e2e_bench"
+  },
+  "candidate_minus_baseline_transport_diff_sha256": "008821d1b341173dff1432b8135dc3d2f1730a86df7432081070e555b1205de1",
+  "comparison": "shared collector-progress optimization versus the same collector-progress optimization plus the single-queue recv_any Condvar fast path",
+  "formatting_revision": {
+    "paired_runner_review_sha256": "932fd86d641bf8de2bbf52a93a9fd2c07c7a0c96c44f2e031f218f8eada9b54a",
+    "runtime_semantics_changed": false,
+    "rustfmt_edition": "2021",
+    "v1_manifest": "paired-source-bindings-v1.json"
+  },
+  "paired_runner": {
+    "build_driver": "work/build_graph_recv_any_e2e_pair.py",
+    "build_driver_sha256": "e9be14febfa53f3c744773ef8581d813cd69e14583284abea70cef831a49964e",
+    "build_instructions_sha256": "8bcd1324fd8a7e1ceebeb44daf27bab52660525c4737e97210a1198499eeb616",
+    "comparison_diff": "evidence/graph-recv-any-single-queue/paired-runner-review.diff",
+    "comparison_diff_sha256": "932fd86d641bf8de2bbf52a93a9fd2c07c7a0c96c44f2e031f218f8eada9b54a",
+    "readme": "work/graph-recv-any-e2e-paired-runner/README.md",
+    "readme_sha256": "61776eb5a6dec1ac310ad2b383203b1fdd7bacb1fd89ed6a543f2650542fc8f5",
+    "runner": "work/graph-recv-any-e2e-paired-runner/graph_recv_any_e2e_pair.py",
+    "runner_sha256": "98ddece53f24fc68a2afd1e9117791de1b119f1e673b728b4c3a42d2add3ad6e",
+    "shared_target_directory": "work/perf-target-candidate",
+    "status": "prepared-source-only-no-build-or-timing",
+    "tests": "work/graph-recv-any-e2e-paired-runner/test_graph_recv_any_e2e_pair.py",
+    "tests_sha256": "a4be5589f2e4ecfb3de8d66a9b4f36171897d56888f41fdf2bd525c49f029d3c"
+  },
+  "patches": {
+    "benchmark_shared": {
+      "applied_to": [
+        "baseline",
+        "candidate"
+      ],
+      "path": "evidence/graph-recv-any-single-queue/graph-recv-any-e2e-benchmark-v2.patch",
+      "sha256": "36b09a09df6d23ab47ba1e5ed02bea1564a4d0c938325c072ff24f8824762002",
+      "source_path": "tests/graph_recv_any_e2e_bench.rs",
+      "source_sha256": "c38f59198e056576b69481e10bfa0cf2ac95124095869550a0d863ceb2bb18c1"
+    },
+    "candidate_minus_baseline_transport_diff": {
+      "path": "evidence/graph-recv-any-single-queue/paired-candidate-minus-baseline-transport.diff",
+      "sha256": "008821d1b341173dff1432b8135dc3d2f1730a86df7432081070e555b1205de1"
+    },
+    "collector_progress_shared": {
+      "applied_to": [
+        "baseline",
+        "candidate"
+      ],
+      "origin": "work/graph-collector-sleep-candidate-v2.patch",
+      "path": "evidence/graph-recv-any-single-queue/collector-progress.patch",
+      "sha256": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4"
+    },
+    "queue_product_candidate_only": {
+      "applied_to": [
+        "candidate"
+      ],
+      "base": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "path": "evidence/graph-recv-any-single-queue/graph-recv-any-single-queue-product-v2.patch",
+      "sha256": "9135c5ee1ea8b350e6e50acb76eef19d5603a044f6dbcf51271bde83088b0400"
+    }
+  },
+  "schema": "execute.graph-recv-any-single-queue-paired-source-bindings/2",
+  "status": "source-v2-formatted-rustfmt-edition-2021-no-build-or-timing",
+  "validation": {
+    "api_calls": "not_run",
+    "benchmark_source_identical": true,
+    "builds": "not_run",
+    "cargo_or_rust_tests": "not_run",
+    "disk_free_after_preparation_bytes": 2969653248,
+    "patches_apply_cleanly": true,
+    "target_directories_present": false,
+    "timings": "not_run"
+  },
+  "worktrees": {
+    "baseline": {
+      "benchmark_source_sha256": "c38f59198e056576b69481e10bfa0cf2ac95124095869550a0d863ceb2bb18c1",
+      "changed_tracked_paths": [
+        "src/graph/transport.rs"
+      ],
+      "has_target_directory": false,
+      "head": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-baseline-a884",
+      "status_porcelain": [
+        " M src/graph/transport.rs",
+        "?? tests/graph_recv_any_e2e_bench.rs"
+      ],
+      "transport_source_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c"
+    },
+    "candidate": {
+      "benchmark_source_sha256": "c38f59198e056576b69481e10bfa0cf2ac95124095869550a0d863ceb2bb18c1",
+      "changed_tracked_paths": [
+        "src/graph/transport.rs"
+      ],
+      "has_target_directory": false,
+      "head": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884",
+      "status_porcelain": [
+        " M src/graph/transport.rs",
+        "?? tests/graph_recv_any_e2e_bench.rs"
+      ],
+      "transport_source_sha256": "ac546546ac93266b675ba0f37418961b3bc1672d6cd34c68974aeaf1f6c8ee45"
+    },
+    "candidate_minus_baseline_transport_diff_sha256": "a08c5d4c1987e5fe8df30b8b98351b6bf7b92aed5fa388dec410d78b33aba127"
+  }
+}

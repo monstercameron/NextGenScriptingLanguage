@@ -1,0 +1,45 @@
+diff --git a/src/graph/transport.rs b/src/graph/transport.rs
+index 90c86bf..f01e239 100644
+--- a/src/graph/transport.rs
++++ b/src/graph/transport.rs
+@@ -1203,6 +1203,7 @@ impl GraphSession {
+         let mut first_error = None;
+         let mut remaining = self.tasks.iter().filter(|task| task.is_some()).count();
+         while remaining > 0 {
++            let mut made_progress = false;
+             if self.external_cancelled.load(Ordering::Acquire) {
+                 self.cancelled.store(true, Ordering::Release);
+                 for queue in &self.all_queues {
+@@ -1222,6 +1223,9 @@ impl GraphSession {
+             }
+             for (_, queue) in &self.terminals {
+                 if let Some(event) = queue.try_recv()? {
++                    // Count queue progress before rejecting stale revisions so
++                    // one event per terminal drains on each pass without idle sleeps.
++                    made_progress = true;
+                     if event.generation == self.context.generation
+                         && event.revision == self.context.revision
+                     {
+@@ -1251,11 +1255,13 @@ impl GraphSession {
+                 }
+                 match self.scope.try_join(handle) {
+                     Ok(Some(())) => {
++                        made_progress = true;
+                         *task = None;
+                         remaining -= 1;
+                     }
+                     Ok(None) => {}
+                     Err(error) => {
++                        made_progress = true;
+                         first_error.get_or_insert(error);
+                         self.cancelled.store(true, Ordering::Release);
+                         *task = None;
+@@ -1263,7 +1269,7 @@ impl GraphSession {
+                     }
+                 }
+             }
+-            if remaining > 0 {
++            if remaining > 0 && !made_progress {
+                 thread::sleep(Duration::from_millis(2));
+             }
+         }

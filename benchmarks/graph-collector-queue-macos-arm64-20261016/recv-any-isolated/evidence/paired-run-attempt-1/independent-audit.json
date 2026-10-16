@@ -1,0 +1,68 @@
+{
+  "attempt_artifacts_read": true,
+  "attempts": 102,
+  "candidate_improvement_count": 48,
+  "candidate_loss_count": 0,
+  "dropped_messages": 0,
+  "expected_fixture_bytes": 1137581,
+  "expected_fixture_sha256": "4d84111007027f04f273330f55943f2d91da249e0b4d5adc0d6e0b0d5a6ba5f4",
+  "graph_sessions_audited": 306,
+  "limitations": [
+    "Timing is whole finite GraphSession execution, including start and terminal collection, not an isolated recv_any microbenchmark.",
+    "Native producer completion is asserted by the frozen harness as process status Integer(0); the per-sample raw report records one launch and one status identity rather than repeating its payload.",
+    "This is one host/run; it does not establish Bash-versus-Rust superiority or broad workload performance."
+  ],
+  "measured_pairs": 48,
+  "median_paired_delta_ns": -782920750.5,
+  "preregistration_sha256": "540991bbea87aafa25b2eee5a064d5db733d355d2fa89efa016bc4c6309edb68",
+  "producer_launches_per_graph_session": 1,
+  "raw_samples_per_attempt": 3,
+  "report_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-recv-any-single-queue/paired-run-attempt-1/paired-report.json",
+  "report_sha256": "7a8824cb68f9a0a1121568c615b2122a719f2be0bc9371b20a17539c7718f2ff",
+  "source_provenance": {
+    "attempt_artifacts_read": false,
+    "build_driver_sha256": "e9be14febfa53f3c744773ef8581d813cd69e14583284abea70cef831a49964e",
+    "builds": {
+      "baseline": {
+        "artifact_fresh": false,
+        "binary_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-recv-any-single-queue/baseline-test-binary",
+        "binary_sha256": "2499a7838e22d804351ebefbc55734e122bd4eafcbad6d39306b6c040cea1a6f",
+        "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+        "opt_level": "3",
+        "rustc_vv_sha256": "352d6857968e80a6357a926ac685b9b07f77c479aaafde33e73a53945e802909",
+        "target_name": "graph_recv_any_e2e_bench"
+      },
+      "candidate": {
+        "artifact_fresh": false,
+        "binary_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-recv-any-single-queue/candidate-test-binary",
+        "binary_sha256": "0c30c122bd2b8931817b6c5e5a62331c461e0fabd819229ea6b5398be33d082d",
+        "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)",
+        "opt_level": "3",
+        "rustc_vv_sha256": "352d6857968e80a6357a926ac685b9b07f77c479aaafde33e73a53945e802909",
+        "target_name": "graph_recv_any_e2e_bench"
+      }
+    },
+    "harness_sha256": "c38f59198e056576b69481e10bfa0cf2ac95124095869550a0d863ceb2bb18c1",
+    "preregistration_sha256": "540991bbea87aafa25b2eee5a064d5db733d355d2fa89efa016bc4c6309edb68",
+    "runner_sha256": "98ddece53f24fc68a2afd1e9117791de1b119f1e673b728b4c3a42d2add3ad6e",
+    "source_arms": {
+      "baseline": {
+        "build_input_count": 124,
+        "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-baseline-a884",
+        "source_fingerprint_sha256": "7a7f226148cb3f5e1291ec98d36abdd20889310c17e84e8ca6a373f109edf1f1",
+        "transport_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c"
+      },
+      "candidate": {
+        "build_input_count": 124,
+        "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884",
+        "source_fingerprint_sha256": "8245a0e368ba4b65d6298ead0eab613f229dea5a893aed799e5ec5e0f1bc9f83",
+        "transport_sha256": "ac546546ac93266b675ba0f37418961b3bc1672d6cd34c68974aeaf1f6c8ee45"
+      }
+    },
+    "status": "source_provenance_verified"
+  },
+  "status": "independent_complete_audit_passed",
+  "terminal_events_per_graph_session": 8193,
+  "tie_count": 0,
+  "warmup_pairs": 3
+}

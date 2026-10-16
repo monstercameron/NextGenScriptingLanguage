@@ -1,0 +1,736 @@
+--- work/graph-transport-e2e-paired-runner/graph_transport_e2e_pair.py
++++ work/graph-recv-any-e2e-paired-runner/graph_recv_any_e2e_pair.py
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Preregister and run the frozen finite graph transport E2E comparison."""
++"""Preregister and run the frozen finite graph recv_any E2E comparison."""
+ from __future__ import annotations
+ 
+ import argparse
+@@ -19,18 +19,26 @@
+ 
+ 
+ SCHEMA_VERSION = 1
+-TEST_NAME = "bounded_native_stream_fanout_has_exact_end_to_end_samples"
+-REPORT_FORMAT = "execute.graph.transport_e2e.v1"
++TEST_NAME = "bounded_native_stream_recv_any_has_exact_end_to_end_samples"
++REPORT_FORMAT = "execute.graph.recv_any_e2e.v1"
+ METHOD = (
+     "wall-clock GraphSession start through run_to_completion; real finite cat NativeStream, typed JSON decoding, "
+-    "two bounded lossless fanout edges, two custom pass-through receivers and terminal collection; all exact "
+-    "payload/order/hash validation follows the timed region"
++    "two bounded lossless fanout edges, two custom pass-through receivers using recv_any on one queue each, and "
++    "terminal collection; all exact payload/order/hash validation follows the timed region"
+ )
+ CAMPAIGN = Path(__file__).resolve().parents[2]
+-BASELINE_ROOT = CAMPAIGN / "work/graph-optimizations-integrated-81bf9ba"
+-BASELINE_COMMIT = "81bf9ba766a775cccf059007b19f5def9b9bfb03"
+-HARNESS_RELATIVE = "tests/graph_transport_e2e_bench.rs"
+-HARNESS_SHA256 = "e3a8c29881fe904b6b68b9e4a97485704a919dcac03aff0be2cc1998456b0d1e"
++BASELINE_ROOT = CAMPAIGN / "work/graph-recv-any-collector-baseline-a884"
++CANDIDATE_ROOT = CAMPAIGN / "work/graph-recv-any-collector-queue-a884"
++SHARED_TARGET_DIR = CAMPAIGN / "work/perf-target-candidate"
++BASELINE_COMMIT = "a884f6561fd43f45e43b25a3cc2233be17ee3944"
++HARNESS_RELATIVE = "tests/graph_recv_any_e2e_bench.rs"
++HARNESS_SHA256 = "c38f59198e056576b69481e10bfa0cf2ac95124095869550a0d863ceb2bb18c1"
++EXPECTED_TRANSPORT_SHA256 = {
++    "baseline": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c",
++    "candidate": "ac546546ac93266b675ba0f37418961b3bc1672d6cd34c68974aeaf1f6c8ee45",
++}
++COLLECTOR_PATCH_SHA256 = "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4"
++QUEUE_PATCH_SHA256 = "9135c5ee1ea8b350e6e50acb76eef19d5603a044f6dbcf51271bde83088b0400"
+ RECORD_COUNT = 4096
+ TEXT_BYTES = 256
+ EDGE_CAPACITY = 8
+@@ -59,8 +67,8 @@
+     "rust-toolchain.toml",
+     "rustfmt.toml",
+ }
+-BUILD_ENVIRONMENT_RELATIVE = "evidence/graph-transport-e2e/build-environment-attempt-1.json"
+-BUILD_DRIVER_RELATIVE = "work/build_graph_e2e_pair.py"
++BUILD_ENVIRONMENT_RELATIVE = "evidence/graph-recv-any-single-queue/build-environment-attempt-1.json"
++BUILD_DRIVER_RELATIVE = "work/build_graph_recv_any_e2e_pair.py"
+ BUILD_METADATA_FIELDS = {
+     "rustc_vv",
+     "cargo_version",
+@@ -261,7 +269,7 @@
+         for item in _git(root, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0")
+         if item
+     ]
+-    expected_changed = [] if side == "baseline" else ["src/graph/transport.rs"]
++    expected_changed = ["src/graph/transport.rs"]
+     if sorted(changed) != expected_changed or staged or untracked != [HARNESS_RELATIVE]:
+         raise PairError(
+             f"unexpected {side} worktree state: changed={changed}, staged={staged}, untracked={untracked}"
+@@ -310,6 +318,8 @@
+         raise PairError(f"{label} build metadata is incomplete or was captured too late")
+     if type(value["captured_before_clean_and_build"]) is not bool:
+         raise PairError(f"{label} build metadata capture marker must be boolean")
++    if environment["CARGO_TARGET_DIR"] != str(SHARED_TARGET_DIR):
++        raise PairError(f"{label} CARGO_TARGET_DIR differs from the frozen shared target path")
+     return value
+ 
+ 
+@@ -320,20 +330,9 @@
+     candidate = _validated_build_metadata(dict(candidate), "candidate")
+     recorded = _validated_build_metadata(dict(recorded), "captured environment")
+ 
+-    def without_target_root(metadata: Mapping[str, Any]) -> dict[str, Any]:
+-        selected_environment = dict(metadata["selected_build_environment"])
+-        selected_environment.pop("CARGO_TARGET_DIR", None)
+-        return {
+-            "rustc_vv": metadata["rustc_vv"],
+-            "cargo_version": metadata["cargo_version"],
+-            "selected_build_environment": selected_environment,
+-            "captured_before_clean_and_build": metadata["captured_before_clean_and_build"],
+-        }
+-
+-    recorded_normalized = without_target_root(recorded)
+-    if without_target_root(baseline) != without_target_root(candidate):
++    if baseline != candidate:
+         raise PairError("baseline and candidate toolchain or selected build environment differ")
+-    if without_target_root(baseline) != recorded_normalized:
++    if baseline != recorded:
+         raise PairError("build receipt metadata differs from the captured build environment")
+ 
+ 
+@@ -363,7 +362,7 @@
+             ("test_list", "{side}-test-list.txt"),
+         ):
+             name = pattern.format(side=side, attempt=attempt)
+-            logs[side][label] = pin_file(CAMPAIGN / "evidence/graph-transport-e2e" / name, f"{side} {label} build evidence")
++            logs[side][label] = pin_file(CAMPAIGN / "evidence/graph-recv-any-single-queue" / name, f"{side} {label} build evidence")
+     return {
+         "environment": pin_file(environment_path, "captured build environment"),
+         "driver": pin_file(CAMPAIGN / BUILD_DRIVER_RELATIVE, "build driver"),
+@@ -385,7 +384,7 @@
+                 if (
+                     row.get("reason") == "compiler-artifact"
+                     and isinstance(target, dict)
+-                    and target.get("name") == "graph_transport_e2e_bench"
++                    and target.get("name") == "graph_recv_any_e2e_bench"
+                 ):
+                     matching_rows.append(row)
+     except OSError as error:
+@@ -422,7 +421,7 @@
+     kinds = target.get("kind")
+     if (
+         artifact.get("reason") != "compiler-artifact"
+-        or target.get("name") != "graph_transport_e2e_bench"
++        or target.get("name") != "graph_recv_any_e2e_bench"
+         or not isinstance(kinds, list)
+         or "test" not in kinds
+         or target.get("test") is not True
+@@ -478,7 +477,7 @@
+     expected_root = Path(source["root"])
+     saved_binary = Path(str(receipt.get("saved_binary", ""))).expanduser().resolve(strict=True)
+     binary_hash = receipt.get("sha256")
+-    build_log = CAMPAIGN / "evidence/graph-transport-e2e" / f"{side}-build-attempt-{receipt['attempt']}.jsonl"
++    build_log = CAMPAIGN / "evidence/graph-recv-any-single-queue" / f"{side}-build-attempt-{receipt['attempt']}.jsonl"
+     pinned_artifact = _artifact_from_build_log(build_log, side)
+     _validate_artifact_receipt(
+         side, artifact, pinned_artifact, build_metadata, expected_root, saved_binary, binary_hash
+@@ -537,7 +536,7 @@
+ 
+ def _graph_template_sha256() -> str:
+     template = (
+-        "graph graph_transport_e2e\n"
++        "graph graph_recv_any_e2e\n"
+         "stream from bench.jsonl_source with path __FIXTURE__ as producer\n"
+         "show each line\n"
+         "end graph\n"
+@@ -551,6 +550,16 @@
+         "harness_format": REPORT_FORMAT,
+         "harness_sha256": HARNESS_SHA256,
+         "baseline_commit": BASELINE_COMMIT,
++        "build_target": {
++            "cargo_target_dir": str(SHARED_TARGET_DIR),
++            "policy": "shared target; clean only execute release outputs between arms and save baseline binary before candidate clean",
++        },
++        "source_composition": {
++            "baseline_transport_sha256": EXPECTED_TRANSPORT_SHA256["baseline"],
++            "candidate_transport_sha256": EXPECTED_TRANSPORT_SHA256["candidate"],
++            "shared_collector_patch_sha256": COLLECTOR_PATCH_SHA256,
++            "candidate_queue_patch_sha256": QUEUE_PATCH_SHA256,
++        },
+         "workload": {
+             "record_count": RECORD_COUNT,
+             "text_bytes_per_record": TEXT_BYTES,
+@@ -567,9 +576,9 @@
+         "invocation_timeout_seconds": INVOCATION_TIMEOUT_SECONDS,
+         "minimum_free_bytes_before_run": MIN_FREE_BYTES,
+         "invocation_environment": {
+-            "EXECUTE_GRAPH_TRANSPORT_E2E_REPORT": "absolute attempt-local raw.json",
+-            "EXECUTE_GRAPH_TRANSPORT_E2E_WARMUPS": str(INNER_WARMUPS),
+-            "EXECUTE_GRAPH_TRANSPORT_E2E_SAMPLES": str(INNER_SAMPLES),
++            "EXECUTE_GRAPH_RECV_ANY_E2E_REPORT": "absolute attempt-local raw.json",
++            "EXECUTE_GRAPH_RECV_ANY_E2E_WARMUPS": str(INNER_WARMUPS),
++            "EXECUTE_GRAPH_RECV_ANY_E2E_SAMPLES": str(INNER_SAMPLES),
+             "LC_ALL": "C",
+             "TZ": "UTC",
+         },
+@@ -580,10 +589,18 @@
+ 
+ 
+ def _validate_source_pair(baseline: Mapping[str, Any], candidate: Mapping[str, Any]) -> None:
++    if baseline["root"] != str(BASELINE_ROOT.resolve(strict=True)):
++        raise PairError("baseline source root is not the prepared collector baseline worktree")
++    if candidate["root"] != str(CANDIDATE_ROOT.resolve(strict=True)):
++        raise PairError("candidate source root is not the prepared queue worktree")
+     if baseline["root"] == candidate["root"]:
+         raise PairError("baseline and candidate source roots must differ")
+     if baseline["commit"] != candidate["commit"] or baseline["commit"] != BASELINE_COMMIT:
+-        raise PairError("baseline and candidate must share the frozen 81bf commit")
++        raise PairError("baseline and candidate must share the frozen a884 commit")
++    if baseline["transport_sha256"] != EXPECTED_TRANSPORT_SHA256["baseline"]:
++        raise PairError("baseline transport source does not match the shared collector patch pin")
++    if candidate["transport_sha256"] != EXPECTED_TRANSPORT_SHA256["candidate"]:
++        raise PairError("candidate transport source does not match the collector plus queue patch pin")
+     base_files = baseline["source_fingerprint"]["files"]
+     candidate_files = candidate["source_fingerprint"]["files"]
+     if base_files.keys() != candidate_files.keys():
+@@ -601,6 +618,8 @@
+     if sha256_bytes(harness) != HARNESS_SHA256:
+         raise PairError("canonical E2E harness bytes do not match the frozen SHA-256")
+     candidate_root = Path(args.candidate_root).expanduser().resolve(strict=True)
++    if candidate_root != CANDIDATE_ROOT.resolve(strict=True):
++        raise PairError("candidate root differs from the prepared queue worktree")
+     baseline = _receipt_identity(Path(args.baseline_receipt), "baseline", BASELINE_ROOT, harness)
+     candidate = _receipt_identity(Path(args.candidate_receipt), "candidate", candidate_root, harness)
+     _validate_source_pair(baseline, candidate)
+@@ -731,7 +750,7 @@
+         if shared_input_sequences is None:
+             shared_input_sequences = input_sequences
+         elif input_sequences != shared_input_sequences:
+-            raise PairError("fanout consumers received different source event sequences")
++            raise PairError("recv_any consumers received different source event sequences")
+ 
+         outputs = consumer["output_event_identities"]
+         if not isinstance(outputs, list) or len(outputs) != record_count:
+@@ -1013,9 +1032,9 @@
+     command = [str(binary), "--exact", TEST_NAME, "--ignored", "--nocapture", "--test-threads=1"]
+     environment = os.environ.copy()
+     invocation_environment = {
+-        "EXECUTE_GRAPH_TRANSPORT_E2E_REPORT": str(raw_path.resolve()),
+-        "EXECUTE_GRAPH_TRANSPORT_E2E_WARMUPS": str(INNER_WARMUPS),
+-        "EXECUTE_GRAPH_TRANSPORT_E2E_SAMPLES": str(INNER_SAMPLES),
++        "EXECUTE_GRAPH_RECV_ANY_E2E_REPORT": str(raw_path.resolve()),
++        "EXECUTE_GRAPH_RECV_ANY_E2E_WARMUPS": str(INNER_WARMUPS),
++        "EXECUTE_GRAPH_RECV_ANY_E2E_SAMPLES": str(INNER_SAMPLES),
+         "LC_ALL": "C",
+         "TZ": "UTC",
+     }
+@@ -1273,7 +1292,7 @@
+     report_path = report_dir / "paired-report.json"
+     report: dict[str, Any] = {
+         "schema_version": SCHEMA_VERSION,
+-        "format": "execute.graph.transport_e2e.paired_run.v1",
++        "format": "execute.graph.recv_any_e2e.paired_run.v1",
+         "created_at": utc_now(),
+         "status": "running",
+         "preregistration_path": str(prereg_path),
+@@ -1387,7 +1406,7 @@
+     try:
+         result = args.function(args)
+     except (PairError, OSError, ValueError, TypeError, KeyError) as error:
+-        print(f"paired graph E2E benchmark failed: {type(error).__name__}: {error}", file=sys.stderr)
++        print(f"paired recv_any E2E benchmark failed: {type(error).__name__}: {error}", file=sys.stderr)
+         return 1
+     return int(result or 0)
+ 
+--- work/graph-transport-e2e-paired-runner/test_graph_transport_e2e_pair.py
++++ work/graph-recv-any-e2e-paired-runner/test_graph_recv_any_e2e_pair.py
+@@ -10,7 +10,9 @@
+ from unittest import mock
+ 
+ sys.path.insert(0, str(Path(__file__).resolve().parent))
+-import graph_transport_e2e_pair as pair
++import graph_recv_any_e2e_pair as pair
++sys.path.insert(0, str(pair.CAMPAIGN / "work"))
++import build_graph_recv_any_e2e_pair as build_pair
+ 
+ 
+ FIXTURE_HASH = "a" * 64
+@@ -99,7 +101,28 @@
+     }
+ 
+ 
+-class GraphTransportPairTests(unittest.TestCase):
++class GraphRecvAnyPairTests(unittest.TestCase):
++    def test_frozen_harness_and_composed_source_roots_match_pins(self) -> None:
++        harness = (pair.CAMPAIGN / "evidence/graph-recv-any-single-queue/graph_recv_any_e2e_bench.rs").read_bytes()
++        self.assertEqual(pair.sha256_bytes(harness), pair.HARNESS_SHA256)
++        source = harness.decode("utf-8")
++        self.assertIn(f'"format": "{pair.REPORT_FORMAT}"', source)
++        self.assertIn(f'"method": "{pair.METHOD}"', source)
++
++        baseline = pair._inspect_source(pair.BASELINE_ROOT, "baseline", harness)
++        candidate = pair._inspect_source(pair.CANDIDATE_ROOT, "candidate", harness)
++        pair._validate_source_pair(baseline, candidate)
++
++    def test_build_driver_preserves_porcelain_spacing_for_prepared_worktrees(self) -> None:
++        self.assertEqual(
++            build_pair.verify_source("baseline", build_pair.BASELINE_ROOT),
++            {"commit": pair.BASELINE_COMMIT, "transport_sha256": pair.EXPECTED_TRANSPORT_SHA256["baseline"]},
++        )
++        self.assertEqual(
++            build_pair.verify_source("candidate", build_pair.CANDIDATE_ROOT),
++            {"commit": pair.BASELINE_COMMIT, "transport_sha256": pair.EXPECTED_TRANSPORT_SHA256["candidate"]},
++        )
++
+     def test_fixture_and_schedule_are_frozen(self) -> None:
+         fixture = pair.expected_fixture_bytes()
+         self.assertEqual(fixture.count(b"\n"), pair.RECORD_COUNT)
+@@ -110,17 +133,22 @@
+         self.assertEqual(pair.TOTAL_ATTEMPTS, 102)
+         self.assertEqual(pair.MIN_FREE_BYTES, 3 * 1024**3)
+ 
+-    def test_build_metadata_matches_except_target_directory(self) -> None:
+-        baseline = make_build_metadata("/build/baseline")
+-        candidate = make_build_metadata("/build/candidate")
++    def test_build_metadata_requires_shared_target_directory(self) -> None:
++        shared_target = str(pair.SHARED_TARGET_DIR)
++        baseline = make_build_metadata(shared_target)
++        candidate = make_build_metadata(shared_target)
+         pair._validate_build_metadata_pair(baseline, candidate, baseline)
+ 
+-        changed_toolchain = make_build_metadata("/build/candidate")
++        separate_target = make_build_metadata("/build/candidate")
++        with self.assertRaisesRegex(pair.PairError, "CARGO_TARGET_DIR differs from the frozen shared target path"):
++            pair._validate_build_metadata_pair(baseline, separate_target, baseline)
++
++        changed_toolchain = make_build_metadata(shared_target)
+         changed_toolchain["cargo_version"] = "cargo 1.98.0 test"
+         with self.assertRaisesRegex(pair.PairError, "toolchain or selected build environment differ"):
+             pair._validate_build_metadata_pair(baseline, changed_toolchain, baseline)
+ 
+-        changed_environment = make_build_metadata("/build/candidate")
++        changed_environment = make_build_metadata(shared_target)
+         changed_environment["selected_build_environment"]["RUSTFLAGS"] = "-C opt-level=2"
+         with self.assertRaisesRegex(pair.PairError, "toolchain or selected build environment differ"):
+             pair._validate_build_metadata_pair(baseline, changed_environment, baseline)
+@@ -136,7 +164,7 @@
+             harness.write_text("// frozen test\n")
+ 
+             target_dir = root / "target"
+-            artifact_path = target_dir / "release" / "deps" / "graph_transport_e2e_bench-reused"
++            artifact_path = target_dir / "release" / "deps" / "graph_recv_any_e2e_bench-reused"
+             artifact_path.parent.mkdir(parents=True)
+             artifact_path.write_bytes(b"candidate later overwrites this Cargo path")
+             saved_binary = root / "baseline-test-binary"
+@@ -147,7 +175,7 @@
+                 "reason": "compiler-artifact",
+                 "manifest_path": str(source_root / "Cargo.toml"),
+                 "target": {
+-                    "name": "graph_transport_e2e_bench",
++                    "name": "graph_recv_any_e2e_bench",
+                     "kind": ["test"],
+                     "test": True,
+                     "src_path": str(harness),
+@@ -173,7 +201,6 @@
+                 hashlib.sha256(saved_binary.read_bytes()).hexdigest(),
+             )
+             self.assertEqual(saved_binary.read_bytes(), b"immutable baseline test binary")
+-
+             changed_row = {**artifact, "fresh": True}
+             with self.assertRaisesRegex(pair.PairError, "differs from the pinned Cargo build JSONL row"):
+                 pair._validate_artifact_receipt(
+@@ -185,6 +212,43 @@
+                     saved_binary,
+                     hashlib.sha256(saved_binary.read_bytes()).hexdigest(),
+                 )
++
++    def test_build_driver_accepts_only_fresh_optimized_harness_artifact(self) -> None:
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary) / "source"
++            (root / "tests").mkdir(parents=True)
++            (root / "Cargo.toml").write_text("[package]\nname='execute'\n")
++            harness = root / build_pair.HARNESS_RELATIVE
++            harness.parent.mkdir(parents=True, exist_ok=True)
++            harness.write_text("// frozen test\n")
++
++            target_directory = Path(temporary) / "shared-target"
++            executable = target_directory / "release" / "deps" / "graph_recv_any_e2e_bench-test"
++            executable.parent.mkdir(parents=True)
++            executable.write_bytes(b"test binary")
++            original_target = build_pair.TARGET
++            build_pair.TARGET = target_directory
++            try:
++                artifact = {
++                    "reason": "compiler-artifact",
++                    "manifest_path": str(root / "Cargo.toml"),
++                    "target": {
++                        "name": build_pair.TARGET_NAME,
++                        "kind": ["test"],
++                        "test": True,
++                        "src_path": str(harness),
++                    },
++                    "profile": {"test": True, "opt_level": "3", "debug_assertions": False},
++                    "executable": str(executable),
++                    "filenames": [str(executable)],
++                    "fresh": False,
++                }
++                self.assertEqual(build_pair.artifact_for([artifact], root.resolve(strict=True)), artifact)
++                stale_artifact = {**artifact, "fresh": True}
++                with self.assertRaisesRegex(RuntimeError, "not the exact fresh optimized"):
++                    build_pair.artifact_for([stale_artifact], root.resolve(strict=True))
++            finally:
++                build_pair.TARGET = original_target
+ 
+     def test_full_sequence_oracle_normalizes_only_global_sequences(self) -> None:
+         left = pair.validate_verification(make_verification(), FIXTURE_HASH, record_count=3)
+--- work/build_graph_e2e_pair.py
++++ work/build_graph_recv_any_e2e_pair.py
+@@ -1,71 +1,288 @@
+-"""Build and retain exact release emit test binaries, sequentially."""
++#!/usr/bin/env python3
++"""Build and save immutable recv_any E2E test binaries, cleaning one shared target between arms."""
++from __future__ import annotations
++
+ import hashlib
+ import json
+ import os
+ from pathlib import Path
+ import shutil
+ import subprocess
+-
+-C = Path(__file__).resolve().parent.parent
+-E = C / 'evidence/graph-transport-e2e'
+-TARGET = C / 'work/perf-target-candidate'
+-ENV = dict(os.environ)
+-ENV.update(
+-    PATH='/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin:' + ENV['PATH'],
+-    CARGO_HOME='/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo',
+-    RUSTUP_HOME='/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/rustup',
+-    RUSTUP_TOOLCHAIN='stable-aarch64-apple-darwin',
+-    CARGO_BUILD_JOBS='4',
+-    CARGO_TARGET_DIR=str(TARGET),
+-)
+-
+-metadata = {
+-    'rustc_vv': subprocess.check_output(['rustc', '-Vv'], env=ENV, text=True),
+-    'cargo_version': subprocess.check_output(['cargo', '--version'], env=ENV, text=True),
+-    'selected_build_environment': {key: value for key, value in ENV.items() if key in ['PATH','CARGO_HOME','RUSTUP_HOME','RUSTUP_TOOLCHAIN','CARGO_TARGET_DIR','CARGO_BUILD_JOBS','RUSTFLAGS','CARGO_ENCODED_RUSTFLAGS','RUSTDOCFLAGS','CC','CXX','AR','SDKROOT','MACOSX_DEPLOYMENT_TARGET'] or key.startswith('CARGO_PROFILE_RELEASE_')},
+-    'captured_before_clean_and_build': True,
++from typing import Any
++
++
++CAMPAIGN = Path(__file__).resolve().parents[1]
++EVIDENCE = CAMPAIGN / "evidence/graph-recv-any-single-queue"
++BASELINE_ROOT = CAMPAIGN / "work/graph-recv-any-collector-baseline-a884"
++CANDIDATE_ROOT = CAMPAIGN / "work/graph-recv-any-collector-queue-a884"
++TARGET = CAMPAIGN / "work/perf-target-candidate"
++HARNESS_RELATIVE = Path("tests/graph_recv_any_e2e_bench.rs")
++HARNESS_SHA256 = "c38f59198e056576b69481e10bfa0cf2ac95124095869550a0d863ceb2bb18c1"
++BASE_COMMIT = "a884f6561fd43f45e43b25a3cc2233be17ee3944"
++TRANSPORT_SHA256 = {
++    "baseline": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c",
++    "candidate": "ac546546ac93266b675ba0f37418961b3bc1672d6cd34c68974aeaf1f6c8ee45",
+ }
+-with (E / 'build-environment-attempt-1.json').open('x') as out:
+-    json.dump(metadata, out, indent=2)
+-    out.write('\n')
+-
+-def digest(path):
+-    return hashlib.sha256(path.read_bytes()).hexdigest()
+-
+-for side, root in [('baseline', C / 'work/graph-optimizations-integrated-81bf9ba'), ('candidate', C / 'work/graph-collector-sleep-candidate')]:
+-    source = root / 'src/graph/transport.rs'
+-    source_hash = digest(source)
+-    with (E / f'{side}-release-clean-attempt-1.log').open('x') as log:
+-        subprocess.run(['cargo', 'clean', '--release', '-p', 'execute'], cwd=root, env=ENV,
+-                       stdout=log, stderr=subprocess.STDOUT, check=True)
+-    stdout = E / f'{side}-build-attempt-1.jsonl'
+-    with stdout.open('x') as out, (E / f'{side}-build-attempt-1.log').open('x') as err:
+-        subprocess.run(['cargo', 'test', '--locked', '--release', '--test', 'graph_transport_e2e_bench', '--test', 'graph_runtime', '--test', 'graph_lifecycles', '--test', 'graph_result_events', '--lib', '--no-run', '--message-format=json'],
+-                       cwd=root, env=ENV, stdout=out, stderr=err, check=True)
+-    rows = [json.loads(line) for line in stdout.read_text().splitlines()]
+-    artifacts = [row for row in rows if row.get('reason') == 'compiler-artifact'
+-                 and row.get('target', {}).get('name') == 'graph_transport_e2e_bench'
+-                 and row.get('profile', {}).get('test') and row.get('executable')]
+-    assert len(artifacts) == 1, artifacts
+-    artifact = artifacts[0]
+-    assert artifact['fresh'] is False
+-    assert Path(artifact['manifest_path']) == root / 'Cargo.toml'
+-    assert Path(artifact['target']['src_path']) == root / 'tests/graph_transport_e2e_bench.rs'
+-    assert artifact['profile']['opt_level'] == '3'
+-    assert artifact['profile']['debug_assertions'] is False
+-    binary = Path(artifact['executable'])
+-    assert binary.is_relative_to(TARGET / 'release/deps')
+-    destination = E / f'{side}-test-binary'
+-    assert not destination.exists()
+-    shutil.copy2(binary, destination)
+-    listing = subprocess.check_output([str(destination), '--list'], text=True)
+-    assert 'bounded_native_stream_fanout_has_exact_end_to_end_samples: test' in listing
+-    assert digest(source) == source_hash
+-    (E / f'{side}-test-list.txt').write_text(listing)
+-    receipt = {'artifact': artifact, 'saved_binary': str(destination), 'sha256': digest(destination),
+-               'source_sha256': source_hash, 'source_stable': True, 'attempt': 1, 'build_metadata': metadata}
+-    for extra in rows:
+-        if extra.get('reason') == 'compiler-artifact' and extra.get('executable') and extra.get('profile', {}).get('test') and extra.get('target',{}).get('name') in ['flow','graph_runtime','graph_lifecycles','graph_result_events']:
+-            shutil.copy2(extra['executable'], E / f"{side}-{extra['target']['name']}-test-binary")
+-    (E / f'{side}-binary-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+-    print(json.dumps({'side': side, 'saved_binary': str(destination), 'sha256': receipt['sha256']}), flush=True)
++TARGET_NAME = "graph_recv_any_e2e_bench"
++TEST_NAME = "bounded_native_stream_recv_any_has_exact_end_to_end_samples"
++BUILD_ATTEMPT = 1
++TOOLCHAIN_BIN = Path("/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin")
++RUSTUP_HOME = Path("/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/rustup")
++CARGO_HOME = Path("/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo")
++
++SELECTED_ENVIRONMENT_NAMES = {
++    "PATH",
++    "CARGO_HOME",
++    "RUSTUP_HOME",
++    "RUSTUP_TOOLCHAIN",
++    "CARGO_BUILD_JOBS",
++    "CARGO_TARGET_DIR",
++    "RUSTFLAGS",
++    "CARGO_ENCODED_RUSTFLAGS",
++    "RUSTDOCFLAGS",
++    "CC",
++    "CXX",
++    "AR",
++    "SDKROOT",
++    "MACOSX_DEPLOYMENT_TARGET",
++}
++
++
++def sha256_file(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as stream:
++        for block in iter(lambda: stream.read(1024 * 1024), b""):
++            digest.update(block)
++    return digest.hexdigest()
++
++
++def git(root: Path, *args: str) -> str:
++    return subprocess.check_output(["git", "-C", str(root), *args], text=True).rstrip("\n")
++
++
++def write_json_exclusive(path: Path, value: Any) -> None:
++    with path.open("x", encoding="utf-8") as stream:
++        json.dump(value, stream, indent=2, sort_keys=True)
++        stream.write("\n")
++        stream.flush()
++        os.fsync(stream.fileno())
++
++
++def selected_build_environment(environment: dict[str, str]) -> dict[str, str]:
++    return {
++        key: value
++        for key, value in sorted(environment.items())
++        if key in SELECTED_ENVIRONMENT_NAMES or key.startswith("CARGO_PROFILE_RELEASE_")
++    }
++
++
++def build_environment() -> tuple[dict[str, str], dict[str, Any]]:
++    environment = os.environ.copy()
++    current_path = environment.get("PATH", "")
++    environment.update(
++        {
++            "PATH": f"{TOOLCHAIN_BIN}{os.pathsep}{current_path}" if current_path else str(TOOLCHAIN_BIN),
++            "CARGO_HOME": str(CARGO_HOME),
++            "RUSTUP_HOME": str(RUSTUP_HOME),
++            "RUSTUP_TOOLCHAIN": "stable-aarch64-apple-darwin",
++            "CARGO_BUILD_JOBS": "4",
++            "CARGO_TARGET_DIR": str(TARGET),
++        }
++    )
++    metadata = {
++        "rustc_vv": subprocess.check_output(["rustc", "-Vv"], env=environment, text=True),
++        "cargo_version": subprocess.check_output(["cargo", "--version"], env=environment, text=True),
++        "selected_build_environment": selected_build_environment(environment),
++        "captured_before_clean_and_build": True,
++    }
++    return environment, metadata
++
++
++def verify_source(side: str, root: Path) -> dict[str, str]:
++    expected_root = (BASELINE_ROOT if side == "baseline" else CANDIDATE_ROOT).resolve(strict=True)
++    root = root.resolve(strict=True)
++    if root != expected_root:
++        raise RuntimeError(f"{side} source root is not the frozen worktree: {root}")
++    commit = git(root, "rev-parse", "HEAD")
++    if commit != BASE_COMMIT:
++        raise RuntimeError(f"{side} source has unexpected commit {commit}")
++    status = git(root, "status", "--porcelain", "--untracked-files=all").splitlines()
++    if sorted(status) != [" M src/graph/transport.rs", "?? tests/graph_recv_any_e2e_bench.rs"]:
++        raise RuntimeError(f"{side} worktree has unexpected changes: {status}")
++    harness = root / HARNESS_RELATIVE
++    if not harness.is_file() or sha256_file(harness) != HARNESS_SHA256:
++        raise RuntimeError(f"{side} integration harness differs from the frozen source")
++    transport = root / "src/graph/transport.rs"
++    transport_hash = sha256_file(transport)
++    if transport_hash != TRANSPORT_SHA256[side]:
++        raise RuntimeError(f"{side} transport source differs from its frozen source pin")
++    return {"commit": commit, "transport_sha256": transport_hash}
++
++
++def parse_build_jsonl(path: Path) -> list[dict[str, Any]]:
++    rows: list[dict[str, Any]] = []
++    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
++        try:
++            row = json.loads(line)
++        except json.JSONDecodeError as error:
++            raise RuntimeError(f"invalid Cargo JSON on line {line_number}: {error}") from error
++        if not isinstance(row, dict):
++            raise RuntimeError(f"Cargo JSON line {line_number} is not an object")
++        rows.append(row)
++    return rows
++
++
++def artifact_for(rows: list[dict[str, Any]], root: Path) -> dict[str, Any]:
++    matches = [
++        row
++        for row in rows
++        if row.get("reason") == "compiler-artifact"
++        and row.get("target", {}).get("name") == TARGET_NAME
++        and row.get("executable")
++    ]
++    if len(matches) != 1:
++        raise RuntimeError(f"expected one {TARGET_NAME} compiler-artifact row, found {len(matches)}")
++    artifact = matches[0]
++    target = artifact.get("target")
++    profile = artifact.get("profile")
++    if (
++        artifact.get("fresh") is not False
++        or not isinstance(target, dict)
++        or target.get("kind") != ["test"]
++        or target.get("test") is not True
++        or not isinstance(profile, dict)
++        or profile.get("test") is not True
++        or profile.get("opt_level") != "3"
++        or profile.get("debug_assertions") is not False
++    ):
++        raise RuntimeError("Cargo artifact is not the exact fresh optimized integration-test binary")
++    if Path(artifact.get("manifest_path", "")).resolve(strict=True) != root / "Cargo.toml":
++        raise RuntimeError("Cargo artifact manifest does not identify the expected source root")
++    if Path(target.get("src_path", "")).resolve(strict=True) != root / HARNESS_RELATIVE:
++        raise RuntimeError("Cargo artifact source path does not identify the frozen benchmark harness")
++    executable = Path(artifact["executable"]).resolve(strict=True)
++    target_dir = TARGET.resolve(strict=True)
++    if not executable.is_relative_to(target_dir / "release" / "deps"):
++        raise RuntimeError("Cargo artifact executable is outside the shared release deps directory")
++    if not any(Path(filename).resolve(strict=True) == executable for filename in artifact.get("filenames", [])):
++        raise RuntimeError("Cargo executable is absent from the artifact filenames list")
++    return artifact
++
++
++def run_logged(command: list[str], root: Path, environment: dict[str, str], log_path: Path) -> None:
++    with log_path.open("x", encoding="utf-8") as log:
++        subprocess.run(
++            command,
++            cwd=root,
++            env=environment,
++            stdin=subprocess.DEVNULL,
++            stdout=log,
++            stderr=subprocess.STDOUT,
++            check=True,
++        )
++        log.flush()
++        os.fsync(log.fileno())
++
++
++def build_arm(side: str, root: Path, environment: dict[str, str], metadata: dict[str, Any]) -> None:
++    source_before = verify_source(side, root)
++    prefix = EVIDENCE / f"{side}"
++    run_logged(
++        ["cargo", "clean", "--release", "--package", "execute"],
++        root,
++        environment,
++        EVIDENCE / f"{side}-release-clean-attempt-{BUILD_ATTEMPT}.log",
++    )
++    build_jsonl = EVIDENCE / f"{side}-build-attempt-{BUILD_ATTEMPT}.jsonl"
++    build_log = EVIDENCE / f"{side}-build-attempt-{BUILD_ATTEMPT}.log"
++    with build_jsonl.open("x", encoding="utf-8") as output, build_log.open("x", encoding="utf-8") as errors:
++        subprocess.run(
++            [
++                "cargo",
++                "test",
++                "--locked",
++                "--release",
++                "--package",
++                "execute",
++                "--test",
++                TARGET_NAME,
++                "--test",
++                "graph_runtime",
++                "--test",
++                "graph_lifecycles",
++                "--test",
++                "graph_result_events",
++                "--lib",
++                "--no-run",
++                "--message-format=json",
++            ],
++            cwd=root,
++            env=environment,
++            stdin=subprocess.DEVNULL,
++            stdout=output,
++            stderr=errors,
++            check=True,
++        )
++        output.flush()
++        os.fsync(output.fileno())
++        errors.flush()
++        os.fsync(errors.fileno())
++
++    artifact = artifact_for(parse_build_jsonl(build_jsonl), root)
++    source_executable = Path(artifact["executable"]).resolve(strict=True)
++    saved_binary = EVIDENCE / f"{side}-test-binary"
++    if saved_binary.exists():
++        raise RuntimeError(f"refusing to overwrite immutable saved binary: {saved_binary}")
++    shutil.copy2(source_executable, saved_binary)
++    if not os.access(saved_binary, os.X_OK):
++        raise RuntimeError(f"saved test binary is not executable: {saved_binary}")
++    test_list = subprocess.check_output([str(saved_binary), "--list"], text=True, timeout=60)
++    expected_test_listing = f"{TEST_NAME}: test"
++    if expected_test_listing not in test_list.splitlines():
++        raise RuntimeError(f"saved test binary does not list its exact ignored benchmark: {TEST_NAME}")
++    test_list_path = EVIDENCE / f"{side}-test-list.txt"
++    with test_list_path.open("x", encoding="utf-8") as stream:
++        stream.write(test_list)
++        stream.flush()
++        os.fsync(stream.fileno())
++
++    source_after = verify_source(side, root)
++    if source_after != source_before:
++        raise RuntimeError(f"{side} source changed during the build")
++    receipt = {
++        "artifact": artifact,
++        "saved_binary": str(saved_binary.resolve()),
++        "sha256": sha256_file(saved_binary),
++        "source_sha256": source_after["transport_sha256"],
++        "source_stable": True,
++        "attempt": BUILD_ATTEMPT,
++        "build_metadata": metadata,
++    }
++    receipt_path = EVIDENCE / f"{side}-binary-receipt.json"
++    with receipt_path.open("x", encoding="utf-8") as stream:
++        json.dump(receipt, stream, indent=2, sort_keys=True)
++        stream.write("\n")
++        stream.flush()
++        os.fsync(stream.fileno())
++    print(
++        json.dumps(
++            {"side": side, "saved_binary": str(saved_binary.resolve()), "sha256": receipt["sha256"]},
++            sort_keys=True,
++        ),
++        flush=True,
++    )
++
++
++def main() -> None:
++    EVIDENCE.mkdir(parents=True, exist_ok=True)
++    environment, metadata = build_environment()
++    environment_path = EVIDENCE / f"build-environment-attempt-{BUILD_ATTEMPT}.json"
++    write_json_exclusive(environment_path, metadata)
++    # The shared target is cleaned for each arm. Baseline's immutable binary and
++    # receipt are saved before candidate cleaning can remove Cargo's artifact.
++    build_arm("baseline", BASELINE_ROOT, environment, metadata)
++    build_arm("candidate", CANDIDATE_ROOT, environment, metadata)
++
++
++if __name__ == "__main__":
++    main()

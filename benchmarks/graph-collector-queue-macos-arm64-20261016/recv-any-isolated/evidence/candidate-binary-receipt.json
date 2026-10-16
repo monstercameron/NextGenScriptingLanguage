@@ -1,0 +1,53 @@
+{
+  "artifact": {
+    "executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/graph_recv_any_e2e_bench-5ac28534ba95c4ea",
+    "features": [],
+    "filenames": [
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/graph_recv_any_e2e_bench-5ac28534ba95c4ea"
+    ],
+    "fresh": false,
+    "manifest_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884/Cargo.toml",
+    "package_id": "path+file:///Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884#execute@0.9.0-rc.5",
+    "profile": {
+      "debug_assertions": false,
+      "debuginfo": 0,
+      "opt_level": "3",
+      "overflow_checks": false,
+      "test": true
+    },
+    "reason": "compiler-artifact",
+    "target": {
+      "crate_types": [
+        "bin"
+      ],
+      "doc": false,
+      "doctest": false,
+      "edition": "2021",
+      "kind": [
+        "test"
+      ],
+      "name": "graph_recv_any_e2e_bench",
+      "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884/tests/graph_recv_any_e2e_bench.rs",
+      "test": true
+    }
+  },
+  "attempt": 1,
+  "build_metadata": {
+    "captured_before_clean_and_build": true,
+    "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)\n",
+    "rustc_vv": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: aarch64-apple-darwin\nrelease: 1.99.0\nLLVM version: 23.1.1\n",
+    "selected_build_environment": {
+      "CARGO_BUILD_JOBS": "4",
+      "CARGO_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo",
+      "CARGO_TARGET_DIR": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+      "PATH": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/usr/local/go/bin:/opt/homebrew/bin:/Applications/ChatGPT.app/Contents/Resources/codex-cli/codex-path:/Users/earlcameron/.codex/tmp/arg0/codex-arg0twLbU3:/Users/earlcameron/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/Users/earlcameron/.local/bin:/Users/earlcameron/.nvm/versions/node/v22.22.1/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/earlcameron/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources:/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS",
+      "RUSTUP_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/rustup",
+      "RUSTUP_TOOLCHAIN": "stable-aarch64-apple-darwin",
+      "SDKROOT": "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
+    }
+  },
+  "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-recv-any-single-queue/candidate-test-binary",
+  "sha256": "0c30c122bd2b8931817b6c5e5a62331c461e0fabd819229ea6b5398be33d082d",
+  "source_sha256": "ac546546ac93266b675ba0f37418961b3bc1672d6cd34c68974aeaf1f6c8ee45",
+  "source_stable": true
+}

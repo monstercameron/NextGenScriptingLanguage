@@ -1,0 +1,26 @@
+{
+  "base_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "benchmark_patch": "evidence/graph-recv-any-single-queue/graph-recv-any-e2e-benchmark-v2.patch",
+  "benchmark_patch_sha256": "36b09a09df6d23ab47ba1e5ed02bea1564a4d0c938325c072ff24f8824762002",
+  "benchmark_source": "evidence/graph-recv-any-single-queue/graph_recv_any_e2e_bench-v2.rs",
+  "benchmark_source_sha256": "c38f59198e056576b69481e10bfa0cf2ac95124095869550a0d863ceb2bb18c1",
+  "checks": {
+    "builds": "not_run",
+    "cargo_or_rust_tests": "not_run_by_formatting_pass",
+    "git_diff_check": "passed",
+    "report_output_buffering": "BufWriter with explicit flush, outside timed region",
+    "rustfmt_edition_2021_check": "passed on intended transport and harness files",
+    "timings": "not_run"
+  },
+  "paired_composition": {
+    "baseline": "a884f6561fd43f45e43b25a3cc2233be17ee3944 plus root collector-progress patch",
+    "candidate": "same composed baseline plus unchanged queue product patch",
+    "collector_patch_owner": "root"
+  },
+  "product_patch": "evidence/graph-recv-any-single-queue/graph-recv-any-single-queue-product-v2.patch",
+  "product_patch_sha256": "9135c5ee1ea8b350e6e50acb76eef19d5603a044f6dbcf51271bde83088b0400",
+  "source_format_version": 2,
+  "supersedes": "source-freeze-v1.json",
+  "transport_source_sha256": "b4b80660e6f5cf0bf4d05ea0e09559bdd17dc2159c14931a38d8cce8a8226101",
+  "worktree": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-single-queue-a884"
+}

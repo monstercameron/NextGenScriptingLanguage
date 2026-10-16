@@ -1,0 +1,42 @@
+{
+  "schema": "execute.graph-transport-e2e-adversarial-followup/1",
+  "review_mode": "read-only source review; no Cargo, build, test, timing, API, or archive processing",
+  "overall": "source-clear for paired E2E use, with one documentation-only byte-count correction",
+  "artifacts": {
+    "harness": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/graph_transport_e2e_bench.rs",
+      "sha256": "4c2851bd014b9b6da3fbd4019965ab9a4dcc2aa8a709e9ea757a5d2d7ce7c34f",
+      "copied_identically_to_both_arms": true
+    },
+    "harness_patch": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/graph-transport-e2e-bench.patch",
+      "sha256": "17d1ccb2d0873e8a476e7a79d2e34c90a57339af92eec9a705f3bdc2e3de6947"
+    },
+    "baseline": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-optimizations-integrated-81bf9ba",
+      "head": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+      "transport_source_sha256": "049b2b13a6c82ba0c98f20b57a44e76c420d631815f1b673ba70d7902f24610c"
+    },
+    "candidate": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-collector-sleep-candidate",
+      "head": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+      "transport_source_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c",
+      "collector_patch_sha256": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4"
+    }
+  },
+  "findings": [
+    {
+      "priority": "P3 documentation",
+      "file": "evidence/graph-transport-e2e/source-notes.md",
+      "detail": "The notes call the producer's integer-zero status payload two bytes. `Value` derives default externally tagged serde serialization, so `Value::Integer(0)` serializes as the 13-byte JSON object `{\"Integer\":0}`; `event_size` accounts for this payload representation. The benchmark computes its byte budget dynamically with the same serializer and is correct, so this does not affect the oracle or execution."
+    }
+  ],
+  "reviewed_points": {
+    "natural_eof": "The graph source contains `show each line` and no `take`; all 4,096 fixture records must be consumed and verified, and successful completion requires exactly one producer status event with integer zero and exactly one launched process.",
+    "timed_boundary": "Fixture generation/writing, expected values and hashes, manifest/registry, plan validation, runtime/options and per-sample executor setup occur before `Instant::now`; timing wraps `GraphSession::start` through `run_to_completion`; output verification and journal/report writes occur after elapsed time is captured.",
+    "event_oracle": "Checks exact expected typed payloads and per-consumer stream hashes, full output EventIdentity values, source-to-consumer input identity lists, matching fanout sequence lists, increasing per-stream sequences, global sequence uniqueness across source/output/status events, generation/revision, ports, sensitivity, absent remote metadata, exact event counts, and zero dropped messages.",
+    "failure_retention": "Fresh report, fixture, and journal paths are claimed with `create_new` before samples. The journal is flushed after preparation, every completed warmup/sample, and runtime or post-timer validation failure. The final report retains raw durations in execution order and full verification results.",
+    "comparison_scope": "Both arms share identical harness bytes and base commit 81bf9ba; the candidate differs only by the reviewed collector sleep patch. This supports only the bounded finite workload's end-to-end comparison, not a general throughput or application-wide claim."
+  },
+  "validation_not_performed": ["Cargo", "build", "tests", "timing", "API calls", "heavy archive processing"]
+}

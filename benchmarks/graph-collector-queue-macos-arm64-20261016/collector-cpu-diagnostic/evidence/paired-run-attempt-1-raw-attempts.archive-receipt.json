@@ -1,0 +1,16 @@
+{
+  "utc": "2026-10-16T08:18:55.932569+00:00",
+  "format": "execute.lossless-raw-attempts-archive.v1",
+  "archive": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/collector-cpu-diagnostic/paired-run-attempt-1-raw-attempts.tar.xz",
+  "archive_sha256": "e2646cf5e76287df6f5ba6746800987837315cb03ecd0fa9ce7c81a4dab73ea0",
+  "archive_bytes": 1359288,
+  "manifest": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/collector-cpu-diagnostic/paired-run-attempt-1-raw-attempts.members.json",
+  "manifest_sha256": "dfdd46ce106ac51163fd33e5a11c3aef5ce407f7fdc3eca4a0b64befe3364d75",
+  "uncompressed_bytes": 220327224,
+  "member_count": 210,
+  "independent_audit_sha256": "8684db25e81bd8abd84e77036ca9afaa97d2e4478c25296126f2db6484911934",
+  "all_archive_members_verified": true,
+  "all_original_files_verified_unchanged": true,
+  "restore": "Extract archive under original paired-run-attempt-1 directory to restore exact raw-file paths for the original auditor. Outer report, audit and preregistration remain in place.",
+  "original_attempts_removed_after_verification": true
+}

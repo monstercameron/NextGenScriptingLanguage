@@ -1,0 +1,328 @@
+{
+  "baseline": {
+    "commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+    "transport_sha256": "049b2b13a6c82ba0c98f20b57a44e76c420d631815f1b673ba70d7902f24610c",
+    "worktree": "work/collector-cpu-baseline-81bf"
+  },
+  "build_environment_policy": {
+    "cargo_configuration_capture": "SHA-256 presence/path/symlink-target/content fingerprints for config and config.toml in CARGO_HOME and each .cargo directory from both source roots through filesystem root; verify before and after each sequential clean/build; record hashes, never config contents",
+    "fixed_values": {
+      "CARGO_BUILD_JOBS": "4",
+      "CARGO_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo",
+      "CARGO_TARGET_DIR": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+      "RUSTUP_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/rustup",
+      "RUSTUP_TOOLCHAIN": "stable-aarch64-apple-darwin"
+    },
+    "inherited_allowlist": [
+      "PATH",
+      "HOME",
+      "TMPDIR",
+      "LANG",
+      "LC_ALL",
+      "TZ",
+      "SDKROOT",
+      "DEVELOPER_DIR",
+      "MACOSX_DEPLOYMENT_TARGET"
+    ],
+    "recorded_actual_environment_values": true,
+    "unlisted_inherited_variables_forwarded": false
+  },
+  "candidate": {
+    "commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+    "product_patch": "work/graph-collector-sleep-candidate-v2.patch",
+    "product_patch_sha256": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4",
+    "transport_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c",
+    "worktree": "work/collector-cpu-candidate-81bf"
+  },
+  "claim_limit": "diagnostic for resource use of one fixed graph/workload on one host; not whole-application, portable, sustained, or capacity evidence",
+  "driver": {
+    "build_environment_test_source": {
+      "path": "work/test_build_collector_cpu_diag_pair.py",
+      "sha256": "66e5876172fb27f559211b5c8184695f9bd4cd23181a36109d0c3a086f881007"
+    },
+    "build_only_driver": {
+      "path": "work/build_collector_cpu_diag_pair.py",
+      "sha256": "4c22e81232bb7bc22a56740e4ace52274b8c49ab59eda0630fc334caa554b3c4"
+    },
+    "execution_state": "source prepared only; neither driver has been run",
+    "paired_runner": {
+      "path": "work/collector-cpu-diagnostic-paired-runner/collector_cpu_pair.py",
+      "sha256": "553af22fc5e9cf9f744b684a09d6c5a3d6654e48bd71a9c2d4b18b06b9b54752"
+    },
+    "test_source": {
+      "path": "work/collector-cpu-diagnostic-paired-runner/test_collector_cpu_pair.py",
+      "sha256": "da6c34fcd4cf71f5dc32692e3d9b04d593d0639b48637050c7ee100ef921094e"
+    }
+  },
+  "pairing": {
+    "attempt_count": 30,
+    "attempts": 30,
+    "first_measured_pair_order": [
+      "candidate",
+      "baseline"
+    ],
+    "inner_samples_per_attempt": 1,
+    "invocation_timeout_seconds": 120,
+    "measured_pairs": 12,
+    "minimum_free_bytes": 536870912,
+    "order": "alternate AB/BA across all 15 pairs; first measured pair BA",
+    "outer_wall_metric": "GraphSession::start through run_to_completion, one raw duration per attempt",
+    "raw_output": "every attempt retains raw report, fixture, journal, stdout, stderr, and completed-call receipt; failures and unattempted slots remain recorded; no retries",
+    "retry_policy": "none; retain every attempt and all losses",
+    "schedule": [
+      {
+        "attempt_ids": [
+          "warmup-01-1-baseline",
+          "warmup-01-2-candidate"
+        ],
+        "global_pair_index": 0,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "phase": "warmup",
+        "phase_pair_index": 1
+      },
+      {
+        "attempt_ids": [
+          "warmup-02-1-candidate",
+          "warmup-02-2-baseline"
+        ],
+        "global_pair_index": 1,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "phase": "warmup",
+        "phase_pair_index": 2
+      },
+      {
+        "attempt_ids": [
+          "warmup-03-1-baseline",
+          "warmup-03-2-candidate"
+        ],
+        "global_pair_index": 2,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "phase": "warmup",
+        "phase_pair_index": 3
+      },
+      {
+        "attempt_ids": [
+          "measurement-01-1-candidate",
+          "measurement-01-2-baseline"
+        ],
+        "global_pair_index": 3,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 1
+      },
+      {
+        "attempt_ids": [
+          "measurement-02-1-baseline",
+          "measurement-02-2-candidate"
+        ],
+        "global_pair_index": 4,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 2
+      },
+      {
+        "attempt_ids": [
+          "measurement-03-1-candidate",
+          "measurement-03-2-baseline"
+        ],
+        "global_pair_index": 5,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 3
+      },
+      {
+        "attempt_ids": [
+          "measurement-04-1-baseline",
+          "measurement-04-2-candidate"
+        ],
+        "global_pair_index": 6,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 4
+      },
+      {
+        "attempt_ids": [
+          "measurement-05-1-candidate",
+          "measurement-05-2-baseline"
+        ],
+        "global_pair_index": 7,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 5
+      },
+      {
+        "attempt_ids": [
+          "measurement-06-1-baseline",
+          "measurement-06-2-candidate"
+        ],
+        "global_pair_index": 8,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 6
+      },
+      {
+        "attempt_ids": [
+          "measurement-07-1-candidate",
+          "measurement-07-2-baseline"
+        ],
+        "global_pair_index": 9,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 7
+      },
+      {
+        "attempt_ids": [
+          "measurement-08-1-baseline",
+          "measurement-08-2-candidate"
+        ],
+        "global_pair_index": 10,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 8
+      },
+      {
+        "attempt_ids": [
+          "measurement-09-1-candidate",
+          "measurement-09-2-baseline"
+        ],
+        "global_pair_index": 11,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 9
+      },
+      {
+        "attempt_ids": [
+          "measurement-10-1-baseline",
+          "measurement-10-2-candidate"
+        ],
+        "global_pair_index": 12,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 10
+      },
+      {
+        "attempt_ids": [
+          "measurement-11-1-candidate",
+          "measurement-11-2-baseline"
+        ],
+        "global_pair_index": 13,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 11
+      },
+      {
+        "attempt_ids": [
+          "measurement-12-1-baseline",
+          "measurement-12-2-candidate"
+        ],
+        "global_pair_index": 14,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "phase": "measurement",
+        "phase_pair_index": 12
+      }
+    ],
+    "timeout_cleanup": {
+      "communicate_timeout_seconds": 5,
+      "final_wait_timeout_seconds": 2,
+      "policy": "kill the session process group; use bounded pipe-drain and reap attempts; if cleanup is unconfirmed, abort immediately and retain all unattempted slots",
+      "wait_timeout_seconds": 5
+    },
+    "warmup_pair_orders": [
+      [
+        "baseline",
+        "candidate"
+      ],
+      [
+        "candidate",
+        "baseline"
+      ],
+      [
+        "baseline",
+        "candidate"
+      ]
+    ],
+    "warmup_pairs": 3
+  },
+  "resource_counters": {
+    "after_snapshot": "immediately after run_to_completion and after the wall timer is stopped, before verification",
+    "api": "getrusage",
+    "before_snapshot": "after graph setup, immediately before Instant::now / GraphSession::start",
+    "children_scope": "reaped child processes visible to the host OS",
+    "fields": [
+      "user_cpu_us",
+      "system_cpu_us",
+      "voluntary_context_switches",
+      "involuntary_context_switches"
+    ],
+    "scopes": [
+      "RUSAGE_SELF",
+      "RUSAGE_CHILDREN"
+    ],
+    "wall_timer_unchanged": true
+  },
+  "schema": "execute.graph.transport_cpu_diagnostic_preregistration/1",
+  "shared_harness": {
+    "inner_samples_per_invocation": 1,
+    "inner_warmups": 0,
+    "path": "evidence/collector-cpu-diagnostic/collector_cpu_diag_bench.rs",
+    "sha256": "f3d484860ca6252fd0f4fdca53d9493719d199fcf66a660905e600949dcbc134",
+    "test_name": "bounded_native_stream_fanout_records_process_cpu"
+  },
+  "state": "prepared_source_only_not_built_or_run",
+  "workload": {
+    "exact_payload_order_metadata_oracle": true,
+    "expected_dropped_messages": 0,
+    "expected_native_processes": 1,
+    "lossless_fanout_edges": 2,
+    "natural_eof": true,
+    "producer_status": 0,
+    "records_per_consumer": 4096,
+    "terminal_events_per_sample": 8193,
+    "text_bytes_per_record": 256
+  }
+}

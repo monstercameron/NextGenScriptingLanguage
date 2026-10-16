@@ -1,0 +1,108 @@
+{
+  "arms": {
+    "baseline": {
+      "tracked_diff": [],
+      "transport_sha256": "049b2b13a6c82ba0c98f20b57a44e76c420d631815f1b673ba70d7902f24610c"
+    },
+    "candidate": {
+      "patch": "../shared-source/collector-progress.patch",
+      "patch_sha256": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4",
+      "transport_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c"
+    }
+  },
+  "audit_script_sha256": "df1c1bd964b423e11292a438afce8522d56c1b5b316f0aff937698d4bfe71ca3",
+  "base_commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+  "binary_build_receipts": {
+    "baseline": {
+      "profile": {
+        "debug_assertions": false,
+        "debuginfo": 0,
+        "opt_level": "3",
+        "overflow_checks": false,
+        "test": true
+      },
+      "saved_binary_sha256": "d382481b823a9c91a8e7c90b2723cda95535a359c2f37a7b8a0e460eb5d215f6",
+      "source_sha256": "049b2b13a6c82ba0c98f20b57a44e76c420d631815f1b673ba70d7902f24610c",
+      "source_stable": true,
+      "target": {
+        "crate_types": [
+          "bin"
+        ],
+        "doc": false,
+        "doctest": false,
+        "edition": "2021",
+        "kind": [
+          "test"
+        ],
+        "name": "collector_cpu_diag_bench",
+        "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/collector-cpu-baseline-81bf/tests/collector_cpu_diag_bench.rs",
+        "test": true
+      }
+    },
+    "candidate": {
+      "profile": {
+        "debug_assertions": false,
+        "debuginfo": 0,
+        "opt_level": "3",
+        "overflow_checks": false,
+        "test": true
+      },
+      "saved_binary_sha256": "07f288133e0f73373fdadf7c6bbf1b17a57f0a34a95fc4448935eb512084bbf8",
+      "source_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c",
+      "source_stable": true,
+      "target": {
+        "crate_types": [
+          "bin"
+        ],
+        "doc": false,
+        "doctest": false,
+        "edition": "2021",
+        "kind": [
+          "test"
+        ],
+        "name": "collector_cpu_diag_bench",
+        "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/collector-cpu-candidate-81bf/tests/collector_cpu_diag_bench.rs",
+        "test": true
+      }
+    }
+  },
+  "build_driver_sha256": "4c22e81232bb7bc22a56740e4ace52274b8c49ab59eda0630fc334caa554b3c4",
+  "build_environment_receipt_sha256": "6b4f2d6618042d957b4e978603c32cf2c5058d0d4601c1b4cc1741edcb6f0213",
+  "build_environment_test_sha256": "66e5876172fb27f559211b5c8184695f9bd4cd23181a36109d0c3a086f881007",
+  "format": "graph-collector-cpu-diagnostic-source-bindings.v1",
+  "harness_sha256": "f3d484860ca6252fd0f4fdca53d9493719d199fcf66a660905e600949dcbc134",
+  "independent_audit_sha256": "8684db25e81bd8abd84e77036ca9afaa97d2e4478c25296126f2db6484911934",
+  "measurement": {
+    "attempts": 30,
+    "completed_at": "2026-10-16T08:12:04.876Z",
+    "created_at": "2026-10-16T08:05:09.099Z",
+    "failed_attempts": 0,
+    "interpretation_limit": "Independent audit of this fixed graph/workload on the measured host only; RUSAGE_SELF is process-wide including threads, RUSAGE_CHILDREN covers reaped children, and the 12 pairs do not establish sustained, portable, whole-application, energy, or capacity behavior. AB/BA grouping is descriptive, not causal.",
+    "measured_pairs": 12,
+    "process_user_plus_system_us": {
+      "AB_lower_of": 6,
+      "BA_lower_of": 6,
+      "baseline_arm_median": 287241.5,
+      "candidate_arm_median": 58743.5,
+      "candidate_higher_pairs": 0,
+      "candidate_lower_pairs": 12,
+      "median_paired_ratio": 0.19834834073626706
+    },
+    "reaped_children_user_plus_system_us": {
+      "baseline_arm_median": 3338.0,
+      "candidate_arm_median": 2789.0,
+      "candidate_higher_pairs": 2,
+      "candidate_lower_pairs": 10,
+      "median_paired_ratio": 0.8874522009938948
+    },
+    "retries": 0,
+    "status": "complete",
+    "unattempted_attempts": 0,
+    "warmup_pairs": 3
+  },
+  "paired_report_sha256": "f552d1cc36df70fb8570566e7be52db725d8748d85d13bb66c4b903cd2c7f348",
+  "preregistration_sha256": "4c33914ad6ca9f8e9fc9bbb4f4e5b4588c965afc827a11b9941061fa35947103",
+  "raw_archive_sha256": "e2646cf5e76287df6f5ba6746800987837315cb03ecd0fa9ce7c81a4dab73ea0",
+  "runner_sha256": "553af22fc5e9cf9f744b684a09d6c5a3d6654e48bd71a9c2d4b18b06b9b54752",
+  "runner_test_sha256": "da6c34fcd4cf71f5dc32692e3d9b04d593d0639b48637050c7ee100ef921094e"
+}

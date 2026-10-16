@@ -1,0 +1,48 @@
+{
+  "schema": "execute.graph-recv-any-cat-pipe-cleanup-probe-binding/1",
+  "status": "probe-passed-on-current-posix-host; no-rust-binary-execution",
+  "probe_source": "work/graph-cat-timeout-probe/probe_cat_pipe_cleanup.py",
+  "probe_source_sha256": "f12da836cfd0e6b283896d2049e9fee4b17416c758db808f68b19121a6e78dfc",
+  "instructions": "work/graph-cat-timeout-probe/README.md",
+  "instructions_sha256": "1a9e0eba35b787d658641f4dc71729538d36d42385c29372ab4073068f07a910",
+  "result_notes": "evidence/graph-recv-any-single-queue/cat-timeout-probe-notes.md",
+  "result_notes_sha256": "635aa48b09264745de5ee0acee718953a5d448d6554ed3aff30baefed87d4034",
+  "runtime_process_group_source": {
+    "path": "work/graph-recv-any-collector-baseline-a884/src/runtime.rs",
+    "line": 1351,
+    "sha256": "10f3c1be7d1b5a7c9016f8f19de5a07b959ed42a11c69b19e5fdcc351c2b7c0e",
+    "operation": "CommandExt::process_group(0)"
+  },
+  "fixture": {
+    "record_count": 4096,
+    "text_bytes_per_record": 256,
+    "bytes": 1137581,
+    "sha256": "4d84111007027f04f273330f55943f2d91da249e0b4d5adc0d6e0b0d5a6ba5f4"
+  },
+  "successful_probe": {
+    "directory": "evidence/graph-recv-any-single-queue/cat-timeout-probe-20261016T071012Z",
+    "report": "evidence/graph-recv-any-single-queue/cat-timeout-probe-20261016T071012Z/probe-report.json",
+    "report_sha256": "9347f1f67a4ef563adbd695d35840d29371a86c08fcf09db898275854b63f079",
+    "fixture": "evidence/graph-recv-any-single-queue/cat-timeout-probe-20261016T071012Z/fixed-fixture.jsonl",
+    "fixture_sha256": "4d84111007027f04f273330f55943f2d91da249e0b4d5adc0d6e0b0d5a6ba5f4",
+    "status": "passed",
+    "explicit_pipe_close_cat_returncode": -13,
+    "direct_parent_sigkill_returncode": -9,
+    "cat_exit_observed_after_parent_sigkill_ns": 5387166,
+    "cat_exit_observed_after_explicit_pipe_close_ns": 20553166,
+    "cat_had_own_pgid_and_shared_parent_session": true
+  },
+  "earlier_failed_probe_preserved": {
+    "directory": "evidence/graph-recv-any-single-queue/cat-timeout-probe-20261016T070955Z",
+    "report": "evidence/graph-recv-any-single-queue/cat-timeout-probe-20261016T070955Z/probe-report.json",
+    "report_sha256": "99695e087020ee2e215532e99923eb52fccc21b998a486ccbc287c251dea4586",
+    "status": "failed",
+    "reason": "controller read a signaling JSON file before its writer completed; probe reader now retries a partial JSON file"
+  },
+  "scope": [
+    "Python/POSIX process and pipe behavior only; does not launch Rust or execute RuntimeGraphExecutor.",
+    "Tests only /bin/cat and the exact fixed fixture on this host.",
+    "A timeout wrapper killing the test process group would not reach cat in its separate PGID."
+  ],
+  "timeout_wrapper_decision": "no successor group-timeout runner drafted; it would not signal cat own PGID, while this probe confirms reader closure causes cat to exit on the tested host."
+}

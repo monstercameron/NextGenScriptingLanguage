@@ -31,3 +31,8 @@ benchmarks/**/*.bin binary
 benchmarks/**/*.patch binary
 # This is an immutable measured source snapshot, including its original whitespace.
 benchmarks/payload-size-paired-macos-linux-20261016/source/direct-size-harness.rs binary
+
+# Immutable graph-run logs, patches, and the original audited source keep raw whitespace.
+benchmarks/graph-collector-queue-macos-arm64-20261016/**/*.log binary
+benchmarks/graph-collector-queue-macos-arm64-20261016/**/*.diff binary
+benchmarks/graph-collector-queue-macos-arm64-20261016/collector-e2e/audit/audit_graph_transport_e2e.py binary

@@ -1,0 +1,30 @@
+Diff in /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884/src/graph/transport.rs:3289:
+         );
+ 
+         assert!(io.recv_timeout("events", Duration::ZERO).unwrap().is_none());
+-        assert!(io
+-            .recv_any_timeout(Duration::ZERO)
+-            .unwrap()
+-            .is_none());
++        assert!(io.recv_any_timeout(Duration::ZERO).unwrap().is_none());
+         assert!(io
+             .recv_timeout("events", Duration::from_millis(1))
+             .unwrap()
+Diff in /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884/tests/graph_recv_any_e2e_bench.rs:1:
+ //! Small end-to-end single-queue recv_any comparison. Run only from a paired harness.
+ #![cfg(unix)]
+ 
+-use anyhow::{Context, Result, anyhow, bail, ensure};
++use anyhow::{anyhow, bail, ensure, Context, Result};
+ use flow::ast::Value;
+ use flow::contracts::{OutputType, Sensitivity, ValueSchema};
+ use flow::graph::{
+Diff in /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884/tests/graph_recv_any_e2e_bench.rs:12:
+ use flow::manifest::Registry;
+ use flow::runtime::RunOptions;
+ use flow::security::SensitivitySet;
+-use serde_json::{Value as JsonValue, json};
++use serde_json::{json, Value as JsonValue};
+ use sha2::{Digest, Sha256};
+ use std::collections::{BTreeMap, BTreeSet};
+ use std::env;

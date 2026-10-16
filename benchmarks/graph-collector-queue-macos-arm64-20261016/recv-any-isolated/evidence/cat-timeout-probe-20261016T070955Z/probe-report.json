@@ -1,0 +1,66 @@
+{
+  "cases": [
+    {
+      "error": "Expecting value: line 1 column 1 (char 0)",
+      "error_type": "JSONDecodeError",
+      "mode": "close-pipe",
+      "success": false
+    },
+    {
+      "cat_exit_observation": {
+        "observed_states": [
+          null
+        ],
+        "ps_returncode": 1,
+        "running": false,
+        "state": null
+      },
+      "cat_wait_result": null,
+      "mode": "kill-parent",
+      "observed_exit_after_ns": 7335249,
+      "parent_observation": {
+        "parent_killed_directly": true,
+        "parent_returncode": -9
+      },
+      "setup": {
+        "cat_alive_before_trigger": true,
+        "cat_own_process_group": true,
+        "cat_pgid": 34724,
+        "cat_pid": 34724,
+        "cat_sid": 34720,
+        "different_process_group_from_parent": true,
+        "fixed_fixture_pipe_readable": true,
+        "mode": "kill-parent",
+        "parent_pgid": 34720,
+        "parent_pid": 34720,
+        "parent_sid": 34720,
+        "queued_stdout_bytes": 512,
+        "same_session_as_parent": true
+      },
+      "stderr_log": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-recv-any-single-queue/cat-timeout-probe-20261016T070955Z/kill-parent/parent-stderr.log",
+      "success": true,
+      "trigger": "kill only the parent test process"
+    }
+  ],
+  "child_command": [
+    "/bin/cat",
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-recv-any-single-queue/cat-timeout-probe-20261016T070955Z/fixed-fixture.jsonl"
+  ],
+  "child_process_group_model": "POSIX setpgrp: cat PID is its PGID and remains in the parent session, matching CommandExt::process_group(0)",
+  "completed_at_unix_ns": 1792134597204524000,
+  "created_at_unix_ns": 1792134597067303000,
+  "fixed_fixture": {
+    "bytes": 1137581,
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-recv-any-single-queue/cat-timeout-probe-20261016T070955Z/fixed-fixture.jsonl",
+    "record_count": 4096,
+    "sha256": "4d84111007027f04f273330f55943f2d91da249e0b4d5adc0d6e0b0d5a6ba5f4",
+    "text_bytes_per_record": 256
+  },
+  "schema": "execute.graph-recv-any-cat-pipe-cleanup-probe/1",
+  "scope_limitations": [
+    "This is a Python/POSIX process and pipe probe, not a RuntimeGraphExecutor or Rust test execution.",
+    "It verifies /bin/cat exits after the parent reader dies or explicitly closes the pipe when cat is in its own process group.",
+    "It does not verify Rust signal-handler timing, graph cancellation/deadline cleanup, or other child descendants."
+  ],
+  "status": "failed"
+}

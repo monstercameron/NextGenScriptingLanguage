@@ -1,0 +1,19 @@
+    Checking execute v0.9.0-rc.5 (/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-collector-sleep-candidate)
+error[E0382]: borrow of moved value: `file`
+   --> tests/graph_transport_e2e_bench.rs:610:5
+    |
+608 | fn write_report(file: &mut File, report: &JsonValue) -> Result<()> {
+    |                 ---- move occurs because `file` has type `&mut std::fs::File`, which does not implement the `Copy` trait
+609 |     serde_json::to_writer_pretty(file, report)?;
+    |                                  ---- value moved here
+610 |     file.write_all(b"\n")?;
+    |     ^^^^ value borrowed here after move
+    |
+help: consider creating a fresh reborrow of `file` here
+    |
+609 |     serde_json::to_writer_pretty(&mut *file, report)?;
+    |                                  ++++++
+
+For more information about this error, try `rustc --explain E0382`.
+error: could not compile `execute` (test "graph_transport_e2e_bench") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

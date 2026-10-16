@@ -1,0 +1,2620 @@
+{
+  "attempt_count": 102,
+  "attempts": [
+    {
+      "attempt_id": "warmup-01-1-baseline",
+      "durations_ns": [
+        10445185500,
+        9984683959,
+        10271766125
+      ],
+      "median_duration_ns": 10271766125,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 0,
+      "phase": "warmup",
+      "raw_sha256": "c33ab2d602584b419e03a27af2c70d7b5336996b620507fba81589329d197f18",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "warmup-01-2-candidate",
+      "durations_ns": [
+        646856625,
+        662666458,
+        836563167
+      ],
+      "median_duration_ns": 662666458,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 0,
+      "phase": "warmup",
+      "raw_sha256": "649c04aabf38c2e36850f69abccd6e0a890bc4837359609518abd5768ae870cf",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "warmup-02-1-candidate",
+      "durations_ns": [
+        524858917,
+        673668584,
+        625105958
+      ],
+      "median_duration_ns": 625105958,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 1,
+      "phase": "warmup",
+      "raw_sha256": "2fa0ff815d27f3cee59b626e1daa6a0143fb7581f6411e81af954acba38fb3c6",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "warmup-02-2-baseline",
+      "durations_ns": [
+        11946312041,
+        12700610167,
+        12555415375
+      ],
+      "median_duration_ns": 12555415375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 1,
+      "phase": "warmup",
+      "raw_sha256": "5a0db45897151ee589f348172e7cf7003285d8f7676eda9fc7a1e1f138b7c1c7",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "warmup-03-1-baseline",
+      "durations_ns": [
+        11886115708,
+        11981885708,
+        12202057125
+      ],
+      "median_duration_ns": 11981885708,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 2,
+      "phase": "warmup",
+      "raw_sha256": "ccd0a65523c496327d4263dd92ef2de30f8e5920ea1c13019e26be0346c21431",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "warmup-03-2-candidate",
+      "durations_ns": [
+        648951250,
+        697609875,
+        707706958
+      ],
+      "median_duration_ns": 697609875,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 2,
+      "phase": "warmup",
+      "raw_sha256": "ad5e18fb342dd34edd2e5c6b566294ad4d954ed2dcb544e941ab52c1aad74c6b",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-01-1-candidate",
+      "durations_ns": [
+        672748334,
+        750384875,
+        721394666
+      ],
+      "median_duration_ns": 721394666,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 3,
+      "phase": "measurement",
+      "raw_sha256": "66e5eca973c751c9e8d6e2bcbc5b2b825b6bc48e39c9d5f2c1bdc33076566f3a",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-01-2-baseline",
+      "durations_ns": [
+        11863430417,
+        11865925750,
+        11858564000
+      ],
+      "median_duration_ns": 11863430417,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 3,
+      "phase": "measurement",
+      "raw_sha256": "a46480acb7ef1b18b7af1f4859396762e1697105a9b90c76af4dd4e100ae6364",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-02-1-baseline",
+      "durations_ns": [
+        10205395334,
+        11572124042,
+        11357389667
+      ],
+      "median_duration_ns": 11357389667,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 4,
+      "phase": "measurement",
+      "raw_sha256": "6e63201de933339d2f6a0e2abfc85a4486653a8d800beaa325b2ad1080991f2a",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-02-2-candidate",
+      "durations_ns": [
+        656942167,
+        643280292,
+        702565833
+      ],
+      "median_duration_ns": 656942167,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 4,
+      "phase": "measurement",
+      "raw_sha256": "dc1a482cf68a28007eef6f149112882d312c17789f1b6f29600edfc0861ef676",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-03-1-candidate",
+      "durations_ns": [
+        670109375,
+        680524000,
+        660044625
+      ],
+      "median_duration_ns": 670109375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 5,
+      "phase": "measurement",
+      "raw_sha256": "f1856fa3b08e058596644572fd65f87ca2ffd40b9bb26d3a62507a3cf5c84e64",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-03-2-baseline",
+      "durations_ns": [
+        11952582208,
+        12145094709,
+        11867336417
+      ],
+      "median_duration_ns": 11952582208,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 5,
+      "phase": "measurement",
+      "raw_sha256": "a4fac7df5b57880d5ce2e2d095ffb808189e18f559aa1353fdb45e5262379255",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-04-1-baseline",
+      "durations_ns": [
+        12082984959,
+        11916441083,
+        11735010041
+      ],
+      "median_duration_ns": 11916441083,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 6,
+      "phase": "measurement",
+      "raw_sha256": "155fd59cb87cb201a3e046bdc1424fe0cf1229738063fa458420738c198ef236",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-04-2-candidate",
+      "durations_ns": [
+        555486125,
+        553974291,
+        576841417
+      ],
+      "median_duration_ns": 555486125,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 6,
+      "phase": "measurement",
+      "raw_sha256": "ab4a3cc7f00dfbf81cc6f7959ad180b77d35807c6440f717a4c173e6b581d559",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-05-1-candidate",
+      "durations_ns": [
+        516036541,
+        553210584,
+        523232792
+      ],
+      "median_duration_ns": 523232792,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 7,
+      "phase": "measurement",
+      "raw_sha256": "90b5fa7a7f86098081174345c4d28d1a0830a42f6cb75218297867bd1a8b91e4",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-05-2-baseline",
+      "durations_ns": [
+        10286633583,
+        11672835375,
+        12016871292
+      ],
+      "median_duration_ns": 11672835375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 7,
+      "phase": "measurement",
+      "raw_sha256": "4d1e81682cc37201a0dae98b8852a927541fd9304f89925cf75e9e19ec59f5a5",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-06-1-baseline",
+      "durations_ns": [
+        11694993875,
+        11749786833,
+        11641261125
+      ],
+      "median_duration_ns": 11694993875,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 8,
+      "phase": "measurement",
+      "raw_sha256": "d7541ce580d860a5369d80cb023ed0259efc45ff4222ff4eb845fe2fac85b9ea",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-06-2-candidate",
+      "durations_ns": [
+        542919167,
+        623601833,
+        658644792
+      ],
+      "median_duration_ns": 623601833,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 8,
+      "phase": "measurement",
+      "raw_sha256": "7731f773db55f2d3747738b495fb9d2e7d02cd5cf19bc85a590245ee611b1d32",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-07-1-candidate",
+      "durations_ns": [
+        583724917,
+        591162875,
+        639490625
+      ],
+      "median_duration_ns": 591162875,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 9,
+      "phase": "measurement",
+      "raw_sha256": "8db1ed69b83863dcac58462a62b7cf54d52b51a026b62c16cc6e2a30f3ddf5ce",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-07-2-baseline",
+      "durations_ns": [
+        11784476875,
+        11758829125,
+        11921764334
+      ],
+      "median_duration_ns": 11784476875,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 9,
+      "phase": "measurement",
+      "raw_sha256": "0951593ff845250a789924802b33a0bb279b6d3a54dd8fdf09d0c13f30622d03",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-08-1-baseline",
+      "durations_ns": [
+        11683747042,
+        11840499084,
+        11723501416
+      ],
+      "median_duration_ns": 11723501416,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 10,
+      "phase": "measurement",
+      "raw_sha256": "c1e52397b94ed8aca6386847f87efee4dcb95ffc665517660b20b32f57a4cdae",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-08-2-candidate",
+      "durations_ns": [
+        647663459,
+        671240625,
+        632207000
+      ],
+      "median_duration_ns": 647663459,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 10,
+      "phase": "measurement",
+      "raw_sha256": "9e0a6530592194abc2f7ae028170820ce3e29d33e71e40c3d9b1abf5333d54dc",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-09-1-candidate",
+      "durations_ns": [
+        702898458,
+        650964667,
+        641358292
+      ],
+      "median_duration_ns": 650964667,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 11,
+      "phase": "measurement",
+      "raw_sha256": "8fad01d6ef48d5a1da12097f0e3cfee68f28afd3779dde08c1ef269e20e60e35",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-09-2-baseline",
+      "durations_ns": [
+        11835349750,
+        11855576375,
+        11888195916
+      ],
+      "median_duration_ns": 11855576375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 11,
+      "phase": "measurement",
+      "raw_sha256": "8227a5d67a7c29b714f76852859c89fa9eedddf58adc869281a584aa8d817f28",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-10-1-baseline",
+      "durations_ns": [
+        11958473166,
+        11959647458,
+        11828004417
+      ],
+      "median_duration_ns": 11958473166,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 12,
+      "phase": "measurement",
+      "raw_sha256": "8b46339895c782c4e6688d2a8aaa76944dcb67ef7e87b90eb443adc82571f3b0",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-10-2-candidate",
+      "durations_ns": [
+        594660667,
+        625986375,
+        630691125
+      ],
+      "median_duration_ns": 625986375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 12,
+      "phase": "measurement",
+      "raw_sha256": "f296ab82b01b871f6c1f8403e07e6b7ff5cf3415fa19705d2881da5c09e6a11d",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-11-1-candidate",
+      "durations_ns": [
+        565472250,
+        610616292,
+        586746750
+      ],
+      "median_duration_ns": 586746750,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 13,
+      "phase": "measurement",
+      "raw_sha256": "638c1bacc132ca0c41c668018c8326b4059b9a2aa04fa227348fe9e06aa1d7a0",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-11-2-baseline",
+      "durations_ns": [
+        11823608792,
+        11845807959,
+        11911861458
+      ],
+      "median_duration_ns": 11845807959,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 13,
+      "phase": "measurement",
+      "raw_sha256": "96488eb4652c59ab5bc5ec7b3396acd54694006e6b839312a1b016c9a41a6856",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-12-1-baseline",
+      "durations_ns": [
+        11683923042,
+        11811739625,
+        11870373000
+      ],
+      "median_duration_ns": 11811739625,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 14,
+      "phase": "measurement",
+      "raw_sha256": "01339b1b03569f68c25574c82152d0ee23982a1b42ab4fb68713c5d167db4707",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-12-2-candidate",
+      "durations_ns": [
+        608323875,
+        587947750,
+        695848084
+      ],
+      "median_duration_ns": 608323875,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 14,
+      "phase": "measurement",
+      "raw_sha256": "156e07770fa2591045992dbbd3f00f330451613f660b7a5717e2d8c0fa232263",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-13-1-candidate",
+      "durations_ns": [
+        589536084,
+        605672000,
+        590638750
+      ],
+      "median_duration_ns": 590638750,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 15,
+      "phase": "measurement",
+      "raw_sha256": "48e2d4dbe0cef4032e1eddadaa483ab852cc2ba3f96bcdcfa26bfda443179d61",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-13-2-baseline",
+      "durations_ns": [
+        11818333208,
+        12072160042,
+        11806400833
+      ],
+      "median_duration_ns": 11818333208,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 15,
+      "phase": "measurement",
+      "raw_sha256": "4e08329c145fa0c04fa19788d24b97bdc802e04da19f82bf702e3b2887e52ded",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-14-1-baseline",
+      "durations_ns": [
+        11747624917,
+        11669908958,
+        11734922333
+      ],
+      "median_duration_ns": 11734922333,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 16,
+      "phase": "measurement",
+      "raw_sha256": "bb70bd4f342a29abf5145ba1670caf10bd1fdfb54bd741ec094dcad326d0d63e",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-14-2-candidate",
+      "durations_ns": [
+        519155875,
+        493543500,
+        583542250
+      ],
+      "median_duration_ns": 519155875,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 16,
+      "phase": "measurement",
+      "raw_sha256": "75ca1e8c9d26781022e895f5675f19c9a837c1ac35038cfd92a306cc53e59595",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-15-1-candidate",
+      "durations_ns": [
+        580381500,
+        547218375,
+        536322625
+      ],
+      "median_duration_ns": 547218375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 17,
+      "phase": "measurement",
+      "raw_sha256": "2d2e0854d9d69d41ba86866ee8f105bea219df82b67f3a9af7cb4211355116f6",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-15-2-baseline",
+      "durations_ns": [
+        11743632958,
+        11879693584,
+        11923303542
+      ],
+      "median_duration_ns": 11879693584,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 17,
+      "phase": "measurement",
+      "raw_sha256": "5ddfbdc1cb84b966abe7f742c0f311d012bed20b19e29ee640f0fcd36d17ffeb",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-16-1-baseline",
+      "durations_ns": [
+        11846538125,
+        11263501250,
+        10046464500
+      ],
+      "median_duration_ns": 11263501250,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 18,
+      "phase": "measurement",
+      "raw_sha256": "319d658517bcfc292985a1ad2186d105440ca01f3268255e799f023fa641722f",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-16-2-candidate",
+      "durations_ns": [
+        626721000,
+        632750708,
+        633744500
+      ],
+      "median_duration_ns": 632750708,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 18,
+      "phase": "measurement",
+      "raw_sha256": "5966b913fd731d06b0515b738b7612f3bb855ce7bcf6dc78b3f6bed63eff1a5b",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-17-1-candidate",
+      "durations_ns": [
+        607113542,
+        604347958,
+        651596791
+      ],
+      "median_duration_ns": 607113542,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 19,
+      "phase": "measurement",
+      "raw_sha256": "e239f2ef6f9640a94a8fe308af9459b6daf00198209ac3843f5e9517ee64de10",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-17-2-baseline",
+      "durations_ns": [
+        11923668125,
+        11927222750,
+        12380366250
+      ],
+      "median_duration_ns": 11927222750,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 19,
+      "phase": "measurement",
+      "raw_sha256": "e2311554800563c34629ee288b451a7a027619d58863ef8d59ba6302a910c822",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-18-1-baseline",
+      "durations_ns": [
+        11849366834,
+        11850536000,
+        11886548667
+      ],
+      "median_duration_ns": 11850536000,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 20,
+      "phase": "measurement",
+      "raw_sha256": "9e8b05a546caeeb3b705c06a074626f9b8afd0d464c02265e692825c1ff4ae88",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-18-2-candidate",
+      "durations_ns": [
+        601811167,
+        585823250,
+        629066375
+      ],
+      "median_duration_ns": 601811167,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 20,
+      "phase": "measurement",
+      "raw_sha256": "1b456415353a2c8e7cf5eebac734c8aae0ae4f59db16e3b1f24d577c48a184fa",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-19-1-candidate",
+      "durations_ns": [
+        545854459,
+        581248833,
+        579122792
+      ],
+      "median_duration_ns": 579122792,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 21,
+      "phase": "measurement",
+      "raw_sha256": "f59552fa957a68ed9b23bc59bba1e3c127d3dc7a96e3b96df0a161d2b423c7f1",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-19-2-baseline",
+      "durations_ns": [
+        13650861292,
+        12237137042,
+        12290431375
+      ],
+      "median_duration_ns": 12290431375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 21,
+      "phase": "measurement",
+      "raw_sha256": "e5606f26451432d79cf18757bbe7c877ba42b6069b20be4842464c0e808f16f8",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-20-1-baseline",
+      "durations_ns": [
+        11793065208,
+        11765294084,
+        11771662083
+      ],
+      "median_duration_ns": 11771662083,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 22,
+      "phase": "measurement",
+      "raw_sha256": "087d67dbf2039abcc784466e3695258064f91e68698fa3b4c8436702a2d8a4d6",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-20-2-candidate",
+      "durations_ns": [
+        566621917,
+        639679042,
+        683879833
+      ],
+      "median_duration_ns": 639679042,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 22,
+      "phase": "measurement",
+      "raw_sha256": "1e8ae31275c34cec4c466d0deba3b325b64e702d34d0d9871fa0e4cd96527a9d",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-21-1-candidate",
+      "durations_ns": [
+        678007250,
+        637416166,
+        694530000
+      ],
+      "median_duration_ns": 678007250,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 23,
+      "phase": "measurement",
+      "raw_sha256": "e55be5da65636743d26c06f726e5bc9d01cd728c7cb90e1bcebbcd2f4d41b693",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-21-2-baseline",
+      "durations_ns": [
+        11942095750,
+        11212826125,
+        10089964459
+      ],
+      "median_duration_ns": 11212826125,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 23,
+      "phase": "measurement",
+      "raw_sha256": "732c1847cc976ff8df89debaa805e7ac03859e666feac38ee53b24e4fe0fa16f",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-22-1-baseline",
+      "durations_ns": [
+        11814493000,
+        12531397583,
+        11806639750
+      ],
+      "median_duration_ns": 11814493000,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 24,
+      "phase": "measurement",
+      "raw_sha256": "d5af603d8c071f79ff205c64831ba57e2c1b9299757b5543e5dd74869c19eeef",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-22-2-candidate",
+      "durations_ns": [
+        610994541,
+        627484083,
+        607222584
+      ],
+      "median_duration_ns": 610994541,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 24,
+      "phase": "measurement",
+      "raw_sha256": "96fd3ce2ba6172defb86a0108d7125e07e11a0e994ee5f0142e7dc7732fce234",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-23-1-candidate",
+      "durations_ns": [
+        561044959,
+        581841166,
+        675335166
+      ],
+      "median_duration_ns": 581841166,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 25,
+      "phase": "measurement",
+      "raw_sha256": "0280f222a628685f7f0c96ef27cc11ead86944d68f12e6c7d442596083aa180e",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-23-2-baseline",
+      "durations_ns": [
+        11476439250,
+        10298229042,
+        10881451917
+      ],
+      "median_duration_ns": 10881451917,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 25,
+      "phase": "measurement",
+      "raw_sha256": "16ecfd3b5ef1c2b7d57e17006e8f15c6223cb678d26fd47f4923cb249d7a5833",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-24-1-baseline",
+      "durations_ns": [
+        11226695125,
+        12103740208,
+        12219123958
+      ],
+      "median_duration_ns": 12103740208,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 26,
+      "phase": "measurement",
+      "raw_sha256": "b7240b379c210d70f3ed65d4dcaccb30865385139165b942116343198f34d19a",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-24-2-candidate",
+      "durations_ns": [
+        625135000,
+        591199416,
+        614704709
+      ],
+      "median_duration_ns": 614704709,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 26,
+      "phase": "measurement",
+      "raw_sha256": "99cd1f65feb2b06b8df60a0c2a6f98cd327f3350d2a4fe209fe1963ae9bef11c",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-25-1-candidate",
+      "durations_ns": [
+        608368666,
+        627015083,
+        787811166
+      ],
+      "median_duration_ns": 627015083,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 27,
+      "phase": "measurement",
+      "raw_sha256": "80f2c2654031b909eafe6a0d9f3c006d347d63552b940e87627f1f9da79eafdb",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-25-2-baseline",
+      "durations_ns": [
+        11995260834,
+        12715653500,
+        13694806791
+      ],
+      "median_duration_ns": 12715653500,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 27,
+      "phase": "measurement",
+      "raw_sha256": "9bdb133038a5a63833624ae7b84720bde29082a160b80e4364ed9202992a04be",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-26-1-baseline",
+      "durations_ns": [
+        11854207791,
+        12185090125,
+        11845765459
+      ],
+      "median_duration_ns": 11854207791,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 28,
+      "phase": "measurement",
+      "raw_sha256": "5baee0352e11aadf902f5dc4dd25d442db474f00ae48ba3612d17c4d4c4e62dc",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-26-2-candidate",
+      "durations_ns": [
+        641313583,
+        636403666,
+        606702459
+      ],
+      "median_duration_ns": 636403666,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 28,
+      "phase": "measurement",
+      "raw_sha256": "383ebd420cbe3d79124ce5885b7b16839da5ee43788c97f57268f88a25067d4c",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-27-1-candidate",
+      "durations_ns": [
+        687313000,
+        678718208,
+        653661459
+      ],
+      "median_duration_ns": 678718208,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 29,
+      "phase": "measurement",
+      "raw_sha256": "5137a96cae3c67755cf38824aa670d65471d9d02b87bc092df492019e5f82058",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-27-2-baseline",
+      "durations_ns": [
+        11875171750,
+        11987793375,
+        11777008291
+      ],
+      "median_duration_ns": 11875171750,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 29,
+      "phase": "measurement",
+      "raw_sha256": "9a1764b4dd497965679631a24f47d7596a7f50a29dd4765c1bb6ddb60eb147b1",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-28-1-baseline",
+      "durations_ns": [
+        11322918917,
+        10208903375,
+        10098130083
+      ],
+      "median_duration_ns": 10208903375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 30,
+      "phase": "measurement",
+      "raw_sha256": "1298a90725df96705ae72c17953af50b64a53ca17b15694b2ed673bd2c06663f",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-28-2-candidate",
+      "durations_ns": [
+        640070541,
+        789507000,
+        742842250
+      ],
+      "median_duration_ns": 742842250,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 30,
+      "phase": "measurement",
+      "raw_sha256": "1ae7c68074ff1268adf414219237d7176b6739e96cc852988e15cf5b10511bcc",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-29-1-candidate",
+      "durations_ns": [
+        668521625,
+        751335459,
+        703552375
+      ],
+      "median_duration_ns": 703552375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 31,
+      "phase": "measurement",
+      "raw_sha256": "16271d27e05bfa82a36f18babb3d886d2e8321df88d3ffecdbeee7ccdebf4e86",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-29-2-baseline",
+      "durations_ns": [
+        12055694375,
+        12145881125,
+        11919975458
+      ],
+      "median_duration_ns": 12055694375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 31,
+      "phase": "measurement",
+      "raw_sha256": "fc6f779547628035fa3ed335b797654c2cf21d31416a9bde5a83031336d2da20",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-30-1-baseline",
+      "durations_ns": [
+        11857900708,
+        12362101292,
+        12209272875
+      ],
+      "median_duration_ns": 12209272875,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 32,
+      "phase": "measurement",
+      "raw_sha256": "630ee172668fe99b87f8f1fdad5b41faa569fd5eac7f51ba003ac59f7e24b1e8",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-30-2-candidate",
+      "durations_ns": [
+        638886041,
+        676843875,
+        631593125
+      ],
+      "median_duration_ns": 638886041,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 32,
+      "phase": "measurement",
+      "raw_sha256": "578aec894f8fa57fd4e61b0ae574c4912a56591a5b47caa27f788f1e163af20b",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-31-1-candidate",
+      "durations_ns": [
+        643899834,
+        667764625,
+        663052458
+      ],
+      "median_duration_ns": 663052458,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 33,
+      "phase": "measurement",
+      "raw_sha256": "922f418b6cb79383d881fdfac84a0fe0e105b68bf0702b58e296638f24fb690c",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-31-2-baseline",
+      "durations_ns": [
+        11864407000,
+        11844818042,
+        11905003791
+      ],
+      "median_duration_ns": 11864407000,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 33,
+      "phase": "measurement",
+      "raw_sha256": "2cf07dc602b4664568d83e1fc58b04be539a7efbf38c3e8d487977d77ef1374e",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-32-1-baseline",
+      "durations_ns": [
+        11827709375,
+        11761266459,
+        11804791792
+      ],
+      "median_duration_ns": 11804791792,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 34,
+      "phase": "measurement",
+      "raw_sha256": "dd1dca3811cadf81f4e5436ad5ee86ae2f01b12b7ddaead5f886f8b68c8e8176",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-32-2-candidate",
+      "durations_ns": [
+        597463458,
+        555841292,
+        609591833
+      ],
+      "median_duration_ns": 597463458,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 34,
+      "phase": "measurement",
+      "raw_sha256": "0c58c03a2313fde32cc23d852e97421f5ce89541060d1861c90860a5a7d15a32",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-33-1-candidate",
+      "durations_ns": [
+        696349125,
+        674067791,
+        693271292
+      ],
+      "median_duration_ns": 693271292,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 35,
+      "phase": "measurement",
+      "raw_sha256": "e87b7c5ab46c685a9017d5ec07e9d33608b3ce486b4b9a31b55411000cc3a6e9",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-33-2-baseline",
+      "durations_ns": [
+        11715979375,
+        11754433625,
+        11727848500
+      ],
+      "median_duration_ns": 11727848500,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 35,
+      "phase": "measurement",
+      "raw_sha256": "0798de0b44cb518462a8432f11c34c8fe514a95fee9d54965b52a3f9335b79a1",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-34-1-baseline",
+      "durations_ns": [
+        10928176667,
+        12620666416,
+        12237500791
+      ],
+      "median_duration_ns": 12237500791,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 36,
+      "phase": "measurement",
+      "raw_sha256": "3387df01c8a2a01efb6bae76ee33b5b74153c5909eb9bedd2b24aff8c9f6b5c8",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-34-2-candidate",
+      "durations_ns": [
+        564197750,
+        649041334,
+        690366417
+      ],
+      "median_duration_ns": 649041334,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 36,
+      "phase": "measurement",
+      "raw_sha256": "fd882a50639aab9a502481e7e454050ce4469b7b7d2bd96b3fc0e84b7e9f9216",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-35-1-candidate",
+      "durations_ns": [
+        642917292,
+        650430750,
+        692321500
+      ],
+      "median_duration_ns": 650430750,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 37,
+      "phase": "measurement",
+      "raw_sha256": "a1d950d45af3128571b3f35ec10f239084a095659bc327430a26cbdfcfc64020",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-35-2-baseline",
+      "durations_ns": [
+        11959738375,
+        12833251250,
+        11827474750
+      ],
+      "median_duration_ns": 11959738375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 37,
+      "phase": "measurement",
+      "raw_sha256": "91847c568e2c4978ba14abe5933a949c811c61d647854e23d178eaba6a8261e3",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-36-1-baseline",
+      "durations_ns": [
+        10356909209,
+        11787190125,
+        11697902625
+      ],
+      "median_duration_ns": 11697902625,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 38,
+      "phase": "measurement",
+      "raw_sha256": "fbcb10644f6e04bf95782078873b76e17be0e48d4829493a524e661269b641c4",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-36-2-candidate",
+      "durations_ns": [
+        540580125,
+        594219416,
+        630915750
+      ],
+      "median_duration_ns": 594219416,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 38,
+      "phase": "measurement",
+      "raw_sha256": "3740e7e6b0e6af3ff142c03bbed579b0a27cbc56c650e529bfe2cfcf4b08b69b",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-37-1-candidate",
+      "durations_ns": [
+        523424458,
+        581779708,
+        579480584
+      ],
+      "median_duration_ns": 579480584,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 39,
+      "phase": "measurement",
+      "raw_sha256": "e9ee4720553211472aafa709710c9a5553c3cae6b7db67508f09d37c41892421",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-37-2-baseline",
+      "durations_ns": [
+        11646586334,
+        11881938583,
+        11856164042
+      ],
+      "median_duration_ns": 11856164042,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 39,
+      "phase": "measurement",
+      "raw_sha256": "3ae8b5a1a10cbb6d5597f727a6c4092e92d89cbb6ea7b84568ead1237e67ff2f",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-38-1-baseline",
+      "durations_ns": [
+        11650172375,
+        11655609917,
+        11805932958
+      ],
+      "median_duration_ns": 11655609917,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 40,
+      "phase": "measurement",
+      "raw_sha256": "ef984838791b230e075be20fb1866f58bb84d6557b2bb75559e1c1aeb90e2b83",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-38-2-candidate",
+      "durations_ns": [
+        576136708,
+        550677000,
+        602708792
+      ],
+      "median_duration_ns": 576136708,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 40,
+      "phase": "measurement",
+      "raw_sha256": "db2ae0202691a704b70c619664e90095b779a98bc20ca21dddff5c18e62e3db1",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-39-1-candidate",
+      "durations_ns": [
+        596279916,
+        681275583,
+        630575583
+      ],
+      "median_duration_ns": 630575583,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 41,
+      "phase": "measurement",
+      "raw_sha256": "ef3dd46d904344a8c6a777fa1eda0f06254848f9ad64e6aeddbf7687be3f954c",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-39-2-baseline",
+      "durations_ns": [
+        11590085666,
+        11657290625,
+        11971244417
+      ],
+      "median_duration_ns": 11657290625,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 41,
+      "phase": "measurement",
+      "raw_sha256": "c75321dbb1c39b6676ff8fe63844124dcbbdb2b199a515d637fca0a35195b4e6",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-40-1-baseline",
+      "durations_ns": [
+        11736234250,
+        12055692500,
+        11719719584
+      ],
+      "median_duration_ns": 11736234250,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 42,
+      "phase": "measurement",
+      "raw_sha256": "34955306ee304009571bee227532e2a5a4c26ff78f774d8258e67340d08624b4",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-40-2-candidate",
+      "durations_ns": [
+        606014375,
+        616707166,
+        605554917
+      ],
+      "median_duration_ns": 606014375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 42,
+      "phase": "measurement",
+      "raw_sha256": "0b5ab71fb3446f9ac9e647e8ffb6b17357fc17f9a574408cc24105295dfb99d7",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-41-1-candidate",
+      "durations_ns": [
+        642780167,
+        635499917,
+        608070458
+      ],
+      "median_duration_ns": 635499917,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 43,
+      "phase": "measurement",
+      "raw_sha256": "8dc70d2baaffcb379205dcd4c739971f91b78cb720c95893180a24fc46c76551",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-41-2-baseline",
+      "durations_ns": [
+        11614639167,
+        11727891000,
+        11715897792
+      ],
+      "median_duration_ns": 11715897792,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 43,
+      "phase": "measurement",
+      "raw_sha256": "2e46156dcd0c4fe7a458831c426367c8c11a232ce9700827b6d6a4a964b843d9",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-42-1-baseline",
+      "durations_ns": [
+        11743911833,
+        11759453500,
+        11644353833
+      ],
+      "median_duration_ns": 11743911833,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 44,
+      "phase": "measurement",
+      "raw_sha256": "f54cbb20f2eef3ec890f905ed3e3fdbe4022ede8153e298ef3441eea970d40ba",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-42-2-candidate",
+      "durations_ns": [
+        621710958,
+        657971417,
+        683633250
+      ],
+      "median_duration_ns": 657971417,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 44,
+      "phase": "measurement",
+      "raw_sha256": "931e1b52d3060a8c488f728934e890b8e1db9b3dcebdd1302c2fdbc8c2140067",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-43-1-candidate",
+      "durations_ns": [
+        610803750,
+        625802125,
+        641398875
+      ],
+      "median_duration_ns": 625802125,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 45,
+      "phase": "measurement",
+      "raw_sha256": "3ba883124a58660c8f80b0a0ac4a562a84823d943cccc149ed0883d097f900ff",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-43-2-baseline",
+      "durations_ns": [
+        11850952958,
+        11700554041,
+        11778795375
+      ],
+      "median_duration_ns": 11778795375,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 45,
+      "phase": "measurement",
+      "raw_sha256": "2a4a622e0842d9c620dd1b4ac274e47a5fb4153f0ef1142594acba2377e78344",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-44-1-baseline",
+      "durations_ns": [
+        11674641292,
+        11977664208,
+        11650741458
+      ],
+      "median_duration_ns": 11674641292,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 46,
+      "phase": "measurement",
+      "raw_sha256": "ed9eb9163efa9cd1ee0a7aad0d041b33f21aa379592346c83cd5cae0b261d6d2",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-44-2-candidate",
+      "durations_ns": [
+        604914083,
+        630458917,
+        627193416
+      ],
+      "median_duration_ns": 627193416,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 46,
+      "phase": "measurement",
+      "raw_sha256": "2ba6ea30be185f19fdd4bc5878c54c3e7bfccdd465a61973a09f1083494b1c87",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-45-1-candidate",
+      "durations_ns": [
+        627264792,
+        630493459,
+        619103000
+      ],
+      "median_duration_ns": 627264792,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 47,
+      "phase": "measurement",
+      "raw_sha256": "246674946f094d6691bf6ca68982154209fb49400b8629973f7f5791fcad5502",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-45-2-baseline",
+      "durations_ns": [
+        11746906209,
+        11766071709,
+        11640360500
+      ],
+      "median_duration_ns": 11746906209,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 47,
+      "phase": "measurement",
+      "raw_sha256": "583130c308710fe30241131bd445313b4a602f5ebd9625b226d45e367a6567e7",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-46-1-baseline",
+      "durations_ns": [
+        11755474500,
+        11816927125,
+        11948512958
+      ],
+      "median_duration_ns": 11816927125,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 48,
+      "phase": "measurement",
+      "raw_sha256": "ee71ae548e431955339f96d9055e1da3adad4dba93f720fd69bed20fb02c417d",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-46-2-candidate",
+      "durations_ns": [
+        618609500,
+        608688333,
+        612636584
+      ],
+      "median_duration_ns": 612636584,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 48,
+      "phase": "measurement",
+      "raw_sha256": "ab6809075a7e2e721a6fa6a370ad3c89f5c4a257c6f41d0c75e55c04a5132c71",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-47-1-candidate",
+      "durations_ns": [
+        667395875,
+        644268458,
+        644001458
+      ],
+      "median_duration_ns": 644268458,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 49,
+      "phase": "measurement",
+      "raw_sha256": "0d9c4d2b193196369ec9bf1bfd8770e3da6007b7a95b627cc630853bd0f9d4eb",
+      "side": "candidate"
+    },
+    {
+      "attempt_id": "measurement-47-2-baseline",
+      "durations_ns": [
+        11914473584,
+        11862653375,
+        11904383833
+      ],
+      "median_duration_ns": 11904383833,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 49,
+      "phase": "measurement",
+      "raw_sha256": "94a7b373d39509041267c9d2cab5be4770e9f875a1a56d7135330fb1c0da9e27",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-48-1-baseline",
+      "durations_ns": [
+        11920836750,
+        11926816750,
+        12000072084
+      ],
+      "median_duration_ns": 11926816750,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 50,
+      "phase": "measurement",
+      "raw_sha256": "acda160c06da547a1ff097a1bba76980a263505848d7519e3cc2a00ef7230882",
+      "side": "baseline"
+    },
+    {
+      "attempt_id": "measurement-48-2-candidate",
+      "durations_ns": [
+        606238958,
+        616143833,
+        641215167
+      ],
+      "median_duration_ns": 616143833,
+      "normalized_oracle_hashes": [
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29",
+        "d8c4a5ff30684eb422cfc11379ebfc00e40a8a79d4c5725db89da29f2c240c29"
+      ],
+      "pair_index": 50,
+      "phase": "measurement",
+      "raw_sha256": "f0b5a36493c876d519df290143ccfea02325edc20b28e7da8b9f5bc71e10d5da",
+      "side": "candidate"
+    }
+  ],
+  "audit_script_sha256": "bc5e3f4435a3da723242e8ad9b9b78b5f99031bcef2bf15a91012055130a11c3",
+  "audited_at": "2026-10-16T07:17:30.755794Z",
+  "baseline_arm_median_of_48_invocation_medians_ns": 11815710062.5,
+  "build_provenance": {
+    "baseline": {
+      "artifact_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/graph_transport_e2e_bench-5286cad57513eb24",
+      "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)\n",
+      "commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+      "receipt_sha256": "37c8ef755338c54df1713a84e618ebeb349d8e5f7e9b45b82d7f0b72c72edb64",
+      "rustc_vv_sha256": "352d6857968e80a6357a926ac685b9b07f77c479aaafde33e73a53945e802909",
+      "saved_binary_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/baseline-test-binary",
+      "saved_binary_sha256": "88ff0f6fca395b6014d2c096f1d383e3c43eba7cddf517e1757dbd8c293a3c2f",
+      "source_fingerprint_sha256": "7302dbe76a3d19345ab6b449fd39274ed5767c0ea019de8fe3f5074267d438ab",
+      "target_triple": null,
+      "transport_sha256": "049b2b13a6c82ba0c98f20b57a44e76c420d631815f1b673ba70d7902f24610c"
+    },
+    "candidate": {
+      "artifact_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/graph_transport_e2e_bench-5286cad57513eb24",
+      "cargo_version": "cargo 1.99.0 (5f94df478 2026-08-27)\n",
+      "commit": "81bf9ba766a775cccf059007b19f5def9b9bfb03",
+      "receipt_sha256": "31d93a347f6461f94e45e7b6448ccb0615f9434a1721ede2e1ed93082ff5d4c8",
+      "rustc_vv_sha256": "352d6857968e80a6357a926ac685b9b07f77c479aaafde33e73a53945e802909",
+      "saved_binary_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/candidate-test-binary",
+      "saved_binary_sha256": "46b475cf28eeeecc954c89a1d6b1b3847fe75f1a6f836fcb8fa3f20862754a06",
+      "source_fingerprint_sha256": "0123638cf289a1ae3529db982dae49bf2863f6eebf7a0259ba803b11c92da890",
+      "target_triple": null,
+      "transport_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c"
+    }
+  },
+  "candidate_arm_median_of_48_invocation_medians_ns": 626500729.0,
+  "candidate_over_baseline_arm_median_ratio": 0.053022689765243214,
+  "candidate_product_patch_sha256": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4",
+  "claim_limit": "one fixed 4,096-record NativeStream fanout graph on this host; not a whole-application or general runtime speedup claim",
+  "driver_sha256": "8d39ec34c761f5a186ea45d8978c9a8a66e0cadf37149d3d4bb8dbcb9cfbd1b8",
+  "failed_attempt_count": 0,
+  "harness_sha256": "e3a8c29881fe904b6b68b9e4a97485704a919dcac03aff0be2cc1998456b0d1e",
+  "loss_pair_indices": [],
+  "measured_candidate_losses": 0,
+  "measured_candidate_wins": 48,
+  "measured_pair_count": 48,
+  "measured_ties": 0,
+  "median_of_all_raw_baseline_sample_durations_ns": 11827592062.5,
+  "median_of_all_raw_candidate_sample_durations_ns": 627104249.5,
+  "median_paired_candidate_minus_baseline_ns": -11203457104.5,
+  "median_paired_candidate_over_baseline": 0.05308331719777229,
+  "method": "wall-clock GraphSession start through run_to_completion; real finite cat NativeStream, typed JSON decoding, two bounded lossless fanout edges, two custom pass-through receivers and terminal collection; all exact payload/order/hash validation follows the timed region",
+  "pairs": [
+    {
+      "baseline_median_ns": 10271766125,
+      "candidate_median_ns": 662666458,
+      "candidate_minus_baseline_ns": -9609099667,
+      "candidate_over_baseline": 0.06451339038835446,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 0,
+      "phase": "warmup"
+    },
+    {
+      "baseline_median_ns": 12555415375,
+      "candidate_median_ns": 625105958,
+      "candidate_minus_baseline_ns": -11930309417,
+      "candidate_over_baseline": 0.04978775606617475,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 1,
+      "phase": "warmup"
+    },
+    {
+      "baseline_median_ns": 11981885708,
+      "candidate_median_ns": 697609875,
+      "candidate_minus_baseline_ns": -11284275833,
+      "candidate_over_baseline": 0.058222043841915774,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 2,
+      "phase": "warmup"
+    },
+    {
+      "baseline_median_ns": 11863430417,
+      "candidate_median_ns": 721394666,
+      "candidate_minus_baseline_ns": -11142035751,
+      "candidate_over_baseline": 0.06080826882638089,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 3,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11357389667,
+      "candidate_median_ns": 656942167,
+      "candidate_minus_baseline_ns": -10700447500,
+      "candidate_over_baseline": 0.057842707370410064,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 4,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11952582208,
+      "candidate_median_ns": 670109375,
+      "candidate_minus_baseline_ns": -11282472833,
+      "candidate_over_baseline": 0.05606398377678491,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 5,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11916441083,
+      "candidate_median_ns": 555486125,
+      "candidate_minus_baseline_ns": -11360954958,
+      "candidate_over_baseline": 0.046615102708178265,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 6,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11672835375,
+      "candidate_median_ns": 523232792,
+      "candidate_minus_baseline_ns": -11149602583,
+      "candidate_over_baseline": 0.04482482406293681,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 7,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11694993875,
+      "candidate_median_ns": 623601833,
+      "candidate_minus_baseline_ns": -11071392042,
+      "candidate_over_baseline": 0.05332211710970221,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 8,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11784476875,
+      "candidate_median_ns": 591162875,
+      "candidate_minus_baseline_ns": -11193314000,
+      "candidate_over_baseline": 0.050164541139209456,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 9,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11723501416,
+      "candidate_median_ns": 647663459,
+      "candidate_minus_baseline_ns": -11075837957,
+      "candidate_over_baseline": 0.05524488256691656,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 10,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11855576375,
+      "candidate_median_ns": 650964667,
+      "candidate_minus_baseline_ns": -11204611708,
+      "candidate_over_baseline": 0.054907888609506766,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 11,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11958473166,
+      "candidate_median_ns": 625986375,
+      "candidate_minus_baseline_ns": -11332486791,
+      "candidate_over_baseline": 0.052346680576228335,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 12,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11845807959,
+      "candidate_median_ns": 586746750,
+      "candidate_minus_baseline_ns": -11259061209,
+      "candidate_over_baseline": 0.04953201605418665,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 13,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11811739625,
+      "candidate_median_ns": 608323875,
+      "candidate_minus_baseline_ns": -11203415750,
+      "candidate_over_baseline": 0.051501632639485144,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 14,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11818333208,
+      "candidate_median_ns": 590638750,
+      "candidate_minus_baseline_ns": -11227694458,
+      "candidate_over_baseline": 0.04997648480584285,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 15,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11734922333,
+      "candidate_median_ns": 519155875,
+      "candidate_minus_baseline_ns": -11215766458,
+      "candidate_over_baseline": 0.04424024806198093,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 16,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11879693584,
+      "candidate_median_ns": 547218375,
+      "candidate_minus_baseline_ns": -11332475209,
+      "candidate_over_baseline": 0.04606334087076231,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 17,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11263501250,
+      "candidate_median_ns": 632750708,
+      "candidate_minus_baseline_ns": -10630750542,
+      "candidate_over_baseline": 0.056177088629523614,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 18,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11927222750,
+      "candidate_median_ns": 607113542,
+      "candidate_minus_baseline_ns": -11320109208,
+      "candidate_over_baseline": 0.0509015011059469,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 19,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11850536000,
+      "candidate_median_ns": 601811167,
+      "candidate_minus_baseline_ns": -11248724833,
+      "candidate_over_baseline": 0.050783455448766196,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 20,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 12290431375,
+      "candidate_median_ns": 579122792,
+      "candidate_minus_baseline_ns": -11711308583,
+      "candidate_over_baseline": 0.047119810064437224,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 21,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11771662083,
+      "candidate_median_ns": 639679042,
+      "candidate_minus_baseline_ns": -11131983041,
+      "candidate_over_baseline": 0.05434058822702616,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 22,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11212826125,
+      "candidate_median_ns": 678007250,
+      "candidate_minus_baseline_ns": -10534818875,
+      "candidate_over_baseline": 0.060467115287583216,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 23,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11814493000,
+      "candidate_median_ns": 610994541,
+      "candidate_minus_baseline_ns": -11203498459,
+      "candidate_over_baseline": 0.05171568013963866,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 24,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 10881451917,
+      "candidate_median_ns": 581841166,
+      "candidate_minus_baseline_ns": -10299610751,
+      "candidate_over_baseline": 0.05347091274565984,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 25,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 12103740208,
+      "candidate_median_ns": 614704709,
+      "candidate_minus_baseline_ns": -11489035499,
+      "candidate_over_baseline": 0.050786343595982775,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 26,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 12715653500,
+      "candidate_median_ns": 627015083,
+      "candidate_minus_baseline_ns": -12088638417,
+      "candidate_over_baseline": 0.04931048828909973,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 27,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11854207791,
+      "candidate_median_ns": 636403666,
+      "candidate_minus_baseline_ns": -11217804125,
+      "candidate_over_baseline": 0.05368588751102988,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 28,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11875171750,
+      "candidate_median_ns": 678718208,
+      "candidate_minus_baseline_ns": -11196453542,
+      "candidate_over_baseline": 0.057154390882809755,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 29,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 10208903375,
+      "candidate_median_ns": 742842250,
+      "candidate_minus_baseline_ns": -9466061125,
+      "candidate_over_baseline": 0.072764157198226,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 30,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 12055694375,
+      "candidate_median_ns": 703552375,
+      "candidate_minus_baseline_ns": -11352142000,
+      "candidate_over_baseline": 0.0583585111828119,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 31,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 12209272875,
+      "candidate_median_ns": 638886041,
+      "candidate_minus_baseline_ns": -11570386834,
+      "candidate_over_baseline": 0.0523279352948363,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 32,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11864407000,
+      "candidate_median_ns": 663052458,
+      "candidate_minus_baseline_ns": -11201354542,
+      "candidate_over_baseline": 0.055885848993548516,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 33,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11804791792,
+      "candidate_median_ns": 597463458,
+      "candidate_minus_baseline_ns": -11207328334,
+      "candidate_over_baseline": 0.05061194373668628,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 34,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11727848500,
+      "candidate_median_ns": 693271292,
+      "candidate_minus_baseline_ns": -11034577208,
+      "candidate_over_baseline": 0.059113254404676185,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 35,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 12237500791,
+      "candidate_median_ns": 649041334,
+      "candidate_minus_baseline_ns": -11588459457,
+      "candidate_over_baseline": 0.05303708208765418,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 36,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11959738375,
+      "candidate_median_ns": 650430750,
+      "candidate_minus_baseline_ns": -11309307625,
+      "candidate_over_baseline": 0.0543850316458114,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 37,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11697902625,
+      "candidate_median_ns": 594219416,
+      "candidate_minus_baseline_ns": -11103683209,
+      "candidate_over_baseline": 0.05079709030318587,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 38,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11856164042,
+      "candidate_median_ns": 579480584,
+      "candidate_minus_baseline_ns": -11276683458,
+      "candidate_over_baseline": 0.0488758912197244,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 39,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11655609917,
+      "candidate_median_ns": 576136708,
+      "candidate_minus_baseline_ns": -11079473209,
+      "candidate_over_baseline": 0.04942999226146803,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 40,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11657290625,
+      "candidate_median_ns": 630575583,
+      "candidate_minus_baseline_ns": -11026715042,
+      "candidate_over_baseline": 0.05409280795038941,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 41,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11736234250,
+      "candidate_median_ns": 606014375,
+      "candidate_minus_baseline_ns": -11130219875,
+      "candidate_over_baseline": 0.051636186027899024,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 42,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11715897792,
+      "candidate_median_ns": 635499917,
+      "candidate_minus_baseline_ns": -11080397875,
+      "candidate_over_baseline": 0.05424252825369817,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 43,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11743911833,
+      "candidate_median_ns": 657971417,
+      "candidate_minus_baseline_ns": -11085940416,
+      "candidate_over_baseline": 0.05602659713019322,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 44,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11778795375,
+      "candidate_median_ns": 625802125,
+      "candidate_minus_baseline_ns": -11152993250,
+      "candidate_over_baseline": 0.0531295523078904,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 45,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11674641292,
+      "candidate_median_ns": 627193416,
+      "candidate_minus_baseline_ns": -11047447876,
+      "candidate_over_baseline": 0.05372271407000588,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 46,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11746906209,
+      "candidate_median_ns": 627264792,
+      "candidate_minus_baseline_ns": -11119641417,
+      "candidate_over_baseline": 0.053398297461455455,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 47,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11816927125,
+      "candidate_median_ns": 612636584,
+      "candidate_minus_baseline_ns": -11204290541,
+      "candidate_over_baseline": 0.05184398427099549,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 48,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11904383833,
+      "candidate_median_ns": 644268458,
+      "candidate_minus_baseline_ns": -11260115375,
+      "candidate_over_baseline": 0.054120269225025414,
+      "full_oracle_equal": true,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "pair_index": 49,
+      "phase": "measurement"
+    },
+    {
+      "baseline_median_ns": 11926816750,
+      "candidate_median_ns": 616143833,
+      "candidate_minus_baseline_ns": -11310672917,
+      "candidate_over_baseline": 0.05166037559854351,
+      "full_oracle_equal": true,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "pair_index": 50,
+      "phase": "measurement"
+    }
+  ],
+  "preregistration_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/paired-preregistration.json",
+  "preregistration_sha256": "c7341933548a6ac0fbd2396519597a04b326220580b9e9dc5d7aa78b86279b52",
+  "report_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/paired-run-attempt-1/paired-report.json",
+  "schema_version": 1,
+  "status": "complete",
+  "successful_attempt_count": 102,
+  "tie_pair_indices": [],
+  "timer_boundary_source_review": "Instant::now before GraphSession::start; elapsed captured immediately after run_to_completion; output and payload/order/metadata validation is afterward",
+  "unattempted_attempt_count": 0,
+  "warmup_pair_count": 3,
+  "win_pair_indices": [
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50
+  ],
+  "workload_oracle": {
+    "all_samples": "exact payload hash, full input/output event identity arrays, fanout sequence equality, metadata, natural EOF/status, and no drops independently validated",
+    "input_fixture_bytes": 1137581,
+    "input_fixture_sha256": "4d84111007027f04f273330f55943f2d91da249e0b4d5adc0d6e0b0d5a6ba5f4",
+    "records_per_consumer": 4096,
+    "terminal_events_per_sample": 8193,
+    "text_bytes_per_record": 256
+  }
+}

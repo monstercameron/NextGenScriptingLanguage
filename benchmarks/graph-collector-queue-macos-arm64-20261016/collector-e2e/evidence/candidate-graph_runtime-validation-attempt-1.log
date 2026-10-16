@@ -1,0 +1,20 @@
+
+running 15 tests
+test actual_manifest_applets_connect_through_shared_invocation_runtime ... ok
+test cancellation_reconfigure_advances_revision_and_reaps_timer_workers ... ok
+test emitted_labels_preserve_secret_unknown_and_public_provenance ... ok
+test emitted_message_bytes_are_checked_before_queueing ... ok
+test explicit_latest_overflow_drops_old_backlog_without_blocking ... ok
+test fanout_merges_record_ports_in_order_with_lossless_bounded_queues ... ok
+test finite_collection_has_total_event_cap ... ok
+test graph_logic_is_reused_when_backend_adapter_changes ... ok
+test injected_stdin_listener_is_supervised_and_reconfigure_drops_old_generation ... ok
+test listener_port_limit_is_checked_before_starting_the_source ... ok
+test listener_reader_budget_is_aggregate_bounded_and_preflighted ... ok
+test overbudget_reconfigure_keeps_the_old_session_live ... ok
+test panicking_worker_closes_terminal_and_recv_output_returns_promptly ... ok
+test runtime_provenance_union_denies_remote_before_invocation ... ok
+test typed_native_jsonl_stream_emits_decoded_records ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+

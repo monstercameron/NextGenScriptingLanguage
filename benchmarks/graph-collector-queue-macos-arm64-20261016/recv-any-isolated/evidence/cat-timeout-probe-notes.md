@@ -1,0 +1,11 @@
+# `/bin/cat` parent/pipe cleanup diagnostic
+
+The optional probe is separate from the frozen paired runner and harness. It launches no Rust executable. Its generated fixture was byte-for-byte equal to the runner's deterministic oracle: 4,096 records, 256 `x` bytes per record, 1,137,581 bytes, SHA-256 `4d84111007027f04f273330f55943f2d91da249e0b4d5adc0d6e0b0d5a6ba5f4`.
+
+The source uses `CommandExt::process_group(0)` for native pipeline stages in `work/graph-recv-any-collector-baseline-a884/src/runtime.rs`. In both probe cases, cat's PID was its PGID, cat and parent shared a session, and their PGIDs differed. Cat's stdout pipe already had 512 queued bytes and cat was still alive before the trigger.
+
+The successful run is `cat-timeout-probe-20261016T071012Z/probe-report.json` (status `passed`). Explicitly closing the parent's read descriptor left the parent alive and reaped cat with return code `-13` (SIGPIPE), observed in about 20.6 ms. Killing only the direct parent with SIGKILL (return code `-9`) closed its read descriptor; `ps` no longer reported a running cat within about 5.4 ms. These elapsed times are diagnostic observations, not performance measurements.
+
+An earlier probe attempt is retained at `cat-timeout-probe-20261016T070955Z/` with status `failed`: the controller read a JSON signal file between its exclusive create and completed write. The probe's file reader was fixed to retry partial JSON and the fresh second attempt passed. Both attempts include their fixtures, process metadata, and logs.
+
+Scope is limited to `/bin/cat`, this exact fixture, POSIX pipe closure, and process-group separation on the current host. It does not execute `RuntimeGraphExecutor` or a Rust test, and it does not verify graph cancellation/deadline handling, signal-handler timing, or arbitrary descendants. A timeout wrapper that kills the test binary's process group would not signal cat's separate PGID. Because direct parent termination closes the cat pipe reader and this probe observed cat exit, no successor wrapper is proposed as a solution to cat cleanup. If the behavior differs on another host or for another child, a driver-only group kill is insufficient; cleanup needs runtime-level tracking or an explicit supervisor for that child's PGID.

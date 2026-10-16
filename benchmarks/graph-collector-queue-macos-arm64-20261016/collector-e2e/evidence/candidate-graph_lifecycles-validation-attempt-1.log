@@ -1,0 +1,11 @@
+
+running 6 tests
+test cancelled_native_stream_accounts_and_reaps_its_spawned_process ... ok
+test expired_remote_listener_deadline_prevents_discovery_request ... ok
+test idle_native_listener_child_is_reaped_during_reconfigure ... ok
+test idle_remote_sse_listener_is_cancelled_before_reconfigure_starts_next_generation ... ok
+test local_sse_listener_routes_typed_events_through_transform_and_sink ... ok
+test remote_listener_accounts_dns_helper_spawns_in_graph_result ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+

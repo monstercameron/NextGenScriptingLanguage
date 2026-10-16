@@ -1,0 +1,59 @@
+{
+  "arms": {
+    "baseline_root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-baseline-a884",
+    "baseline_transport_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c",
+    "candidate_queue_patch_sha256": "9135c5ee1ea8b350e6e50acb76eef19d5603a044f6dbcf51271bde83088b0400",
+    "candidate_root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884",
+    "candidate_transport_sha256": "ac546546ac93266b675ba0f37418961b3bc1672d6cd34c68974aeaf1f6c8ee45",
+    "shared_collector_patch_sha256": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4",
+    "shared_harness_path": "evidence/graph-recv-any-single-queue/graph_recv_any_e2e_bench-v2.rs",
+    "shared_harness_sha256": "c38f59198e056576b69481e10bfa0cf2ac95124095869550a0d863ceb2bb18c1"
+  },
+  "base_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "formatting_revision": {
+    "harness_sha256": "c38f59198e056576b69481e10bfa0cf2ac95124095869550a0d863ceb2bb18c1",
+    "product_patch_sha256": "9135c5ee1ea8b350e6e50acb76eef19d5603a044f6dbcf51271bde83088b0400",
+    "runtime_semantics_changed": false,
+    "rustfmt_edition": "2021"
+  },
+  "offline_validation": {
+    "ast_parse": "passed for runner, tests, and build driver",
+    "builds": "not_run",
+    "cargo_or_rust_tests": "not_run",
+    "older_frozen_runners_or_harnesses_mutated": false,
+    "product_worktrees_mutated": false,
+    "python_unittests": "13 passed in 0.730 seconds",
+    "timings": "not_run"
+  },
+  "paired_runner": {
+    "build_driver": "work/build_graph_recv_any_e2e_pair.py",
+    "build_driver_sha256": "e9be14febfa53f3c744773ef8581d813cd69e14583284abea70cef831a49964e",
+    "build_instructions_sha256": "8bcd1324fd8a7e1ceebeb44daf27bab52660525c4737e97210a1198499eeb616",
+    "comparison_diff": "evidence/graph-recv-any-single-queue/paired-runner-review.diff",
+    "comparison_diff_sha256": "932fd86d641bf8de2bbf52a93a9fd2c07c7a0c96c44f2e031f218f8eada9b54a",
+    "readme": "work/graph-recv-any-e2e-paired-runner/README.md",
+    "readme_sha256": "61776eb5a6dec1ac310ad2b383203b1fdd7bacb1fd89ed6a543f2650542fc8f5",
+    "source": "work/graph-recv-any-e2e-paired-runner/graph_recv_any_e2e_pair.py",
+    "source_bindings_sha256": "3558da3bf7412bc77efcd2efebdf83047942bc1f194baf9391800fb399a1e800",
+    "source_sha256": "98ddece53f24fc68a2afd1e9117791de1b119f1e673b728b4c3a42d2add3ad6e",
+    "tests": "work/graph-recv-any-e2e-paired-runner/test_graph_recv_any_e2e_pair.py",
+    "tests_sha256": "a4be5589f2e4ecfb3de8d66a9b4f36171897d56888f41fdf2bd525c49f029d3c"
+  },
+  "runner_protocol": {
+    "cargo_target_dir": "work/perf-target-candidate",
+    "cargo_target_policy": "campaign/work/perf-target-candidate shared by both arms to reuse dependency artifacts; cargo clean --release --package execute between arms; save immutable baseline binary and receipt before candidate clean",
+    "format": "execute.graph.recv_any_e2e.v1",
+    "inner_warmups": 0,
+    "invocation_timeout_seconds": 120,
+    "measured_pairs": 48,
+    "minimum_free_bytes": 3221225472,
+    "ordering": "alternating AB/BA",
+    "raw_samples_per_invocation": 3,
+    "retry_count": 0,
+    "test_name": "bounded_native_stream_recv_any_has_exact_end_to_end_samples",
+    "warmup_pairs": 3
+  },
+  "schema": "execute.graph-recv-any-single-queue-paired-runner-source-freeze/2",
+  "status": "prepared-source-v2-formatted-no-build-or-timing",
+  "supersedes": "paired-runner-source-freeze-v1.json"
+}

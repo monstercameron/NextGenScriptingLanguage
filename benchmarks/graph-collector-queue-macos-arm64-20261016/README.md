@@ -1,0 +1,35 @@
+# Graph collector paired trials and CPU diagnostic
+
+This bundle preserves two paired wall-clock trials and one separate CPU-counter diagnostic, along with each run's source, build, oracle, audit, and raw-attempt artifacts. Raw archives are copied unchanged from the campaign's already-verified archives. No archive member is unpacked by this bundle or its verifier.
+
+## Scope and results
+
+**Collector-only wall-clock trial** (`collector-e2e/`) compares a baseline at commit `81bf9ba766a775cccf059007b19f5def9b9bfb03` with a candidate containing the collector-progress optimization. It times one fixed finite NativeStream fanout graph over 4,096 records, from GraphSession start through completion/terminal collection; this is an end-to-end graph measurement, not a collector microbenchmark. The run had 3 warmup pairs and 48 measured AB/BA pairs, three inner samples per arm, 102 successful attempts, no failed or unattempted attempts, no retries, and exact-oracle equality for every pair. The median paired candidate-minus-baseline delta was **−11,203,457,104.5 ns**; the candidate won all 48 measured pairs.
+
+**Isolated `recv_any` wall-clock trial** (`recv-any-isolated/`) uses base commit `a884f6561fd43f45e43b25a3cc2233be17ee3944`. Both arms include the same collector-progress change; the candidate additionally includes the single-queue `recv_any` Condvar fast path. Its frozen finite GraphSession workload emits 8,193 terminal events per session and processes one 1,137,581-byte NativeStream fixture. It had 3 warmup pairs and 48 measured AB/BA pairs, three inner samples per arm, 102 successful attempts, no failed/lost/unattempted attempts, no retries, zero dropped messages, and exact-oracle equality. The median paired candidate-minus-baseline delta was **−782,920,750.5 ns**; the candidate won all 48 measured pairs. This is whole-session latency, including start and terminal collection, not an isolated `recv_any` microbenchmark.
+
+**Collector CPU-counter diagnostic** (`collector-cpu-diagnostic/`) uses the same `81bf9ba…` base, 4,096-record fixture, and collector source change as the collector-only wall-clock trial, but its own one-sample-per-attempt harness and a 3-warmup/12-measured-pair schedule. All 30 attempts succeeded with no failed or unattempted attempts, retries, oracle mismatches, or dropped messages. For process-wide `RUSAGE_SELF` user+system CPU counters, the baseline and candidate median arm counters were 287,241.5 µs and 58,743.5 µs; the median paired candidate/baseline ratio was 0.198348, with the candidate lower in all 12 measured pairs (6 of 6 in each order). For `RUSAGE_CHILDREN` counters covering already-reaped children, the median arm counters were 3,338 µs and 2,789 µs; the median paired ratio was 0.887452, with the candidate lower in 10 pairs and higher in 2. The audit also retains the user and system components separately.
+
+The CPU diagnostic measures resource counters for this finite workload on one host. It does not measure CPU utilization percentage, energy, per-thread attribution, a portable efficiency estimate, sustained capacity, or whole-application behavior. `RUSAGE_SELF` includes the test process's threads; `RUSAGE_CHILDREN` covers children already reaped at the snapshot. Keep its results separate from the wall-clock trials. Do not add or multiply ratios across these trials, or present them as an aggregate speedup.
+
+The wall-clock trials are also not directly comparable or combinable: they use different base commits, harnesses, workload details, source composition, and baseline conditions. None of these measurements establishes Bash-versus-Rust superiority or broad application performance. Each is a single-host result for its frozen workload only.
+
+## Host and measurement disclosures
+
+The original collector trial's complete host observations are preserved at `collector-e2e/evidence/host-observations.jsonl`. They disclose active desktop Codex processes consuming CPU during the run and a separate short `/bin/cat` pipe-close diagnostic that overlapped its timing window. The queue trial's `cat-timeout-probe-notes.md` records a separate pipe-close diagnostic and the initial controller-race failure followed by a fresh successful diagnostic. These probes did not execute the Rust benchmark, and the paired schedules were not retried or altered. AB/BA ordering reduces some order effects but cannot remove host noise.
+
+The CPU diagnostic's post-run process snapshot is preserved at `collector-cpu-diagnostic/evidence/host-observations-post-run.json`. It records other desktop Codex processes and a Chromium headless process on the shared host after the diagnostic, during a later product build. It is not an in-timer profile; exact overlap with the measured pairs and attributable CPU cannot be inferred. No pairs were excluded or retried.
+
+## Source, build, and raw provenance
+
+`shared-source/` contains the shared collector patch, the candidate-only queue patch, and the three exact `transport.rs` snapshots named by their SHA prefixes. Each trial folder retains its own source bindings, preregistration, build environment and compiler receipts, saved benchmark binaries, run report, independent audit, benchmark harness, runner, and build driver. The CPU folder additionally carries its own harness copies, source binding record, and post-run host disclosure. Absolute paths in original receipts are historical provenance; the relative bundle layout is self-contained for inspection. Source commits, changed-file/source fingerprints, patch hashes, runner/harness hashes, compiler identity, binary hashes, schedules, and audit checks are retained in the included records.
+
+The two wall-clock `raw-attempts.tar.xz` archives each contain 714 verified members and about 2.0 GB uncompressed. The CPU diagnostic archive contains 210 verified members and 220,327,224 bytes uncompressed. Each archive has an adjacent receipt and member manifest; receipts state that archive members and original files were verified before original raw files were removed. This bundle verifier hashes each compressed archive as an ordinary file; it does not extract archives or repeat the prior member-by-member verification.
+
+## Product integration note
+
+The combined product integration was later landed and pushed as commit `216a1c848e0305b45971959756d0c5ec3e944929`; the normal native and WASM hook passed, along with 310 library tests, 20 ignored library tests, 15 graph-runtime tests, 6 lifecycle tests, and 4 result-event tests. This integration validation is separate from the measured source bases above. The benchmark deltas bind to the commits, patches, and binaries recorded per trial; they are not measurements of the later integration commit. See `product-integration.md` for the explicit boundary.
+
+## Verify
+
+Run `python3 verify_bundle.py` from this directory. The verifier checks listed file sizes and SHA-256 values, checks that the checksum list is complete, rejects path traversal/symlinks/unlisted files, and does not open archives beyond hashing their compressed bytes. `bundle-sha256sums.txt` hashes every bundle file except itself.

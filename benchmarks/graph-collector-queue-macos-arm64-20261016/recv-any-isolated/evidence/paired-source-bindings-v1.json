@@ -1,0 +1,146 @@
+{
+  "schema": "execute.graph-recv-any-single-queue-paired-source-bindings/1",
+  "status": "prepared-source-only-no-build-or-timing",
+  "comparison": "shared collector-progress optimization versus the same collector-progress optimization plus the single-queue recv_any Condvar fast path",
+  "base_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "patches": {
+    "collector_progress_shared": {
+      "path": "evidence/graph-recv-any-single-queue/collector-progress.patch",
+      "sha256": "7d411b9b0fc3a8a37fbd589381720016916b6edabec43be06414e198cd39bca4",
+      "origin": "work/graph-collector-sleep-candidate-v2.patch",
+      "applied_to": [
+        "baseline",
+        "candidate"
+      ]
+    },
+    "benchmark_shared": {
+      "path": "evidence/graph-recv-any-single-queue/graph-recv-any-e2e-benchmark.patch",
+      "sha256": "f426bc6535aad17b1a830f4b9a452bafd0fdd311e870100369b48d361c25c38c",
+      "source_path": "tests/graph_recv_any_e2e_bench.rs",
+      "source_sha256": "4294e731012d4f3d28d3deea61e40fcb92a5a4b77ea32c3fc8bdae37f12095e8",
+      "applied_to": [
+        "baseline",
+        "candidate"
+      ]
+    },
+    "queue_product_candidate_only": {
+      "path": "evidence/graph-recv-any-single-queue/graph-recv-any-single-queue-product.patch",
+      "sha256": "3fdb7b11062ebca674b314e046bab9f71ce1656712c231c92a0b18a280c2fa12",
+      "applied_to": [
+        "candidate"
+      ],
+      "base": "a884f6561fd43f45e43b25a3cc2233be17ee3944"
+    },
+    "candidate_minus_baseline_transport_diff": {
+      "path": "evidence/graph-recv-any-single-queue/paired-candidate-minus-baseline-transport.diff",
+      "sha256": "a08c5d4c1987e5fe8df30b8b98351b6bf7b92aed5fa388dec410d78b33aba127"
+    }
+  },
+  "worktrees": {
+    "baseline": {
+      "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-baseline-a884",
+      "head": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "transport_source_sha256": "bfc03a7028b2871a4823ed0a130e3b735ca8dc535cac9c12cd39d876174dad9c",
+      "benchmark_source_sha256": "4294e731012d4f3d28d3deea61e40fcb92a5a4b77ea32c3fc8bdae37f12095e8",
+      "has_target_directory": false,
+      "status_porcelain": [
+        " M src/graph/transport.rs",
+        "?? tests/graph_recv_any_e2e_bench.rs"
+      ],
+      "changed_tracked_paths": [
+        "src/graph/transport.rs"
+      ]
+    },
+    "candidate": {
+      "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/graph-recv-any-collector-queue-a884",
+      "head": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "transport_source_sha256": "743a24390f38dfae54c04cb061054b78ba20f056351aa33ed790c7d4aad0bafa",
+      "benchmark_source_sha256": "4294e731012d4f3d28d3deea61e40fcb92a5a4b77ea32c3fc8bdae37f12095e8",
+      "has_target_directory": false,
+      "status_porcelain": [
+        " M src/graph/transport.rs",
+        "?? tests/graph_recv_any_e2e_bench.rs"
+      ],
+      "changed_tracked_paths": [
+        "src/graph/transport.rs"
+      ]
+    },
+    "candidate_minus_baseline_transport_diff_sha256": "a08c5d4c1987e5fe8df30b8b98351b6bf7b92aed5fa388dec410d78b33aba127"
+  },
+  "validation": {
+    "patches_apply_cleanly": true,
+    "benchmark_source_identical": true,
+    "target_directories_present": false,
+    "cargo_or_rust_tests": "not_run",
+    "builds": "not_run",
+    "timings": "not_run",
+    "api_calls": "not_run",
+    "disk_free_after_preparation_bytes": 2969653248
+  },
+  "build_instructions": {
+    "path": "evidence/graph-recv-any-single-queue/paired-build-instructions.md",
+    "sha256": "9ffb9995bccc1ff986b705aea0cd6e82f351b07c959df50dc50d4926e7566b9d",
+    "package": "execute",
+    "test_target": "graph_recv_any_e2e_bench",
+    "exact_ignored_test": "bounded_native_stream_recv_any_has_exact_end_to_end_samples",
+    "release_build_command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--release",
+      "--package",
+      "execute",
+      "--test",
+      "graph_recv_any_e2e_bench",
+      "--test",
+      "graph_runtime",
+      "--test",
+      "graph_lifecycles",
+      "--test",
+      "graph_result_events",
+      "--lib",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "run_arguments": [
+      "--exact",
+      "bounded_native_stream_recv_any_has_exact_end_to_end_samples",
+      "--ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "environment": {
+      "EXECUTE_GRAPH_RECV_ANY_E2E_WARMUPS": "0",
+      "EXECUTE_GRAPH_RECV_ANY_E2E_SAMPLES": "3",
+      "EXECUTE_GRAPH_RECV_ANY_E2E_REPORT": "fresh absolute JSON path for every invocation"
+    },
+    "schedule": {
+      "warmup_pairs": 3,
+      "measured_pairs": 48,
+      "ordering": "alternating AB/BA",
+      "timeout_seconds": 120,
+      "retries": 0
+    },
+    "clean_between_arms": [
+      "cargo",
+      "clean",
+      "--release",
+      "--package",
+      "execute"
+    ],
+    "cargo_target_dir": "campaign/work/perf-target-candidate shared by both arms to reuse dependency artifacts",
+    "build_environment_receipt": "evidence/graph-recv-any-single-queue/build-environment-attempt-1.json"
+  },
+  "paired_runner": {
+    "runner": "work/graph-recv-any-e2e-paired-runner/graph_recv_any_e2e_pair.py",
+    "runner_sha256": "028b5e8395ba19799ed39df3d037893c02e2a9db04314511baee35dec68a7eae",
+    "tests": "work/graph-recv-any-e2e-paired-runner/test_graph_recv_any_e2e_pair.py",
+    "tests_sha256": "a4be5589f2e4ecfb3de8d66a9b4f36171897d56888f41fdf2bd525c49f029d3c",
+    "build_driver": "work/build_graph_recv_any_e2e_pair.py",
+    "build_driver_sha256": "11a533a381d4dbc08355afbf964b4ea4573a8c575b17d7d4d796bf1d1c4c3375",
+    "readme": "work/graph-recv-any-e2e-paired-runner/README.md",
+    "readme_sha256": "3733b8a00a5191b9c58090baf01b99080a47703ba4e74ac185236860cb618f4e",
+    "status": "prepared-source-only-no-build-or-timing",
+    "shared_target_directory": "work/perf-target-candidate"
+  }
+}

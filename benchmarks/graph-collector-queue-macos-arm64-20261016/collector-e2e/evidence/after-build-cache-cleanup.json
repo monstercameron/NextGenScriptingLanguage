@@ -1,0 +1,19 @@
+{
+  "purpose": "Free inactive Execute release package outputs before large paired raw evidence; dependency cache and immutable saved test binaries retained.",
+  "command": "cargo clean --release -p execute",
+  "target": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+  "saved_binaries_rehashed": [
+    {
+      "side": "baseline",
+      "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/baseline-test-binary",
+      "sha256": "88ff0f6fca395b6014d2c096f1d383e3c43eba7cddf517e1757dbd8c293a3c2f",
+      "reusable_cargo_artifact_removed": true
+    },
+    {
+      "side": "candidate",
+      "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/graph-transport-e2e/candidate-test-binary",
+      "sha256": "46b475cf28eeeecc954c89a1d6b1b3847fe75f1a6f836fcb8fa3f20862754a06",
+      "reusable_cargo_artifact_removed": true
+    }
+  ]
+}

@@ -112,13 +112,12 @@ impl<'a> LineSink<'a> {
     }
 
     pub(super) fn push(&mut self, bytes: &[u8], signals: &Signals) -> Result<bool> {
-        for part in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let mut part_start = 0;
+        for newline in memchr::memchr_iter(b'\n', bytes) {
+            let part = &bytes[part_start..=newline];
+            part_start = newline + 1;
             if part.len() > self.max_record_bytes.saturating_sub(self.pending.len()) {
                 bail!("stream record exceeds {} bytes", self.max_record_bytes);
-            }
-            if part.last() != Some(&b'\n') {
-                self.pending.extend_from_slice(part);
-                continue;
             }
             if self.pending.is_empty() {
                 // The callback is synchronous, so complete records can borrow
@@ -138,6 +137,13 @@ impl<'a> LineSink<'a> {
                     return Ok(true);
                 }
             }
+        }
+        let tail = &bytes[part_start..];
+        if !tail.is_empty() {
+            if tail.len() > self.max_record_bytes.saturating_sub(self.pending.len()) {
+                bail!("stream record exceeds {} bytes", self.max_record_bytes);
+            }
+            self.pending.extend_from_slice(tail);
         }
         Ok(false)
     }

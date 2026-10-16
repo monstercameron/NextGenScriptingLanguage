@@ -321,6 +321,7 @@ dependencies = [
  "ctrlc",
  "getrandom 0.4.3",
  "libc",
+ "memchr",
  "mio",
  "ratatui",
  "serde",

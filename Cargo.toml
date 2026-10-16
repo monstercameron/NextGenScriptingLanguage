@@ -16,6 +16,7 @@ name = "flow"
 
 [dependencies]
 anyhow = "1"
+memchr = "2.8.3"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"

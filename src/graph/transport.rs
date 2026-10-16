@@ -20,6 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const QUEUE_POLL: Duration = Duration::from_millis(10);
+const INPUT_RECEIVE_POLL: Duration = Duration::from_millis(2);
 /// Absolute ceiling for per-graph declared listener-port reader admission.
 pub const MAX_GRAPH_LISTENER_READERS: usize = 128;
 /// Maximum declared event ports on one applet listener. Remote listeners
@@ -259,6 +260,17 @@ impl BoundedQueue {
         Ok(item)
     }
 
+    fn wait_for_change(&self, timeout: Duration) {
+        // Defer poison errors to the caller's next scan, after its cancellation check.
+        let Ok(state) = self.state.lock() else {
+            return;
+        };
+        if !state.items.is_empty() || state.closed {
+            return;
+        }
+        let _ = self.changed.wait_timeout(state, timeout);
+    }
+
     fn recv(&self, token: &CancellationToken) -> Result<Option<EventEnvelope>> {
         loop {
             token.check()?;
@@ -389,6 +401,17 @@ impl NodeIo {
         self.input_names
             .binary_search_by(|candidate| candidate.as_str().cmp(port))
             .ok()
+    }
+
+    fn single_active_input_queue(&self) -> Option<&BoundedQueue> {
+        if self.active_input_names.len() != 1 {
+            return None;
+        }
+        let name = &self.input_names[self.active_input_names[0]];
+        match self.inputs.get(name)?.as_slice() {
+            [queue] => Some(queue),
+            _ => None,
+        }
     }
 
     fn discard_seed_only_name(&mut self, name_index: usize) {
@@ -592,11 +615,19 @@ impl NodeIo {
             if deadline.is_some_and(|deadline| now >= deadline) {
                 return Ok(None);
             }
-            thread::sleep(deadline.map_or(Duration::from_millis(2), |deadline| {
+            let wait = deadline.map_or(INPUT_RECEIVE_POLL, |deadline| {
                 deadline
                     .saturating_duration_since(now)
-                    .min(Duration::from_millis(2))
-            }));
+                    .min(INPUT_RECEIVE_POLL)
+            });
+            if queue_count == 1 {
+                self.inputs
+                    .get(port)
+                    .expect("named receive has a bound input")[0]
+                    .wait_for_change(wait);
+            } else {
+                thread::sleep(wait);
+            }
         }
     }
 
@@ -638,7 +669,11 @@ impl NodeIo {
             if all_closed {
                 return Ok(None);
             }
-            thread::sleep(Duration::from_millis(2));
+            if let Some(queue) = self.single_active_input_queue() {
+                queue.wait_for_change(INPUT_RECEIVE_POLL);
+            } else {
+                thread::sleep(INPUT_RECEIVE_POLL);
+            }
         }
     }
 
@@ -679,7 +714,16 @@ impl NodeIo {
             if all_closed || deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Ok(None);
             }
-            thread::sleep(Duration::from_millis(2));
+            let wait = deadline.map_or(INPUT_RECEIVE_POLL, |deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(INPUT_RECEIVE_POLL)
+            });
+            if let Some(queue) = self.single_active_input_queue() {
+                queue.wait_for_change(wait);
+            } else {
+                thread::sleep(wait);
+            }
         }
     }
 
@@ -1203,6 +1247,7 @@ impl GraphSession {
         let mut first_error = None;
         let mut remaining = self.tasks.iter().filter(|task| task.is_some()).count();
         while remaining > 0 {
+            let mut made_progress = false;
             if self.external_cancelled.load(Ordering::Acquire) {
                 self.cancelled.store(true, Ordering::Release);
                 for queue in &self.all_queues {
@@ -1222,6 +1267,9 @@ impl GraphSession {
             }
             for (_, queue) in &self.terminals {
                 if let Some(event) = queue.try_recv()? {
+                    // Count queue progress before rejecting stale revisions so
+                    // one event per terminal drains on each pass without idle sleeps.
+                    made_progress = true;
                     if event.generation == self.context.generation
                         && event.revision == self.context.revision
                     {
@@ -1251,11 +1299,13 @@ impl GraphSession {
                 }
                 match self.scope.try_join(handle) {
                     Ok(Some(())) => {
+                        made_progress = true;
                         *task = None;
                         remaining -= 1;
                     }
                     Ok(None) => {}
                     Err(error) => {
+                        made_progress = true;
                         first_error.get_or_insert(error);
                         self.cancelled.store(true, Ordering::Release);
                         *task = None;
@@ -1263,7 +1313,7 @@ impl GraphSession {
                     }
                 }
             }
-            if remaining > 0 {
+            if remaining > 0 && !made_progress {
                 thread::sleep(Duration::from_millis(2));
             }
         }
@@ -3226,6 +3276,71 @@ mod input_cursor_tests {
         let gamma_from_any_again = io.recv_any().unwrap().unwrap();
         assert_eq!(gamma_from_any_again.sequence, 201);
         assert_eq!(gamma_from_any_again.port.node, "gamma_source_0");
+    }
+
+    #[test]
+    fn single_queue_receive_paths_preserve_timeout_eof_and_cancellation() {
+        let task_scope = TaskScope::new(1, None).unwrap();
+        let token = task_scope.cancellation_token();
+        let queue = BoundedQueue::new(4, BufferPolicy::Lossless);
+        let mut io = node_io(
+            BTreeMap::from([("events".into(), vec![Arc::clone(&queue)])]),
+            token.clone(),
+        );
+
+        assert!(io.recv_timeout("events", Duration::ZERO).unwrap().is_none());
+        assert!(io.recv_any_timeout(Duration::ZERO).unwrap().is_none());
+        assert!(io
+            .recv_timeout("events", Duration::from_millis(1))
+            .unwrap()
+            .is_none());
+        assert!(io
+            .recv_any_timeout(Duration::from_millis(1))
+            .unwrap()
+            .is_none());
+
+        enqueue(&queue, "source".into(), "events", 41, &token);
+        enqueue(&queue, "source".into(), "events", 42, &token);
+        let first = io.recv_any_timeout(Duration::MAX).unwrap().unwrap();
+        assert_eq!(first.sequence, 41);
+        assert_eq!(first.input.as_ref().unwrap().port.as_str(), "events");
+        let second = io
+            .recv_timeout("events", Duration::from_millis(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.sequence, 42);
+        queue.close();
+        assert!(io.recv_any().unwrap().is_none());
+
+        let cancelled_scope = TaskScope::new(1, None).unwrap();
+        let cancelled_token = cancelled_scope.cancellation_token();
+        let cancelled_queue = lossless_queue();
+        let mut cancelled_io = node_io(
+            BTreeMap::from([("events".into(), vec![cancelled_queue])]),
+            cancelled_token.clone(),
+        );
+        cancelled_token
+            .cancellation_flag()
+            .store(true, Ordering::Release);
+        assert!(cancelled_io
+            .recv_any()
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled"));
+
+        let expired_scope = TaskScope::new(1, None).unwrap();
+        let expired_token = expired_scope.cancellation_token();
+        let expired_queue = lossless_queue();
+        let mut expired_io = node_io(
+            BTreeMap::from([("events".into(), vec![expired_queue])]),
+            expired_token,
+        );
+        expired_io.deadline = Some(Instant::now() - Duration::from_millis(1));
+        assert!(expired_io
+            .recv_any_timeout(Duration::from_secs(1))
+            .unwrap_err()
+            .to_string()
+            .contains("graph execution deadline exceeded"));
     }
 
     #[test]

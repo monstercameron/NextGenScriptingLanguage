@@ -1,0 +1,39 @@
+{
+  "artifact": {
+    "executable": "/home/runner/work/_temp/literal-json-targets/literal-json-arguments-baseline-target/release/deps/flow-ea36466c46f7fbc0",
+    "features": [],
+    "filenames": [
+      "/home/runner/work/_temp/literal-json-targets/literal-json-arguments-baseline-target/release/deps/flow-ea36466c46f7fbc0"
+    ],
+    "fresh": false,
+    "manifest_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/baseline/Cargo.toml",
+    "package_id": "path+file:///home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/baseline#execute@0.9.0-rc.5",
+    "profile": {
+      "debug_assertions": false,
+      "debuginfo": 0,
+      "opt_level": "3",
+      "overflow_checks": false,
+      "test": true
+    },
+    "reason": "compiler-artifact",
+    "target": {
+      "crate_types": [
+        "lib"
+      ],
+      "doc": true,
+      "doctest": true,
+      "edition": "2021",
+      "kind": [
+        "lib"
+      ],
+      "name": "flow",
+      "src_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/baseline/src/lib.rs",
+      "test": true
+    }
+  },
+  "attempt": 1,
+  "saved_binary": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/literal-json-arguments/build/baseline/baseline-test-binary",
+  "sha256": "dd020130550dcbd2e87f60b5a2ba29adf889ed71bb84f138b2a6c90af99d7d74",
+  "source_sha256": "2d144408c177655b28eae66afe7303733f77aa91434f6ab5edc4b37cf76fa67f",
+  "source_stable": true
+}

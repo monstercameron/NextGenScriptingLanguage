@@ -1,0 +1,65 @@
+{
+  "name": "number.add",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "left": {
+      "type": "json",
+      "required": true
+    },
+    "right": {
+      "type": "json",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "number.add"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "number",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "number.compute"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "left": {
+          "schema": {
+            "type": "number"
+          },
+          "delivery": "single"
+        },
+        "right": {
+          "schema": {
+            "type": "number"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "number"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

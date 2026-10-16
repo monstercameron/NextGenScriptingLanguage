@@ -1,0 +1,194 @@
+diff --git a/src/runtime.rs b/src/runtime.rs
+index 96e4b66..dce40f6 100644
+--- a/src/runtime.rs
++++ b/src/runtime.rs
+@@ -35,6 +35,8 @@ mod jobs;
+ pub(crate) mod live;
+ mod loops;
+ mod program_backend;
++#[cfg(all(test, not(target_arch = "wasm32")))]
++mod resolved_json_arguments_bench;
+ mod resume;
+ mod service;
+ mod streaming;
+diff --git a/benchmarks/workloads/resolved-json-arguments-repeat-1000.program b/benchmarks/workloads/resolved-json-arguments-repeat-1000.program
+new file mode 100644
+index 0000000..5b4b309
+--- /dev/null
++++ b/benchmarks/workloads/resolved-json-arguments-repeat-1000.program
+@@ -0,0 +1,7 @@
++# Fixed public runtime workload for JSON-argument resolution.
++# Keep the source identical when pairing runtime builds. The final explicit
++# JSON encoding should produce the exact byte string `3`, without a newline.
++accept sum as json with default 0
++repeat 1000 times
++  run number.add with left 1 and right 2 as sum
++then encode sum as json
+diff --git a/src/runtime/resolved_json_arguments_bench.rs b/src/runtime/resolved_json_arguments_bench.rs
+new file mode 100644
+index 0000000..ec2194b
+--- /dev/null
++++ b/src/runtime/resolved_json_arguments_bench.rs
+@@ -0,0 +1,162 @@
++//! Explicit release timing of the shared literal-only JSON-argument workload.
++use anyhow::{bail, Context, Result};
++use serde_json::{json, Value as JsonValue};
++use sha2::{Digest, Sha256};
++use std::{
++    fs::OpenOptions,
++    io::Write,
++    path::{Path, PathBuf},
++    time::Instant,
++};
++
++const WORKLOAD: &str =
++    include_str!("../../benchmarks/workloads/resolved-json-arguments-repeat-1000.program");
++const EXPECTED_OUTPUT: &[u8] = b"3";
++const EXPECTED_CALLS: usize = 1000;
++const MAX_CONFIGURED_RUNS: usize = 20;
++
++fn sha256(bytes: &[u8]) -> String {
++    format!("{:x}", Sha256::digest(bytes))
++}
++
++fn configured_count(name: &str, default: usize, minimum: usize) -> Result<usize> {
++    let raw = std::env::var(name).unwrap_or_else(|_| default.to_string());
++    let count = raw
++        .parse::<usize>()
++        .with_context(|| format!("parsing {name}"))?;
++    if !(minimum..=MAX_CONFIGURED_RUNS).contains(&count) {
++        bail!("{name} must be between {minimum} and {MAX_CONFIGURED_RUNS}");
++    }
++    Ok(count)
++}
++
++fn report_path() -> Result<PathBuf> {
++    let path = PathBuf::from(
++        std::env::var_os("EXECUTE_JSON_ARGUMENTS_BENCH_REPORT")
++            .context("set EXECUTE_JSON_ARGUMENTS_BENCH_REPORT to a fresh absolute JSON path")?,
++    );
++    if !path.is_absolute() {
++        bail!("benchmark report path must be absolute");
++    }
++    if path.exists() {
++        bail!("refusing to overwrite benchmark report {}", path.display());
++    }
++    if !path.parent().is_some_and(Path::is_dir) {
++        bail!("benchmark report parent directory must already exist");
++    }
++    Ok(path)
++}
++
++fn receipt(index: usize, elapsed_ns: Option<u128>, result: Result<super::RunResult>) -> JsonValue {
++    match result {
++        Ok(result) => {
++            let completed_calls = result.executions.len() + result.dropped_executions;
++            let output_matches = result.output == EXPECTED_OUTPUT;
++            let call_count_matches = completed_calls == EXPECTED_CALLS;
++            let no_child_launches = result.launched_processes == 0;
++            json!({
++                "index": index,
++                "elapsed_ns": elapsed_ns,
++                "output_sha256": sha256(&result.output),
++                "output_matches": output_matches,
++                "completed_call_count": completed_calls,
++                "call_count_matches": call_count_matches,
++                "child_launches": result.launched_processes,
++                "no_child_launches": no_child_launches,
++                "valid": output_matches && call_count_matches && no_child_launches
++            })
++        }
++        Err(error) => json!({
++            "index": index,
++            "elapsed_ns": elapsed_ns,
++            "valid": false,
++            "error": format!("{error:#}")
++        }),
++    }
++}
++
++#[test]
++#[ignore = "explicit release runtime::run measurements; report and workload are required"]
++#[allow(clippy::assertions_on_constants)] // Keep the ignored probe buildable in debug; refuse debug timings.
++fn repeated_number_add_runtime_samples() -> Result<()> {
++    assert!(
++        !cfg!(debug_assertions),
++        "run this ignored probe with --release"
++    );
++
++    let report_path = report_path()?;
++    let warmup_count = configured_count("EXECUTE_JSON_ARGUMENTS_BENCH_WARMUPS", 0, 0)?;
++    let sample_count = configured_count("EXECUTE_JSON_ARGUMENTS_BENCH_SAMPLES", 3, 1)?;
++    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
++    let program = crate::parser::parse(WORKLOAD)?;
++    let registry = crate::manifest::Registry::load(&root.join("manifests"))?;
++    let cwd = tempfile::tempdir()?;
++    let options = super::RunOptions {
++        inputs: Default::default(),
++        working_directory: cwd.path().to_path_buf(),
++        cache_directory: None,
++        trace: false,
++        max_output_bytes: 1024 * 1024,
++        command_timeout: None,
++        total_timeout: None,
++    };
++    let input_hash = sha256(&serde_json::to_vec(&json!({
++        "program_defaults": {"sum": 0},
++        "number_add_arguments": {"left": 1, "right": 2},
++        "repeat_count": EXPECTED_CALLS
++    }))?);
++
++    let mut warmups = Vec::with_capacity(warmup_count);
++    for index in 0..warmup_count {
++        warmups.push(receipt(
++            index,
++            None,
++            super::run(&program, &registry, &options),
++        ));
++    }
++
++    let mut samples = Vec::with_capacity(sample_count);
++    for index in 0..sample_count {
++        let started = Instant::now();
++        let result = super::run(&program, &registry, &options);
++        let elapsed_ns = started.elapsed().as_nanos();
++        samples.push(receipt(index, Some(elapsed_ns), result));
++    }
++
++    let all_valid = warmups
++        .iter()
++        .chain(samples.iter())
++        .all(|sample| sample["valid"].as_bool().unwrap_or(false));
++    let report = json!({
++        "schema": "execute.runtime-json-arguments.raw/1",
++        "profile": "release",
++        "warmups_configured": warmup_count,
++        "samples_configured": sample_count,
++        "workload": {
++            "path": "benchmarks/workloads/resolved-json-arguments-repeat-1000.program",
++            "source_sha256": sha256(WORKLOAD.as_bytes()),
++            "input_sha256": input_hash,
++            "expected_output_sha256": sha256(EXPECTED_OUTPUT)
++        },
++        "warmups": warmups,
++        "samples": samples,
++        "all_runs_valid": all_valid
++    });
++    let bytes = serde_json::to_vec_pretty(&report)?;
++    let mut file = OpenOptions::new()
++        .write(true)
++        .create_new(true)
++        .open(&report_path)
++        .with_context(|| format!("creating fresh report {}", report_path.display()))?;
++    file.write_all(&bytes)?;
++    file.write_all(b"\n")?;
++    file.sync_all()?;
++
++    if !all_valid {
++        bail!(
++            "workload correctness failed; raw receipts saved to {}",
++            report_path.display()
++        );
++    }
++    Ok(())
++}

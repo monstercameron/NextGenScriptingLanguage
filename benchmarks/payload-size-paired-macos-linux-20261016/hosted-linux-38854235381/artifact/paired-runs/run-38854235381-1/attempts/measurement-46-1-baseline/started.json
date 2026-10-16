@@ -1,0 +1,29 @@
+{
+  "attempt_id": "measurement-46-1-baseline",
+  "binary_sha256": "aebfc1bd12e38f4c5b1c92f3d8113cbaa35296bc3c068d9fe5238b9b06d31248",
+  "binary_sha256_before": "aebfc1bd12e38f4c5b1c92f3d8113cbaa35296bc3c068d9fe5238b9b06d31248",
+  "command": [
+    "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/emit-perf/build/baseline/test-binary",
+    "--exact",
+    "graph::transport::emit_perf_harness::emit_raw_samples_with_full_oracle",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+  "environment": {
+    "EXECUTE_EMIT_PERF_SAMPLES": "3",
+    "EXECUTE_EMIT_PERF_WARMUPS": "0",
+    "LC_ALL": "C",
+    "TZ": "UTC"
+  },
+  "global_pair_index": 48,
+  "phase": "measurement",
+  "phase_pair_index": 46,
+  "position_in_pair": 1,
+  "raw_report_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/emit-perf/paired-runs/run-38854235381-1/attempts/measurement-46-1-baseline/raw.json",
+  "side": "baseline",
+  "source_fingerprint_sha256": "339d2bba6cd0a69a5508239e9d245eb0c2e1d034b048a839e739f85bd07eb9d1",
+  "started_at": "2026-10-16T05:10:57.951Z",
+  "timeout_seconds": 60
+}

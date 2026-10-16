@@ -1,4 +1,22 @@
-# Five-hour performance and security session
+# Benchmark results index — October 16, 2026
+
+These reports cover separate, source-pinned workloads and timing boundaries. Read each report for its platform, paired samples, and retained losses. The results are not combined into an overall speedup or readiness claim.
+
+| Measurement | Result | Scope and status |
+| --- | --- | --- |
+| [`recv_any`, hosted Linux](graph-recv-any-ci-38851233022/README.md) | 288/288 paired comparisons favored the candidate. | Preloaded bounded-queue `NodeIo::recv_any` on x86_64 Linux; this does not measure whole-graph or end-to-end execution. |
+| [`emit`, local macOS and hosted Linux](graph-emit-paired-macos-linux-20261016/README.md) | macOS: three case ratios favored the candidate; `fanout_8_integer` regressed about 2.0% (median paired ratio 1.02012; 21 wins/27 losses). Linux: all four case ratios were below 1.0. Overall, 52/192 macOS and 19/192 Linux comparisons lost. | Separate ARM64 macOS and x86_64 Linux `NodeIo::emit` runs. Platform results remain separate. |
+| [Named receive operations, local macOS](graph-named-recv-macos-arm64-20261016/README.md) | 566 improvements and 10 losses across 576 paired comparisons. | Preloaded bounded-queue `recv` and zero-duration `recv_timeout`; in-process operation only. |
+| [Manifest catalog selection](manifest-catalog-paired-2026-10-16/README.md) | Library selection: 48 wins/0 losses. Explicit CLI selectors: `check --json` 47/1 and `applets list` 46/2. | Opt-in catalog selection; default directory discovery is unchanged. The library and CLI comparisons are distinct. |
+| [Serialized payload size and full emit](payload-size-paired-macos-linux-20261016/README.md) | The local direct-size counter had 192 wins/0 losses. Full-emit runs retained 55/192 macOS losses and 34/192 hosted Linux losses. | Direct-size measurement is local macOS only. Full emit is a separate workload on each platform; this is not a hosted direct-size comparison.  |
+| [Resolved JSON arguments](resolved-json-arguments-positive/README.md) | Local macOS: 47 wins/1 loss; hosted Linux: 48 wins/0 losses. | Separate fixed 1,000-call public-runtime workloads: median paired ratios 0.8239 on macOS and 0.8265 on Linux. Both raw audits passed; platform results remain separate. |
+| [Program AST cache v1](program-ast-cache-v1-negative/README.md) | Negative result: 21 wins/27 losses; median paired ratio was 1.0221. | Candidate remains unmerged and  This result does not support the proposed cache change. |
+
+Pair counts, ratios, and deltas use each report's stated denominator. Do not sum values across rows: platforms, source revisions, and workload boundaries differ.
+
+## Earlier benchmark records (preserved)
+
+### Five-hour performance and security session
 
 The [session summary](session-2026-10-14-summary.json) indexes 17 retained reports
 from the fixed October 14–15 session. Runtime commit `41b08da` passed Linux,
@@ -19,7 +37,7 @@ interpret private-helper gains as whole-application speedups. Timings are local
 macOS arm64 with warm filesystem caches; native Linux/Windows performance,
 true cold startup and peak memory remain unmeasured by this session.
 
-## Applet backend boundaries (harness; no result recorded)
+#### Applet backend boundaries (harness; no result recorded)
 
 [`applet_boundaries.py`](applet_boundaries.py) invokes an already-built Rust
 benchmark test binary; it never runs Cargo or compiles while measuring. Wrapper
@@ -90,7 +108,7 @@ lifecycle smoke probes. Raw pairs, exact output oracles, source/binary hashes,
 rejected experiments and scope limits remain in the indexed reports and local
 session evidence. No universal Bash advantage or production completeness is claimed.
 
-## Paired source revisions
+#### Paired source revisions
 
 [`source_pair.py`](source_pair.py) compares a preserved Execute build and its
 catalog with an already-built candidate. It covers fresh CLI checks with
@@ -128,7 +146,7 @@ other operating systems and Bash/Nushell parity need separate measurements.
 `tests/source_pair_bench.py` checks the harness without collecting performance
 data.
 
-### October 15 source comparison
+##### October 15 source comparison
 
 The [summary](source-pair-macos-arm64-1eabbfa-summary.json) and
 [compressed raw report](source-pair-macos-arm64-1eabbfa.json.xz) compare baseline
@@ -162,7 +180,7 @@ XZ instead of adding a 102 MB JSON file to Git. The summary records compressed
 and uncompressed hashes; decompression was checked against the original bytes.
 Use `xz -dc benchmarks/source-pair-macos-arm64-1eabbfa.json.xz` to inspect it.
 
-## October 15 matched public reference workflows
+#### October 15 matched public reference workflows
 
 The [summary](matched-language-macos-arm64-987ef77-summary.json) and [lossless raw report](matched-language-macos-arm64-987ef77.json.xz) record Execute `987ef77` (rc.5), macOS Bash 3.2.57 and Nushell 0.116.0 on local macOS arm64. Three checked-in public reference workflows each have two fixture cases. These are hand-authored evaluator references; the separate AI-generation pilot has its own results.
 
@@ -185,7 +203,7 @@ An earlier attempt stopped before timing because the harness reused the first ta
 
 The raw JSON is retained losslessly as XZ with both hashes in the summary. Inspect it with `xz -dc benchmarks/matched-language-macos-arm64-987ef77.json.xz`.
 
-# Native stream framing
+### Native stream framing
 
 The [stream-framing report](performance-2026-10-14-stream-framing.json) compares
 `3a07fe5` with borrowing complete newline-terminated records from the native
@@ -221,7 +239,7 @@ traffic, peak memory, RSS, cold I/O and Linux/Windows performance were not
 measured. Raw paired samples and source, input, output, catalog, harness and
 binary hashes are retained. Keep timing separate from builds and stress.
 
-# Widget publication JSON
+### Widget publication JSON
 
 The [publication report](performance-2026-10-14-ui-publication.json) compares
 `cf84e91` with building final JSON directly from renderer data. The old path
@@ -255,7 +273,7 @@ Allocation counts, peak memory, RSS, cold startup and Linux timing were not
 measured. Source, input, complete-output, catalog, harness and binary hashes and
 all raw samples are retained. Keep measurements separate from builds and stress.
 
-# Owned widget handoff
+### Owned widget handoff
 
 The [widget-handoff report](performance-2026-10-14-ui-handoff.json) compares
 `f07b3e2` with transferring already-owned widget values into the renderer.
@@ -291,7 +309,7 @@ wrapping. The native executable shrinks by 112 bytes; WASM is byte-identical.
 Allocation traffic, peak memory, RSS, cold startup and Linux timing were not
 measured. Keep measurements separate from builds and stress.
 
-# Live widget state decoding
+### Live widget state decoding
 
 The [UI-state report](performance-2026-10-14-ui-state.json) compares `5ac9361`
 with borrowed JSON decoding at validation, normalization and renderer input.
@@ -326,7 +344,7 @@ retained as variation, without attributing them to UI decoding. Source, input,
 catalog, harness and binary hashes and all raw paired samples are retained.
 Keep measurements separate from builds and stress.
 
-# Borrowed preflight values
+### Borrowed preflight values
 
 The [preflight-state report](performance-2026-10-14-preflight-state.json)
 compares `d83078a` with borrowed supplied values during static preflight.
@@ -365,7 +383,7 @@ hashes and browser controls are retained. Measurements are local warm-cache
 macOS arm64; cold starts and performance on other platforms remain unmeasured.
 Keep timing runs separate from builds and tests.
 
-# Browser trace sizing
+### Browser trace sizing
 
 The [browser trace report](performance-2026-10-14-browser-trace.json) compares
 release WASM from `f797524` with a byte-counting serializer for trace limits.
@@ -400,7 +418,7 @@ The harness uses the installed playground Playwright dependency. Keep timing
 runs separate from builds and tests. Results are local warm-cache macOS arm64,
 not cold-start, native-runtime or Bash comparisons. Native CLI bytes are unchanged.
 
-# Compound checkpoint fingerprints
+### Compound checkpoint fingerprints
 
 The [checkpoint fingerprint report](performance-2026-10-14-checkpoint-fingerprints.json)
 compares `9d56b25` with a temporary serialization buffer reused across a node's
@@ -432,7 +450,7 @@ hashes are retained. These are local macOS warm-cache observations, without a
 cold-cache, other-platform or Bash performance claim. Keep timing runs separate
 from builds and tests.
 
-# Managed-live state handoff
+### Managed-live state handoff
 
 The [live-state report](performance-2026-10-14-live-state.json) compares
 `6685426` with a change that removes a full copy of incoming live-node state
@@ -461,7 +479,7 @@ are local macOS warm-cache measurements, with no allocation, peak memory, RSS,
 other-platform or Bash performance claim. Run benchmarks without concurrent
 builds or tests.
 
-# Typed-input lookup scaling
+### Typed-input lookup scaling
 
 The [input-interface report](performance-2026-10-14-input-lookup.json) compares
 `cc10290` with an index collected during existing declaration validation.
@@ -486,7 +504,7 @@ was +8.27%; an earlier cron control changed +9.33%, then -6.76% on repeat. These
 are not claimed gains. Results are local macOS with warm filesystem caches;
 cold-cache, other-platform and Bash performance remain unmeasured.
 
-# Catalog decoding performance
+### Catalog decoding performance
 
 The [paired catalog report](performance-2026-10-14-catalog-decoding.json)
 compares `8cb5e7d` with a strict one-pass argument-node decoder. Across three
@@ -506,7 +524,7 @@ source/catalog/harness/binary hashes and limits are retained. These are local
 macOS warm-cache results; cold-cache and other-platform performance remain
 unmeasured.
 
-# Loop integration regression controls
+### Loop integration regression controls
 
 The [loop integration report](loop-regression-2026-10-14.json) compares the
 unchanged `7348c16` release build with current source after adding bounded loops.
@@ -518,7 +536,7 @@ changes are descriptive controls, not claimed speedups. Raw samples, binary and
 source hashes, output oracles and local verification are retained. This does not
 measure loop dispatch, cold-cache startup, Bash parity or other platforms.
 
-# Supplied JSON input setup performance
+### Supplied JSON input setup performance
 
 The [input setup report](performance-2026-10-14-input-setup.json) compares
 `5dc0d59` with a candidate that avoids cloning supplied inputs into an options
@@ -540,7 +558,7 @@ neither is treated as a gain. These are local warm-cache macOS measurements.
 The ignored `opt_input_setup` release test provides API timing workloads;
 `opt_allocations` measures allocation requests separately from timing.
 
-# Known-input preflight performance
+### Known-input preflight performance
 
 The [paired preflight report](performance-2026-10-14-preflight-parameters.json)
 compares `c95495b` with a candidate that borrows literal-only calls during
@@ -562,7 +580,7 @@ then use `paired_core.py --baseline BASE_TEST --candidate NEW_TEST --test
 reusable_definition_validation --output DIR` for the in-process comparison.
 Never run timing comparisons alongside builds or stress tests.
 
-# Reusable definition validation performance
+### Reusable definition validation performance
 
 The [October 14 paired report](performance-2026-10-14-definition-validation.json)
 compares the unchanged `f742a54` release build with a candidate that borrows
@@ -580,7 +598,7 @@ This is local macOS arm64 with warm caches, not a cross-platform or Bash result.
 The ignored `opt_reuse_validation` release test measures only validation;
 `reusable_programs.py --baseline-programs` compares matching sources end to end.
 
-# Unix command differential matrix (pending source candidate)
+### Unix command differential matrix (pending source candidate)
 
 `unix_matrix.py` exercises 110 cases across **46 distinct native executables**:
 literal argv (including shell-looking text), text and binary tools, multi-stage
@@ -615,7 +633,7 @@ is unchanged by this proof pass. These are 110 cases, **not 100 distinct tools**
 or the held-out 100 real Bash-script/model study; the replacement gate stays
 partial. Installed 0.8.0 does not contain the pending source features.
 
-# Typed program inputs, 0.8.0
+### Typed program inputs, 0.8.0
 
 The [80-sample run](program-inputs-v0.8.0-macos-arm64.json) and
 [240-sample repeat](program-inputs-v0.8.0-macos-arm64-repeat.json) compare
@@ -637,7 +655,7 @@ python3 benchmarks/program_inputs.py --baseline /path/to/execute-0.7.0 \
   --candidate target/release/execute --samples 240 --report /tmp/program-inputs.json
 ```
 
-# Direct executable calls, 0.7.0
+### Direct executable calls, 0.7.0
 
 The [initial paired report](direct-commands-v0.7.0-macos-arm64.json) and
 [120-sample repeat](direct-commands-v0.7.0-macos-arm64-repeat.json) compare the
@@ -660,7 +678,7 @@ python3 benchmarks/direct_commands.py --baseline /path/to/execute-0.6.1 \
   --candidate target/release/execute --samples 120 --report /tmp/direct-calls.json
 ```
 
-# 0.6.1 full audit
+### 0.6.1 full audit
 
 The [full testing report](../docs/full-testing.md) records the two CLI panic fixes,
 237 Rust tests, 31 live scenarios, source coverage, and 1,000 seven-case lifecycle
@@ -675,7 +693,7 @@ fresh CLI read 3.318/4.291 ms; widget edit through applied headless render
 
 The sections below retain historical 0.6.0 and earlier measurements.
 
-# Replacement challenge: streaming and lifecycle proofs
+### Replacement challenge: streaming and lifecycle proofs
 
 The new [proof runner](replacement_proofs.py) checks exact binary output through
 persistent native pipelines and repeats seven cancellation/failure/record-boundary
@@ -696,7 +714,7 @@ python3 benchmarks/replacement_proofs.py --binary bin/execute --lifecycle-repeti
 See the [fifteen-gate ledger](../docs/replacement-challenge.md) for the exact
 contracts, remaining work, and held-out AI evaluation protocol.
 
-# 0.6.0 live control latency
+### 0.6.0 live control latency
 
 The local control API and actual headless renderer were measured on macOS arm64.
 [Raw samples and provenance](live-control-v0.6.0-macos-arm64.json) record the binary
@@ -728,7 +746,7 @@ Reproduce:
 python3 benchmarks/live_control.py --binary bin/execute --report /tmp/live-latency.json
 ```
 
-# 0.5.0 optimization and streaming work
+### 0.5.0 optimization and streaming work
 
 See the [measured optimization pass](optimization-pass/README.md) for retained
 changes, paired measurements, rejected experiments, and limits. The new
@@ -737,7 +755,7 @@ puts the final record limit and stdout sink in the `.program` file.
 
 The following 0.4.6 and earlier tables are historical release measurements.
 
-# Historical 0.4.6 matched Unix workloads
+### Historical 0.4.6 matched Unix workloads
 
 143 Rust tests and two benchmark-contract tests pass on macOS arm64. Formatting,
 Clippy and release compilation pass; the installed binary also passes a real
@@ -747,7 +765,7 @@ The [Unix compatibility review](../docs/unix-compatibility-review.md) explains
 implemented contracts and open acceptance gates. [Raw samples and provenance](unix-workloads-v0.4.6-macos-arm64.json)
 record the exact release, installed external binaries and benchmark harness.
 
-## Wall time, milliseconds
+#### Wall time, milliseconds
 
 | Workload | Samples/runtime | Execute p50 | Bash p50 | Execute p95 | Bash p95 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -763,7 +781,7 @@ mostly equal the maximum observation. Execute is slower at fresh startup, faster
 for these repeated external launches, and close to Bash for the bulk workloads.
 These results do not imply a general speedup.
 
-## Per-record listener, microseconds
+#### Per-record listener, microseconds
 
 A persistent interpreter handles 200 sequential requests with the same external
 `tr` binary per record. Ten initial events are excluded. Replies are required
@@ -779,7 +797,7 @@ This is per-record process spawning, not one persistent transform. The event
 p50 advantage does not remove that architecture cost or establish a tail-latency
 advantage.
 
-## RSS and lifecycle observations
+#### RSS and lifecycle observations
 
 | Workload | Execute reported RSS MiB | Bash reported RSS MiB |
 | --- | ---: | ---: |
@@ -828,14 +846,14 @@ python3 tests/unix_bench.py
 
 The sections below retain measurements from earlier releases.
 
-# Historical 0.4.5 adversarial-refinement measurements
+### Historical 0.4.5 adversarial-refinement measurements
 
 142 tests pass (56 unit, 86 integration), plus the explicitly run release UI
 benchmark. Formatting, Clippy, release compilation, and installed real ps/jq
 file-URI smoke checks pass on macOS arm64. Linux CI remains configured, not run
 locally. These observations do not establish 10/10 production performance.
 
-## Fresh CLI milliseconds
+#### Fresh CLI milliseconds
 
 100 samples per case after 10 warmups, deterministic shuffled ordering. Includes
 fresh process startup, manifest loading, commands, output capture and exit. Fixtures
@@ -857,7 +875,7 @@ pipes avoid interpreter copies; final finite output is buffered and cannot promi
 shell-equivalent streaming to the final consumer. The warmed persistent `cat`
 roundtrip is 3.958 µs at p50, including two pipes, scheduling and Python calls; this is not script dispatch.
 
-## Application milliseconds
+#### Application milliseconds
 
 | Operation | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
@@ -871,7 +889,7 @@ rankings on every sample. GH refresh includes PTY input/output observation and a
 Python fixture, excludes network. The CPU p99 spike is retained in the raw data.
 [CPU data](cpu-macos-arm64.json), [mock GH data](ui-macos-arm64.json).
 
-## In-memory UI microseconds
+#### In-memory UI microseconds
 
 | Operation | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
@@ -888,7 +906,7 @@ not a Rust-versus-shell end-to-end speedup.
 
 The sections below preserve historical observations and reference archived data.
 
-# Execute 0.4.2 CPU monitor and TUI measurements
+### Execute 0.4.2 CPU monitor and TUI measurements
 
 126 Rust tests have passed (50 unit and 76 integration), including the 50-script
 ladder. The full suite was followed by focused CPU/widget checks for the final
@@ -896,7 +914,7 @@ portable ps flags, fractional scale fix, and added live ps smoke test. Formattin
 Clippy with warnings denied, release compilation, and an explicit ignored release
 benchmark pass on macOS arm64. Linux CI is configured but has not run locally.
 
-## CPU program with real ps and jq, in milliseconds
+#### CPU program with real ps and jq, in milliseconds
 
 50 fresh one-shot executions after 10 warmups. Every sample checks numeric
 ranking and consistency between the bar chart and table. Timing includes process
@@ -913,7 +931,7 @@ No artificial CPU load was created.
 [live snapshot](top-cpu-live.json). Reproduce with
 `python3 benchmarks/cpu.py target/release/execute` after a release build.
 
-## UI operations in microseconds
+#### UI operations in microseconds
 
 Percentiles are 100 batch averages, with 100 operations per batch after 10 warmup
 batches. The release unit-test binary calls the optimized UI library functions.
@@ -930,7 +948,7 @@ ten-bar CPU chart. Terminal I/O, JSON input parsing, and applet work are exclude
 
 [Raw UI operation measurements](ui-operations-macos-arm64-v0.4.2.json).
 
-## Historical 0.4.1 GitHub mock refresh in milliseconds
+#### Historical 0.4.1 GitHub mock refresh in milliseconds
 
 These are 50 observed samples after 5 warmups with a controlled Python `gh`
 fixture. Refresh includes a real PTY key event, command worker, subprocess,
@@ -958,7 +976,7 @@ UI_BENCH_REPORT="$PWD/benchmarks/ui-operations-macos-arm64.json" cargo test --lo
 python3 benchmarks/ui.py target/release/execute
 ```
 
-## Historical 0.3.1 measurements after the 50-example stress ladder
+#### Historical 0.3.1 measurements after the 50-example stress ladder
 
 All 50 numbered examples pass on macOS. The Rust suite passes 101 tests (41 unit,
 37 CLI, 8 adversarial, 14 resume, and 1 integration test that runs the entire
@@ -976,7 +994,7 @@ caches were warm. No system caches were flushed, background applications were
 not controlled, and every output was checked. All fixtures, saves, checkpoints,
 and caches remained in temporary directories. Preparation is outside CLI timing.
 
-### 0.3.1 CLI milliseconds
+##### 0.3.1 CLI milliseconds
 
 | Case | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
@@ -992,7 +1010,7 @@ loads a 19-byte fixture and launches no applet. The pipeline/save case launches
 finished result without running commands or rewriting the journal; it does not
 measure a repaired suffix that starts new work.
 
-### 0.3.1 listener handler milliseconds
+##### 0.3.1 listener handler milliseconds
 
 | Case | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
@@ -1016,7 +1034,7 @@ Historical measurements follow; their raw files retain the recorded versions.
 
 ---
 
-# Execute 0.3.0 checkpoint latency measurements (historical)
+### Execute 0.3.0 checkpoint latency measurements (historical)
 
 That release passed 97 tests: 39 unit, 36 CLI, 8 adversarial, and 14 resume
 integration tests. Formatting, Clippy with warnings denied, and the optimized
@@ -1032,7 +1050,7 @@ All outputs are checked; all writes occur in temporary directories. These are
 local filesystem measurements with warmed caches, not a power-loss simulation.
 Background applications and storage activity were not controlled.
 
-## Current CLI milliseconds
+#### Current CLI milliseconds
 
 | Case | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
@@ -1049,7 +1067,7 @@ the completed journal. It does not measure a repaired suffix that executes new
 commands. Checkpoint times include intent writes, binary identity hashing where
 applicable, snapshots, completion writes, and directory synchronization.
 
-## Current listener handler milliseconds
+#### Current listener handler milliseconds
 
 | Case | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
@@ -1077,11 +1095,11 @@ measurements of the current release.
 
 ---
 
-# Execute 0.2.0 latency measurements after adversarial review
+### Execute 0.2.0 latency measurements after adversarial review
 
 Measured on an Apple M1 Pro (10 logical CPUs), macOS 26.6.2, Darwin 25.6.0, arm64, with the optimized release binary. All 71 tests pass: 27 unit and 44 isolated integration tests. Formatting and Clippy checks pass. Linux execution and benchmarks have not been run; macOS/Ubuntu CI is configured.
 
-## Method
+#### Method
 
 CLI cases use 200 fresh processes after 10 warmups, shuffled each round. OS file/executable caches are warm; no system caches were flushed. Times include Python subprocess launch, complete output capture, and process exit. Fixture/cache preparation occurs outside timing. Every sample's output is checked. Background applications were not controlled; these are local measurements.
 
@@ -1089,7 +1107,7 @@ The shell pipelines use the same binaries and input as Execute. Builtin `read` s
 
 p95/p99 are nearest-rank percentiles, with a small tail sample at 200 runs. First-byte cases use 50 samples. The result JSON includes scripts, paths, environment, and binary SHA-256. Each suite ran sequentially after compilation.
 
-## CLI end-to-end milliseconds
+#### CLI end-to-end milliseconds
 
 | Case | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
@@ -1112,7 +1130,7 @@ The 16-byte native pipeline takes 7.46 ms in Execute and 6.75 ms through `/bin/s
 
 The 1 MiB sequential workflow takes 53.00 ms uncached and 12.03 ms with a warm transformation cache (4.40× faster). A miss takes 64.78 ms, so caching has a measurable miss cost. This workflow caches `tr`, while generic `wc` caching is disabled because arbitrary arguments can read external files.
 
-## Running listener round-trip microseconds
+#### Running listener round-trip microseconds
 
 One running interpreter handles 200 sequential requests after 20 warmups. Timing includes Python pipe write/read, record framing, named binding, handler work, unbuffered output emission, and scheduling. Startup is excluded. Stdin remains open, verifying delivery before producer EOF.
 
@@ -1125,7 +1143,7 @@ The first handler reads a 16-byte fixture without launching an applet; it is eve
 
 A 5 ms interval with the fixture handler had positive deadline lateness of **0.991 ms p50**, **1.779 ms p95**, and **2.945 ms p99**, over 200 ticks after 20 warmups. Deadlines are monotonic, missed ticks are skipped, and handlers never overlap. Scheduling is not a real-time guarantee. Calendar minute-boundary firing and live `tail` records were separately smoke-tested.
 
-## Interpreter and argument binding microseconds
+#### Interpreter and argument binding microseconds
 
 These percentiles describe **batch averages**, not individual request latencies: 100 batches × 1,000 operations after warmup. Validation reuses loaded manifests and a parsed program. No applets launch, and no per-script JIT or native compilation is needed.
 
@@ -1135,11 +1153,11 @@ These percentiles describe **batch averages**, not individual request latencies:
 | printf_manifest_build_arguments | 0.106 | 0.108 | 0.110 |
 | runtime_validate_loaded_registry | 0.291 | 0.295 | 0.313 |
 
-## Warm native pipe baseline
+#### Warm native pipe baseline
 
 A persistent `cat` echoes one byte through two OS pipes in **4.71 µs p50**, **5.96 µs p95**, and **8.17 µs p99**, over 2,000 round trips after 200 warmups. This includes cat, scheduling, and Python calls. It excludes startup and is neither Execute event latency nor a one-way pipe estimate.
 
-## First-byte milliseconds
+#### First-byte milliseconds
 
 | Case | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: |
@@ -1148,7 +1166,7 @@ A persistent `cat` echoes one byte through two OS pipes in **4.71 µs p50**, **5
 
 Execute captures final finite output before exposing it: 51.45 ms first-byte latency versus 7.07 ms for shell streaming. Intermediate applet pipes stream directly. Listeners emit after each handler, without waiting for source completion. Streaming finite terminal output and cooperating persistent handlers remain concrete latency improvements.
 
-## Reproduce
+#### Reproduce
 
 ```sh
 cargo build --locked --release
@@ -1165,7 +1183,7 @@ Evidence:
 - [Live listener/calendar smoke checks](service-smoke.json)
 - [Adversarial review](../DESIGN.md#adversarial-review-october-13-2026)
 
-## Explicit finite stdin candidate
+#### Explicit finite stdin candidate
 
 `finite_stdin.py` compares the candidate's `read from stdin` with the preceding
 release candidate's existing `read "/dev/stdin"` file workaround. It checks equal
@@ -1185,7 +1203,7 @@ or native Linux execution. The feature adds an explicit input primitive with
 bounded cancellation-aware capture; the prior file workaround remains a valid
 baseline for data forwarding. Final finite output remains buffered and bounded.
 
-## Managed interval scheduling candidate
+#### Managed interval scheduling candidate
 
 `reactive_timers.py` measures resume-to-completed-ticks through the actual live
 Unix socket API. The paired programs use the same `.program` intervals and
@@ -1206,7 +1224,7 @@ and native process startup still affect results. Campaign preimages, same-binary
 baseline probe, paired reports and raw samples are retained under
 `work/optimization-all-dimensions-2026-10-14/reactive-timers/` in the workspace root.
 
-## Buffered stdin writer failure and success probes
+#### Buffered stdin writer failure and success probes
 
 `input_writer_failure.py` uses an owned fixture whose parent exits while a
 short-lived child retains the generated stdin pipe in its own session. The
@@ -1230,7 +1248,7 @@ prefilled and threaded-input paths. Do not infer a throughput speedup from the
 failure probe's changed status or elapsed time. Reports and preimages are in
 `work/optimization-all-dimensions-2026-10-14/error-handling/` in the workspace root.
 
-### Live state scaling (pending source candidate)
+##### Live state scaling (pending source candidate)
 
 `live_state_scaling.py --baseline PATH --candidate PATH --report PATH` compares
 64 paused-listener `send` requests with 0, 1 MiB and 6 MiB of unrelated user
@@ -1241,7 +1259,7 @@ release binary hashes. This measures bounded queue admission, not process RSS,
 whole-runtime speed or unbounded workload support. State boundary regressions
 are separate functional tests, including rollback and repair before side effects.
 
-### Completed resume validation (pending source candidate)
+##### Completed resume validation (pending source candidate)
 
 `resume_validation.py --baseline PATH --candidate PATH --report PATH` measures
 resuming completed checkpoints containing 1, 32 and 256 repetitions of native
@@ -1252,7 +1270,7 @@ are checked outside timing. The report hashes `/bin/cat`, both release binaries
 and the harness. Results include CLI/trace overhead and use warm caches; they do
 not describe fresh application execution or native Linux performance.
 
-### Checkpoint path security probes
+##### Checkpoint path security probes
 
 `checkpoint_paths.py --binary PATH --report PATH` runs three functional probes
 against directory, trailing-slash directory and blob-directory symlinks. Every
@@ -1262,7 +1280,7 @@ mutation from rejection. This is a correctness probe, not a speed comparison.
 Paired release measurements use `resume_validation.py` separately to quantify
 normal completed-resume overhead of the added checks.
 
-### Static JSON diagnostics (pending source candidate)
+##### Static JSON diagnostics (pending source candidate)
 
 `check_diagnostics.py --baseline PATH --candidate PATH --report PATH` interleaves
 ordinary static checks from both release binaries and the candidate's JSON mode.
@@ -1272,7 +1290,7 @@ match the same result, with no applet effects. Five warmups precede timing;
 reports include CLI startup/capture and warm caches. The additional JSON format
 is measured separately, not treated as an output-identical performance win.
 
-### Widget publication scaling (pending source candidate)
+##### Widget publication scaling (pending source candidate)
 
 `ui_state_scaling.py --baseline PATH --candidate PATH --report PATH` compares
 actual headless renderer updates with 0, 1 MiB and 6 MiB of unrelated user state.
@@ -1285,7 +1303,7 @@ campaign also runs the existing core/allocation probes and broader native CLI,
 pipe, sequential-stage, cache, checkpoint and listener comparison harnesses
 separately from builds/tests.
 
-# Native status capture, pending source candidate
+### Native status capture, pending source candidate
 
 `native_status.py` compares the pre-status and status-capable release builds on
 identical programs/native argv, and separately labels candidate programs that
@@ -1303,7 +1321,7 @@ changes do not establish a speedup, a per-status cost, a regression-free runtime
 or a hard bound. Full distributions, including capture-tail variation, remain
 visible. No cold-cache, RSS or native Linux measurement follows from this pass.
 
-# Conditional control and validation, pending source candidate
+### Conditional control and validation, pending source candidate
 
 `conditions.py` compares identical ordinary sources across the pre-condition and
 condition-capable release builds, plus explicitly different candidate condition
@@ -1339,7 +1357,7 @@ Full reports and the pre-optimization sample remain under the campaign's
 `conditions/` evidence directory. All three interpreter binaries are identified
 by hashes despite their shared pending base version string.
 
-# Native JSON boundary, pending source candidate
+### Native JSON boundary, pending source candidate
 
 `structured_json.py` compares identical native/check controls across archived
 release builds, then compares the existing `jq` extraction with the candidate's
@@ -1366,7 +1384,7 @@ byte-bounded; streaming queries and CSV transforms remain outside this pass.
 The campaign's `structured-json/paired-latency.json` and
 `paired-latency-repeat.json` preserve both runs. The installed release is unchanged.
 
-# Reusable finite programs, pending source candidate
+### Reusable finite programs, pending source candidate
 
 `reusable_programs.py` compares archived release builds on identical explicit
 native/check controls and on equivalent finite tasks written with inlining or
@@ -1401,7 +1419,7 @@ before/after binding comparisons, the final feature comparison, all interpreter
 binaries, preimages and five/sixteen-level finite nesting proofs. These are
 same-file finite scopes, not imported modules or lifecycle-owned child services.
 
-# Model adapter overhead (source candidate)
+### Model adapter overhead (source candidate)
 
 `model_adapter.py` compares eight ordinary native configurations against a
 pre-adapter release binary and measures fixture-only model startup separately.
@@ -1434,7 +1452,7 @@ The 0.9.0-dev source candidate preserves unhandled native CLI status codes. The
 current Unix matrix requires the actual native failure status; older reports
 retain the generic status-1 contract they measured.
 
-## Process inputs, source 0.9.0-dev
+#### Process inputs, source 0.9.0-dev
 
 `process_inputs.py` compares a pre-feature helper pipeline with typed environment
 inputs, plus an unchanged literal-command control and equivalent Bash commands.
@@ -1466,7 +1484,7 @@ streaming/lifecycle smoke report as `native-proofs-<os>` artifacts for 14 days.
 These are functional checks with descriptive timing only; Ubuntu is not an
 Arch/Omarchy desktop and CI load is not controlled for performance comparisons.
 
-## Matched current-source Execute/Bash/Nushell workflows
+#### Matched current-source Execute/Bash/Nushell workflows
 
 `matched_language.py` runs the three checked-in public-development reference
 workflows (`filesystem_inventory`, `layered_config_merge`, and
@@ -1515,7 +1533,7 @@ times, paired differences against Execute, exact environment, artifact hashes,
 and unavailable/unmatched cells are retained. Run only in a serialized idle
 window. This code addition includes no comparative timing receipt.
 
-## Retained equal-plan controls and mixed lifecycle run
+#### Retained equal-plan controls and mixed lifecycle run
 
 The [equal-command-plan control](equal_command_plan_control/README.md) retains
 1,152 measured invocations over six public fixtures on macOS ARM64 at source
@@ -1556,7 +1574,7 @@ worker-reaping checks. It retains process-local RSS/thread samples and the
 original preregistration; the fixed graph and whole-window coverage do not
 establish production endurance, churn or process-tree resource limits.
 
-## October 16 graph and catalog measurements
+#### October 16 graph and catalog measurements
 
 These fixed paired comparisons retain raw samples, preregistrations, source and binary identities, independent audits, and observed losses. Each has its own workload and baseline.
 

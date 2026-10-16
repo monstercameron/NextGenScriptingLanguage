@@ -1,0 +1,31 @@
+{
+  "attempt_dir": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/literal-json-arguments/paired-runs/run-38862234332-1/attempts/measurement-26-1-baseline",
+  "attempt_id": "measurement-26-1-baseline",
+  "binary_sha256": "dd020130550dcbd2e87f60b5a2ba29adf889ed71bb84f138b2a6c90af99d7d74",
+  "binary_sha256_after": "dd020130550dcbd2e87f60b5a2ba29adf889ed71bb84f138b2a6c90af99d7d74",
+  "binary_sha256_before": "dd020130550dcbd2e87f60b5a2ba29adf889ed71bb84f138b2a6c90af99d7d74",
+  "compile_receipt_sha256": "5babfbcfc1abccb858f1926afe1a11be180241743762cc02ed9d89befc6c309a",
+  "execution_error": null,
+  "finished_at": "2026-10-16T06:39:50.835Z",
+  "global_pair_index": 28,
+  "median_duration_ns": 969801,
+  "phase": "measurement",
+  "phase_pair_index": 26,
+  "position_in_pair": 1,
+  "raw_report_present": true,
+  "raw_report_sha256": "271fe29fbdf0e0259ee219b08fded3e34b46a34f20e9f73f2aaf1b176a2b384d",
+  "returncode": 0,
+  "sample_duration_ns": [
+    1087008,
+    969801,
+    952215
+  ],
+  "side": "baseline",
+  "source_fingerprint_sha256": "e27af134925cf524c6b495a8081f7a20229df7b22c30f3e8690f097b123ff960",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "ccd101ce72f406107cd77bbcec372574483f604ace8f4a61bab724b2e1248302",
+  "successful": true,
+  "timed_out": false,
+  "validation_error": null,
+  "wall_elapsed_ns": 7021247
+}

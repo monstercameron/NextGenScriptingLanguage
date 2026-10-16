@@ -1,0 +1,213 @@
+{
+  "entries": [
+    {
+      "compression": "xz",
+      "original_path": "hosted-linux-38854235381/artifact/build/baseline/cargo-stderr.log",
+      "original_sha256": "6030244f329d5c42d8fe6304e36182e49f51305e0b1e76356dd8f5697495d733",
+      "original_size_bytes": 11777,
+      "stored_path": "hosted-linux-38854235381/artifact/build/baseline/cargo-stderr.log.xz",
+      "stored_sha256": "892c4f2b02bdddd79a7b7caf6b45eb6fef616c25594595db6947529aa036f2f3",
+      "stored_size_bytes": 2032
+    },
+    {
+      "compression": "xz",
+      "original_path": "hosted-linux-38854235381/artifact/build/baseline/receipt-error.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original_size_bytes": 0,
+      "stored_path": "hosted-linux-38854235381/artifact/build/baseline/receipt-error.log.xz",
+      "stored_sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+      "stored_size_bytes": 32
+    },
+    {
+      "compression": "xz",
+      "original_path": "hosted-linux-38854235381/artifact/build/candidate/cargo-stderr.log",
+      "original_sha256": "7649575f098948bfde92e23967a579380e4e83ae806cfe6b2c3fb5dc35217f3e",
+      "original_size_bytes": 5744,
+      "stored_path": "hosted-linux-38854235381/artifact/build/candidate/cargo-stderr.log.xz",
+      "stored_sha256": "af0541b4d9f0ec1574e8954e4415138bf05bbff8955767e2e0027ebd7278a330",
+      "stored_size_bytes": 1408
+    },
+    {
+      "compression": "xz",
+      "original_path": "hosted-linux-38854235381/artifact/build/candidate/receipt-error.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original_size_bytes": 0,
+      "stored_path": "hosted-linux-38854235381/artifact/build/candidate/receipt-error.log.xz",
+      "stored_sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+      "stored_size_bytes": 32
+    },
+    {
+      "compression": "xz",
+      "original_path": "hosted-linux-38854235381/artifact/build/patch-baseline.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original_size_bytes": 0,
+      "stored_path": "hosted-linux-38854235381/artifact/build/patch-baseline.log.xz",
+      "stored_sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+      "stored_size_bytes": 32
+    },
+    {
+      "compression": "xz",
+      "original_path": "hosted-linux-38854235381/artifact/build/patch-candidate.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original_size_bytes": 0,
+      "stored_path": "hosted-linux-38854235381/artifact/build/patch-candidate.log.xz",
+      "stored_sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+      "stored_size_bytes": 32
+    },
+    {
+      "compression": "xz",
+      "original_path": "identities/local-macos-build-provenance/baseline-build-attempt-1.log",
+      "original_sha256": "af5e57f6d5b61769e01643a30a013ee1591e194aadf9cce5289ff2d19a35cf49",
+      "original_size_bytes": 494,
+      "stored_path": "identities/local-macos-build-provenance/baseline-build-attempt-1.log.xz",
+      "stored_sha256": "b4c4ceef0b50cabdab5b31267fda243fc5393f39d683d3eec47396f9c2126c15",
+      "stored_size_bytes": 296
+    },
+    {
+      "compression": "xz",
+      "original_path": "identities/local-macos-build-provenance/candidate-build-attempt-1.log",
+      "original_sha256": "cf4fe1e6e6701a65686145c157fb437fbfd71786d5a637daf45b3e0a9c1c9467",
+      "original_size_bytes": 245,
+      "stored_path": "identities/local-macos-build-provenance/candidate-build-attempt-1.log.xz",
+      "stored_sha256": "1ca014c6342c8b30e050d4e5958dc225925f217c3e4cfbf252fd26c1a047f76e",
+      "stored_size_bytes": 252
+    },
+    {
+      "compression": "xz",
+      "original_path": "identities/local-macos-build-provenance/candidate-clippy-attempt-1.log",
+      "original_sha256": "b6e6364499ce492cbb6741b441e750e66ff4aefd1d9dbf0ffceeb9812847ba03",
+      "original_size_bytes": 490,
+      "stored_path": "identities/local-macos-build-provenance/candidate-clippy-attempt-1.log.xz",
+      "stored_sha256": "68bc5611b2592623b1393f60eb18e83372c1c0b76e94a1b05f7d42e63c7298e1",
+      "stored_size_bytes": 296
+    },
+    {
+      "compression": "xz",
+      "original_path": "identities/local-macos-build-provenance/candidate-library-attempt-1.log",
+      "original_sha256": "a9abf26abe4c5c7a0a14d241944cdf5c61e27b3b344436b3c80862ce41d61c95",
+      "original_size_bytes": 31104,
+      "stored_path": "identities/local-macos-build-provenance/candidate-library-attempt-1.log.xz",
+      "stored_sha256": "fdf31677b26dc9ec34f7165f5e617d2d38126fc9ca995f1595e00880b4ce85d0",
+      "stored_size_bytes": 7868
+    },
+    {
+      "compression": "xz",
+      "original_path": "identities/local-macos-build-provenance/integrated-clean-5558708.log",
+      "original_sha256": "d44d3e9afc81bc87fddb562b4d8da42c77352ce48fddd9d80be82c7404e034bb",
+      "original_size_bytes": 35,
+      "stored_path": "identities/local-macos-build-provenance/integrated-clean-5558708.log.xz",
+      "stored_sha256": "d043bacabd38140bc671151a431dc29f51e140cc63ddc580e3b67329b0c7e052",
+      "stored_size_bytes": 92
+    },
+    {
+      "compression": "xz",
+      "original_path": "identities/local-macos-build-provenance/integrated-library-5558708.log",
+      "original_sha256": "5c26b72e790c6546f304a7d87f75eb7a5b50d3c06aed6c1e975aaaba5915de64",
+      "original_size_bytes": 31882,
+      "stored_path": "identities/local-macos-build-provenance/integrated-library-5558708.log.xz",
+      "stored_sha256": "8363ad2bc454ba770d81a4db391fe85edaed7bb40312e6ece229ab5ce10357ad",
+      "stored_size_bytes": 8112
+    },
+    {
+      "compression": "xz",
+      "original_path": "identities/local-macos-build-provenance/pair-build-attempt-1.log",
+      "original_sha256": "7756da469aa348596af27b790be994264131de06f8aa166fdafc575759536a72",
+      "original_size_bytes": 574,
+      "stored_path": "identities/local-macos-build-provenance/pair-build-attempt-1.log.xz",
+      "stored_sha256": "64d49879825f3229d84dc62141a5e8b9f658769c6207432d59d7547aac136e10",
+      "stored_size_bytes": 348
+    },
+    {
+      "compression": "xz",
+      "original_path": "source/baseline-full.patch",
+      "original_sha256": "63aae53a633ed39de9b18bc10c47166463de521231ca81f45a4d1f1fd424ba26",
+      "original_size_bytes": 24333,
+      "stored_path": "source/baseline-full.patch.xz",
+      "stored_sha256": "72fb1e5a68a7322d084c7610e48f2bdc8836a79a6550ef3afaf5475d14f696f7",
+      "stored_size_bytes": 5392
+    },
+    {
+      "compression": "xz",
+      "original_path": "source/candidate-full.patch",
+      "original_sha256": "ba25e336def3d22920ecca23b070b959d4968a98098cd8fa0466c93acaf01c59",
+      "original_size_bytes": 30476,
+      "stored_path": "source/candidate-full.patch.xz",
+      "stored_sha256": "494a34d2bdd181dce3d9671c89c9201d7a977020f01e28bad742e50540f7429e",
+      "stored_size_bytes": 6468
+    },
+    {
+      "compression": "xz",
+      "original_path": "source/direct-size-harness.patch",
+      "original_sha256": "429506dd563504096990722a7b70a061adff698be600345d8ee18888364c4c8c",
+      "original_size_bytes": 7563,
+      "stored_path": "source/direct-size-harness.patch.xz",
+      "stored_sha256": "bcb6ee5f233bf05e39de6a77782962516e4021b505667d22a728759e92ba5985",
+      "stored_size_bytes": 2252
+    },
+    {
+      "compression": "xz",
+      "original_path": "source/full-emit-harness.patch",
+      "original_sha256": "3c7b691f8b0b88c4393f58105fea8d29a566dbbdf958d4eb4e063d20f93eb60e",
+      "original_size_bytes": 16676,
+      "stored_path": "source/full-emit-harness.patch.xz",
+      "stored_sha256": "f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974",
+      "stored_size_bytes": 4176
+    },
+    {
+      "compression": "xz (pre-existing exact hosted patch archive)",
+      "original_path": "source/hosted-emit-baseline-patch",
+      "original_sha256": "3c7b691f8b0b88c4393f58105fea8d29a566dbbdf958d4eb4e063d20f93eb60e",
+      "original_size_bytes": 16676,
+      "stored_path": "source/hosted-emit-baseline-patch.xz",
+      "stored_sha256": "f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974",
+      "stored_size_bytes": 4176
+    },
+    {
+      "compression": "xz (pre-existing exact hosted patch archive)",
+      "original_path": "source/hosted-emit-candidate-patch",
+      "original_sha256": "2c9bcd8ec874fed6f4798224f9d94b4fa5b59f208db16e7d8f60b81192f8d877",
+      "original_size_bytes": 27967,
+      "stored_path": "source/hosted-emit-candidate-patch.xz",
+      "stored_sha256": "239b3f3a19fcb65b2a2be490b32e7e9fb00acdbcb9f62a562693baebb8b7f9a3",
+      "stored_size_bytes": 5876
+    },
+    {
+      "compression": "xz (pre-existing exact hosted patch archive)",
+      "original_path": "source/hosted-payload-baseline-payload-size-patch",
+      "original_sha256": "63aae53a633ed39de9b18bc10c47166463de521231ca81f45a4d1f1fd424ba26",
+      "original_size_bytes": 24333,
+      "stored_path": "source/hosted-payload-baseline-payload-size-patch.xz",
+      "stored_sha256": "72fb1e5a68a7322d084c7610e48f2bdc8836a79a6550ef3afaf5475d14f696f7",
+      "stored_size_bytes": 5392
+    },
+    {
+      "compression": "xz (pre-existing exact hosted patch archive)",
+      "original_path": "source/hosted-payload-candidate-payload-size-patch",
+      "original_sha256": "ba25e336def3d22920ecca23b070b959d4968a98098cd8fa0466c93acaf01c59",
+      "original_size_bytes": 30476,
+      "stored_path": "source/hosted-payload-candidate-payload-size-patch.xz",
+      "stored_sha256": "494a34d2bdd181dce3d9671c89c9201d7a977020f01e28bad742e50540f7429e",
+      "stored_size_bytes": 6468
+    },
+    {
+      "compression": "xz",
+      "original_path": "source/hosted-payload-profile-support.patch",
+      "original_sha256": "7847a61da290fb4c63d2ddfdb94f2bc5726af9be7e1f5b8f006dedeeb41696c6",
+      "original_size_bytes": 46387,
+      "stored_path": "source/hosted-payload-profile-support.patch.xz",
+      "stored_sha256": "bdd849c065fdcbdb8ca50a4364083476d926b2ed5bffe57982c0d3688e3ef37c",
+      "stored_size_bytes": 19512
+    },
+    {
+      "compression": "xz",
+      "original_path": "source/product-and-correctness.patch",
+      "original_sha256": "0afe9fc3da29e238cc6783b19bab760743bfc72b87c04648ceac2acb0583bcc0",
+      "original_size_bytes": 6073,
+      "stored_path": "source/product-and-correctness.patch.xz",
+      "stored_sha256": "9e3b7e2f8aeea66b0ddade1fd06c2dfc49c4974134f585473a079ef6edad77af",
+      "stored_size_bytes": 1884
+    }
+  ],
+  "format": "execute.lossless_xz_artifact_map.v1",
+  "method": "XZ/LZMA2, single stream, preset 9 for newly compressed .patch and .log files; pre-existing dispatch-pinned .xz patch files are retained byte-for-byte"
+}

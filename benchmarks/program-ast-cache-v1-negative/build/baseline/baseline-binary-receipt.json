@@ -1,0 +1,39 @@
+{
+  "artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735#execute@0.9.0-rc.5",
+    "manifest_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/Cargo.toml",
+    "target": {
+      "kind": [
+        "test"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "program_module_cache_bench",
+      "src_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/tests/program_module_cache_bench.rs",
+      "edition": "2021",
+      "doc": false,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": true
+    },
+    "features": [],
+    "filenames": [
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/program_module_cache_bench-734b9cd5fd95d56d"
+    ],
+    "executable": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/program_module_cache_bench-734b9cd5fd95d56d",
+    "fresh": false
+  },
+  "saved_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/program-ast-cache/baseline-test-binary",
+  "sha256": "5503439baf89b6a3b139004528d94cb8560cd606d234271242fd2273bd5bfeb6",
+  "source_sha256": "45be335cb33c50e3748c9ea9e2f0625d8f09c21c8b401a012a08fa97f3d0ca14",
+  "source_stable": true,
+  "attempt": 1
+}

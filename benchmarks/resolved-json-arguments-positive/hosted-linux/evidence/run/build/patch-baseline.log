@@ -1,0 +1,2 @@
+$ git -C /home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/baseline apply --check --whitespace=error /home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/literal-json-arguments/build/patches/baseline-b824.patch
+$ git -C /home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/baseline apply --whitespace=error /home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/literal-json-arguments/build/patches/baseline-b824.patch

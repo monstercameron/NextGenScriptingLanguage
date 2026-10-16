@@ -1,0 +1,12 @@
+{
+  "recorded_at": "2026-10-16T04:47:37.672025+00:00",
+  "base_commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+  "identical_harness": true,
+  "harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+  "size_harness_sha256": "2b7cc4c1f61a68cca19d31a35bc9b2ab55c9e2171b4fe7f6e1d67b95f16c6619",
+  "source_paths": {
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/payload-size-baseline-69a9e74/src/graph/transport.rs": "36e59989fc8abe3afeeab0922792cfb4fff1110ef234b6e8946c9930c54dc056",
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/payload-size-scout-worktree/src/graph/transport.rs": "5975e969cf68e8b5d7cc5c11548d0b2234477f397697da81760c499d3ccb3927"
+  },
+  "claim": "source frozen before fresh release builds; unmeasured"
+}

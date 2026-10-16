@@ -1,0 +1,25 @@
+{
+  "registered_at": "2026-10-16T05:08:35.350243+00:00",
+  "workflow_commit": "d0370b3a96072e58cb3236603e4b02f6e8804427",
+  "profile": "payload-size",
+  "base_commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+  "warmup_pairs": 3,
+  "measured_pairs": 48,
+  "inner_warmups": 0,
+  "inner_samples": 3,
+  "timeout_seconds_per_invocation": 60,
+  "purpose": "independent Linux replication of frozen payload counter full-emit comparison",
+  "retry_policy": "one run; no outcome-dependent or timeout retries",
+  "scope": "four synthetic preallocated NodeIo.emit cases; no full-runtime claim",
+  "files": {
+    ".github/workflows/emit-perf-hosted-replication.yml": "bdb1dcd89cc1c09ea3a5e12d0abffb7ce408019955110cca1376d6e42e0f57a5",
+    "benchmarks/emit_perf/baseline-patch.xz": "f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974",
+    "benchmarks/emit_perf/baseline-payload-size-patch.xz": "72fb1e5a68a7322d084c7610e48f2bdc8836a79a6550ef3afaf5475d14f696f7",
+    "benchmarks/emit_perf/candidate-patch.xz": "239b3f3a19fcb65b2a2be490b32e7e9fb00acdbcb9f62a562693baebb8b7f9a3",
+    "benchmarks/emit_perf/candidate-payload-size-patch.xz": "494a34d2bdd181dce3d9671c89c9201d7a977020f01e28bad742e50540f7429e",
+    "benchmarks/emit_perf/emit-perf-harness-final.rs": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "benchmarks/emit_perf/emit_perf_pair.py": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+    "benchmarks/emit_perf/hosted_emit_support.py": "f6c3132d6bad1f55d97620328818b733788345038c7a601b8b75568ab591afaf",
+    "benchmarks/emit_perf/test_hosted_emit_support.py": "d6fd51f6fb30d42a6631e18a12cb338ee6e6e277586c5ae984536c24a27cb720"
+  }
+}

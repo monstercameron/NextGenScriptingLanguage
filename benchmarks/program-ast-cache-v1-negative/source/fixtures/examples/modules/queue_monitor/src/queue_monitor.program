@@ -1,0 +1,5 @@
+accept input_path as text
+accept threshold as text
+every 1 second
+  run "cat" with arguments [input_path]
+  then "jq" with arguments ["-c", "--argjson", "threshold", threshold, ".jobs | map(select(.pending and .age_minutes >= $threshold)) | {overdue:length, threshold:$threshold}"]

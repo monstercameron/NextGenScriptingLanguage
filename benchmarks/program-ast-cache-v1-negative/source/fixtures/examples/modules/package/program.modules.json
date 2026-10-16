@@ -1,0 +1,47 @@
+{
+  "format_version": 1,
+  "name": "examples.records",
+  "version": "1.0.0",
+  "interface_version": 1,
+  "source": "../records.program",
+  "source_sha256": "75ba63851d626b2e7f7127f2ef0e8a5f9b671291a13a9e9a8bcab8f69f90540e",
+  "exports": {
+    "report": {
+      "entry": "echo_record",
+      "interface_version": 1,
+      "inputs": [
+        {
+          "name": "payload",
+          "type": "json",
+          "required": true
+        }
+      ],
+      "output": {
+        "type": "record",
+        "encoding": "json",
+        "fields": {
+          "name": {
+            "type": "text",
+            "fields": {},
+            "required": []
+          },
+          "count": {
+            "type": "integer",
+            "fields": {},
+            "required": []
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "trim_final_lf": false
+      },
+      "lifecycle": {
+        "kind": "one_shot"
+      },
+      "capabilities": []
+    }
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,11 @@
+purpose=fixed hosted replication of the literal-only JSON-argument runtime workload
+profile=literal-json-arguments
+base_commit=b824aeaa7bccaa4d3d75d3fc6a363a99138287d4
+warmup_pairs=3
+measured_pairs=48
+invocation_timeout_seconds=120
+no_retries=true
+event=workflow_dispatch
+run_id=38862234332
+run_attempt=1
+workflow_commit=278541e7d9a88bc55058ca133b3031675dfb84d0

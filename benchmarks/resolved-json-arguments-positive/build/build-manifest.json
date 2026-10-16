@@ -1,0 +1,49 @@
+{
+  "arms": [
+    {
+      "artifact_executable_original": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/flow-b56585bda01e751e",
+      "artifact_fresh": false,
+      "build_log_archive_member": "evidence/resolved-json-arguments/baseline-build-attempt-1.log",
+      "build_log_sha256": "39a6721095e2978b8d36d80015e99d6cd308ad8cddac9f5801726e635a3f30dc",
+      "cargo_jsonl_archive_member": "evidence/resolved-json-arguments/baseline-build-attempt-1.jsonl",
+      "cargo_jsonl_sha256": "56d5b30bdc351877a98ff825c9cdb0514b42471ff8a8bb6d14020a86862e0acc",
+      "cargo_version_recorded": "not retained in the original build receipt/log set",
+      "receipt_path": "build/baseline/baseline-binary-receipt.json",
+      "receipt_sha256": "646a5191c265d516f565fa30c24a0eb767e443dd97bf431efc9876cc204bd3a3",
+      "release_clean_archive_member": "evidence/resolved-json-arguments/baseline-release-clean-attempt-1.log",
+      "release_clean_sha256": "a0f00c6cf37e501796094a72440c86b7280c13b380e3f635227f654ec4fd98ce",
+      "runtime_source_sha256": "2d144408c177655b28eae66afe7303733f77aa91434f6ab5edc4b37cf76fa67f",
+      "rustc_vv_recorded": "not retained in the original build receipt/log set",
+      "saved_binary_blob_included": false,
+      "saved_binary_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/resolved-json-arguments/baseline-test-binary",
+      "saved_binary_sha256": "85cdcf7a6fd1d5be8e157234db51c8d195242a3b03e6e60b905569d150fdd83e",
+      "side": "baseline",
+      "source_fingerprint_sha256": "e27af134925cf524c6b495a8081f7a20229df7b22c30f3e8690f097b123ff960"
+    },
+    {
+      "artifact_executable_original": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate/release/deps/flow-b56585bda01e751e",
+      "artifact_fresh": false,
+      "build_log_archive_member": "evidence/resolved-json-arguments/candidate-build-attempt-1.log",
+      "build_log_sha256": "9c90e58c8e623de04ad0d57fd3a9983f4aaa1ebbb6941c80f2d621b931b6cbfe",
+      "cargo_jsonl_archive_member": "evidence/resolved-json-arguments/candidate-build-attempt-1.jsonl",
+      "cargo_jsonl_sha256": "587215399c293ae38dadd9f1049e82124f5116ee9db61e15a16e04c6e301baae",
+      "cargo_version_recorded": "not retained in the original build receipt/log set",
+      "receipt_path": "build/candidate/candidate-binary-receipt.json",
+      "receipt_sha256": "a3e3bed6904981a06f82cf50163d1aec2467e6f37b3b76ab873f82003ddd2ae1",
+      "release_clean_archive_member": "evidence/resolved-json-arguments/candidate-release-clean-attempt-1.log",
+      "release_clean_sha256": "d44d3e9afc81bc87fddb562b4d8da42c77352ce48fddd9d80be82c7404e034bb",
+      "runtime_source_sha256": "da5eb3d178f8c8716dd87c2af5064b71d46cc8b3cdfff6c21d437e1a22d53215",
+      "rustc_vv_recorded": "not retained in the original build receipt/log set",
+      "saved_binary_blob_included": false,
+      "saved_binary_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/resolved-json-arguments/candidate-test-binary",
+      "saved_binary_sha256": "662927fd658de60ccc26ad3825c730b98fcf28a8dc451e296c98c1cb9cc3f7af",
+      "side": "candidate",
+      "source_fingerprint_sha256": "57499f1db9df5f2b6cfcdf7913b07e62e1f41884f0a10c01d6ca38205705babf"
+    }
+  ],
+  "compiler_versions": "The completed run receipts do not retain exact Cargo/rustc versions. No retroactive toolchain-version assertion is made.",
+  "format": "execute.source_only_build_manifest.v1",
+  "per_arm_immutable_saved_copies_are_distinct": true,
+  "saved_binary_blobs_included": false,
+  "shared_reusable_cargo_target_path": true
+}

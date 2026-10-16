@@ -25,3 +25,9 @@ vendor/** linguist-vendored
 docs/** linguist-documentation
 benchmarks/optimization-pass/** linguist-documentation
 work/** linguist-documentation
+
+# Hash-pinned benchmark artifacts retain their exact raw bytes across checkouts.
+benchmarks/**/*.bin binary
+benchmarks/**/*.patch binary
+# This is an immutable measured source snapshot, including its original whitespace.
+benchmarks/payload-size-paired-macos-linux-20261016/source/direct-size-harness.rs binary

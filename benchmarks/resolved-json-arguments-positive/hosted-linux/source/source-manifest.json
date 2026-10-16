@@ -1,0 +1,64 @@
+{
+  "schema": "execute.hosted_literal_json_dispatch_source_manifest.v1",
+  "dispatch_commit": "278541e7d9a88bc55058ca133b3031675dfb84d0",
+  "measured_base_commit": "b824aeaa7bccaa4d3d75d3fc6a363a99138287d4",
+  "dispatch_files": [
+    {
+      "path": ".github/workflows/literal-json-arguments-hosted-replication.yml",
+      "sha256": "56625230345aee30b2f130c8c86f8f6ed8df73ecb554ab49c4a30e57843aa3c0",
+      "size_bytes": 6391
+    },
+    {
+      "path": "benchmarks/runtime_json_arguments/baseline-b824.patch.xz",
+      "sha256": "e77e63d99a94e2e3ded307f0f2876102267b3dfbcd6b4c3c5891d5b271a02778",
+      "size_bytes": 2640
+    },
+    {
+      "path": "benchmarks/runtime_json_arguments/candidate-b824.patch.xz",
+      "sha256": "60d49df4fb6983382c8dc4b57794ddbe8c2e315103e7c9fce3fbee64c6481be3",
+      "size_bytes": 4224
+    },
+    {
+      "path": "benchmarks/runtime_json_arguments/hosted_support.py",
+      "sha256": "32eb170c8a3394710759765a063d379685f30285786bca5fdc0b923adf360b17",
+      "size_bytes": 24866
+    },
+    {
+      "path": "benchmarks/runtime_json_arguments/resolved-json-arguments-repeat-1000.program",
+      "sha256": "a2a95cfb03e55164e459467b088eeffd1d8034fb7023a7e3dfcd806274177b1d",
+      "size_bytes": 339
+    },
+    {
+      "path": "benchmarks/runtime_json_arguments/resolved_json_arguments_bench.rs",
+      "sha256": "627d8466f0c0ef8264e483d456118bb7eb6f4e14757a752fbd226efecf917003",
+      "size_bytes": 5824
+    },
+    {
+      "path": "benchmarks/runtime_json_arguments/resolved_json_arguments_pair.py",
+      "sha256": "00afb9395517d065a90344eb1635bbbfaa20d3d0bb3f32b4cbe93b7fa7862571",
+      "size_bytes": 32366
+    },
+    {
+      "path": "benchmarks/runtime_json_arguments/test_hosted_support.py",
+      "sha256": "19bea65c6f3ec252205332d4c21d68b68e6a24ca800aa9330151b27245a82ebf",
+      "size_bytes": 9959
+    },
+    {
+      "path": "benchmarks/runtime_json_arguments/test_resolved_json_arguments_pair.py",
+      "sha256": "f483c11e9785ec8d53cb3ff8e85377c08b4842dbd48560669657fb3b09f442f4",
+      "size_bytes": 3362
+    }
+  ],
+  "measured_product_patches": [
+    {
+      "path": "patches/baseline-b824.patch",
+      "sha256": "a7ac079649ce8a290354dec0885b30db1fc209e34cebc761cfe5cc83d0eb79cb",
+      "size_bytes": 7182
+    },
+    {
+      "path": "patches/candidate-b824.patch",
+      "sha256": "4b65d2e5d6ffe356d70982c0735cbc44067cd28b6101e169867f1aa3b4b60ae2",
+      "size_bytes": 14505
+    }
+  ]
+}

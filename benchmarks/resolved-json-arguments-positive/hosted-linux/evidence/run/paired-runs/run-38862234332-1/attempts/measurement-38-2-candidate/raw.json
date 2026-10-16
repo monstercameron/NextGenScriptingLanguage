@@ -1,0 +1,49 @@
+{
+  "all_runs_valid": true,
+  "profile": "release",
+  "samples": [
+    {
+      "call_count_matches": true,
+      "child_launches": 0,
+      "completed_call_count": 1000,
+      "elapsed_ns": 932705,
+      "index": 0,
+      "no_child_launches": true,
+      "output_matches": true,
+      "output_sha256": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+      "valid": true
+    },
+    {
+      "call_count_matches": true,
+      "child_launches": 0,
+      "completed_call_count": 1000,
+      "elapsed_ns": 798182,
+      "index": 1,
+      "no_child_launches": true,
+      "output_matches": true,
+      "output_sha256": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+      "valid": true
+    },
+    {
+      "call_count_matches": true,
+      "child_launches": 0,
+      "completed_call_count": 1000,
+      "elapsed_ns": 777181,
+      "index": 2,
+      "no_child_launches": true,
+      "output_matches": true,
+      "output_sha256": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+      "valid": true
+    }
+  ],
+  "samples_configured": 3,
+  "schema": "execute.runtime-json-arguments.raw/1",
+  "warmups": [],
+  "warmups_configured": 0,
+  "workload": {
+    "expected_output_sha256": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+    "input_sha256": "afff4f726540836958a5fdfb2eb858920074c067f47584cf08381ab78ec20d2a",
+    "path": "benchmarks/workloads/resolved-json-arguments-repeat-1000.program",
+    "source_sha256": "a2a95cfb03e55164e459467b088eeffd1d8034fb7023a7e3dfcd806274177b1d"
+  }
+}

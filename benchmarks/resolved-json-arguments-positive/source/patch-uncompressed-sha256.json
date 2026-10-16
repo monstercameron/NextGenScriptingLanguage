@@ -1,0 +1,33 @@
+{
+  "compression": "XZ (LZMA2), lossless",
+  "format": "execute.source_patch_xz_manifest.v1",
+  "patches": [
+    {
+      "commit": "b824aeaa7bccaa4d3d75d3fc6a363a99138287d4",
+      "compressed_path": "source/patches/baseline-product.patch.xz",
+      "compressed_sha256": "da4e209a5affe6422f967dc7a46de8cf757568cb91038fd50f2ebb8eb6e8e216",
+      "compressed_size_bytes": 292,
+      "origin_git_diff": "git -C /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/resolved-json-arguments-baseline-b824 diff --binary HEAD",
+      "tracked_paths": [
+        "src/runtime.rs"
+      ],
+      "uncompressed_name": "baseline-product.patch",
+      "uncompressed_sha256": "4625b50c9724a62fb048b5c07cc1b547ee5e24434d70e12d8fadd9edc6c92721",
+      "uncompressed_size_bytes": 328
+    },
+    {
+      "commit": "b824aeaa7bccaa4d3d75d3fc6a363a99138287d4",
+      "compressed_path": "source/patches/candidate-product.patch.xz",
+      "compressed_sha256": "4809ae2234b39979e1a8797a1b4b1e85acfb485ecbefb190e6312183fa63f25d",
+      "compressed_size_bytes": 2328,
+      "origin_git_diff": "git -C /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/resolved-json-arguments-b824 diff --binary HEAD",
+      "tracked_paths": [
+        "src/runtime.rs",
+        "tests/structured_tasks.rs"
+      ],
+      "uncompressed_name": "candidate-product.patch",
+      "uncompressed_sha256": "88900a43ae6ab3969f9e7107e7f80827b0406ee709c4fb6934a2918f4a06bcc1",
+      "uncompressed_size_bytes": 7651
+    }
+  ]
+}

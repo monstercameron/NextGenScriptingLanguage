@@ -1,0 +1,898 @@
+{
+  "all_102_attempts_successful": true,
+  "all_candidate_slower_pairs": [
+    {
+      "baseline_attempt_id": "measurement-47-2-baseline",
+      "baseline_median_ns": 1087166,
+      "candidate_attempt_id": "measurement-47-1-candidate",
+      "candidate_median_ns": 1658916,
+      "candidate_minus_baseline_ns": 571750,
+      "candidate_over_baseline": 1.5259086468855723,
+      "global_pair_index": 49,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_slower",
+      "pair_index": 47,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    }
+  ],
+  "all_measured_pairs": [
+    {
+      "baseline_attempt_id": "measurement-01-2-baseline",
+      "baseline_median_ns": 1092458,
+      "candidate_attempt_id": "measurement-01-1-candidate",
+      "candidate_median_ns": 966541,
+      "candidate_minus_baseline_ns": -125917,
+      "candidate_over_baseline": 0.8847397337014329,
+      "global_pair_index": 3,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 1,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-02-1-baseline",
+      "baseline_median_ns": 1067792,
+      "candidate_attempt_id": "measurement-02-2-candidate",
+      "candidate_median_ns": 883208,
+      "candidate_minus_baseline_ns": -184584,
+      "candidate_over_baseline": 0.8271348727092916,
+      "global_pair_index": 4,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 2,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-03-2-baseline",
+      "baseline_median_ns": 1016250,
+      "candidate_attempt_id": "measurement-03-1-candidate",
+      "candidate_median_ns": 835958,
+      "candidate_minus_baseline_ns": -180292,
+      "candidate_over_baseline": 0.8225908979089791,
+      "global_pair_index": 5,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 3,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-04-1-baseline",
+      "baseline_median_ns": 1119000,
+      "candidate_attempt_id": "measurement-04-2-candidate",
+      "candidate_median_ns": 880375,
+      "candidate_minus_baseline_ns": -238625,
+      "candidate_over_baseline": 0.786751563896336,
+      "global_pair_index": 6,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 4,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-05-2-baseline",
+      "baseline_median_ns": 1091542,
+      "candidate_attempt_id": "measurement-05-1-candidate",
+      "candidate_median_ns": 842083,
+      "candidate_minus_baseline_ns": -249459,
+      "candidate_over_baseline": 0.7714618402223643,
+      "global_pair_index": 7,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 5,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-06-1-baseline",
+      "baseline_median_ns": 1001917,
+      "candidate_attempt_id": "measurement-06-2-candidate",
+      "candidate_median_ns": 837750,
+      "candidate_minus_baseline_ns": -164167,
+      "candidate_over_baseline": 0.8361471059978022,
+      "global_pair_index": 8,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 6,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-07-2-baseline",
+      "baseline_median_ns": 1139208,
+      "candidate_attempt_id": "measurement-07-1-candidate",
+      "candidate_median_ns": 915625,
+      "candidate_minus_baseline_ns": -223583,
+      "candidate_over_baseline": 0.8037382111080681,
+      "global_pair_index": 9,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 7,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-08-1-baseline",
+      "baseline_median_ns": 1422291,
+      "candidate_attempt_id": "measurement-08-2-candidate",
+      "candidate_median_ns": 853000,
+      "candidate_minus_baseline_ns": -569291,
+      "candidate_over_baseline": 0.59973662211179,
+      "global_pair_index": 10,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 8,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-09-2-baseline",
+      "baseline_median_ns": 1039000,
+      "candidate_attempt_id": "measurement-09-1-candidate",
+      "candidate_median_ns": 842833,
+      "candidate_minus_baseline_ns": -196167,
+      "candidate_over_baseline": 0.8111963426371511,
+      "global_pair_index": 11,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 9,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-10-1-baseline",
+      "baseline_median_ns": 1008125,
+      "candidate_attempt_id": "measurement-10-2-candidate",
+      "candidate_median_ns": 846167,
+      "candidate_minus_baseline_ns": -161958,
+      "candidate_over_baseline": 0.8393473031618103,
+      "global_pair_index": 12,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 10,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-11-2-baseline",
+      "baseline_median_ns": 1087667,
+      "candidate_attempt_id": "measurement-11-1-candidate",
+      "candidate_median_ns": 842208,
+      "candidate_minus_baseline_ns": -245459,
+      "candidate_over_baseline": 0.7743252300566258,
+      "global_pair_index": 13,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 11,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-12-1-baseline",
+      "baseline_median_ns": 1033584,
+      "candidate_attempt_id": "measurement-12-2-candidate",
+      "candidate_median_ns": 837833,
+      "candidate_minus_baseline_ns": -195751,
+      "candidate_over_baseline": 0.8106094908589916,
+      "global_pair_index": 14,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 12,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-13-2-baseline",
+      "baseline_median_ns": 1063125,
+      "candidate_attempt_id": "measurement-13-1-candidate",
+      "candidate_median_ns": 861833,
+      "candidate_minus_baseline_ns": -201292,
+      "candidate_over_baseline": 0.8106600823045268,
+      "global_pair_index": 15,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 13,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-14-1-baseline",
+      "baseline_median_ns": 1058500,
+      "candidate_attempt_id": "measurement-14-2-candidate",
+      "candidate_median_ns": 952916,
+      "candidate_minus_baseline_ns": -105584,
+      "candidate_over_baseline": 0.9002512990080302,
+      "global_pair_index": 16,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 14,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-15-2-baseline",
+      "baseline_median_ns": 1013916,
+      "candidate_attempt_id": "measurement-15-1-candidate",
+      "candidate_median_ns": 879542,
+      "candidate_minus_baseline_ns": -134374,
+      "candidate_over_baseline": 0.8674702835343362,
+      "global_pair_index": 17,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 15,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-16-1-baseline",
+      "baseline_median_ns": 1165709,
+      "candidate_attempt_id": "measurement-16-2-candidate",
+      "candidate_median_ns": 837959,
+      "candidate_minus_baseline_ns": -327750,
+      "candidate_over_baseline": 0.7188406368999467,
+      "global_pair_index": 18,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 16,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-17-2-baseline",
+      "baseline_median_ns": 1126084,
+      "candidate_attempt_id": "measurement-17-1-candidate",
+      "candidate_median_ns": 827667,
+      "candidate_minus_baseline_ns": -298417,
+      "candidate_over_baseline": 0.7349957907225394,
+      "global_pair_index": 19,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 17,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-18-1-baseline",
+      "baseline_median_ns": 1017792,
+      "candidate_attempt_id": "measurement-18-2-candidate",
+      "candidate_median_ns": 884625,
+      "candidate_minus_baseline_ns": -133167,
+      "candidate_over_baseline": 0.8691608894548198,
+      "global_pair_index": 20,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 18,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-19-2-baseline",
+      "baseline_median_ns": 1012125,
+      "candidate_attempt_id": "measurement-19-1-candidate",
+      "candidate_median_ns": 823708,
+      "candidate_minus_baseline_ns": -188417,
+      "candidate_over_baseline": 0.8138401877238484,
+      "global_pair_index": 21,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 19,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-20-1-baseline",
+      "baseline_median_ns": 1005333,
+      "candidate_attempt_id": "measurement-20-2-candidate",
+      "candidate_median_ns": 915666,
+      "candidate_minus_baseline_ns": -89667,
+      "candidate_over_baseline": 0.9108086574299262,
+      "global_pair_index": 22,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 20,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-21-2-baseline",
+      "baseline_median_ns": 1030083,
+      "candidate_attempt_id": "measurement-21-1-candidate",
+      "candidate_median_ns": 844125,
+      "candidate_minus_baseline_ns": -185958,
+      "candidate_over_baseline": 0.8194727997646791,
+      "global_pair_index": 23,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 21,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-22-1-baseline",
+      "baseline_median_ns": 1041875,
+      "candidate_attempt_id": "measurement-22-2-candidate",
+      "candidate_median_ns": 863625,
+      "candidate_minus_baseline_ns": -178250,
+      "candidate_over_baseline": 0.8289142171565687,
+      "global_pair_index": 24,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 22,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-23-2-baseline",
+      "baseline_median_ns": 1006000,
+      "candidate_attempt_id": "measurement-23-1-candidate",
+      "candidate_median_ns": 942416,
+      "candidate_minus_baseline_ns": -63584,
+      "candidate_over_baseline": 0.9367952286282306,
+      "global_pair_index": 25,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 23,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-24-1-baseline",
+      "baseline_median_ns": 1038542,
+      "candidate_attempt_id": "measurement-24-2-candidate",
+      "candidate_median_ns": 832459,
+      "candidate_minus_baseline_ns": -206083,
+      "candidate_over_baseline": 0.801565078735381,
+      "global_pair_index": 26,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 24,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-25-2-baseline",
+      "baseline_median_ns": 1164958,
+      "candidate_attempt_id": "measurement-25-1-candidate",
+      "candidate_median_ns": 843833,
+      "candidate_minus_baseline_ns": -321125,
+      "candidate_over_baseline": 0.7243462854454839,
+      "global_pair_index": 27,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 25,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-26-1-baseline",
+      "baseline_median_ns": 1010875,
+      "candidate_attempt_id": "measurement-26-2-candidate",
+      "candidate_median_ns": 843709,
+      "candidate_minus_baseline_ns": -167166,
+      "candidate_over_baseline": 0.8346323729442315,
+      "global_pair_index": 28,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 26,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-27-2-baseline",
+      "baseline_median_ns": 1029708,
+      "candidate_attempt_id": "measurement-27-1-candidate",
+      "candidate_median_ns": 842041,
+      "candidate_minus_baseline_ns": -187667,
+      "candidate_over_baseline": 0.8177473613878886,
+      "global_pair_index": 29,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 27,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-28-1-baseline",
+      "baseline_median_ns": 1089000,
+      "candidate_attempt_id": "measurement-28-2-candidate",
+      "candidate_median_ns": 894125,
+      "candidate_minus_baseline_ns": -194875,
+      "candidate_over_baseline": 0.8210514233241506,
+      "global_pair_index": 30,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 28,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-29-2-baseline",
+      "baseline_median_ns": 1047458,
+      "candidate_attempt_id": "measurement-29-1-candidate",
+      "candidate_median_ns": 866959,
+      "candidate_minus_baseline_ns": -180499,
+      "candidate_over_baseline": 0.8276790095641067,
+      "global_pair_index": 31,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 29,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-30-1-baseline",
+      "baseline_median_ns": 1123083,
+      "candidate_attempt_id": "measurement-30-2-candidate",
+      "candidate_median_ns": 829709,
+      "candidate_minus_baseline_ns": -293374,
+      "candidate_over_baseline": 0.7387779888040332,
+      "global_pair_index": 32,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 30,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-31-2-baseline",
+      "baseline_median_ns": 1112750,
+      "candidate_attempt_id": "measurement-31-1-candidate",
+      "candidate_median_ns": 823708,
+      "candidate_minus_baseline_ns": -289042,
+      "candidate_over_baseline": 0.7402453381262638,
+      "global_pair_index": 33,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 31,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-32-1-baseline",
+      "baseline_median_ns": 1058916,
+      "candidate_attempt_id": "measurement-32-2-candidate",
+      "candidate_median_ns": 825667,
+      "candidate_minus_baseline_ns": -233249,
+      "candidate_over_baseline": 0.7797285148208167,
+      "global_pair_index": 34,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 32,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-33-2-baseline",
+      "baseline_median_ns": 1141542,
+      "candidate_attempt_id": "measurement-33-1-candidate",
+      "candidate_median_ns": 919792,
+      "candidate_minus_baseline_ns": -221750,
+      "candidate_over_baseline": 0.8057452113019057,
+      "global_pair_index": 35,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 33,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-34-1-baseline",
+      "baseline_median_ns": 1051958,
+      "candidate_attempt_id": "measurement-34-2-candidate",
+      "candidate_median_ns": 884375,
+      "candidate_minus_baseline_ns": -167583,
+      "candidate_over_baseline": 0.840694210225123,
+      "global_pair_index": 36,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 34,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-35-2-baseline",
+      "baseline_median_ns": 1128000,
+      "candidate_attempt_id": "measurement-35-1-candidate",
+      "candidate_median_ns": 833125,
+      "candidate_minus_baseline_ns": -294875,
+      "candidate_over_baseline": 0.7385859929078015,
+      "global_pair_index": 37,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 35,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-36-1-baseline",
+      "baseline_median_ns": 1009625,
+      "candidate_attempt_id": "measurement-36-2-candidate",
+      "candidate_median_ns": 883042,
+      "candidate_minus_baseline_ns": -126583,
+      "candidate_over_baseline": 0.8746237464405101,
+      "global_pair_index": 38,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 36,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-37-2-baseline",
+      "baseline_median_ns": 1068708,
+      "candidate_attempt_id": "measurement-37-1-candidate",
+      "candidate_median_ns": 905666,
+      "candidate_minus_baseline_ns": -163042,
+      "candidate_over_baseline": 0.8474400865343948,
+      "global_pair_index": 39,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 37,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-38-1-baseline",
+      "baseline_median_ns": 1011375,
+      "candidate_attempt_id": "measurement-38-2-candidate",
+      "candidate_median_ns": 831750,
+      "candidate_minus_baseline_ns": -179625,
+      "candidate_over_baseline": 0.8223952539859103,
+      "global_pair_index": 40,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 38,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-39-2-baseline",
+      "baseline_median_ns": 1196958,
+      "candidate_attempt_id": "measurement-39-1-candidate",
+      "candidate_median_ns": 842000,
+      "candidate_minus_baseline_ns": -354958,
+      "candidate_over_baseline": 0.7034499121940787,
+      "global_pair_index": 41,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 39,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-40-1-baseline",
+      "baseline_median_ns": 1053792,
+      "candidate_attempt_id": "measurement-40-2-candidate",
+      "candidate_median_ns": 930292,
+      "candidate_minus_baseline_ns": -123500,
+      "candidate_over_baseline": 0.8828041966536091,
+      "global_pair_index": 42,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 40,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-41-2-baseline",
+      "baseline_median_ns": 1005791,
+      "candidate_attempt_id": "measurement-41-1-candidate",
+      "candidate_median_ns": 831250,
+      "candidate_minus_baseline_ns": -174541,
+      "candidate_over_baseline": 0.826463947281294,
+      "global_pair_index": 43,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 41,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-42-1-baseline",
+      "baseline_median_ns": 1016416,
+      "candidate_attempt_id": "measurement-42-2-candidate",
+      "candidate_median_ns": 962291,
+      "candidate_minus_baseline_ns": -54125,
+      "candidate_over_baseline": 0.9467491656959355,
+      "global_pair_index": 44,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 42,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-43-2-baseline",
+      "baseline_median_ns": 1006709,
+      "candidate_attempt_id": "measurement-43-1-candidate",
+      "candidate_median_ns": 832416,
+      "candidate_minus_baseline_ns": -174293,
+      "candidate_over_baseline": 0.8268685389720366,
+      "global_pair_index": 45,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 43,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-44-1-baseline",
+      "baseline_median_ns": 1023666,
+      "candidate_attempt_id": "measurement-44-2-candidate",
+      "candidate_median_ns": 885792,
+      "candidate_minus_baseline_ns": -137874,
+      "candidate_over_baseline": 0.8653134909237974,
+      "global_pair_index": 46,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 44,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-45-2-baseline",
+      "baseline_median_ns": 1030167,
+      "candidate_attempt_id": "measurement-45-1-candidate",
+      "candidate_median_ns": 878375,
+      "candidate_minus_baseline_ns": -151792,
+      "candidate_over_baseline": 0.8526530164526722,
+      "global_pair_index": 47,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 45,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-46-1-baseline",
+      "baseline_median_ns": 1033500,
+      "candidate_attempt_id": "measurement-46-2-candidate",
+      "candidate_median_ns": 856042,
+      "candidate_minus_baseline_ns": -177458,
+      "candidate_over_baseline": 0.8282941461054668,
+      "global_pair_index": 48,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 46,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-47-2-baseline",
+      "baseline_median_ns": 1087166,
+      "candidate_attempt_id": "measurement-47-1-candidate",
+      "candidate_median_ns": 1658916,
+      "candidate_minus_baseline_ns": 571750,
+      "candidate_over_baseline": 1.5259086468855723,
+      "global_pair_index": 49,
+      "order": [
+        "candidate",
+        "baseline"
+      ],
+      "outcome": "candidate_slower",
+      "pair_index": 47,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    },
+    {
+      "baseline_attempt_id": "measurement-48-1-baseline",
+      "baseline_median_ns": 1017167,
+      "candidate_attempt_id": "measurement-48-2-candidate",
+      "candidate_median_ns": 839417,
+      "candidate_minus_baseline_ns": -177750,
+      "candidate_over_baseline": 0.8252499343765576,
+      "global_pair_index": 50,
+      "order": [
+        "baseline",
+        "candidate"
+      ],
+      "outcome": "candidate_faster",
+      "pair_index": 48,
+      "phase": "measurement",
+      "raw_oracle_equal": true
+    }
+  ],
+  "benchmark": "runtime::resolved_json_arguments_bench::repeated_number_add_runtime_samples",
+  "candidate_tradeoff": null,
+  "claim_boundary": "Positive result only for this one fixed public runtime::run literal-argument workload: 47/48 pairs faster, one slower. Median paired candidate/baseline ratio is descriptive. Every invocation produced exact b'3', 1,000 completed calls, and zero child launches. Do not describe this as an end-to-end, graph queue, or general speedup.",
+  "correctness_oracle": {
+    "child_launches": 0,
+    "completed_call_count_per_invocation": 1000,
+    "expected_output_bytes_base64": "Mw==",
+    "expected_output_sha256": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+    "input_sha256": "afff4f726540836958a5fdfb2eb858920074c067f47584cf08381ab78ec20d2a"
+  },
+  "format": "execute.fixed48.runtime_microbenchmark_summary.v1",
+  "harness_sha256": "627d8466f0c0ef8264e483d456118bb7eb6f4e14757a752fbd226efecf917003",
+  "host": {
+    "machine": "arm64",
+    "python": "3.9.6 (default, May 22 2026, 11:13:45) \n[Clang 21.0.0 (clang-2100.1.1.101)]",
+    "release": "25.6.0",
+    "system": "Darwin"
+  },
+  "measured_outcomes": {
+    "candidate_faster_pairs": 47,
+    "candidate_slower_pairs": 1,
+    "median_of_per_pair_candidate_over_baseline_ratios": 0.8239204161427683,
+    "median_paired_candidate_minus_baseline_ns": -180395.5,
+    "ties": 0,
+    "valid_pairs": 48
+  },
+  "product_patch_sha256": {
+    "baseline-product.patch": "4625b50c9724a62fb048b5c07cc1b547ee5e24434d70e12d8fadd9edc6c92721",
+    "candidate-product.patch": "88900a43ae6ab3969f9e7107e7f80827b0406ee709c4fb6934a2918f4a06bcc1"
+  },
+  "protocol": {
+    "correctness": "every warmup and measured invocation must report exact output b'3', 1,000 completed calls, zero child launches, and the frozen workload/input/output hashes",
+    "interpretation_limit": "fixed local paired microbenchmark; no confidence interval, cold-start, sustained-load, or general workload claim",
+    "invocation_environment": {
+      "EXECUTE_JSON_ARGUMENTS_BENCH_SAMPLES": "3",
+      "EXECUTE_JSON_ARGUMENTS_BENCH_WARMUPS": "0",
+      "LC_ALL": "C",
+      "TZ": "UTC"
+    },
+    "invocation_timeout_seconds": 120,
+    "invocation_warmups": 0,
+    "measured_pairs": 48,
+    "metric": "within-invocation median of 3 raw runtime::run durations; per-pair candidate minus baseline; report median of 48 paired deltas",
+    "no_retries": true,
+    "pair_order": "global pairs alternate AB/BA, beginning AB; measured pairs are balanced and begin BA",
+    "samples_per_invocation": 3,
+    "test_name": "runtime::resolved_json_arguments_bench::repeated_number_add_runtime_samples",
+    "total_budget_seconds": 10800,
+    "warmup_pairs": 3
+  },
+  "source_and_build_limits": {
+    "exact_cargo_rustc_versions_recorded": false,
+    "no_retroactive_version_attestation": true,
+    "saved_executable_blobs_included": false
+  },
+  "source_base_commit": "b824aeaa7bccaa4d3d75d3fc6a363a99138287d4",
+  "status": "positive_fixed_workload_candidate",
+  "timer_scope": "The ignored Rust test parses the fixed workload, loads the registry, and constructs runtime options before timing. Each sample times one public `runtime::run` invocation executing the fixed program with 1,000 in-process `core.number_add` calls; compilation and CLI startup are excluded. Every raw sample reports exact output `b\"3\"`, 1,000 completed calls, and zero child launches. This is not a graph queue or `RuntimeGraphExecutor` benchmark and makes no end-to-end claim."
+}

@@ -1,0 +1,28 @@
+{
+  "name": "omarchy.editor-list",
+  "binary": "/usr/bin/env",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {
+    "command": {"type": "string", "required": true}
+  },
+  "arguments": [
+    {"parameter": "command"},
+    {"literal": "--list-extensions"}
+  ],
+  "stdio": {"stderr": "discard"},
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {"kind": "oneshot"},
+    "output": {"type": "text", "encoding": "raw"},
+    "outcomes": [
+      {"status": 0, "name": "success", "kind": "success"},
+      {"status": 1, "name": "failure", "kind": "failure"},
+      {"status": 127, "name": "not_found", "kind": "absence"}
+    ],
+    "capabilities": ["process.spawn"],
+    "effects": ["process.spawn"],
+    "result_envelope": true
+  }
+}

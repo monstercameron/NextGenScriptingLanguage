@@ -1,0 +1,13 @@
+{
+  "base_commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+  "claim": "hosted Linux replication inputs; no performance conclusion is implied by this record",
+  "harness_extracted_from_both_arms": true,
+  "harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+  "identical_harness": true,
+  "profile": "payload-size",
+  "recorded_at": "2026-10-16T05:08:54Z",
+  "source_paths": {
+    "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/baseline/src/graph/transport.rs": "36e59989fc8abe3afeeab0922792cfb4fff1110ef234b6e8946c9930c54dc056",
+    "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/build-source/candidate/src/graph/transport.rs": "5975e969cf68e8b5d7cc5c11548d0b2234477f397697da81760c499d3ccb3927"
+  }
+}

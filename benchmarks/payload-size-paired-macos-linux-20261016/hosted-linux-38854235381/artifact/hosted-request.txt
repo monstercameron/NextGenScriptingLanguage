@@ -1,0 +1,10 @@
+purpose=independent hosted Linux replication of one frozen emit profile
+experiment_profile=payload-size
+base_commit=69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a
+measured_pairs=48
+warmup_pairs=3
+invocation_timeout_seconds=60
+no_result_dependent_retries=true
+event=workflow_dispatch
+run_id=38854235381
+run_attempt=1

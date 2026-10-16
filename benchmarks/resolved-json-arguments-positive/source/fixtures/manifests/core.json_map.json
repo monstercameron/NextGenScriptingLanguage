@@ -1,0 +1,86 @@
+{
+  "name": "json.map",
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "document": {
+      "type": "json"
+    },
+    "pointer": {
+      "type": "string"
+    },
+    "select": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "json.map"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "list",
+      "encoding": "json",
+      "items": {
+        "type": "json"
+      }
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "document": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "pointer": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "select": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single",
+          "encoding": "json"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

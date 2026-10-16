@@ -1,0 +1,50 @@
+{
+  "base_commit": "b824aeaa7bccaa4d3d75d3fc6a363a99138287d4",
+  "limits": [
+    "This is an uncommitted source patch prepared in a separate clone; no primary repository files were edited.",
+    "No Cargo build, benchmark timing, or workflow dispatch was run for this change.",
+    "The patch must be reviewed and committed before a hosted workflow dispatch; it contains no performance result or conclusion."
+  ],
+  "patch": {
+    "changed_paths": [
+      ".github/workflows/emit-perf-hosted-replication.yml",
+      "benchmarks/emit_perf/baseline-payload-size-patch.xz",
+      "benchmarks/emit_perf/candidate-payload-size-patch.xz",
+      "benchmarks/emit_perf/hosted_emit_support.py",
+      "benchmarks/emit_perf/test_hosted_emit_support.py"
+    ],
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/hosted-replication/payload-size-profile-support.patch",
+    "sha256": "7847a61da290fb4c63d2ddfdb94f2bc5726af9be7e1f5b8f006dedeeb41696c6"
+  },
+  "payload_size_profile": {
+    "base_commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+    "baseline_patch_sha256": "63aae53a633ed39de9b18bc10c47166463de521231ca81f45a4d1f1fd424ba26",
+    "baseline_patch_xz_sha256": "72fb1e5a68a7322d084c7610e48f2bdc8836a79a6550ef3afaf5475d14f696f7",
+    "baseline_transport_sha256": "36e59989fc8abe3afeeab0922792cfb4fff1110ef234b6e8946c9930c54dc056",
+    "candidate_patch_sha256": "ba25e336def3d22920ecca23b070b959d4968a98098cd8fa0466c93acaf01c59",
+    "candidate_patch_xz_sha256": "494a34d2bdd181dce3d9671c89c9201d7a977020f01e28bad742e50540f7429e",
+    "candidate_transport_sha256": "5975e969cf68e8b5d7cc5c11548d0b2234477f397697da81760c499d3ccb3927",
+    "shared_harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "shared_v1_driver_sha256": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6"
+  },
+  "preserved_default_profile": {
+    "default_input": true,
+    "existing_base_and_source_patch_hashes_preserved": true,
+    "name": "emit-sync",
+    "protocol": "3 warmup pairs, 48 measured pairs, 60 second per-invocation timeout",
+    "shared_harness_and_driver_unchanged": true
+  },
+  "purpose": "Source-only handoff receipt for adding a second fixed payload-size profile to the hosted emit replication workflow.",
+  "recorded_at": "2026-10-16T05:04:23Z",
+  "verification": {
+    "actionlint": "1.7.12 passed on the modified workflow",
+    "applied_baseline_transport_sha256_matches_pin": true,
+    "applied_candidate_transport_sha256_matches_pin": true,
+    "driver_and_harness_source_unchanged": true,
+    "git_diff_check": "passed in the isolated checkout",
+    "patch_apply_check": "passed against current main at the stated b824 base; check only, no files changed",
+    "payload_size_raw_patches_apply_to_base": true,
+    "py_compile": "passed for hosted_emit_support.py and test_hosted_emit_support.py",
+    "unittest": "10 tests passed: python3 -m unittest discover -s benchmarks/emit_perf -p test_hosted_emit_support.py"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "attempt_dir": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/literal-json-arguments/paired-runs/run-38862234332-1/attempts/measurement-46-2-candidate",
+  "attempt_id": "measurement-46-2-candidate",
+  "binary_sha256": "8476bf6a00a756dcfaaf08dd5c1b4dcdcc841cfa97a9012e2ec0cf016f9d94c5",
+  "binary_sha256_after": "8476bf6a00a756dcfaaf08dd5c1b4dcdcc841cfa97a9012e2ec0cf016f9d94c5",
+  "binary_sha256_before": "8476bf6a00a756dcfaaf08dd5c1b4dcdcc841cfa97a9012e2ec0cf016f9d94c5",
+  "compile_receipt_sha256": "7003732794bcda9452072286cfbd8c9f4723879e744d8d53d9444b4cb5c8d02e",
+  "execution_error": null,
+  "finished_at": "2026-10-16T06:39:51.973Z",
+  "global_pair_index": 48,
+  "median_duration_ns": 800046,
+  "phase": "measurement",
+  "phase_pair_index": 46,
+  "position_in_pair": 2,
+  "raw_report_present": true,
+  "raw_report_sha256": "b2613a88bc58cba2dfd7c13aab4e19e69ae204a6dada96d8b1a706a0efb04be3",
+  "returncode": 0,
+  "sample_duration_ns": [
+    927197,
+    796080,
+    800046
+  ],
+  "side": "candidate",
+  "source_fingerprint_sha256": "57499f1db9df5f2b6cfcdf7913b07e62e1f41884f0a10c01d6ca38205705babf",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "518a05ef0a2fc8ec42388e7a8573c6d3ee07bdeafbd437ac30e8296953b08662",
+  "successful": true,
+  "timed_out": false,
+  "validation_error": null,
+  "wall_elapsed_ns": 6552607
+}

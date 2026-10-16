@@ -1,0 +1,297 @@
+{
+  "review": "independent offline audit; no builds/tests/Cargo/timings run",
+  "recorded_at": "2026-10-16T05:01:28.582282+00:00",
+  "scope": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/payload-size-scout",
+  "direct_size": {
+    "paired_report_sha256": "e2df7112a0550b37b57d00c2b710f0e5a49c67feaa67277662b938e1cf477d58",
+    "preregistration_sha256": "a96c515c9ef10028c7e245e417137e4423ac71ab9879104ea08435f4215bf46e",
+    "runner_sha256": "3019bcc8caba596f09ec61dbd6a81539ac9f63bfd2a773dff1c643e0f24b6226",
+    "attempts": 102,
+    "successful": 102,
+    "failed": 0,
+    "warmup_pairs": 3,
+    "measured_pairs": 48,
+    "attempt_artifacts_verified": 102,
+    "raw_case_records_checked": 408,
+    "raw_samples_checked": 1224,
+    "event_stream_hashes_recomputed": 0,
+    "events_reconstructed": 0,
+    "source_hashes": {
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/payload-size-baseline-69a9e74/src/graph/transport.rs": "36e59989fc8abe3afeeab0922792cfb4fff1110ef234b6e8946c9930c54dc056",
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/payload-size-scout-worktree/src/graph/transport.rs": "5975e969cf68e8b5d7cc5c11548d0b2234477f397697da81760c499d3ccb3927"
+    },
+    "harness_sha256": "2b7cc4c1f61a68cca19d31a35bc9b2ab55c9e2171b4fe7f6e1d67b95f16c6619",
+    "raw_derived_summary": {
+      "escape_heavy_unicode_control_text": {
+        "baseline_median_of_pair_medians_ns": 3465250.0,
+        "candidate_median_of_pair_medians_ns": 1845021.5,
+        "candidate_over_baseline_ratio": 0.5324353221268306,
+        "median_of_48_paired_ratios": 0.5319315251028544,
+        "median_paired_delta_ns": -1631750.0,
+        "wins": 48,
+        "losses": 0,
+        "ties": 0
+      },
+      "nested_record": {
+        "baseline_median_of_pair_medians_ns": 786521.0,
+        "candidate_median_of_pair_medians_ns": 321562.5,
+        "candidate_over_baseline_ratio": 0.4088415948207359,
+        "median_of_48_paired_ratios": 0.4072718638973225,
+        "median_paired_delta_ns": -466063.0,
+        "wins": 48,
+        "losses": 0,
+        "ties": 0
+      },
+      "scalar_integer": {
+        "baseline_median_of_pair_medians_ns": 152125.0,
+        "candidate_median_of_pair_medians_ns": 31208.0,
+        "candidate_over_baseline_ratio": 0.20514708299096138,
+        "median_of_48_paired_ratios": 0.20465843505987044,
+        "median_paired_delta_ns": -121083.0,
+        "wins": 48,
+        "losses": 0,
+        "ties": 0
+      },
+      "text_4k": {
+        "baseline_median_of_pair_medians_ns": 6733458.5,
+        "candidate_median_of_pair_medians_ns": 5397021.0,
+        "candidate_over_baseline_ratio": 0.8015228726812529,
+        "median_of_48_paired_ratios": 0.8022399618377294,
+        "median_paired_delta_ns": -1330313.0,
+        "wins": 48,
+        "losses": 0,
+        "ties": 0
+      }
+    },
+    "verified_attempt_artifact_manifest_sha256": "95341d2203460c225bf0ede77153759c6f179d055c3820ff0470755db30a4ba8",
+    "verified_attempt_artifact_manifest_entries": 102,
+    "independently_reconstructed_payload_oracles": {
+      "scalar_integer": {
+        "serialized_bytes": 14,
+        "sha256": "43658147a509802a9cab1d609d9dffa78184e5c23bba509843263d809fba84bb"
+      },
+      "escape_heavy_unicode_control_text": {
+        "serialized_bytes": 909,
+        "sha256": "5170cebd31a9d25220e15f8aa352b2f79ab1997202eec7ef15e48d3534dba427"
+      },
+      "nested_record": {
+        "serialized_bytes": 134,
+        "sha256": "1dbcb868fcc5c41f18a431873b319e9fee536527289beaa1c847950c07d7eff1"
+      },
+      "text_4k": {
+        "serialized_bytes": 4109,
+        "sha256": "b36d1322c35ce1d15264bd66332de0d3583ea77a7179300dac8609831a84f4d9"
+      }
+    }
+  },
+  "full_emit": {
+    "paired_report_sha256": "657da3ee8e014290efc9abf009b76f9fc1511d9721b05929e2be3f6e7f2b756e",
+    "preregistration_sha256": "badce2d251ea1231715a780c505e4d209b4099f078e933608303457cd3562f83",
+    "runner_sha256": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+    "attempts": 102,
+    "successful": 102,
+    "failed": 0,
+    "warmup_pairs": 3,
+    "measured_pairs": 48,
+    "attempt_artifacts_verified": 102,
+    "raw_case_records_checked": 408,
+    "raw_samples_checked": 1224,
+    "event_stream_hashes_recomputed": 5202,
+    "events_reconstructed": 430848,
+    "source_hashes": {
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/payload-size-baseline-69a9e74/src/graph/transport.rs": "36e59989fc8abe3afeeab0922792cfb4fff1110ef234b6e8946c9930c54dc056",
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/payload-size-scout-worktree/src/graph/transport.rs": "5975e969cf68e8b5d7cc5c11548d0b2234477f397697da81760c499d3ccb3927"
+    },
+    "harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "raw_derived_summary": {
+      "fanout_4_text": {
+        "baseline_median_of_pair_medians_ns": 64062.5,
+        "candidate_median_of_pair_medians_ns": 57729.0,
+        "candidate_over_baseline_ratio": 0.9011356097560975,
+        "median_of_48_paired_ratios": 0.9159802987861811,
+        "median_paired_delta_ns": -5062.5,
+        "wins": 29,
+        "losses": 19,
+        "ties": 0
+      },
+      "fanout_4_typed_record": {
+        "baseline_median_of_pair_medians_ns": 53063.0,
+        "candidate_median_of_pair_medians_ns": 51396.5,
+        "candidate_over_baseline_ratio": 0.9685939355106195,
+        "median_of_48_paired_ratios": 0.922423177901966,
+        "median_paired_delta_ns": -4562.5,
+        "wins": 35,
+        "losses": 13,
+        "ties": 0
+      },
+      "fanout_8_integer": {
+        "baseline_median_of_pair_medians_ns": 141166.5,
+        "candidate_median_of_pair_medians_ns": 132104.5,
+        "candidate_over_baseline_ratio": 0.9358062996532464,
+        "median_of_48_paired_ratios": 0.9540282743757675,
+        "median_paired_delta_ns": -6729.0,
+        "wins": 31,
+        "losses": 17,
+        "ties": 0
+      },
+      "single_sink_integer": {
+        "baseline_median_of_pair_medians_ns": 76292.0,
+        "candidate_median_of_pair_medians_ns": 68145.5,
+        "candidate_over_baseline_ratio": 0.8932194725528234,
+        "median_of_48_paired_ratios": 0.8923782716127693,
+        "median_paired_delta_ns": -8000.5,
+        "wins": 42,
+        "losses": 6,
+        "ties": 0
+      }
+    },
+    "verified_attempt_artifact_manifest_sha256": "361cc5ba0e8acf487396779cf23a04aab079a65cf8be2260e028f84ce5d9ac5c",
+    "verified_attempt_artifact_manifest_entries": 102,
+    "independently_reconstructed_full_emit_oracles": {
+      "fanout_4_text": {
+        "events_per_sink": 16,
+        "sink_count": 4,
+        "input_payloads_sha256": "87e3a09b8d56129e72d73cab9de3838861c5a8dacd3d84eb0bdc6cfa4ba0ed99",
+        "sink_oracles": [
+          {
+            "sink": "sink_00.in",
+            "events": 16,
+            "stream_sha256": "1ff2885fd7275cc0a66b75ccd42eb1ab8a90c4bf5ac0838d97cf577e59d551cd",
+            "representative_event_sha256": "34df6ddc356d5666c7fc4f13f5b64f7082a9f07e85cf2230b95a5dc2307ffc68"
+          },
+          {
+            "sink": "sink_01.in",
+            "events": 16,
+            "stream_sha256": "d38c5e09ccbd013b6dc04a1562aeef211d8bf4ba0cbf9a2f35db6a2d94cce212",
+            "representative_event_sha256": "b02f6e8722d3f90af6d6a0a28ed775d5017d52811e938cc1594228a7df9d46ba"
+          },
+          {
+            "sink": "sink_02.in",
+            "events": 16,
+            "stream_sha256": "bdb53bebbe92623295273d85b561d9d4f4dcfc1b3e6f26d0c114d5270b7ee1cf",
+            "representative_event_sha256": "115140ef27847ffa8297f3ea4be7c90b1759e5beab7d08c95fc45065fa54e453"
+          },
+          {
+            "sink": "sink_03.in",
+            "events": 16,
+            "stream_sha256": "28294e2184923a7a8222352d045d2ea62cd31bb594b3472becf11515f0e780ef",
+            "representative_event_sha256": "5db5680d00d64585911494c5d971da22d9d4f26338e980f77ba951f8227b8f39"
+          }
+        ]
+      },
+      "fanout_4_typed_record": {
+        "events_per_sink": 16,
+        "sink_count": 4,
+        "input_payloads_sha256": "cd80663cd215c9432f63850e3193676f169575c00a6804a6c0ef30268be756aa",
+        "sink_oracles": [
+          {
+            "sink": "sink_00.in",
+            "events": 16,
+            "stream_sha256": "575475a7ce2c093ce81b0c88086801ecc673220641e524ad796215e708973d94",
+            "representative_event_sha256": "f7588f5239edc502c9475ee01c3cf764f04fe19602897930b4b26c4b4e14d4de"
+          },
+          {
+            "sink": "sink_01.in",
+            "events": 16,
+            "stream_sha256": "20e3598859665fa37f5cb638557a7a3dbbab65bc1cf44fb7a0bb3cb6c78ae217",
+            "representative_event_sha256": "95604ee7f32dfcbac18f1589ef87dd369829f20ea581a75da0cc5a7f597e2ea6"
+          },
+          {
+            "sink": "sink_02.in",
+            "events": 16,
+            "stream_sha256": "4af0cc125f39c418adde24557bc8312e1941cc98f38fba1b2e276d106d69a56e",
+            "representative_event_sha256": "9965c4f1014565be9d7c58c1a14837da682eea9e54f9a57ac67ae0576493c845"
+          },
+          {
+            "sink": "sink_03.in",
+            "events": 16,
+            "stream_sha256": "515adfa403fd30b9eac2d4292ad23866db3de1d98f0d37b82db769a43243229e",
+            "representative_event_sha256": "863363cc43bfaf173d881393c607fa9bf642b70df58fe7013f778030dfc95354"
+          }
+        ]
+      },
+      "fanout_8_integer": {
+        "events_per_sink": 128,
+        "sink_count": 8,
+        "input_payloads_sha256": "f6fe535c40439a8f648d436936fda76a8f099b50903272ef4cc26b4ec98282c1",
+        "sink_oracles": [
+          {
+            "sink": "sink_00.in",
+            "events": 128,
+            "stream_sha256": "2c9f49e4e4903d4321c46ae023efc8283e9d85fa3eae30d3f97b0d159100cd90",
+            "representative_event_sha256": "83fc5ae6897afd7a692b1544c224e88af70456b104e3ec792c9f3a5c5ba6ae3d"
+          },
+          {
+            "sink": "sink_01.in",
+            "events": 128,
+            "stream_sha256": "70b2e61ff38a981b3c7a9888afd53c9a1e071dbf23e12d78841fdf28ce5cb2ff",
+            "representative_event_sha256": "f858329422b5ecabfb3d0c8793bd5ca698a6bd1e9fea539b214645296ff58e67"
+          },
+          {
+            "sink": "sink_02.in",
+            "events": 128,
+            "stream_sha256": "5a7d044f6d9667a545d229ad0c474bad5a22a59cc0a1a62646d3dfe928efef95",
+            "representative_event_sha256": "2e39155dfa9ae3e8533b465e4856d0f672883de8900f0efb8430d4c218cf2b9c"
+          },
+          {
+            "sink": "sink_03.in",
+            "events": 128,
+            "stream_sha256": "e171052f829b4103d0d8b057e3e7553e6ff44e26ae64dffa9c1abd1e5b474111",
+            "representative_event_sha256": "9eaa1370e209ed0be9ffc7808bea6577adb8bc1c6e6473219efa2e57cdc75c50"
+          },
+          {
+            "sink": "sink_04.in",
+            "events": 128,
+            "stream_sha256": "1b886c6ab71b72d6c2a823637549005520231d7d63abd0ea07325869be85c6af",
+            "representative_event_sha256": "8c44d39163ca5325a69013c605d8cd053a4d24b6c812eccc4eebe8b3fc72f899"
+          },
+          {
+            "sink": "sink_05.in",
+            "events": 128,
+            "stream_sha256": "6e1e206d2523f22e176ec62ccc6a54d34e89ed36e44054ac30a699fddd8c6f39",
+            "representative_event_sha256": "124f9da1aa1d30f098f6408f32f2a43281fa23ca2abe7744e2e8779290f670aa"
+          },
+          {
+            "sink": "sink_06.in",
+            "events": 128,
+            "stream_sha256": "354bb48be9994e6a44ec63d5eee111a28f3ed74638cddce4e93b45f619de8045",
+            "representative_event_sha256": "1ced665cfba3215b9bdd98aca710981642fee71555ce7fcf5a3aa47c1fd84111"
+          },
+          {
+            "sink": "sink_07.in",
+            "events": 128,
+            "stream_sha256": "a63a5e9e480d626e83f91603c4b24385c06047c88deefd50d4e40f7f8d621c66",
+            "representative_event_sha256": "3eee2bd3fa153e8ce540147521a9e7219418942d84dca7c6f95064b3ad51e9bc"
+          }
+        ]
+      },
+      "single_sink_integer": {
+        "events_per_sink": 256,
+        "sink_count": 1,
+        "input_payloads_sha256": "f0ec19be7f7805ccc3fc001db4d3d771c4e3d971abb1c045f062ffb1fa1133d1",
+        "sink_oracles": [
+          {
+            "sink": "sink_00.in",
+            "events": 256,
+            "stream_sha256": "7999f0d2c28ea3153b0c31f319b46845a5ee3f12088d4b631d918ac5423db8d5",
+            "representative_event_sha256": "83fc5ae6897afd7a692b1544c224e88af70456b104e3ec792c9f3a5c5ba6ae3d"
+          }
+        ]
+      }
+    }
+  },
+  "superseded_preregistration": {
+    "file": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/payload-size-scout/payload-size-paired-preregistration-never-run-superseded.json",
+    "sha256": "6896c52f78b3f65f6218b53e9ebd20a3cc4fa698c039dbe3db8aa93db0063bf0",
+    "old_driver_sha256": "8ef2709c67e1b633759f8211befd3a7aca44795dbbe952bf9bf7a87c3c3c0a18",
+    "canonical_report_uses_superseded": false,
+    "note": "The explicitly never-run/superseded file is not the preregistration bound by the completed direct report; the completed report uses the later fixed-runner digest."
+  },
+  "interpretation": {
+    "direct_size": "Clear improvement in the isolated payload-byte counter microbenchmark over four fixed typed-value shapes; this does not establish whole-runtime or end-to-end speed.",
+    "full_emit": "All four per-case medians improve, with paired losses retained per case. Bounded corroboration for NodeIo::emit under the fixed preallocated-queue setups only.",
+    "mergeability": "The measurements support keeping the small optimization if semantic/property coverage and already-reported strict Clippy/full checks remain green. Direct counter is the stronger narrow claim; emit-level results are smaller/noisier and should not be generalized.",
+    "limits": "No allocation-count, peak-memory, scheduler, external transport, application-level, or broad-workload claim is established."
+  },
+  "checksum_manifest_definition": "For each collection, sort the 102 report attempt records by attempt_id; serialize an array of {attempt_id, raw_json_sha256, stdout_sha256, stderr_sha256, started_json_sha256, finished_json_sha256} as compact UTF-8 JSON with sorted object keys, then SHA-256 the bytes. Expected input/output oracles are separately reconstructed from frozen Rust harness constants and serde JSON representation."
+}

@@ -1,0 +1,15 @@
+{
+  "protocol_version": 1,
+  "identity": {"name": "desktop.clock_remote", "version": "1.0.0"},
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "output": {"type": "integer", "encoding": "json"},
+    "capabilities": ["network.loopback"],
+    "effects": ["network.loopback"],
+    "ports": {
+      "inputs": {"pulse": {"schema": {"type": "integer"}, "delivery": "events"}},
+      "outputs": {"value": {"schema": {"type": "integer"}, "delivery": "records"}}
+    }
+  }
+}

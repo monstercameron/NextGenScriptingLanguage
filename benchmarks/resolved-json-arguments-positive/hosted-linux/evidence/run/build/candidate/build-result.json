@@ -1,0 +1,11 @@
+{
+  "artifact_selected": true,
+  "build_receipt_sha256": "7003732794bcda9452072286cfbd8c9f4723879e744d8d53d9444b4cb5c8d02e",
+  "cargo_exit_status": 0,
+  "error": null,
+  "receipt_exit_status": 0,
+  "side": "candidate",
+  "source_stable": true,
+  "target_directory_fresh": true,
+  "timed_out": false
+}

@@ -1,0 +1,265 @@
+{
+  "arm_source_fingerprints": {
+    "baseline": "722621e84b6d59e6d4d0fc677fd8b3644b9b5b7ddc55c7e3de82af239ffabf72",
+    "candidate": "a9d9d5313e54588839455d483ee0d35e1e34ac9b2e78151e081081516163a0a5"
+  },
+  "base_commits": {
+    "baseline": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+    "candidate": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4"
+  },
+  "files": [
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/src/modules.rs",
+      "path": "source/arms/baseline/src/modules.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "c12d8145374ca908cd1e974daca53b00389ad6319db3460208c4c0a8b6373501",
+      "size_bytes": 109625
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/src/runtime.rs",
+      "path": "source/arms/baseline/src/runtime.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "9159b5028ae0680f9d15943453365f60b7a84e9d061bb1ddb278972fc42cb038",
+      "size_bytes": 218259
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/src/runtime/program_backend.rs",
+      "path": "source/arms/baseline/src/runtime/program_backend.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "45be335cb33c50e3748c9ea9e2f0625d8f09c21c8b401a012a08fa97f3d0ca14",
+      "size_bytes": 5362
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/tests/program_modules.rs",
+      "path": "source/arms/baseline/tests/program_modules.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "504ec2a94948b296e0114c3da0f988e8325e017f23c187f20b536a4f50fc25fb",
+      "size_bytes": 38872
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/tests/program_module_cache_bench.rs",
+      "path": "source/arms/baseline/tests/program_module_cache_bench.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "6547f9f245b384b6095495931002c1d313aa4217d10709a944d98448e2682793",
+      "size_bytes": 6260
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/Cargo.toml",
+      "path": "source/build-inputs/baseline/Cargo.toml",
+      "role": "build-input-snapshot",
+      "sha256": "15b6a5a41e38bd2e971fb040b0b168c1a19e75cdc61f8e0266f4cffd86382823",
+      "size_bytes": 1723
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/Cargo.lock",
+      "path": "source/build-inputs/baseline/Cargo.lock",
+      "role": "build-input-snapshot",
+      "sha256": "2be0aa74e5bfe3e4897ea9ca9121efce663a94a4df7850958dc2cf511c6f427c",
+      "size_bytes": 44048
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/.cargo/config.toml",
+      "path": "source/build-inputs/baseline/.cargo/config.toml",
+      "role": "build-input-snapshot",
+      "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+      "size_bytes": 238
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/src/modules.rs",
+      "path": "source/arms/candidate/src/modules.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "7a6fbaaca53c4da7de4ad1911ef5978407051d8230322f31d8e1831e20f72caa",
+      "size_bytes": 110343
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/src/runtime.rs",
+      "path": "source/arms/candidate/src/runtime.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "931347c76c05313777f5fbbfea81fa0cd2e34d1e2cb1075c4037abb193dde475",
+      "size_bytes": 218311
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/src/runtime/program_backend.rs",
+      "path": "source/arms/candidate/src/runtime/program_backend.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "aee22cc4d886bc8ef0875a5c291c92ab67b7f902314a5c1b865f9d91d5f9357c",
+      "size_bytes": 5435
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/tests/program_modules.rs",
+      "path": "source/arms/candidate/tests/program_modules.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "849a9f8387d44bc5aa2cbe973fde3963b16707b59cedb637d11de6acb0b23875",
+      "size_bytes": 40341
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/tests/program_module_cache_bench.rs",
+      "path": "source/arms/candidate/tests/program_module_cache_bench.rs",
+      "role": "arm-source-snapshot",
+      "sha256": "6547f9f245b384b6095495931002c1d313aa4217d10709a944d98448e2682793",
+      "size_bytes": 6260
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/Cargo.toml",
+      "path": "source/build-inputs/candidate/Cargo.toml",
+      "role": "build-input-snapshot",
+      "sha256": "15b6a5a41e38bd2e971fb040b0b168c1a19e75cdc61f8e0266f4cffd86382823",
+      "size_bytes": 1723
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/Cargo.lock",
+      "path": "source/build-inputs/candidate/Cargo.lock",
+      "role": "build-input-snapshot",
+      "sha256": "2be0aa74e5bfe3e4897ea9ca9121efce663a94a4df7850958dc2cf511c6f427c",
+      "size_bytes": 44048
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/.cargo/config.toml",
+      "path": "source/build-inputs/candidate/.cargo/config.toml",
+      "role": "build-input-snapshot",
+      "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+      "size_bytes": 238
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/caller.program",
+      "path": "source/fixtures/examples/modules/caller.program",
+      "role": "registry-or-workload-fixture",
+      "sha256": "ffb87ca110db595763139d17f6027f87af10ccb6c904397b3c6ecc083f77ce5b",
+      "size_bytes": 109,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/caller.program",
+      "verified_candidate_sha256": "ffb87ca110db595763139d17f6027f87af10ccb6c904397b3c6ecc083f77ce5b"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/examples.records.report.json",
+      "path": "source/fixtures/examples/modules/examples.records.report.json",
+      "role": "registry-or-workload-fixture",
+      "sha256": "60a516974aeaae1d0299574fd0883298f9966a2a6e06eef9ff408443759b7bd4",
+      "size_bytes": 829,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/examples.records.report.json",
+      "verified_candidate_sha256": "60a516974aeaae1d0299574fd0883298f9966a2a6e06eef9ff408443759b7bd4"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/package/program.modules.json",
+      "path": "source/fixtures/examples/modules/package/program.modules.json",
+      "role": "registry-or-workload-fixture",
+      "sha256": "d6f0cd207439bc81a3d1c6eddbf4c0f24a6795b0112b29680a2425f3bbddcebf",
+      "size_bytes": 1003,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/package/program.modules.json",
+      "verified_candidate_sha256": "d6f0cd207439bc81a3d1c6eddbf4c0f24a6795b0112b29680a2425f3bbddcebf"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/package/program.modules.lock.json",
+      "path": "source/fixtures/examples/modules/package/program.modules.lock.json",
+      "role": "registry-or-workload-fixture",
+      "sha256": "84108214d30522323e868fe61eb1f32028cc41eba917b5edc42d95f0f3f69446",
+      "size_bytes": 396,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/package/program.modules.lock.json",
+      "verified_candidate_sha256": "84108214d30522323e868fe61eb1f32028cc41eba917b5edc42d95f0f3f69446"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/queue_monitor/README.md",
+      "path": "source/fixtures/examples/modules/queue_monitor/README.md",
+      "role": "registry-or-workload-fixture",
+      "sha256": "ab98d59bfdd0f748dbb6e9befb85f300ed14727d0dc185623549be607fdbc6bd",
+      "size_bytes": 768,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/queue_monitor/README.md",
+      "verified_candidate_sha256": "ab98d59bfdd0f748dbb6e9befb85f300ed14727d0dc185623549be607fdbc6bd"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/queue_monitor/package/program.modules.json",
+      "path": "source/fixtures/examples/modules/queue_monitor/package/program.modules.json",
+      "role": "registry-or-workload-fixture",
+      "sha256": "791004daadb4a32eade31d6e5cb74e6570599ddeac562ea558a413a681c9ae0a",
+      "size_bytes": 1452,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/queue_monitor/package/program.modules.json",
+      "verified_candidate_sha256": "791004daadb4a32eade31d6e5cb74e6570599ddeac562ea558a413a681c9ae0a"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/queue_monitor/package/program.modules.lock.json",
+      "path": "source/fixtures/examples/modules/queue_monitor/package/program.modules.lock.json",
+      "role": "registry-or-workload-fixture",
+      "sha256": "0a5a8cc08a10ff2a84f1007588b0e3ac9f9e1ae1937bcda784acbe6cce3854a0",
+      "size_bytes": 408,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/queue_monitor/package/program.modules.lock.json",
+      "verified_candidate_sha256": "0a5a8cc08a10ff2a84f1007588b0e3ac9f9e1ae1937bcda784acbe6cce3854a0"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/queue_monitor/queue_monitor.graph.program",
+      "path": "source/fixtures/examples/modules/queue_monitor/queue_monitor.graph.program",
+      "role": "registry-or-workload-fixture",
+      "sha256": "db4b015afaef5183203265228e42b25cf932209c86a519aa0b1fd12b1db2c3d8",
+      "size_bytes": 159,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/queue_monitor/queue_monitor.graph.program",
+      "verified_candidate_sha256": "db4b015afaef5183203265228e42b25cf932209c86a519aa0b1fd12b1db2c3d8"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/queue_monitor/queue_monitor.poll.json",
+      "path": "source/fixtures/examples/modules/queue_monitor/queue_monitor.poll.json",
+      "role": "registry-or-workload-fixture",
+      "sha256": "87084e89369859a391d2148876aef1274472fa43ca9a72c8c266257b508c109c",
+      "size_bytes": 1439,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/queue_monitor/queue_monitor.poll.json",
+      "verified_candidate_sha256": "87084e89369859a391d2148876aef1274472fa43ca9a72c8c266257b508c109c"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/queue_monitor/src/queue_monitor.program",
+      "path": "source/fixtures/examples/modules/queue_monitor/src/queue_monitor.program",
+      "role": "registry-or-workload-fixture",
+      "sha256": "72150bf85ba784870ff8355d6e5cb8cc3f40d98a0a814e8b3be98fbbab5fefba",
+      "size_bytes": 282,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/queue_monitor/src/queue_monitor.program",
+      "verified_candidate_sha256": "72150bf85ba784870ff8355d6e5cb8cc3f40d98a0a814e8b3be98fbbab5fefba"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735/examples/modules/records.program",
+      "path": "source/fixtures/examples/modules/records.program",
+      "role": "registry-or-workload-fixture",
+      "sha256": "75ba63851d626b2e7f7127f2ef0e8a5f9b671291a13a9e9a8bcab8f69f90540e",
+      "size_bytes": 90,
+      "verified_candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/examples/modules/records.program",
+      "verified_candidate_sha256": "75ba63851d626b2e7f7127f2ef0e8a5f9b671291a13a9e9a8bcab8f69f90540e"
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/program-ast-cache/paired-runner/program_module_cache_pair.py",
+      "path": "source/driver/program_module_cache_pair.py",
+      "role": "paired-driver-or-build-driver",
+      "sha256": "c622f09d5aeaf4b4936e197590ada3ce687a12d8b18594789c2cd446f7a27fd3",
+      "size_bytes": 48812
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/program-ast-cache/paired-runner/test_program_module_cache_pair.py",
+      "path": "source/driver/test_program_module_cache_pair.py",
+      "role": "paired-driver-or-build-driver",
+      "sha256": "b482dc20cd583fd7887877ba07c91647fb2d253a0bf9fee85804ccd7459b27b3",
+      "size_bytes": 7967
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/program-ast-cache/paired-runner/README.md",
+      "path": "source/driver/README.md",
+      "role": "paired-driver-or-build-driver",
+      "sha256": "d885aa4c4cc9ded1f9fd77f99787e0f810d286601130b829794780b63505821e",
+      "size_bytes": 6430
+    },
+    {
+      "origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/build_program_ast_pair.py",
+      "path": "source/build/build_program_ast_pair.py",
+      "role": "paired-driver-or-build-driver",
+      "sha256": "1dddde2c508547a7306041a4e1ef150e0a454059886a60cb6d03725c2405950e",
+      "size_bytes": 3535
+    }
+  ],
+  "format": "execute.source_only_bundle_manifest.v1",
+  "harness": {
+    "caller_source_sha256": "8d43e2843689bdf6c69c24aba004dfacda55dc3af7d37734a1a1dee5963848c2",
+    "candidate_copy_sha256": "6547f9f245b384b6095495931002c1d313aa4217d10709a944d98448e2682793",
+    "candidate_origin": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree/tests/program_module_cache_bench.rs",
+    "expected_output_sha256": "e4ffbcc47a6351d4f01f1f32e031293f867f74313b790d2e1826e6ecfb9b4db8",
+    "input_sha256": "e4ffbcc47a6351d4f01f1f32e031293f867f74313b790d2e1826e6ecfb9b4db8",
+    "sha256": "6547f9f245b384b6095495931002c1d313aa4217d10709a944d98448e2682793",
+    "shared_harness_path": "source/arms/baseline/tests/program_module_cache_bench.rs",
+    "size_bytes": 6260
+  },
+  "patch_manifest": "source/patch-uncompressed-sha256.json",
+  "patch_manifest_sha256": "94e7f4a6495c5d0de08ba892b88ed1c2e4e1e77b745b961c5a600124a736839c",
+  "source_file_count": 31
+}

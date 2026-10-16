@@ -1,0 +1,84 @@
+{
+  "name": "color.rgb_to_hex",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "red": {
+      "type": "integer",
+      "required": true
+    },
+    "green": {
+      "type": "integer",
+      "required": true
+    },
+    "blue": {
+      "type": "integer",
+      "required": true
+    },
+    "uppercase": {
+      "type": "boolean"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "color.rgb_to_hex"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "color.convert"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "red": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "green": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "blue": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "uppercase": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

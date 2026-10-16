@@ -1,0 +1,13 @@
+{
+  "lock_version": 1,
+  "root": "examples.queue_monitor",
+  "packages": {
+    "examples.queue_monitor": {
+      "manifest": "package/program.modules.json",
+      "version": "1.0.0",
+      "interface_version": 2,
+      "manifest_sha256": "791004daadb4a32eade31d6e5cb74e6570599ddeac562ea558a413a681c9ae0a",
+      "source_sha256": "72150bf85ba784870ff8355d6e5cb8cc3f40d98a0a814e8b3be98fbbab5fefba"
+    }
+  }
+}

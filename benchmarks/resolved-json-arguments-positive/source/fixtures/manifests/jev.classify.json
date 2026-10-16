@@ -1,0 +1,32 @@
+{
+  "name": "jev.classify",
+  "binary": "@execute-model",
+  "accepts_stdin": true,
+  "cacheable": false,
+  "uncertain_on_failure": true,
+  "parameters": {
+    "question": { "type": "string", "required": true },
+    "labels": { "type": "list", "items": "string", "required": true, "min_items": 2 },
+    "model": { "type": "string" },
+    "minimum": { "type": "integer" },
+    "max_bytes": { "type": "integer" },
+    "timeout_ms": { "type": "integer" },
+    "env_file": { "type": "string" },
+    "fixture": { "type": "string" }
+  },
+  "arguments": [
+    { "literal": "classify" },
+    { "literal": "--provider" },
+    { "literal": "jev" },
+    { "when_present": "model", "append": [{ "literal": "--model" }, { "parameter": "model" }] },
+    { "literal": "--question" },
+    { "parameter": "question" },
+    { "literal": "--labels" },
+    { "spread": "labels" },
+    { "when_present": "minimum", "append": [{ "literal": "--minimum" }, { "parameter": "minimum" }] },
+    { "when_present": "max_bytes", "append": [{ "literal": "--max-bytes" }, { "parameter": "max_bytes" }] },
+    { "when_present": "timeout_ms", "append": [{ "literal": "--timeout-ms" }, { "parameter": "timeout_ms" }] },
+    { "when_present": "env_file", "append": [{ "literal": "--env-file" }, { "parameter": "env_file" }] },
+    { "when_present": "fixture", "append": [{ "literal": "--fixture" }, { "parameter": "fixture" }] }
+  ]
+}

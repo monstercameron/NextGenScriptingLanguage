@@ -1,0 +1,33 @@
+{
+  "name": "llm.extract",
+  "binary": "@execute-model",
+  "accepts_stdin": true,
+  "cacheable": false,
+  "uncertain_on_failure": true,
+  "parameters": {
+    "model": { "type": "string", "required": true },
+    "instruction": { "type": "string", "required": true },
+    "schema": { "type": "string", "required": true },
+    "max_tokens": { "type": "integer" },
+    "max_bytes": { "type": "integer" },
+    "timeout_ms": { "type": "integer" },
+    "env_file": { "type": "string" },
+    "fixture": { "type": "string" }
+  },
+  "arguments": [
+    { "literal": "extract" },
+    { "literal": "--provider" },
+    { "literal": "openai" },
+    { "literal": "--model" },
+    { "parameter": "model" },
+    { "literal": "--instruction" },
+    { "parameter": "instruction" },
+    { "literal": "--schema" },
+    { "parameter": "schema" },
+    { "when_present": "max_tokens", "append": [{ "literal": "--max-tokens" }, { "parameter": "max_tokens" }] },
+    { "when_present": "max_bytes", "append": [{ "literal": "--max-bytes" }, { "parameter": "max_bytes" }] },
+    { "when_present": "timeout_ms", "append": [{ "literal": "--timeout-ms" }, { "parameter": "timeout_ms" }] },
+    { "when_present": "env_file", "append": [{ "literal": "--env-file" }, { "parameter": "env_file" }] },
+    { "when_present": "fixture", "append": [{ "literal": "--fixture" }, { "parameter": "fixture" }] }
+  ]
+}

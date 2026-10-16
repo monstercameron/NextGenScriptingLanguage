@@ -1,0 +1,29 @@
+{
+  "attempt_id": "measurement-15-1-candidate",
+  "binary_sha256": "a2f24b5b544845d1a49415c31d368e866900ec29c69ee96e11cccc348f2e76d7",
+  "binary_sha256_before": "a2f24b5b544845d1a49415c31d368e866900ec29c69ee96e11cccc348f2e76d7",
+  "command": [
+    "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/emit-perf/build/candidate/test-binary",
+    "--exact",
+    "graph::transport::emit_perf_harness::emit_raw_samples_with_full_oracle",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+  "environment": {
+    "EXECUTE_EMIT_PERF_SAMPLES": "3",
+    "EXECUTE_EMIT_PERF_WARMUPS": "0",
+    "LC_ALL": "C",
+    "TZ": "UTC"
+  },
+  "global_pair_index": 17,
+  "phase": "measurement",
+  "phase_pair_index": 15,
+  "position_in_pair": 1,
+  "raw_report_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/emit-perf/paired-runs/run-38854235381-1/attempts/measurement-15-1-candidate/raw.json",
+  "side": "candidate",
+  "source_fingerprint_sha256": "a76a42e12a913d7c97b40509d24ec4101d301a05e3165ed0ecbeacd07ca41059",
+  "started_at": "2026-10-16T05:10:53.020Z",
+  "timeout_seconds": 60
+}

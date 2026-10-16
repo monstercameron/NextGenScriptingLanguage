@@ -1,0 +1,103 @@
+{
+  "name": "text.matches",
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "needle": {
+      "type": "string",
+      "required": true
+    },
+    "text": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "text.matches"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "matches": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": "integer"
+        },
+        "byte_offsets": {
+          "type": "json"
+        }
+      },
+      "required": [
+        "matches",
+        "count",
+        "byte_offsets"
+      ]
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "needle": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "matches": {
+                "type": "boolean"
+              },
+              "count": {
+                "type": "integer"
+              },
+              "byte_offsets": {
+                "type": "json"
+              }
+            },
+            "required": [
+              "matches",
+              "count",
+              "byte_offsets"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

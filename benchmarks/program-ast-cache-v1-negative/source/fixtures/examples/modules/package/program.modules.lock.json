@@ -1,0 +1,13 @@
+{
+  "lock_version": 1,
+  "root": "examples.records",
+  "packages": {
+    "examples.records": {
+      "manifest": "package/program.modules.json",
+      "version": "1.0.0",
+      "interface_version": 1,
+      "manifest_sha256": "d6f0cd207439bc81a3d1c6eddbf4c0f24a6795b0112b29680a2425f3bbddcebf",
+      "source_sha256": "75ba63851d626b2e7f7127f2ef0e8a5f9b671291a13a9e9a8bcab8f69f90540e"
+    }
+  }
+}

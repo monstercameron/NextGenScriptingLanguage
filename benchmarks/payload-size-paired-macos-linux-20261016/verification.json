@@ -1,0 +1,331 @@
+{
+  "archive_audit": {
+    "archive": "raw-measurements.tar.gz",
+    "archive_bytes": 871659,
+    "archive_sha256": "d665f29f8bce88285fc03b66f936452e5bcb481072b209579c1bd3c5b5b015ac",
+    "every_member_matches_manifest_and_original": true,
+    "issues": [],
+    "manifest_file_entries": 1024,
+    "regular_files": 1024,
+    "safe_relative_posix_paths": true,
+    "tar_members": 1233
+  },
+  "bundle": "payload-size-counter-local-macos-pending-hosted-profile",
+  "checks": {
+    "all_attempts_succeeded": true,
+    "all_checks_pass": true,
+    "attempt_evidence_inventory_matches_audit": true,
+    "audit_prereg_hashes_match": true,
+    "audit_reports_34_slower_pairs_preserved": true,
+    "binary_receipt_source_and_binary_hashes_match_claims": true,
+    "direct_report_hash_bound_by_audit": true,
+    "direct_report_prereg_matches_bundle": true,
+    "frozen_transport_hashes_match_claims": true,
+    "full_emit_report_hash_bound_by_audit": true,
+    "full_emit_report_prereg_matches_bundle": true,
+    "hosted_artifact_and_audit_byte_roundtrips_match_sources": true,
+    "hosted_artifact_original_files_count_539": true,
+    "hosted_audit_sha256_matches_requested": true,
+    "hosted_compressed_files_manifest_roundtrips_exactly": true,
+    "hosted_measurement_remains_pending": true,
+    "hosted_preregistration_sha256_matches_report_and_audit": true,
+    "hosted_profile_is_full_emit_not_direct_size": true,
+    "hosted_profile_support_matches_source_only_dispatch_pins": true,
+    "hosted_report_is_complete_102_of_102": true,
+    "hosted_report_sha256_matches_audit": true,
+    "hosted_report_source_and_binary_pins_match_audit": true,
+    "hosted_result_audit_found_no_protocol_issue": true,
+    "hosted_run_status_is_success_and_profile_payload_size": true,
+    "local_dispatch_preregistration_sha_matches_audit": true,
+    "no_uncompressed_patch_or_log_remains": true,
+    "raw_archive_inventory_valid": true,
+    "source_hash_values_match_freeze": true
+  },
+  "format": "execute.benchmark_bundle_verification.v1",
+  "hosted_artifact_inventory": {
+    "artifact_manifest_sha256": "63c194ee33c139efbc0b177af5570b13906facc95aaa81525ce26ad9159d5b91",
+    "attempt_evidence_files": 510,
+    "attempt_evidence_manifest_sha256": "f80eed7081285d17110db4a24d25f5f4dd2d66adba80ae955f6c0d573c289462",
+    "audit_bytes": 12638,
+    "compressed_files_manifest_sha256": "7b253567a90eb200d3521fdc0a9af7c494a788c615b624b941249462c9b71bf4",
+    "files": 539,
+    "original_bytes": 48817610
+  },
+  "hosted_profile_status": "completed_fixed_hosted_linux_full_emit_replication; direct_size_measurement_remains_local_only",
+  "hosted_run": {
+    "attempt": 1,
+    "audit_decision": "Evidence internally consistent with the frozen one-run protocol; observed per-case median timing changes are reported without a general performance claim.",
+    "audit_limitations": [
+      "This is one fixed GitHub-hosted Linux run on an ubuntu-24.04 workflow; the retained host record identifies x86_64 Linux and an Azure kernel but does not identify an exact CPU model or establish general hardware representativeness.",
+      "The workload is four synthetic, preallocated, lossless NodeIo.emit queue cases. It does not measure full graph execution, scheduler/runtime overhead, an application task, or end-to-end system throughput.",
+      "All four arm-median ratios favor the candidate, but losses remain in every case (1 to 18 of 48). The fanout_8_integer arm-median change is only about -0.8% and has 18 slower paired results. The report supplies no confidence intervals or inferential test; retain all losses and avoid a universal speedup claim.",
+      "Each raw sample retains input hashes, per-sink full-stream hashes, event counts and representative envelopes. The frozen harness contract states that it checks every envelope by value and serialized bytes during execution, but this reviewer did not rerun binaries and the persisted oracle summaries alone cannot reconstruct every event in every stream.",
+      "The audit validates the downloaded run artifacts and frozen provenance statically; it is not an independent rerun and is not a full-runtime or product acceptance result.",
+      "The remote run report hashes its generated hosted preregistration, not the separate local dispatch-preregistration file. I reconciled the local dispatch record by run ID/profile, workflow commit, frozen file hashes and matching protocol fields; the downloaded remote report does not cryptographically attest the local dispatch file bytes."
+    ],
+    "audit_sha256": "d37787de6eea7ceb7045fae9e1e8104d887145cbb14a00df1f2a0282b4b7932f",
+    "binary_sha256": {
+      "baseline": "aebfc1bd12e38f4c5b1c92f3d8113cbaa35296bc3c068d9fe5238b9b06d31248",
+      "candidate": "a2f24b5b544845d1a49415c31d368e866900ec29c69ee96e11cccc348f2e76d7"
+    },
+    "cases": {
+      "fanout_4_text": {
+        "faster_pairs": 47,
+        "median_of_48_paired_ratios": 0.933298931433467,
+        "median_paired_delta_ns": -3075.0,
+        "ratio_of_arm_medians": 0.9382599355531687,
+        "slower_pairs": 1
+      },
+      "fanout_4_typed_record": {
+        "faster_pairs": 44,
+        "median_of_48_paired_ratios": 0.9449714441181994,
+        "median_paired_delta_ns": -3270.5,
+        "ratio_of_arm_medians": 0.9443996370601875,
+        "slower_pairs": 4
+      },
+      "fanout_8_integer": {
+        "faster_pairs": 30,
+        "median_of_48_paired_ratios": 0.9834923848205342,
+        "median_paired_delta_ns": -5448.0,
+        "ratio_of_arm_medians": 0.9920018513112698,
+        "slower_pairs": 18
+      },
+      "single_sink_integer": {
+        "faster_pairs": 37,
+        "median_of_48_paired_ratios": 0.9520636964139257,
+        "median_paired_delta_ns": -5469.0,
+        "ratio_of_arm_medians": 0.9696859410229552,
+        "slower_pairs": 11
+      }
+    },
+    "common_base_commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+    "comparisons": 192,
+    "hosted_preregistration_sha256": "d0b49c057ea1e0c4ff74af43fcefebb3ab20e56d52b88c58f2ec65507d47e330",
+    "local_dispatch_preregistration_sha256": "a3e8ad43a4d619da82c864aae351710278e48e2e9e1ed2f84bcd1376bf1aa92d",
+    "paired_report_sha256": "fc3974f37408a19627e8233aeeb37df72927bc9d684fd18feea0e6c3de7fd7ad",
+    "platform": {
+      "machine": "x86_64",
+      "system": "Linux"
+    },
+    "protocol": {
+      "failed_invocations": 0,
+      "measured_pairs": 48,
+      "raw_samples": 1224,
+      "successful_invocations": 102,
+      "warmup_pairs": 3
+    },
+    "run_id": 38854235381,
+    "slower_pairs_total": 34,
+    "transport_sha256": {
+      "baseline": "36e59989fc8abe3afeeab0922792cfb4fff1110ef234b6e8946c9930c54dc056",
+      "candidate": "5975e969cf68e8b5d7cc5c11548d0b2234477f397697da81760c499d3ccb3927"
+    },
+    "workflow_commit": "d0370b3a96072e58cb3236603e4b02f6e8804427"
+  },
+  "independent_audit": {
+    "direct_attempts": 102,
+    "direct_failed": 0,
+    "direct_raw_samples_checked": 1224,
+    "direct_size_oracles": {
+      "escape_heavy_unicode_control_text": {
+        "serialized_bytes": 909,
+        "sha256": "5170cebd31a9d25220e15f8aa352b2f79ab1997202eec7ef15e48d3534dba427"
+      },
+      "nested_record": {
+        "serialized_bytes": 134,
+        "sha256": "1dbcb868fcc5c41f18a431873b319e9fee536527289beaa1c847950c07d7eff1"
+      },
+      "scalar_integer": {
+        "serialized_bytes": 14,
+        "sha256": "43658147a509802a9cab1d609d9dffa78184e5c23bba509843263d809fba84bb"
+      },
+      "text_4k": {
+        "serialized_bytes": 4109,
+        "sha256": "b36d1322c35ce1d15264bd66332de0d3583ea77a7179300dac8609831a84f4d9"
+      }
+    },
+    "full_emit_attempts": 102,
+    "full_emit_events_reconstructed": 430848,
+    "full_emit_failed": 0,
+    "full_emit_oracle_cases": [
+      "fanout_4_text",
+      "fanout_4_typed_record",
+      "fanout_8_integer",
+      "single_sink_integer"
+    ],
+    "full_emit_raw_samples_checked": 1224,
+    "sha256": "46b406588e1f5276bd6a6076bf6cb11b1c6b9ad9ba43295492f18d0d30ab5661"
+  },
+  "runs": {
+    "local_macos_arm64_direct_size": {
+      "attempts": 102,
+      "case_metrics": {
+        "escape_heavy_unicode_control_text": {
+          "candidate_over_baseline_ratio": 0.5324353221268306,
+          "losses": 0,
+          "median_paired_delta_ns": -1631750.0,
+          "relative_change_percent": -46.756467787316936,
+          "ties": 0,
+          "wins": 48
+        },
+        "nested_record": {
+          "candidate_over_baseline_ratio": 0.4088415948207359,
+          "losses": 0,
+          "median_paired_delta_ns": -466063.0,
+          "relative_change_percent": -59.11584051792641,
+          "ties": 0,
+          "wins": 48
+        },
+        "scalar_integer": {
+          "candidate_over_baseline_ratio": 0.20514708299096138,
+          "losses": 0,
+          "median_paired_delta_ns": -121083.0,
+          "relative_change_percent": -79.48529170090386,
+          "ties": 0,
+          "wins": 48
+        },
+        "text_4k": {
+          "candidate_over_baseline_ratio": 0.8015228726812529,
+          "losses": 0,
+          "median_paired_delta_ns": -1330313.0,
+          "relative_change_percent": -19.84771273187471,
+          "ties": 0,
+          "wins": 48
+        }
+      },
+      "failed": 0,
+      "format": "execute.graph.payload_size_paired_run.v1",
+      "measured_pairs": 48,
+      "preregistration_sha256": "a96c515c9ef10028c7e245e417137e4423ac71ab9879104ea08435f4215bf46e",
+      "sha256": "e2df7112a0550b37b57d00c2b710f0e5a49c67feaa67277662b938e1cf477d58",
+      "status": "complete",
+      "successful": 102,
+      "warmup_pairs": 3
+    },
+    "local_macos_arm64_full_emit": {
+      "attempts": 102,
+      "case_metrics": {
+        "fanout_4_text": {
+          "candidate_over_baseline_ratio": 0.9011356097560975,
+          "losses": 19,
+          "median_paired_delta_ns": -5062.5,
+          "relative_change_percent": -9.886439024390247,
+          "ties": 0,
+          "wins": 29
+        },
+        "fanout_4_typed_record": {
+          "candidate_over_baseline_ratio": 0.9685939355106195,
+          "losses": 13,
+          "median_paired_delta_ns": -4562.5,
+          "relative_change_percent": -3.1406064489380547,
+          "ties": 0,
+          "wins": 35
+        },
+        "fanout_8_integer": {
+          "candidate_over_baseline_ratio": 0.9358062996532464,
+          "losses": 17,
+          "median_paired_delta_ns": -6729.0,
+          "relative_change_percent": -6.419370034675365,
+          "ties": 0,
+          "wins": 31
+        },
+        "single_sink_integer": {
+          "candidate_over_baseline_ratio": 0.8932194725528234,
+          "losses": 6,
+          "median_paired_delta_ns": -8000.5,
+          "relative_change_percent": -10.67805274471766,
+          "ties": 0,
+          "wins": 42
+        }
+      },
+      "failed": 0,
+      "format": "execute.graph.emit_paired_run.v1",
+      "measured_pairs": 48,
+      "preregistration_sha256": "badce2d251ea1231715a780c505e4d209b4099f078e933608303457cd3562f83",
+      "sha256": "657da3ee8e014290efc9abf009b76f9fc1511d9721b05929e2be3f6e7f2b756e",
+      "status": "complete",
+      "successful": 102,
+      "warmup_pairs": 3
+    }
+  },
+  "source_commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+  "source_identity": {
+    "binary_sha256": {
+      "baseline": "4efd31b25e751494e96abee2bb308e04eb4559df419e8c15797dcd139064efe4",
+      "candidate": "1c9be6829546dd964aaed8b659659afa2ea33e21903756c51a5f06e08460bcb0"
+    },
+    "direct_size_harness_sha256": "2b7cc4c1f61a68cca19d31a35bc9b2ab55c9e2171b4fe7f6e1d67b95f16c6619",
+    "full_emit_harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "transport_sha256_baseline": "36e59989fc8abe3afeeab0922792cfb4fff1110ef234b6e8946c9930c54dc056",
+    "transport_sha256_candidate": "5975e969cf68e8b5d7cc5c11548d0b2234477f397697da81760c499d3ccb3927"
+  },
+  "source_pin_audit": {
+    "all_pinned_files_match": true,
+    "files": [
+      {
+        "actual_sha256": "bdb1dcd89cc1c09ea3a5e12d0abffb7ce408019955110cca1376d6e42e0f57a5",
+        "bundle_path": "source/hosted-payload-profile-workflow.yml",
+        "expected_sha256": "bdb1dcd89cc1c09ea3a5e12d0abffb7ce408019955110cca1376d6e42e0f57a5",
+        "file_key": ".github/workflows/emit-perf-hosted-replication.yml",
+        "matches": true
+      },
+      {
+        "actual_sha256": "f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974",
+        "bundle_path": "source/hosted-emit-baseline-patch.xz",
+        "expected_sha256": "f3583a3d18929b393ebfca82a5422d5b306e4954e33bc7e8b596161393879974",
+        "file_key": "benchmarks/emit_perf/baseline-patch.xz",
+        "matches": true
+      },
+      {
+        "actual_sha256": "72fb1e5a68a7322d084c7610e48f2bdc8836a79a6550ef3afaf5475d14f696f7",
+        "bundle_path": "source/hosted-payload-baseline-payload-size-patch.xz",
+        "expected_sha256": "72fb1e5a68a7322d084c7610e48f2bdc8836a79a6550ef3afaf5475d14f696f7",
+        "file_key": "benchmarks/emit_perf/baseline-payload-size-patch.xz",
+        "matches": true
+      },
+      {
+        "actual_sha256": "239b3f3a19fcb65b2a2be490b32e7e9fb00acdbcb9f62a562693baebb8b7f9a3",
+        "bundle_path": "source/hosted-emit-candidate-patch.xz",
+        "expected_sha256": "239b3f3a19fcb65b2a2be490b32e7e9fb00acdbcb9f62a562693baebb8b7f9a3",
+        "file_key": "benchmarks/emit_perf/candidate-patch.xz",
+        "matches": true
+      },
+      {
+        "actual_sha256": "494a34d2bdd181dce3d9671c89c9201d7a977020f01e28bad742e50540f7429e",
+        "bundle_path": "source/hosted-payload-candidate-payload-size-patch.xz",
+        "expected_sha256": "494a34d2bdd181dce3d9671c89c9201d7a977020f01e28bad742e50540f7429e",
+        "file_key": "benchmarks/emit_perf/candidate-payload-size-patch.xz",
+        "matches": true
+      },
+      {
+        "actual_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+        "bundle_path": "source/full-emit-harness.rs",
+        "expected_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+        "file_key": "benchmarks/emit_perf/emit-perf-harness-final.rs",
+        "matches": true
+      },
+      {
+        "actual_sha256": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+        "bundle_path": "source/hosted-payload-profile-runner.py",
+        "expected_sha256": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+        "file_key": "benchmarks/emit_perf/emit_perf_pair.py",
+        "matches": true
+      },
+      {
+        "actual_sha256": "f6c3132d6bad1f55d97620328818b733788345038c7a601b8b75568ab591afaf",
+        "bundle_path": "source/hosted-payload-profile-support.py",
+        "expected_sha256": "f6c3132d6bad1f55d97620328818b733788345038c7a601b8b75568ab591afaf",
+        "file_key": "benchmarks/emit_perf/hosted_emit_support.py",
+        "matches": true
+      },
+      {
+        "actual_sha256": "d6fd51f6fb30d42a6631e18a12cb338ee6e6e277586c5ae984536c24a27cb720",
+        "bundle_path": "source/hosted-payload-profile-support-tests.py",
+        "expected_sha256": "d6fd51f6fb30d42a6631e18a12cb338ee6e6e277586c5ae984536c24a27cb720",
+        "file_key": "benchmarks/emit_perf/test_hosted_emit_support.py",
+        "matches": true
+      }
+    ],
+    "issues": []
+  }
+}

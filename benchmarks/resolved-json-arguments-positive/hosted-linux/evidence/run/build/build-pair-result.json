@@ -1,0 +1,9 @@
+{
+  "completed_at": "2026-10-16T06:39:49Z",
+  "failed_sides": [],
+  "no_retries": true,
+  "sides": [
+    "baseline",
+    "candidate"
+  ]
+}

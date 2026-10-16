@@ -1,0 +1,213 @@
+name: Emit hosted Linux paired replication
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_profile:
+        description: Frozen emit benchmark profile
+        type: choice
+        required: true
+        default: emit-sync
+        options:
+          - emit-sync
+          - payload-size
+
+permissions:
+  contents: read
+
+jobs:
+  emit-hosted-replication:
+    name: Fixed 48-pair Linux replication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      EXPERIMENT_PROFILE: ${{ github.event.inputs.experiment_profile || 'emit-sync' }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Select a literal frozen experiment profile
+        id: profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/emit-perf/build evidence/emit-perf/paired-runs
+          python3 benchmarks/emit_perf/hosted_emit_support.py select-profile \
+            --profile "$EXPERIMENT_PROFILE" --github-env "$GITHUB_ENV" \
+            --github-output "$GITHUB_OUTPUT" \
+            > evidence/emit-perf/build/profile-selection.json
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - name: Check fixed inputs and offline evidence helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPERIMENT_PROFILE" == "emit-sync" || "$EXPERIMENT_PROFILE" == "payload-size" ]]
+          [[ "$INVOCATION_TIMEOUT_SECONDS" == "60" ]]
+          printf '%s  %s\n' "$DRIVER_SHA256" benchmarks/emit_perf/emit_perf_pair.py | sha256sum --check
+          printf '%s  %s\n' "$HARNESS_SHA256" benchmarks/emit_perf/emit-perf-harness-final.rs | sha256sum --check
+          printf '%s  %s\n' "$BASELINE_PATCH_XZ_SHA256" benchmarks/emit_perf/$BASELINE_PATCH_ARCHIVE | sha256sum --check
+          printf '%s  %s\n' "$CANDIDATE_PATCH_XZ_SHA256" benchmarks/emit_perf/$CANDIDATE_PATCH_ARCHIVE | sha256sum --check
+          python3 -m unittest discover -s benchmarks/emit_perf -p 'test_hosted_emit_support.py'
+          mkdir -p evidence/emit-perf/build evidence/emit-perf/paired-runs
+          {
+            printf 'purpose=independent hosted Linux replication of one frozen emit profile\n'
+            printf 'experiment_profile=%s\n' "$EXPERIMENT_PROFILE"
+            printf 'base_commit=%s\n' "$BASE_COMMIT"
+            printf 'measured_pairs=48\nwarmup_pairs=3\ninvocation_timeout_seconds=%s\n' "$INVOCATION_TIMEOUT_SECONDS"
+            printf 'no_result_dependent_retries=true\n'
+            printf 'event=workflow_dispatch\nrun_id=%s\nrun_attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+          } > evidence/emit-perf/hosted-request.txt
+          python3 --version > evidence/emit-perf/build/host-tool-versions.txt
+          cargo --version >> evidence/emit-perf/build/host-tool-versions.txt
+          rustc --version --verbose >> evidence/emit-perf/build/host-tool-versions.txt
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout exact common base for baseline
+        with:
+          ref: ${{ steps.profile.outputs.base_commit }}
+          path: build-source/baseline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        name: Checkout exact common base for candidate
+        with:
+          ref: ${{ steps.profile.outputs.base_commit }}
+          path: build-source/candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Apply exact frozen source patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_archive="$GITHUB_WORKSPACE/benchmarks/emit_perf/$BASELINE_PATCH_ARCHIVE"
+          candidate_archive="$GITHUB_WORKSPACE/benchmarks/emit_perf/$CANDIDATE_PATCH_ARCHIVE"
+          baseline_patch="$RUNNER_TEMP/emit-perf-baseline.patch"
+          candidate_patch="$RUNNER_TEMP/emit-perf-candidate.patch"
+          python3 benchmarks/emit_perf/hosted_emit_support.py unpack-patch \
+            --profile "$EXPERIMENT_PROFILE" --side baseline --archive "$baseline_archive" --output "$baseline_patch" \
+            > evidence/emit-perf/build/unpack-baseline-patch.json
+          python3 benchmarks/emit_perf/hosted_emit_support.py unpack-patch \
+            --profile "$EXPERIMENT_PROFILE" --side candidate --archive "$candidate_archive" --output "$candidate_patch" \
+            > evidence/emit-perf/build/unpack-candidate-patch.json
+          printf '%s  %s\n' "$BASELINE_PATCH_SHA256" "$baseline_patch" | sha256sum --check
+          printf '%s  %s\n' "$CANDIDATE_PATCH_SHA256" "$candidate_patch" | sha256sum --check
+          for side in baseline candidate; do
+            root="$GITHUB_WORKSPACE/build-source/$side"
+            log="$GITHUB_WORKSPACE/evidence/emit-perf/build/patch-$side.log"
+            mkdir -p "$(dirname "$log")"
+            [[ "$(git -C "$root" rev-parse HEAD)" == "$BASE_COMMIT" ]]
+            if [[ "$side" == baseline ]]; then
+              patch="$baseline_patch"
+            else
+              patch="$candidate_patch"
+            fi
+            git -C "$root" apply --check "$patch" > "$log" 2>&1
+            git -C "$root" apply "$patch" >> "$log" 2>&1
+            git -C "$root" diff --check
+            mapfile -t changed < <(git -C "$root" diff --name-only)
+            mapfile -t staged < <(git -C "$root" diff --cached --name-only)
+            mapfile -t untracked < <(git -C "$root" ls-files --others --exclude-standard)
+            [[ ${#changed[@]} -eq 1 && "${changed[0]}" == "src/graph/transport.rs" ]]
+            [[ ${#staged[@]} -eq 0 && ${#untracked[@]} -eq 0 ]]
+          done
+
+      - name: Extract and freeze both source arms and the shared harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 benchmarks/emit_perf/hosted_emit_support.py freeze \
+            --profile "$EXPERIMENT_PROFILE" \
+            --baseline-root "$GITHUB_WORKSPACE/build-source/baseline" \
+            --candidate-root "$GITHUB_WORKSPACE/build-source/candidate" \
+            --frozen-harness "$GITHUB_WORKSPACE/benchmarks/emit_perf/emit-perf-harness-final.rs" \
+            --output-dir "$GITHUB_WORKSPACE/evidence/emit-perf/build"
+          printf '%s  %s\n' "$BASELINE_SOURCE_SHA256" "$GITHUB_WORKSPACE/build-source/baseline/src/graph/transport.rs" | sha256sum --check
+          printf '%s  %s\n' "$CANDIDATE_SOURCE_SHA256" "$GITHUB_WORKSPACE/build-source/candidate/src/graph/transport.rs" | sha256sum --check
+          printf '%s  %s\n' "$HARNESS_SHA256" evidence/emit-perf/build/emit-perf-harness-extracted.rs | sha256sum --check
+
+      - name: Build both arms in separate fresh release target directories
+        shell: bash
+        run: |
+          set -uo pipefail
+          failed=0
+          for side in baseline candidate; do
+            root="$GITHUB_WORKSPACE/build-source/$side"
+            target="$RUNNER_TEMP/emit-perf-$side-target"
+            output="$GITHUB_WORKSPACE/evidence/emit-perf/build/$side"
+            mkdir -p "$output"
+            if [[ -e "$target" ]]; then
+              printf 'target directory was not fresh: %s\n' "$target" > "$output/target-freshness-error.txt"
+              failed=1
+              continue
+            fi
+            mkdir -p "$target"
+            cargo --version > "$output/tool-versions.txt"
+            rustc --version --verbose >> "$output/tool-versions.txt"
+            set +e
+            CARGO_TARGET_DIR="$target" CARGO_INCREMENTAL=0 \
+              cargo test --manifest-path "$root/Cargo.toml" --locked --release --lib --no-run \
+                --message-format=json > "$output/cargo-stdout.jsonl" 2> "$output/cargo-stderr.log"
+            status=$?
+            set -e
+            printf '%s\n' "$status" > "$output/cargo-exit-status.txt"
+            if [[ "$status" -ne 0 ]]; then
+              failed=1
+              continue
+            fi
+            set +e
+            python3 benchmarks/emit_perf/hosted_emit_support.py record-build \
+              --profile "$EXPERIMENT_PROFILE" \
+              --side "$side" \
+              --root "$root" \
+              --target-dir "$target" \
+              --cargo-json "$output/cargo-stdout.jsonl" \
+              --output-dir "$output" \
+              --fresh-target-dir-confirmed > "$output/receipt-command.json" 2> "$output/receipt-error.log"
+            receipt_status=$?
+            set -e
+            printf '%s\n' "$receipt_status" > "$output/receipt-exit-status.txt"
+            if [[ "$receipt_status" -ne 0 ]]; then
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Prepare the fixed preregistration
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$DRIVER_SHA256" benchmarks/emit_perf/emit_perf_pair.py | sha256sum --check
+          python3 benchmarks/emit_perf/emit_perf_pair.py prepare \
+            --source-freeze "$GITHUB_WORKSPACE/evidence/emit-perf/build/emit-source-freeze.json" \
+            --baseline-receipt "$GITHUB_WORKSPACE/evidence/emit-perf/build/baseline/build-receipt.json" \
+            --candidate-receipt "$GITHUB_WORKSPACE/evidence/emit-perf/build/candidate/build-receipt.json" \
+            --harness-source "$GITHUB_WORKSPACE/evidence/emit-perf/build/emit-perf-harness-extracted.rs" \
+            --preregistration "$GITHUB_WORKSPACE/evidence/emit-perf/hosted-preregistration.json"
+
+      - name: Run the single fixed 48-pair cross-platform replication
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$GITHUB_WORKSPACE/evidence/emit-perf/paired-runs/run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python3 benchmarks/emit_perf/emit_perf_pair.py run \
+            --preregistration "$GITHUB_WORKSPACE/evidence/emit-perf/hosted-preregistration.json" \
+            --report-dir "$report"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: emit-hosted-replication-${{ github.event.inputs.experiment_profile || 'emit-sync' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/emit-perf
+          if-no-files-found: warn
+          retention-days: 90

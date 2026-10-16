@@ -1,0 +1,11 @@
+{
+  "name": "cd",
+  "binary": "cd",
+  "builtin": "cd",
+  "parameters": {
+    "path": { "type": "string", "required": true }
+  },
+  "arguments": [
+    { "parameter": "path" }
+  ]
+}

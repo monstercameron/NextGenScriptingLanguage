@@ -1,0 +1,33 @@
+{
+  "compression": "XZ (LZMA2), lossless",
+  "format": "execute.source_patch_xz_manifest.v1",
+  "patches": [
+    {
+      "commit": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+      "compressed_path": "source/patches/baseline-product.patch.xz",
+      "compressed_sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+      "compressed_size_bytes": 32,
+      "origin_git_diff": "git -C /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-baseline-0735 diff --binary HEAD",
+      "tracked_paths": [],
+      "uncompressed_name": "baseline-product.patch",
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "uncompressed_size_bytes": 0
+    },
+    {
+      "commit": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+      "compressed_path": "source/patches/candidate-product.patch.xz",
+      "compressed_sha256": "5f63c3d3ee64e91145ba3c3dc6401bc69d42396d579d331d53eb0923cc80993a",
+      "compressed_size_bytes": 2568,
+      "origin_git_diff": "git -C /Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/program-ast-cache-worktree diff --binary HEAD",
+      "tracked_paths": [
+        "src/modules.rs",
+        "src/runtime.rs",
+        "src/runtime/program_backend.rs",
+        "tests/program_modules.rs"
+      ],
+      "uncompressed_name": "candidate-product.patch",
+      "uncompressed_sha256": "9b98360603c6ab8328dd9512cdb9cb036b644aee3672cd8bd33217b227180e51",
+      "uncompressed_size_bytes": 7864
+    }
+  ]
+}

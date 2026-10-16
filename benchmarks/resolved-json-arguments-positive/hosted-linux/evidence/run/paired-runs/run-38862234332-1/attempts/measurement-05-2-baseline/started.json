@@ -1,0 +1,29 @@
+{
+  "attempt_id": "measurement-05-2-baseline",
+  "binary_sha256": "dd020130550dcbd2e87f60b5a2ba29adf889ed71bb84f138b2a6c90af99d7d74",
+  "binary_sha256_before": "dd020130550dcbd2e87f60b5a2ba29adf889ed71bb84f138b2a6c90af99d7d74",
+  "command": [
+    "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/literal-json-arguments/build/baseline/baseline-test-binary",
+    "--exact",
+    "runtime::resolved_json_arguments_bench::repeated_number_add_runtime_samples",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "compile_receipt_sha256": "5babfbcfc1abccb858f1926afe1a11be180241743762cc02ed9d89befc6c309a",
+  "environment": {
+    "EXECUTE_JSON_ARGUMENTS_BENCH_SAMPLES": "3",
+    "EXECUTE_JSON_ARGUMENTS_BENCH_WARMUPS": "0",
+    "LC_ALL": "C",
+    "TZ": "UTC"
+  },
+  "global_pair_index": 7,
+  "phase": "measurement",
+  "phase_pair_index": 5,
+  "position_in_pair": 2,
+  "raw_report_path": "/home/runner/work/NextGenScriptingLanguage/NextGenScriptingLanguage/evidence/literal-json-arguments/paired-runs/run-38862234332-1/attempts/measurement-05-2-baseline/raw.json",
+  "side": "baseline",
+  "source_fingerprint_sha256": "e27af134925cf524c6b495a8081f7a20229df7b22c30f3e8690f097b123ff960",
+  "started_at": "2026-10-16T06:39:49.686Z",
+  "timeout_seconds": 120
+}

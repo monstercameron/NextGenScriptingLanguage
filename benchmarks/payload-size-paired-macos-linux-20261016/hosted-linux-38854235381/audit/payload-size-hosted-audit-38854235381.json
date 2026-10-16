@@ -1,0 +1,209 @@
+{
+  "artifact_paths": {
+    "downloaded_run": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/payload-size-hosted-linux-38854235381/emit-hosted-replication-payload-size-38854235381-1",
+    "hosted_preregistration": "hosted-preregistration.json",
+    "hosted_request": "hosted-request.txt",
+    "paired_report": "paired-runs/run-38854235381-1/paired-report.json",
+    "profile_selection": "build/profile-selection.json",
+    "source_freeze": "build/emit-source-freeze.json"
+  },
+  "case_design": [
+    {
+      "events_per_sink": 256,
+      "name": "single_sink_integer",
+      "remote_metadata": false,
+      "sinks": 1
+    },
+    {
+      "events_per_sink": 128,
+      "name": "fanout_8_integer",
+      "remote_metadata": false,
+      "sinks": 8
+    },
+    {
+      "events_per_sink": 16,
+      "name": "fanout_4_text",
+      "remote_metadata": true,
+      "sinks": 4
+    },
+    {
+      "events_per_sink": 16,
+      "name": "fanout_4_typed_record",
+      "remote_metadata": true,
+      "sinks": 4
+    }
+  ],
+  "decision": "Evidence internally consistent with the frozen one-run protocol; observed per-case median timing changes are reported without a general performance claim.",
+  "dispatch": {
+    "preregistration_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/emit-perf/hosted-replication/payload-size-dispatch-preregistration.json",
+    "preregistration_sha256": "a3e8ad43a4d619da82c864aae351710278e48e2e9e1ed2f84bcd1376bf1aa92d",
+    "profile": "payload-size",
+    "retry_policy": "one run; no outcome-dependent or timeout retries",
+    "run_attempt": 1,
+    "run_conclusion": "success",
+    "run_id": 38854235381,
+    "run_status_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/payload-size-hosted-linux-38854235381-status.json",
+    "run_status_sha256": "83234ba3c357741b2d82f17be7f5ab3c52d70e9735b2d491460d72a6d91c2521",
+    "workflow_commit": "d0370b3a96072e58cb3236603e4b02f6e8804427",
+    "workflow_path": ".github/workflows/emit-perf-hosted-replication.yml",
+    "workflow_sha256": "bdb1dcd89cc1c09ea3a5e12d0abffb7ce408019955110cca1376d6e42e0f57a5"
+  },
+  "host": {
+    "machine": "x86_64",
+    "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+    "release": "6.17.0-1022-azure",
+    "system": "Linux"
+  },
+  "limitations": [
+    "This is one fixed GitHub-hosted Linux run on an ubuntu-24.04 workflow; the retained host record identifies x86_64 Linux and an Azure kernel but does not identify an exact CPU model or establish general hardware representativeness.",
+    "The workload is four synthetic, preallocated, lossless NodeIo.emit queue cases. It does not measure full graph execution, scheduler/runtime overhead, an application task, or end-to-end system throughput.",
+    "All four arm-median ratios favor the candidate, but losses remain in every case (1 to 18 of 48). The fanout_8_integer arm-median change is only about -0.8% and has 18 slower paired results. The report supplies no confidence intervals or inferential test; retain all losses and avoid a universal speedup claim.",
+    "Each raw sample retains input hashes, per-sink full-stream hashes, event counts and representative envelopes. The frozen harness contract states that it checks every envelope by value and serialized bytes during execution, but this reviewer did not rerun binaries and the persisted oracle summaries alone cannot reconstruct every event in every stream.",
+    "The audit validates the downloaded run artifacts and frozen provenance statically; it is not an independent rerun and is not a full-runtime or product acceptance result.",
+    "The remote run report hashes its generated hosted preregistration, not the separate local dispatch-preregistration file. I reconciled the local dispatch record by run ID/profile, workflow commit, frozen file hashes and matching protocol fields; the downloaded remote report does not cryptographically attest the local dispatch file bytes."
+  ],
+  "protocol_and_build": {
+    "all_48_pairs_valid_for_timing": true,
+    "all_binary_hashes_stable_before_after": true,
+    "all_pair_input_and_oracle_equal": true,
+    "all_source_fingerprints_stable_after_run": true,
+    "arms": {
+      "baseline": {
+        "binary_sha256": "aebfc1bd12e38f4c5b1c92f3d8113cbaa35296bc3c068d9fe5238b9b06d31248",
+        "build_receipt_sha256": "d1497e98e984f2d6603dff95322a9528cdd68c803358dc08eff0a99c49d02a83",
+        "cargo_exit_status": 0,
+        "common_base_commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+        "receipt_exit_status": 0,
+        "source_fingerprint_sha256": "339d2bba6cd0a69a5508239e9d245eb0c2e1d034b048a839e739f85bd07eb9d1",
+        "target_directory_fresh_and_separate": true,
+        "tracked_build_input_count": 124,
+        "worktree_transport_sha256": "36e59989fc8abe3afeeab0922792cfb4fff1110ef234b6e8946c9930c54dc056"
+      },
+      "candidate": {
+        "binary_sha256": "a2f24b5b544845d1a49415c31d368e866900ec29c69ee96e11cccc348f2e76d7",
+        "build_receipt_sha256": "59583df0f5459c3cb65420d91789659b939acd26089359a0904cf42fb0731fac",
+        "cargo_exit_status": 0,
+        "common_base_commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+        "receipt_exit_status": 0,
+        "source_fingerprint_sha256": "a76a42e12a913d7c97b40509d24ec4101d301a05e3165ed0ecbeacd07ca41059",
+        "target_directory_fresh_and_separate": true,
+        "tracked_build_input_count": 124,
+        "worktree_transport_sha256": "5975e969cf68e8b5d7cc5c11548d0b2234477f397697da81760c499d3ccb3927"
+      }
+    },
+    "attempts_failed": 0,
+    "attempts_successful": 102,
+    "attempts_timed_out": 0,
+    "attempts_total": 102,
+    "case_count": 4,
+    "case_sample_rows_all_invocations": 1224,
+    "common_base_commit": "69a9e74abcdf09efd8ecb83e4b7f1a8d5f30488a",
+    "inner_samples_per_case_per_invocation": 3,
+    "inner_warmups_per_case": 0,
+    "invocation_timeout_seconds": 60,
+    "measured_pairs": 48,
+    "profile": "optimized release library-test target; test=true, opt_level=3, debug_assertions=false; separate fresh target dirs for baseline/candidate.",
+    "source_fingerprint_scope": "124 tracked inputs per arm under src/, vendor/, .cargo/, Cargo.toml/Cargo.lock and listed build config; byte maps differ only at src/graph/transport.rs.",
+    "warmup_pairs": 3
+  },
+  "provenance_hashes": {
+    "attempt_evidence_manifest": {
+      "algorithm": "SHA-256 of UTF-8 concatenation of lexicographically sorted lines: <attempt_id>/<filename> <file_sha256>\\n; files are started.json, finished.json, raw.json, stdout.bin, stderr.bin for every attempt.",
+      "file_count": 510,
+      "sha256": "f80eed7081285d17110db4a24d25f5f4dd2d66adba80ae955f6c0d573c289462"
+    },
+    "dispatch_patch_archives": {
+      "baseline_uncompressed_patch_sha256": "63aae53a633ed39de9b18bc10c47166463de521231ca81f45a4d1f1fd424ba26",
+      "baseline_xz_sha256": "72fb1e5a68a7322d084c7610e48f2bdc8836a79a6550ef3afaf5475d14f696f7",
+      "candidate_uncompressed_patch_sha256": "ba25e336def3d22920ecca23b070b959d4968a98098cd8fa0466c93acaf01c59",
+      "candidate_xz_sha256": "494a34d2bdd181dce3d9671c89c9201d7a977020f01e28bad742e50540f7429e"
+    },
+    "extracted_shared_harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "frozen_driver_sha256": "1a2fe69a2cd667c65c5e23b2e04e877bf10163261fea54721be383834a6eeba6",
+    "frozen_harness_sha256": "098db9038e8e8cc684eb6533d3fb60aaa33184f3e16cc9e9a028ac2c860a48f3",
+    "hosted_preregistration_sha256": "d0b49c057ea1e0c4ff74af43fcefebb3ab20e56d52b88c58f2ec65507d47e330",
+    "paired_report_preregistration_sha256": "d0b49c057ea1e0c4ff74af43fcefebb3ab20e56d52b88c58f2ec65507d47e330",
+    "paired_report_sha256": "fc3974f37408a19627e8233aeeb37df72927bc9d684fd18feea0e6c3de7fd7ad",
+    "source_freeze_sha256": "a04c4232f564ed3fd04f4a016f9d00df42f3573aba78bad2535f077c19e05424"
+  },
+  "results": {
+    "cases": {
+      "fanout_4_text": {
+        "arm_median_ratio_change_percent": -6.174006444683133,
+        "baseline_median_duration_ns": 46550.0,
+        "candidate_faster_pairs": 47,
+        "candidate_median_duration_ns": 43676.0,
+        "candidate_over_baseline_ratio_of_arm_medians": 0.9382599355531687,
+        "candidate_slower_pairs": 1,
+        "max_paired_delta_ns": 3355.0,
+        "median_of_48_paired_candidate_over_baseline_ratios": 0.933298931433467,
+        "median_paired_candidate_minus_baseline_ns": -3075.0,
+        "min_paired_delta_ns": -8653.0,
+        "ties": 0,
+        "valid_paired_measurements": 48
+      },
+      "fanout_4_typed_record": {
+        "arm_median_ratio_change_percent": -5.560036293981252,
+        "baseline_median_duration_ns": 59514.0,
+        "candidate_faster_pairs": 44,
+        "candidate_median_duration_ns": 56205.0,
+        "candidate_over_baseline_ratio_of_arm_medians": 0.9443996370601875,
+        "candidate_slower_pairs": 4,
+        "max_paired_delta_ns": 5448.0,
+        "median_of_48_paired_candidate_over_baseline_ratios": 0.9449714441181994,
+        "median_paired_candidate_minus_baseline_ns": -3270.5,
+        "min_paired_delta_ns": -9645.0,
+        "ties": 0,
+        "valid_paired_measurements": 48
+      },
+      "fanout_8_integer": {
+        "arm_median_ratio_change_percent": -0.7998148688730167,
+        "baseline_median_duration_ns": 330576.5,
+        "candidate_faster_pairs": 30,
+        "candidate_median_duration_ns": 327932.5,
+        "candidate_over_baseline_ratio_of_arm_medians": 0.9920018513112698,
+        "candidate_slower_pairs": 18,
+        "max_paired_delta_ns": 19609.0,
+        "median_of_48_paired_candidate_over_baseline_ratios": 0.9834923848205342,
+        "median_paired_candidate_minus_baseline_ns": -5448.0,
+        "min_paired_delta_ns": -36354.0,
+        "ties": 0,
+        "valid_paired_measurements": 48
+      },
+      "single_sink_integer": {
+        "arm_median_ratio_change_percent": -3.0314058977044755,
+        "baseline_median_duration_ns": 112654.0,
+        "candidate_faster_pairs": 37,
+        "candidate_median_duration_ns": 109239.0,
+        "candidate_over_baseline_ratio_of_arm_medians": 0.9696859410229552,
+        "candidate_slower_pairs": 11,
+        "max_paired_delta_ns": 16776.0,
+        "median_of_48_paired_candidate_over_baseline_ratios": 0.9520636964139257,
+        "median_paired_candidate_minus_baseline_ns": -5469.0,
+        "min_paired_delta_ns": -26609.0,
+        "ties": 0,
+        "valid_paired_measurements": 48
+      }
+    },
+    "metric": "Per invocation, median of three harness duration_ns samples. Paired delta is candidate minus baseline (negative means candidate faster). Ratios are candidate/baseline (below 1 means candidate faster)."
+  },
+  "review_checks": [
+    "The dispatch workflow commit and every file pinned by the dispatch preregistration were checked against the local Git object at that commit.",
+    "The exact workflow request records run 38854235381, attempt 1, and profile payload-size; the generated run preregistration matches the dispatch protocol fields.",
+    "Both compressed patch archives and decompressed patch bytes match the profile pins and preserved campaign patch files.",
+    "Both source worktrees are at the common base commit, with only src/graph/transport.rs modified; all 124 tracked build-input hashes and the aggregate fingerprint were recomputed for each.",
+    "The harness suffix extracted from each source transport file equals the uploaded extracted harness and frozen SHA-256.",
+    "Build receipts, uploaded binaries, separate target paths, optimized test profile, source hashes, exit-status records, and binary hashes were checked.",
+    "All 102 attempt records were reconciled with started/finished/raw/stdout/stderr files; raw JSON schemas, exact case metadata, three samples per case, delivery/drop counts, retained sink oracles, cross-arm equality, pair order, per-pair medians/deltas/ratios, and the report summary were independently recomputed."
+  ],
+  "review_scope": "Independent static audit of the fixed hosted Linux payload-size emit replication; no binaries/tests were run by this reviewer.",
+  "reviewed_at_utc": "2026-10-16T05:47:32+00:00",
+  "reviewer_actions": {
+    "executed_cargo_or_build": false,
+    "executed_test_binaries_or_benchmark": false,
+    "modified_primary_sources_or_preregistration": false,
+    "read_only_artifact_audit": true,
+    "requested_or_used_external_api": false
+  },
+  "schema": "execute.emit.payload-size.hosted-audit.v1"
+}

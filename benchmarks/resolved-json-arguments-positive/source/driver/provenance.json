@@ -1,0 +1,60 @@
+{
+  "purpose": "Source-only paired runner for the literal-only JSON-argument runtime workload.",
+  "source_roots": [
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/resolved-json-arguments-baseline-b824",
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/resolved-json-arguments-b824"
+  ],
+  "runner_and_tests_outside_source_roots": true,
+  "test_name": "runtime::resolved_json_arguments_bench::repeated_number_add_runtime_samples",
+  "environment": {
+    "EXECUTE_JSON_ARGUMENTS_BENCH_REPORT": "absolute fresh attempt raw.json",
+    "EXECUTE_JSON_ARGUMENTS_BENCH_WARMUPS": "0",
+    "EXECUTE_JSON_ARGUMENTS_BENCH_SAMPLES": "3"
+  },
+  "protocol": {
+    "warmup_pairs": 3,
+    "measured_pairs": 48,
+    "order": "alternating AB/BA across global pairs, starting AB; measured balanced, starts BA",
+    "retries": 0
+  },
+  "pinned_hashes": {
+    "harness_sha256": "627d8466f0c0ef8264e483d456118bb7eb6f4e14757a752fbd226efecf917003",
+    "workload_sha256": "a2a95cfb03e55164e459467b088eeffd1d8034fb7023a7e3dfcd806274177b1d",
+    "input_sha256": "afff4f726540836958a5fdfb2eb858920074c067f47584cf08381ab78ec20d2a",
+    "expected_output_sha256": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+  },
+  "expected_source_fingerprint": {
+    "algorithm": "SHA-256 over sorted relative-path UTF-8 + NUL + file SHA-256 ASCII + LF records",
+    "includes": [
+      "src/",
+      "tests/",
+      "vendor/",
+      ".cargo/",
+      "manifests/",
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "rust-toolchain",
+      "rust-toolchain.toml",
+      "rustfmt.toml",
+      "benchmarks/workloads/resolved-json-arguments-repeat-1000.program"
+    ],
+    "allowed_arm_differences": [
+      "src/runtime.rs",
+      "tests/structured_tasks.rs"
+    ],
+    "receipt_source_sha256": "must equal that arm\u2019s src/runtime.rs digest"
+  },
+  "files": {
+    "resolved_json_arguments_pair.py": "00afb9395517d065a90344eb1635bbbfaa20d3d0bb3f32b4cbe93b7fa7862571",
+    "test_resolved_json_arguments_pair.py": "f483c11e9785ec8d53cb3ff8e85377c08b4842dbd48560669657fb3b09f442f4",
+    "README.md": "808ca2261c7518d4ccf94722b6621ee3765069c3984088984c5dc407af132c01"
+  },
+  "validation": {
+    "python_unittest": "5 offline contract tests passed",
+    "python_ast": "passed for runner and tests",
+    "runner_help": "passed",
+    "cargo_build_test_product_execution_timing": "not run"
+  },
+  "limitations": "Runner requires the standard one-attempt build receipts and side-named immutable binary copies. Build/clean logs and the full Cargo JSONL artifact match are retained by the parent build workflow, not audited by this driver."
+}

@@ -1,0 +1,39 @@
+{
+  "build": {
+    "build_and_clean_logs_in_raw_archive": true,
+    "cargo_artifact_jsonl_in_raw_archive": true,
+    "exact_compiler_versions_recorded": false,
+    "no_retroactive_toolchain_attestation": true,
+    "per_arm_receipts_included": true,
+    "saved_binary_hashes_retained": true
+  },
+  "claim_scope": "The ignored test constructs/parses the caller, loads the module registry, and builds the payload/options outside the timer. Each sample times a public runtime::run call, including runtime validation, the per-run module preload, and the repeated 128-iteration module workload; compilation and CLI startup are excluded. This is not a graph queue or RuntimeGraphExecutor benchmark.",
+  "format": "execute.fixed48_publication_verification.v1",
+  "independent_audit": {
+    "checks": 848,
+    "failed_checks": 0,
+    "passed": true,
+    "sha256": "5d7810542eb8fa0f0f69beefd9ea511455a5d433808dde585f003093c5ed3295"
+  },
+  "raw_archive": {
+    "all_attempt_files_retained": true,
+    "all_uncompressed_member_hashes_verified": true,
+    "attempt_directories": 102,
+    "compressed_size_bytes": 57064,
+    "member_count": 528,
+    "path": "raw-artifacts.tar.xz",
+    "safe_sorted_unique_paths": true,
+    "sha256": "206d7316509f6c693e477413f3be37f8f9ad8bd49612248112f180e2cd749947"
+  },
+  "saved_binary_blobs_included": false,
+  "source": {
+    "all_product_patches_xz_decompress_and_match_uncompressed_sha": true,
+    "all_source_snapshots_match_manifest": true,
+    "product_patch_count": 2,
+    "source_file_count": 31,
+    "staging_text_whitespace_check": "passed; no trailing spaces or tabs in plain-text bundle members",
+    "tracked_arm_git_diff_check": "passed for baseline and candidate; git diff --check HEAD returned 0"
+  },
+  "source_only": true,
+  "status": "verified"
+}

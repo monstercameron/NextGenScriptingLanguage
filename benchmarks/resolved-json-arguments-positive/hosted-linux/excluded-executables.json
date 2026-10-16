@@ -1,0 +1,18 @@
+{
+  "schema": "execute.hosted_literal_json_excluded_executables.v1",
+  "statement": "Executable bytes are excluded from this source-only publication. The hashes below are recorded in the retained original build receipts and independent audit; the original CI artifact/local download retains the executable bytes.",
+  "executables": [
+    {
+      "side": "baseline",
+      "original_evidence_path": "build/baseline/baseline-test-binary",
+      "sha256": "dd020130550dcbd2e87f60b5a2ba29adf889ed71bb84f138b2a6c90af99d7d74",
+      "size_bytes": 11959712
+    },
+    {
+      "side": "candidate",
+      "original_evidence_path": "build/candidate/candidate-test-binary",
+      "sha256": "8476bf6a00a756dcfaaf08dd5c1b4dcdcc841cfa97a9012e2ec0cf016f9d94c5",
+      "size_bytes": 11999584
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+define a program named echo_record
+  accept payload as json
+  then encode payload as json

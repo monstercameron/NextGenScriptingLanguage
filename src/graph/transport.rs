@@ -303,6 +303,28 @@ struct QueueSink {
     input: Option<PortRef>,
 }
 
+impl QueueSink {
+    fn send_and_update_report(
+        &self,
+        envelope: EventEnvelope,
+        token: &CancellationToken,
+        report: &mut PortEmitReport,
+    ) -> Result<()> {
+        let before = self.queue.dropped.load(Ordering::Relaxed);
+        if self.queue.send(envelope, self.input.clone(), token)? {
+            report.delivered += 1;
+        } else {
+            report.dropped += 1;
+        }
+        report.dropped += self
+            .queue
+            .dropped
+            .load(Ordering::Relaxed)
+            .saturating_sub(before);
+        Ok(())
+    }
+}
+
 struct CloseQueues(Vec<Arc<BoundedQueue>>);
 
 impl Drop for CloseQueues {
@@ -671,7 +693,11 @@ impl NodeIo {
                 self.max_message_bytes
             );
         }
-        let sinks = self.output_sinks.get(port).cloned().unwrap_or_default();
+        let sinks = self
+            .output_sinks
+            .get(port)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if sinks.is_empty() {
             return Ok(PortEmitReport::default());
         }
@@ -693,19 +719,13 @@ impl NodeIo {
             payload,
         };
         let mut report = PortEmitReport::default();
-        for sink in sinks {
-            let before = sink.queue.dropped.load(Ordering::Relaxed);
-            if sink.queue.send(envelope.clone(), sink.input, &self.token)? {
-                report.delivered += 1;
-            } else {
-                report.dropped += 1;
-            }
-            report.dropped += sink
-                .queue
-                .dropped
-                .load(Ordering::Relaxed)
-                .saturating_sub(before);
+        let (last_sink, earlier_sinks) = sinks
+            .split_last()
+            .expect("nonempty output sink list was checked above");
+        for sink in earlier_sinks {
+            sink.send_and_update_report(envelope.clone(), &self.token, &mut report)?;
         }
+        last_sink.send_and_update_report(envelope, &self.token, &mut report)?;
         Ok(report)
     }
 
@@ -3532,5 +3552,240 @@ mod input_cursor_tests {
                 std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod emit_fanout_tests {
+    use super::*;
+    use crate::contracts::ValueSchema;
+
+    fn value_schema(kind: OutputType) -> ValueSchema {
+        ValueSchema {
+            kind,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+        }
+    }
+
+    fn test_io(
+        sink_policies: &[(BufferPolicy, usize)],
+        schema: ValueSchema,
+        max_message_bytes: usize,
+    ) -> (TaskScope, NodeIo, Vec<Arc<BoundedQueue>>) {
+        let scope = TaskScope::new(1, None).expect("test task scope");
+        let token = scope.cancellation_token();
+        let queues = sink_policies
+            .iter()
+            .map(|(policy, capacity)| BoundedQueue::new(*capacity, *policy))
+            .collect::<Vec<_>>();
+        let sinks = queues
+            .iter()
+            .enumerate()
+            .map(|(index, queue)| QueueSink {
+                queue: Arc::clone(queue),
+                input: Some(PortRef::new(format!("sink_{index:02}"), "in")),
+            })
+            .collect::<Vec<_>>();
+        let mut output_schema = PortSchema::events(schema);
+        output_schema.sensitivity = Sensitivity::Confidential;
+        let cancelled = token.cancellation_flag();
+        let io = NodeIo {
+            node: "emitter".into(),
+            inputs: BTreeMap::new(),
+            input_schemas: BTreeMap::new(),
+            initial_inputs: BTreeMap::new(),
+            input_names: Vec::new(),
+            active_input_names: Vec::new(),
+            input_name_cursor: 0,
+            input_queue_cursors: Vec::new(),
+            output_sinks: BTreeMap::from([("out".into(), sinks)]),
+            schemas: BTreeMap::from([("out".into(), output_schema)]),
+            generation: 7,
+            revision: 13,
+            next_sequence: Arc::new(AtomicU64::new(41)),
+            token,
+            external_cancelled: cancelled,
+            deadline: None,
+            input_sensitivity: Some(SensitivitySet::from_label(Sensitivity::Internal)),
+            max_message_bytes,
+        };
+        (scope, io, queues)
+    }
+
+    fn remote_metadata(index: usize) -> RemoteEventMetadata {
+        RemoteEventMetadata {
+            event: format!("event-{index}"),
+            cursor: Some(format!("cursor-{index}")),
+            duplicate_cursor: index == 2,
+        }
+    }
+
+    fn expected_event(
+        sink: usize,
+        event_index: usize,
+        payload: PortValue,
+        remote: Option<RemoteEventMetadata>,
+    ) -> EventEnvelope {
+        EventEnvelope {
+            port: PortRef::new("emitter", "out"),
+            input: Some(PortRef::new(format!("sink_{sink:02}"), "in")),
+            generation: 7,
+            revision: 13,
+            sequence: 41 + event_index as u64,
+            sensitivity: SensitivitySet::from_labels([
+                Sensitivity::Internal,
+                Sensitivity::Confidential,
+            ]),
+            remote,
+            payload,
+        }
+    }
+
+    #[test]
+    fn single_sink_and_fanout_preserve_identity_order_sensitivity_and_metadata() {
+        for sink_count in [1, 3] {
+            let policies = vec![(BufferPolicy::Lossless, 3); sink_count];
+            let (_scope, mut io, queues) =
+                test_io(&policies, value_schema(OutputType::Integer), 1024);
+
+            for event_index in 0..3 {
+                let payload = PortValue::Value(Value::Integer(100 + event_index as i64));
+                let report = if event_index % 2 == 0 {
+                    io.emit_remote_event("out", payload, remote_metadata(event_index))
+                } else {
+                    io.emit("out", payload)
+                }
+                .expect("valid event should be emitted");
+                assert_eq!(
+                    report,
+                    PortEmitReport {
+                        delivered: sink_count,
+                        dropped: 0,
+                    }
+                );
+            }
+
+            for (sink_index, queue) in queues.iter().enumerate() {
+                for event_index in 0..3 {
+                    assert_eq!(
+                        queue.try_recv().unwrap().unwrap(),
+                        expected_event(
+                            sink_index,
+                            event_index,
+                            PortValue::Value(Value::Integer(100 + event_index as i64)),
+                            (event_index % 2 == 0).then(|| remote_metadata(event_index)),
+                        ),
+                        "sink {sink_index} event {event_index}"
+                    );
+                }
+                assert!(queue.try_recv().unwrap().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn drop_policies_keep_their_existing_queue_contents_and_counts() {
+        for (policy, expected_sequence, expected_deliveries) in [
+            (BufferPolicy::DropNewest, 41_u64, [1_usize, 0, 0]),
+            (BufferPolicy::DropOldest, 43_u64, [1_usize, 1, 1]),
+            (BufferPolicy::Latest, 43_u64, [1_usize, 1, 1]),
+        ] {
+            let (_scope, mut io, queues) =
+                test_io(&[(policy, 1)], value_schema(OutputType::Integer), 1024);
+            for (index, delivered) in expected_deliveries.into_iter().enumerate() {
+                let report = io
+                    .emit("out", PortValue::Value(Value::Integer(100 + index as i64)))
+                    .unwrap();
+                assert_eq!(report.delivered, delivered, "{policy:?} event {index}");
+                if policy == BufferPolicy::DropNewest && delivered == 0 {
+                    assert_eq!(report.dropped, 2, "DropNewest rejected-event report");
+                }
+            }
+            assert_eq!(queues[0].dropped.load(Ordering::Relaxed), 2, "{policy:?}");
+            let event = queues[0].try_recv().unwrap().unwrap();
+            assert_eq!(event.sequence, expected_sequence, "{policy:?}");
+            assert_eq!(
+                event.payload,
+                PortValue::Value(Value::Integer(if expected_sequence == 41 {
+                    100
+                } else {
+                    102
+                }))
+            );
+            assert!(queues[0].try_recv().unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn validation_size_and_cancellation_failures_do_not_deliver_or_consume_sequence() {
+        let (_scope, mut io, queues) = test_io(
+            &[(BufferPolicy::Lossless, 1)],
+            value_schema(OutputType::Integer),
+            1024,
+        );
+        let next_sequence = Arc::clone(&io.next_sequence);
+        let error = io
+            .emit("out", PortValue::Value(Value::String("wrong type".into())))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("payload for emitter.out"), "{error}");
+        assert_eq!(next_sequence.load(Ordering::Relaxed), 41);
+        assert!(queues[0].try_recv().unwrap().is_none());
+
+        let (_scope, mut io, queues) = test_io(
+            &[(BufferPolicy::Lossless, 1)],
+            value_schema(OutputType::Bytes),
+            4,
+        );
+        let next_sequence = Arc::clone(&io.next_sequence);
+        let error = io
+            .emit("out", PortValue::Bytes(vec![0; 8]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exceeds graph message limit"), "{error}");
+        assert_eq!(next_sequence.load(Ordering::Relaxed), 41);
+        assert!(queues[0].try_recv().unwrap().is_none());
+
+        let (_scope, mut io, queues) = test_io(
+            &[(BufferPolicy::Lossless, 1)],
+            value_schema(OutputType::Integer),
+            1024,
+        );
+        let next_sequence = Arc::clone(&io.next_sequence);
+        io.external_cancelled.store(true, Ordering::Release);
+        let error = io
+            .emit("out", PortValue::Value(Value::Integer(1)))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("task group cancelled"), "{error}");
+        assert_eq!(next_sequence.load(Ordering::Relaxed), 41);
+        assert!(queues[0].try_recv().unwrap().is_none());
+    }
+
+    #[test]
+    fn fanout_error_keeps_prior_delivery_and_stops_before_later_sinks() {
+        let policies = vec![(BufferPolicy::Lossless, 1); 3];
+        let (_scope, mut io, queues) = test_io(&policies, value_schema(OutputType::Integer), 1024);
+        queues[1].close();
+
+        let error = io
+            .emit("out", PortValue::Value(Value::Integer(9)))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("graph edge was closed while its producer was active"),
+            "{error}"
+        );
+        assert_eq!(
+            queues[0].try_recv().unwrap().unwrap(),
+            expected_event(0, 0, PortValue::Value(Value::Integer(9)), None,)
+        );
+        assert!(queues[1].try_recv().unwrap().is_none());
+        assert!(queues[2].try_recv().unwrap().is_none());
+        assert_eq!(io.next_sequence.load(Ordering::Relaxed), 42);
     }
 }

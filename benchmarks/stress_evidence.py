@@ -38,6 +38,8 @@ SAFE_ENV = (
 )
 MIXED_GRAPH_DEADLINE_GRACE_MS = 20_000
 MIXED_ACTIVE_WINDOW_OBSERVATION_TOLERANCE_MS = 1_000
+MIXED_MIN_ACTIVE_WINDOW_MS = 100
+MIXED_MAX_ACTIVE_WINDOW_MS = 300_000
 MAX_U64 = (1 << 64) - 1
 
 
@@ -286,6 +288,15 @@ def _mixed_counter(outputs: dict[str, object], key: str) -> int:
     if type(value) is not int or not 0 <= value <= MAX_U64:
         raise ValueError(f"mixed graph probe returned an invalid nonnegative counter: {key}")
     return value
+
+
+def _validate_mixed_window_ms(window_ms: int) -> None:
+    if type(window_ms) is not int or not (
+        MIXED_MIN_ACTIVE_WINDOW_MS <= window_ms <= MIXED_MAX_ACTIVE_WINDOW_MS
+    ):
+        raise ValueError(
+            f"mixed graph --window-ms must be in {MIXED_MIN_ACTIVE_WINDOW_MS}..={MIXED_MAX_ACTIVE_WINDOW_MS}"
+        )
 
 
 def _validate_mixed(raw: dict[str, object], args: argparse.Namespace) -> dict[str, object]:
@@ -614,8 +625,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, object]:
     elif args.kind == "mixed":
         if not 32 <= args.nodes <= 1000:
             raise ValueError("mixed graph --nodes must be in 32..1000")
-        if not 100 <= args.window_ms <= 10_000:
-            raise ValueError("mixed graph --window-ms must be in 100..10000")
+        _validate_mixed_window_ms(args.window_ms)
     elif not 1 <= args.warmups <= 10_000 or not 1 <= args.samples <= 1_000:
         raise ValueError("remote warmups/samples exceed supported bounds (1..10000 / 1..1000)")
     elif not 1 <= args.timeout_ms <= 300_000:
@@ -816,7 +826,12 @@ def main() -> int:
     mixed.add_argument("--report", required=True, type=Path)
     mixed.add_argument("--final-release-build-confirmed", action="store_true")
     mixed.add_argument("--nodes", type=int, default=32, help="total graph actors, 32..1000; default is the 32-actor smoke probe")
-    mixed.add_argument("--window-ms", type=int, default=1_000, help="active cancellation window, 100..10000")
+    mixed.add_argument(
+        "--window-ms",
+        type=int,
+        default=1_000,
+        help=f"active window in {MIXED_MIN_ACTIVE_WINDOW_MS}..={MIXED_MAX_ACTIVE_WINDOW_MS} ms",
+    )
     mixed.add_argument("--overall-timeout-s", type=int, default=600, help="hard wrapper watchdog for graph start, active window, cancel, and reaping")
     remote = subparsers.add_parser("remote", help="remote protocol latency and local client resource workload")
     remote.add_argument("--test-binary", required=True, type=Path)

@@ -39,6 +39,8 @@ const MAX_NATIVE_CHILDREN: usize = 64;
 const WORKER_POOL_CAPACITY: usize = 16;
 const MAX_PROGRAM_SERVICES: usize = 32;
 const MAX_REMOTE_LISTENERS: usize = 8;
+const MIN_ACTIVE_WINDOW_MS: u64 = 100;
+const MAX_ACTIVE_WINDOW_MS: u64 = 300_000;
 const PROBE_HELPER_POLL: Duration = Duration::from_millis(10);
 const ACTOR_READINESS_TIMEOUT: Duration = Duration::from_secs(10);
 const GRAPH_RUN_DEADLINE_GRACE: Duration = Duration::from_secs(20);
@@ -598,7 +600,12 @@ struct RemoteFixtureStats {
 #[ignore = "explicit mixed RuntimeGraphExecutor stress measurement; run only through benchmarks/stress_evidence.py"]
 fn mixed_graph_lifecycle_stress() {
     let total = env_usize("GRAPH_MIXED_STRESS_NODES", 32, 32, MAX_ACTORS);
-    let window_ms = env_u64("GRAPH_MIXED_STRESS_WINDOW_MS", 1_000, 100, 10_000);
+    let window_ms = env_u64(
+        "GRAPH_MIXED_STRESS_WINDOW_MS",
+        1_000,
+        MIN_ACTIVE_WINDOW_MS,
+        MAX_ACTIVE_WINDOW_MS,
+    );
     let report_path = PathBuf::from(
         std::env::var_os("GRAPH_MIXED_STRESS_RAW_REPORT")
             .expect("GRAPH_MIXED_STRESS_RAW_REPORT must be set by stress_evidence.py"),

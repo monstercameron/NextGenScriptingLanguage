@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Unit tests for the non-measuring mixed graph stress evidence validator."""
 import argparse
+import os
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 
@@ -12,6 +14,77 @@ from benchmarks import stress_evidence as harness
 
 
 class MixedStressEvidenceTests(unittest.TestCase):
+    def test_mixed_window_cli_bounds_include_five_minutes_only(self):
+        for value in (100, 1_000, 10_000, 300_000):
+            with self.subTest(value=value):
+                harness._validate_mixed_window_ms(value)
+        for value in (99, 300_001, True, "300000"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, "--window-ms must be"
+            ):
+                harness._validate_mixed_window_ms(value)
+
+    def test_full_mixed_report_validator_accepts_bounded_five_minute_window(self):
+        args = argparse.Namespace(nodes=32, window_ms=300_000)
+        report = self.valid_report(args.nodes, args.window_ms)
+        summary = harness._validate_mixed(report, args)
+        self.assertEqual(summary["active_window_ms"], 300_000)
+        self.assertEqual(summary["active_window_observed_us"], 300_000_000)
+
+    def test_workflow_rejects_three_five_minute_trials_before_checkout_or_smoke(self):
+        workflow_path = ROOT / ".github/workflows/mixed-runtime-probe.yml"
+        workflow = workflow_path.read_text()
+        validation_name = "Validate requested 1,000-actor trial bounds"
+        self.assertIn(f"      - name: {validation_name}\n", workflow)
+        validation_step = workflow.split(validation_name, 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("        if: inputs.run_1000\n", validation_step)
+        self.assertLess(workflow.index(validation_name), workflow.index("uses: actions/checkout@"))
+        self.assertLess(workflow.index(validation_name), workflow.index("Run the 32-actor correctness smoke"))
+        self.assertIn('          - "300000"', workflow)
+        input_definitions = workflow.split("jobs:", 1)[0]
+        window_input = input_definitions.split("      window_ms:", 1)[1].split(
+            "      replications:", 1
+        )[0]
+        replication_input = input_definitions.split("      replications:", 1)[1].split(
+            "\n\npermissions:", 1
+        )[0]
+        self.assertIn('default: "1000"', window_input)
+        self.assertIn('default: "1"', replication_input)
+
+        step = workflow.split(f"      - name: {validation_name}\n", 1)[1].split("\n      - ", 1)[0]
+        run_marker = "        run: |\n"
+        self.assertIn(run_marker, step)
+        run_body = step.split(run_marker, 1)[1]
+        script_lines = []
+        for line in run_body.splitlines():
+            if line.startswith("          "):
+                script_lines.append(line[10:])
+            elif not line.strip():
+                script_lines.append("")
+            else:
+                break
+        script = "\n".join(script_lines) + "\n"
+        for window_ms, replications, expected_returncode in (
+            ("1000", "1", 0),
+            ("10000", "3", 0),
+            ("300000", "1", 0),
+            ("300000", "3", 2),
+            ("300001", "1", 2),
+        ):
+            with self.subTest(window_ms=window_ms, replications=replications):
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    env={
+                        **os.environ,
+                        "MIXED_WINDOW_MS": window_ms,
+                        "MIXED_REPLICATIONS": replications,
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, expected_returncode, result.stderr)
+
     def ready_receipt(self, timer_count: int) -> dict[str, object]:
         return {
             "status": "ready",

@@ -167,10 +167,7 @@ fn native_stderr_discard_preserves_child_status_result_and_interpreter_diagnosti
     );
     assert_eq!(unhandled.status.code(), Some(7));
     let diagnostic = String::from_utf8_lossy(&unhandled.stderr);
-    assert!(
-        diagnostic.contains("failed (exit status: 7)"),
-        "{diagnostic}"
-    );
+    assert!(diagnostic.contains("failed (exit code: 7)"), "{diagnostic}");
     assert!(diagnostic.starts_with("execute: line 1:"), "{diagnostic}");
     assert!(!diagnostic.contains("fixture failed"), "{diagnostic}");
 }

@@ -1041,10 +1041,10 @@ impl OutputSchema {
         }
         match self.kind {
             OutputType::Text | OutputType::Path => {
-                let value = json
-                    .as_str()
-                    .ok_or_else(|| anyhow!("expected JSON string output"))?
-                    .to_owned();
+                let value = match json {
+                    serde_json::Value::String(value) => value,
+                    _ => bail!("expected JSON string output"),
+                };
                 self.decode_string_value(value)
             }
             OutputType::Integer

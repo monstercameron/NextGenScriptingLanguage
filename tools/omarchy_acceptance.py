@@ -45,7 +45,7 @@ RENDERED_WIDGET_TEXT_LIMIT = 256
 RENDERED_WIDGET_RESPONSE_LIMIT = 2048
 RENDERED_WIDGET_TIMEOUT = 3.0
 RENDERED_WIDGET_POLL_INTERVAL = 0.05
-TEST_OBSERVER_IDENTITY = "execute.acceptance.rendered-widget-observer.v1"
+TEST_OBSERVER_IDENTITY = "execute.acceptance.rendered-widget-observer.v3"
 TEST_OBSERVER_WIDGETS = {
     "desktop_demo::clock_text": "text",
     "desktop_demo::action_button": "button",
@@ -113,14 +113,25 @@ def build_test_observer_qml(qml_text: str, ipc_target: str, observer_target: str
             f"            if (typeof renderedText !== \"string\" || renderedText.length > {RENDERED_WIDGET_TEXT_LIMIT})",
             '                return JSON.stringify({status: "invalid_text", widget_key: widgetKey});',
             '            const renderedEnabled = loader.componentName === "button" ? loader.item.enabled : null;',
+            '            const renderedActiveFocus = loader.componentName === "button" ? loader.item.activeFocus : null;',
+            '            const visibleTextItem = loader.componentName === "text" && loader.item.children.length === 1 ? loader.item.children[0] : null;',
+            '            const visibleText = visibleTextItem ? visibleTextItem.text : null;',
+            '            if (loader.componentName === "text" && !visibleTextItem)',
+            '                return JSON.stringify({status: "invalid_visible_text", widget_key: widgetKey});',
             '            if (loader.componentName === "button" && typeof renderedEnabled !== "boolean")',
             '                return JSON.stringify({status: "invalid_enabled", widget_key: widgetKey});',
+            '            if (loader.componentName === "button" && typeof renderedActiveFocus !== "boolean")',
+            '                return JSON.stringify({status: "invalid_active_focus", widget_key: widgetKey});',
+            '            if (loader.componentName === "text" && (typeof visibleText !== "string" || visibleText.length > 256))',
+            '                return JSON.stringify({status: "invalid_visible_text", widget_key: widgetKey});',
             "            return JSON.stringify({",
             '                status: "loaded",',
             "                widget_key: widgetKey,",
             "                component: loader.componentName,",
             "                text: renderedText,",
-            "                enabled: renderedEnabled",
+            "                visible_text: visibleText,",
+            "                enabled: renderedEnabled,",
+            "                active_focus: renderedActiveFocus",
             "            });",
             "        }",
             '        return JSON.stringify({status: "not_found", widget_key: widgetKey});',
@@ -157,17 +168,28 @@ def decode_rendered_widget_response(payload: bytes, expected_key: str) -> dict[s
     if not isinstance(text, str) or len(text) > RENDERED_WIDGET_TEXT_LIMIT:
         raise RuntimeError("rendered-widget observer returned invalid or oversized text")
     enabled = response.get("enabled")
+    active_focus = response.get("active_focus")
+    visible_text = response.get("visible_text")
     if expected_component == "button":
         if not isinstance(enabled, bool):
             raise RuntimeError("rendered button observer did not return a boolean enabled state")
-    elif enabled is not None:
-        raise RuntimeError("rendered text observer returned an unexpected enabled state")
+        if not isinstance(active_focus, bool):
+            raise RuntimeError("rendered button observer did not return a boolean active-focus state")
+        if visible_text is not None:
+            raise RuntimeError("rendered button observer returned an unexpected visible text child")
+    else:
+        if enabled is not None or active_focus is not None:
+            raise RuntimeError("rendered text observer returned unexpected button state")
+        if not isinstance(visible_text, str) or len(visible_text) > RENDERED_WIDGET_TEXT_LIMIT:
+            raise RuntimeError("rendered text observer did not return a bounded visible Text.text value")
     return {
         "status": "loaded",
         "widget_key": expected_key,
         "component": expected_component,
         "text": text,
+        "visible_text": visible_text,
         "enabled": enabled,
+        "active_focus": active_focus,
     }
 
 
@@ -220,6 +242,7 @@ def wait_for_rendered_widget(
     *,
     text: str | None = None,
     enabled: bool | None = None,
+    active_focus: bool | None = None,
     timeout: float = RENDERED_WIDGET_TIMEOUT,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
@@ -234,13 +257,20 @@ def wait_for_rendered_widget(
             last_error = None
             if actual.get("status") == "loaded":
                 text_matches = text is None or actual.get("text") == text
+                component = TEST_OBSERVER_WIDGETS.get(widget_key)
+                visible_text_matches = component != "text" or text is None or actual.get("visible_text") == text
                 enabled_matches = enabled is None or actual.get("enabled") is enabled
-                if text_matches and enabled_matches:
+                focus_matches = active_focus is None or actual.get("active_focus") is active_focus
+                if text_matches and visible_text_matches and enabled_matches and focus_matches:
                     expected: dict[str, Any] = {}
                     if text is not None:
                         expected["text"] = text
+                        if component == "text":
+                            expected["visible_text"] = text
                     if enabled is not None:
                         expected["enabled"] = enabled
+                    if active_focus is not None:
+                        expected["active_focus"] = active_focus
                     return {
                         "status": "pass",
                         "widget_key": widget_key,
@@ -257,8 +287,12 @@ def wait_for_rendered_widget(
     expected = {}
     if text is not None:
         expected["text"] = text
+        if TEST_OBSERVER_WIDGETS.get(widget_key) == "text":
+            expected["visible_text"] = text
     if enabled is not None:
         expected["enabled"] = enabled
+    if active_focus is not None:
+        expected["active_focus"] = active_focus
     return {
         "status": "fail",
         "widget_key": widget_key,
@@ -1131,7 +1165,7 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
                 "widget_keys": sorted(TEST_OBSERVER_WIDGETS),
                 "response_limit_bytes": RENDERED_WIDGET_RESPONSE_LIMIT,
                 "text_limit_characters": RENDERED_WIDGET_TEXT_LIMIT,
-                "injection": "private QML copy: fixed read-only IpcHandler and Repeater.itemAt(index).item property lookup",
+                "injection": "private QML copy: fixed read-only IpcHandler; Loader.item properties, its nested visible Text.text, and button activeFocus",
             },
         }
         logs = temp_path / "logs"
@@ -1166,6 +1200,7 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
             *,
             text: str | None = None,
             enabled: bool | None = None,
+            active_focus: bool | None = None,
         ) -> dict[str, Any]:
             result = wait_for_rendered_widget(
                 qs_path,
@@ -1174,6 +1209,7 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
                 widget_key,
                 text=text,
                 enabled=enabled,
+                active_focus=active_focus,
             )
             outcomes[name] = result
             if result["status"] != "pass":
@@ -1201,6 +1237,20 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
         _, destroy_revision = client.mutation(
             {"kind": "destroy", "applet_id": "desktop_demo", "widget_id": "clock_text"}
         )
+        destroyed_render = inspect_rendered_widget(
+            qs_path,
+            qml_copy,
+            observer_target,
+            "desktop_demo::clock_text",
+        )
+        if destroyed_render.get("status") != "not_found":
+            raise RuntimeError("destroy acknowledgement left the actual rendered clock item present")
+        outcomes["rendered_clock_destroy"] = {
+            "status": "pass",
+            "widget_key": "desktop_demo::clock_text",
+            "revision": destroy_revision,
+            "observer": destroyed_render,
+        }
         _, button_revision = client.mutation(
             {"kind": "instantiate", "applet_id": "desktop_demo", "widget_id": "action_button", "contract": button_contract, "properties": {"text": "Acknowledge", "enabled": True}}
         )
@@ -1267,8 +1317,10 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
                 raise RuntimeError(f"Hyprland focus was not verified: {evidence.get('reason', 'unknown failure')}")
             return evidence
 
-        def send_tab_return() -> dict[str, Any]:
-            command = [click_path, "-k", "Tab", "-k", "Return"]
+        def send_wayland_key(key: str) -> dict[str, Any]:
+            if key not in {"Tab", "Return"}:
+                raise RuntimeError("acceptance input key is outside the fixed Tab/Return set")
+            command = [click_path, "-k", key]
             completed = subprocess.run(
                 command,
                 stdin=subprocess.DEVNULL,
@@ -1277,7 +1329,7 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
                 timeout=COMMAND_TIMEOUT,
                 check=False,
             )
-            evidence = {"argv": command, "returncode": completed.returncode}
+            evidence = {"key": key, "argv": command, "returncode": completed.returncode}
             if completed.returncode != 0:
                 stdout = capture_command_output_tail(completed.stdout)["tail_utf8"][-400:]
                 stderr = capture_command_output_tail(completed.stderr)["tail_utf8"][-400:]
@@ -1288,7 +1340,14 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
             return evidence
 
         focus_renderer()
-        disabled_input_command = send_tab_return()
+        disabled_tab_command = send_wayland_key("Tab")
+        disabled_focus = verify_rendered_widget(
+            "rendered_button_disabled_focus",
+            "desktop_demo::action_button",
+            enabled=False,
+            active_focus=False,
+        )
+        disabled_return_command = send_wayland_key("Return")
         disabled_events: list[dict[str, Any]] = []
         disabled_deadline = time.monotonic() + 1.0
         while time.monotonic() < disabled_deadline:
@@ -1307,7 +1366,8 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
             "input": ["Tab", "Return"],
             "enabled": False,
             "source_revision": disabled_revision,
-            "command": disabled_input_command,
+            "commands": {"tab": disabled_tab_command, "return": disabled_return_command},
+            "rendered_button_active_focus": disabled_focus["actual"]["active_focus"],
             "observed_event_count": len(disabled_events),
             "unexpected_button_clicks": unexpected_disabled_clicks[:4],
         }
@@ -1322,7 +1382,14 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
             enabled=True,
         )
         focus_renderer()
-        enabled_input_command = send_tab_return()
+        enabled_tab_command = send_wayland_key("Tab")
+        enabled_focus = verify_rendered_widget(
+            "rendered_button_enabled_focus",
+            "desktop_demo::action_button",
+            enabled=True,
+            active_focus=True,
+        )
+        enabled_return_command = send_wayland_key("Return")
         positive_deadline = time.monotonic() + 5.0
         positive_events: list[dict[str, Any]] = []
         matched_event: dict[str, Any] | None = None
@@ -1358,7 +1425,8 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
             "enabled_source_revision": enabled_revision,
             "source_revision": matched_event.get("source_revision") if matched_event is not None else None,
             "cursor": matched_event.get("cursor") if matched_event is not None else None,
-            "command": enabled_input_command,
+            "commands": {"tab": enabled_tab_command, "return": enabled_return_command},
+            "rendered_button_active_focus": enabled_focus["actual"]["active_focus"],
             "disabled_input": disabled_input_status,
             "wrong_revision_clicks": wrong_revision_clicks[:4],
         }

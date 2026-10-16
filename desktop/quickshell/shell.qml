@@ -83,7 +83,7 @@ ShellRoot {
                         target: widgetLoader.item
                         enabled: widgetLoader.componentName === "button"
 
-                        function onActivated() {
+                        function onClicked() {
                             root.queueSignal(
                                 widgetLoader.widgetKey,
                                 widgetLoader.appletId,
@@ -111,10 +111,7 @@ ShellRoot {
         }
     }
 
-    component ButtonComponent: Button {
-        signal activated()
-        onClicked: activated()
-    }
+    component ButtonComponent: Button {}
 
     Component {
         id: textComponent

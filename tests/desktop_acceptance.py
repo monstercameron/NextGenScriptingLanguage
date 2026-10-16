@@ -115,10 +115,21 @@ class RenderedWidgetObserverTests(unittest.TestCase):
         self.assertIn("acceptanceWidgetRepeater.itemAt(index)", generated)
         self.assertIn("const renderedText = loader.item.text;", generated)
         self.assertIn("loader.item.enabled", generated)
+        self.assertIn("loader.item.activeFocus", generated)
+        self.assertIn("loader.item.children[0]", generated)
+        self.assertIn("visibleTextItem.text", generated)
         self.assertIn(ACCEPTANCE.TEST_OBSERVER_IDENTITY, generated)
         self.assertNotIn(ACCEPTANCE.TEST_OBSERVER_IDENTITY, source)
         self.assertNotIn("acceptanceWidgetRepeater", source)
         self.assertIn('__EXECUTE_RENDERER_IPC_TARGET__', source)
+
+    def test_button_signal_forwarding_uses_the_inherited_clicked_signal(self) -> None:
+        source = (ROOT / "desktop" / "quickshell" / "shell.qml").read_text(encoding="utf-8")
+
+        self.assertIn("function onClicked()", source)
+        self.assertIn('"clicked",', source)
+        self.assertNotIn("function onActivated()", source)
+        self.assertNotIn("signal activated()", source)
 
     def test_private_qml_injection_fails_closed_on_ambiguous_source(self) -> None:
         source = (ROOT / "desktop" / "quickshell" / "shell.qml").read_text(encoding="utf-8")
@@ -135,20 +146,31 @@ class RenderedWidgetObserverTests(unittest.TestCase):
             "widget_key": "desktop_demo::clock_text",
             "component": "text",
             "text": "09:41",
+            "visible_text": "09:41",
             "enabled": None,
+            "active_focus": None,
         }
         button_response = {
             "status": "loaded",
             "widget_key": "desktop_demo::action_button",
             "component": "button",
             "text": "Acknowledge",
+            "visible_text": None,
             "enabled": False,
+            "active_focus": False,
         }
         self.assertEqual(
             ACCEPTANCE.decode_rendered_widget_response(
                 json.dumps(text_response).encode(),
                 "desktop_demo::clock_text",
             )["text"],
+            "09:41",
+        )
+        self.assertEqual(
+            ACCEPTANCE.decode_rendered_widget_response(
+                json.dumps(text_response).encode(),
+                "desktop_demo::clock_text",
+            )["visible_text"],
             "09:41",
         )
         self.assertIs(
@@ -158,6 +180,22 @@ class RenderedWidgetObserverTests(unittest.TestCase):
             )["enabled"],
             False,
         )
+        self.assertIs(
+            ACCEPTANCE.decode_rendered_widget_response(
+                json.dumps(button_response).encode(),
+                "desktop_demo::action_button",
+            )["active_focus"],
+            False,
+        )
+        self.assertEqual(
+            ACCEPTANCE.decode_rendered_widget_response(
+                json.dumps(
+                    {"status": "not_found", "widget_key": "desktop_demo::clock_text"}
+                ).encode(),
+                "desktop_demo::clock_text",
+            ),
+            {"status": "not_found", "widget_key": "desktop_demo::clock_text"},
+        )
         with self.assertRaisesRegex(RuntimeError, "exceeds byte limit"):
             ACCEPTANCE.decode_rendered_widget_response(
                 b" " * (ACCEPTANCE.RENDERED_WIDGET_RESPONSE_LIMIT + 1),
@@ -165,6 +203,13 @@ class RenderedWidgetObserverTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(RuntimeError, "malformed JSON"):
             ACCEPTANCE.decode_rendered_widget_response(b"not json", "desktop_demo::clock_text")
+        button_response["active_focus"] = None
+        with self.assertRaisesRegex(RuntimeError, "active-focus state"):
+            ACCEPTANCE.decode_rendered_widget_response(
+                json.dumps(button_response).encode(),
+                "desktop_demo::action_button",
+            )
+        button_response["active_focus"] = False
         button_response["enabled"] = "false"
         with self.assertRaisesRegex(RuntimeError, "boolean enabled state"):
             ACCEPTANCE.decode_rendered_widget_response(
@@ -178,7 +223,9 @@ class RenderedWidgetObserverTests(unittest.TestCase):
             "widget_key": "desktop_demo::action_button",
             "component": "button",
             "text": "Acknowledge",
+            "visible_text": None,
             "enabled": True,
+            "active_focus": True,
         }
         completed = SimpleNamespace(returncode=0, stdout=json.dumps(response).encode(), stderr=b"")
         config_path = pathlib.Path("/run/user/1000/acceptance/shell.qml")
@@ -205,6 +252,7 @@ class RenderedWidgetObserverTests(unittest.TestCase):
             ],
         )
         self.assertTrue(actual["enabled"])
+        self.assertTrue(actual["active_focus"])
 
     def test_state_wait_observes_a_later_actual_child_value(self) -> None:
         observed = [
@@ -213,14 +261,18 @@ class RenderedWidgetObserverTests(unittest.TestCase):
                 "widget_key": "desktop_demo::clock_text",
                 "component": "text",
                 "text": "09:41",
+                "visible_text": "09:41",
                 "enabled": None,
+                "active_focus": None,
             },
             {
                 "status": "loaded",
                 "widget_key": "desktop_demo::clock_text",
                 "component": "text",
                 "text": "09:42",
+                "visible_text": "09:42",
                 "enabled": None,
+                "active_focus": None,
             },
         ]
         with mock.patch.object(
@@ -240,6 +292,47 @@ class RenderedWidgetObserverTests(unittest.TestCase):
         self.assertEqual(result["status"], "pass")
         self.assertEqual(result["polls"], 2)
         self.assertEqual(result["actual"]["text"], "09:42")
+        self.assertEqual(inspect.call_count, 2)
+
+    def test_state_wait_observes_a_later_actual_button_focus_state(self) -> None:
+        observed = [
+            {
+                "status": "loaded",
+                "widget_key": "desktop_demo::action_button",
+                "component": "button",
+                "text": "Acknowledge",
+                "visible_text": None,
+                "enabled": True,
+                "active_focus": False,
+            },
+            {
+                "status": "loaded",
+                "widget_key": "desktop_demo::action_button",
+                "component": "button",
+                "text": "Acknowledge",
+                "visible_text": None,
+                "enabled": True,
+                "active_focus": True,
+            },
+        ]
+        with mock.patch.object(
+            ACCEPTANCE,
+            "inspect_rendered_widget",
+            side_effect=observed,
+        ) as inspect:
+            result = ACCEPTANCE.wait_for_rendered_widget(
+                "/usr/bin/qs",
+                pathlib.Path("/run/user/1000/acceptance/shell.qml"),
+                "executeDesktopObserver-acceptance",
+                "desktop_demo::action_button",
+                enabled=True,
+                active_focus=True,
+                timeout=1.0,
+            )
+
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["polls"], 2)
+        self.assertTrue(result["actual"]["active_focus"])
         self.assertEqual(inspect.call_count, 2)
 
 

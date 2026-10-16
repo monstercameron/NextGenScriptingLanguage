@@ -28,9 +28,19 @@
       "patch": "program-cache-v3-1.patch.xz",
       "patch_sha256": "a0d2d16d6efc40ee71a687bfd926874f6a5204d279edb5b15091876eab5c862e",
       "xz_sha256": "195aed61c68c6b9aa1da44a44dbd04959f918667b44ee051234e0e083b51fdd8",
-      "supersedes_unbuilt_candidate": "program-cache-v3",
       "previous_validation_run": 38863436578,
-      "reason": "Private preload context groups traversal vectors; fixes strict Clippy argument-count failure without suppression."
+      "reason": "Private preload context groups traversal vectors; fixes strict Clippy argument-count failure without suppression.",
+      "previous_candidate": "program-cache-v3"
+    },
+    {
+      "name": "typed-json-carry-v2",
+      "base": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+      "patch": "typed-json-carry-v2.patch.xz",
+      "patch_sha256": "0305d8b2ab6c7d0650d7fb384c143375d33801fdbc6dadf0e2e85799930d1e50",
+      "xz_sha256": "66e48efa5a79b74251da56a892582771b1209d8c8c9a38f4bff4bba7cb8aa62c",
+      "previous_candidate": "typed-json-carry",
+      "previous_validation_run": 38863436578,
+      "reason": "Correct unsupported test keyword number to integer; runtime source unchanged. Workflow now builds bundled helper bins before regressions."
     }
   ]
 }

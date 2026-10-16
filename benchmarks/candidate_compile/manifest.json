@@ -1,0 +1,26 @@
+{
+  "purpose": "Unmerged source-only candidate compile and focused regression validation; no performance measurements.",
+  "candidates": [
+    {
+      "name": "typed-json-carry",
+      "base": "e5fa5162b9bdca608f7f3c9d0d273db40a93c17b",
+      "patch": "typed-json-carry.patch.xz",
+      "patch_sha256": "c43a56eab9556f454175c03ca7e7739f4af0f51cc542dd640eb1152a6e1b698c",
+      "xz_sha256": "a996c966828a0fd89c433e977fcea60af9988c24dffc6224e9c1055fd1db7c84"
+    },
+    {
+      "name": "program-cache-v3",
+      "base": "0735e4bf2f10b4d366bd31cd0140acd574b80ee4",
+      "patch": "program-cache-v3.patch.xz",
+      "patch_sha256": "48d03d43fd1bb1bb34415ac44ab38fdbe2ae197bb85bc0fc9708821deea72e0a",
+      "xz_sha256": "d295845b7855649639be1eda0313e2e4ab66d8e3b499f63f08d4f4dedb6cbc27"
+    },
+    {
+      "name": "borrowed-response",
+      "base": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "patch": "borrowed-response.patch.xz",
+      "patch_sha256": "ebe7e81accfd8b80568943aa30f2451435945a76d239eb30cd88042fd373121a",
+      "xz_sha256": "d505d6c23b49faf484135d886e7ae6bb156e8dd89c23c570cf3bcc6e70c69374"
+    }
+  ]
+}

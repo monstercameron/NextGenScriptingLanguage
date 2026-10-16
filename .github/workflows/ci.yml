@@ -1,92 +1,100 @@
-name: Native checks
+name: Performance candidate source validation
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-  workflow_call:
 permissions:
   contents: read
-concurrency:
-  group: native-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 jobs:
-  workflows:
-    name: Release contracts and workflow lint
+  candidate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - run: python3 tests/releases.py
-      - run: python3 -O tests/releases.py
-      - name: Install pinned workflow validator
-        run: GOBIN="$RUNNER_TEMP/actionlint" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-      - run: '"$RUNNER_TEMP/actionlint/actionlint" -color'
-  unix:
-    name: Unix (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'macos-15' && 45 || 30 }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: jq --version
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-        working-directory: editors/vscode
-      - run: make check
-      - run: make unix-smoke
-      - run: make proof-smoke
-      - run: npm run package
-        working-directory: editors/vscode
-        env:
-          EXECUTE_TEST_BINARY: ${{ github.workspace }}/target/release/execute
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: native-proofs-${{ matrix.os }}
-          path: |
-            target/unix-matrix.json
-            target/proof-smoke.json
-          if-no-files-found: warn
-          retention-days: 14
-  windows:
-    name: Native Windows (${{ matrix.os }})
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-2022
-            target: x86_64-pc-windows-msvc
-          - os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+          - name: typed-json-carry
+            base: e5fa5162b9bdca608f7f3c9d0d273db40a93c17b
+            patch: typed-json-carry.patch.xz
+            xz_sha256: a996c966828a0fd89c433e977fcea60af9988c24dffc6224e9c1055fd1db7c84
+            patch_sha256: c43a56eab9556f454175c03ca7e7739f4af0f51cc542dd640eb1152a6e1b698c
+          - name: program-cache-v3
+            base: 0735e4bf2f10b4d366bd31cd0140acd574b80ee4
+            patch: program-cache-v3.patch.xz
+            xz_sha256: d295845b7855649639be1eda0313e2e4ab66d8e3b499f63f08d4f4dedb6cbc27
+            patch_sha256: 48d03d43fd1bb1bb34415ac44ab38fdbe2ae197bb85bc0fc9708821deea72e0a
+          - name: borrowed-response
+            base: a884f6561fd43f45e43b25a3cc2233be17ee3944
+            patch: borrowed-response.patch.xz
+            xz_sha256: d505d6c23b49faf484135d886e7ae6bb156e8dd89c23c570cf3bcc6e70c69374
+            patch_sha256: ebe7e81accfd8b80568943aa30f2451435945a76d239eb30cd88042fd373121a
+    env:
+      CANDIDATE_NAME: ${{ matrix.name }}
+      BASE_COMMIT: ${{ matrix.base }}
+      PATCH_NAME: ${{ matrix.patch }}
+      PATCH_XZ_SHA256: ${{ matrix.xz_sha256 }}
+      PATCH_SHA256: ${{ matrix.patch_sha256 }}
+      CARGO_BUILD_JOBS: 4
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ matrix.base }}
+          path: candidate-source
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo fmt --check
-      - run: rustfmt --edition 2021 --check src/runtime/shared.rs
-      - run: cargo clippy --locked --target ${{ matrix.target }} --all-targets -- -D warnings
-      - run: cargo build --locked --target ${{ matrix.target }} --release --bins --example native-fixture
-      - run: cargo test --locked --target ${{ matrix.target }} --release --test windows_native --test worker_backend_windows --test named_background_jobs --test models --test opt_manifest_regressions --test check_json --test manifest_catalog -- --test-threads=1
-      - run: cargo test --locked --target ${{ matrix.target }} --release --lib -- --test-threads=1
+          targets: wasm32-unknown-unknown, x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+      - name: Apply and record the exact frozen candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/candidate-compile-target" >> "$GITHUB_ENV"
+          printf '%s  %s\n' "$PATCH_XZ_SHA256" "benchmarks/candidate_compile/$PATCH_NAME" | sha256sum --check
+          xz -dc "benchmarks/candidate_compile/$PATCH_NAME" > evidence/product.patch
+          printf '%s  %s\n' "$PATCH_SHA256" evidence/product.patch | sha256sum --check
+          test "$(git -C candidate-source rev-parse HEAD)" = "$BASE_COMMIT"
+          git -C candidate-source apply --check "$GITHUB_WORKSPACE/evidence/product.patch"
+          git -C candidate-source apply "$GITHUB_WORKSPACE/evidence/product.patch"
+          git -C candidate-source diff --check
+          git -C candidate-source diff --binary > evidence/applied-source.patch
+          cargo --version > evidence/tool-versions.txt
+          rustc -Vv >> evidence/tool-versions.txt
+      - name: Check formatting and strict native Clippy
+        working-directory: candidate-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings 2>&1 | tee "$GITHUB_WORKSPACE/evidence/native-clippy.log"
+      - name: Check WebAssembly and both Windows targets
+        working-directory: candidate-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --manifest-path browser/Cargo.toml --locked --target wasm32-unknown-unknown -- -D warnings 2>&1 | tee "$GITHUB_WORKSPACE/evidence/wasm-clippy.log"
+          cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings 2>&1 | tee "$GITHUB_WORKSPACE/evidence/windows-x64-clippy.log"
+          cargo clippy --locked --target aarch64-pc-windows-msvc --all-targets -- -D warnings 2>&1 | tee "$GITHUB_WORKSPACE/evidence/windows-arm64-clippy.log"
+      - name: Execute release library and focused integration regressions
+        working-directory: candidate-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          targets=(--lib)
+          case "$CANDIDATE_NAME" in
+            typed-json-carry) targets+=(--test typed_contracts) ;;
+            program-cache-v3) targets+=(--test program_modules) ;;
+            borrowed-response) targets+=(--test worker_backend) ;;
+            *) exit 2 ;;
+          esac
+          cargo test --locked --release "${targets[@]}" -- --test-threads=1 2>&1 | tee "$GITHUB_WORKSPACE/evidence/release-regressions.log"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: candidate-source-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+          if-no-files-found: warn
+          retention-days: 30

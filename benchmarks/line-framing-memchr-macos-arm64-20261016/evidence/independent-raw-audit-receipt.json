@@ -1,0 +1,20 @@
+{
+  "audited_attempts": 102,
+  "audited_raw_samples": 918,
+  "auditor_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/independent_raw_audit.py",
+  "auditor_sha256": "b18691c30e6f74cc26f24fe13abf016b07e6fe560b151486988f282124fb0e30",
+  "build_driver_sha256": "91cc1f09f8e58206fe6358dacf922fb6222a7d252b02406e9d0272e451825d79",
+  "no_cargo_tests_or_product_executions": true,
+  "preregistration_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/preregistration-attempt-3.json",
+  "preregistration_sha256": "9e0d3b55cb4c7b065d1b4e30f511d4d9fcc0cba4850eb4f97b51ab301360b92e",
+  "report_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/independent-raw-audit.json",
+  "report_sha256": "f3f07daccfb3e760f38f9996b61f2e588867ba7d7838f2974f9d6232b29b0aa2",
+  "reproducible_command": [
+    "python3",
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/independent_raw_audit.py"
+  ],
+  "results_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/paired-run-attempt-1/results.json",
+  "results_sha256": "15e2829335b1094292affd4e4d5f26f5f49a1e9062a5a67c3e4d77faaea53a6f",
+  "runner_sha256": "64258df9b4a3e66d19e903e8ff2065a1c42a6a61a1d56e319f246515671fa7b0",
+  "schema": "execute.line-framing-memchr-independent-raw-audit-receipt/1"
+}

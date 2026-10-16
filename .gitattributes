@@ -50,3 +50,8 @@ benchmarks/typed-json-carry-structured-20261016/**/*.diff binary
 benchmarks/graph-collector-hosted-linux-proof-20261016/** -text
 benchmarks/graph-collector-hosted-linux-proof-20261016/**/*.log binary
 benchmarks/graph-collector-hosted-linux-proof-20261016/**/*.diff binary
+
+# Immutable line-framing source snapshots and raw measurements.
+benchmarks/line-framing-memchr-macos-arm64-20261016/** -text
+benchmarks/line-framing-memchr-macos-arm64-20261016/**/*.log binary
+benchmarks/line-framing-memchr-macos-arm64-20261016/**/*.diff binary

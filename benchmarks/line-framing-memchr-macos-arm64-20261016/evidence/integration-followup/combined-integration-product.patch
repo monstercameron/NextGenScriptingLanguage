@@ -1,0 +1,73 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index b92de36..7711180 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -321,6 +321,7 @@ dependencies = [
+  "ctrlc",
+  "getrandom 0.4.3",
+  "libc",
++ "memchr",
+  "mio",
+  "ratatui",
+  "serde",
+diff --git a/Cargo.toml b/Cargo.toml
+index ed2946a..f0501ac 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -16,6 +16,7 @@ name = "flow"
+ 
+ [dependencies]
+ anyhow = "1"
++memchr = "2.8.3"
+ serde = { version = "1", features = ["derive", "rc"] }
+ serde_json = { version = "1", features = ["raw_value"] }
+ sha2 = "0.10"
+diff --git a/browser/Cargo.lock b/browser/Cargo.lock
+index 11c33f8..05b1f4c 100644
+--- a/browser/Cargo.lock
++++ b/browser/Cargo.lock
+@@ -321,6 +321,7 @@ dependencies = [
+  "ctrlc",
+  "getrandom 0.4.3",
+  "libc",
++ "memchr",
+  "mio",
+  "ratatui",
+  "serde",
+diff --git a/src/runtime/streaming.rs b/src/runtime/streaming.rs
+index 6d6ea1d..cccb0eb 100644
+--- a/src/runtime/streaming.rs
++++ b/src/runtime/streaming.rs
+@@ -112,14 +112,13 @@ impl<'a> LineSink<'a> {
+     }
+ 
+     pub(super) fn push(&mut self, bytes: &[u8], signals: &Signals) -> Result<bool> {
+-        for part in bytes.split_inclusive(|byte| *byte == b'\n') {
++        let mut part_start = 0;
++        for newline in memchr::memchr_iter(b'\n', bytes) {
++            let part = &bytes[part_start..=newline];
++            part_start = newline + 1;
+             if part.len() > self.max_record_bytes.saturating_sub(self.pending.len()) {
+                 bail!("stream record exceeds {} bytes", self.max_record_bytes);
+             }
+-            if part.last() != Some(&b'\n') {
+-                self.pending.extend_from_slice(part);
+-                continue;
+-            }
+             if self.pending.is_empty() {
+                 // The callback is synchronous, so complete records can borrow
+                 // the current read buffer. Preserve the failed record exactly
+@@ -139,6 +138,13 @@ impl<'a> LineSink<'a> {
+                 }
+             }
+         }
++        let tail = &bytes[part_start..];
++        if !tail.is_empty() {
++            if tail.len() > self.max_record_bytes.saturating_sub(self.pending.len()) {
++                bail!("stream record exceeds {} bytes", self.max_record_bytes);
++            }
++            self.pending.extend_from_slice(tail);
++        }
+         Ok(false)
+     }
+ 

@@ -1,0 +1,10 @@
+{
+  "integration_base": "c719653",
+  "main_parent": "4fd9fea11cf2494cb2a1dc2e184bacd6a613dffa",
+  "native_product_exact_measured_patch": true,
+  "native_patch_sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94",
+  "combined_patch_sha256": "b25eb3fe4a2dfa39b685f2314603e0f986b9c9643471c606af3a28a3769597c1",
+  "extra_integration_path": "browser/Cargo.lock",
+  "extra_change": "add direct execute memchr dependency entry to separate locked browser manifest; no vendor/version change",
+  "all_four_files_identical_to_tested_worktree": true
+}

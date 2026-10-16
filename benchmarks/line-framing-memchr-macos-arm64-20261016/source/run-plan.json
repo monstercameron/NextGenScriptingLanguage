@@ -1,0 +1,120 @@
+{
+  "base_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "benchmark_harness_sha256": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+  "build_only_workflow": {
+    "artifact_handling": "Record exact Cargo JSONL artifact rows/log hashes and save fresh immutable binaries outside the shared target before cleaning for the next arm.",
+    "baseline_test_targets": [
+      "native_stream_status_bench"
+    ],
+    "before_each_arm": "cargo clean --release --package execute",
+    "benchmark_timing": "not run by build script",
+    "build_environment_provenance": {
+      "actual_effective_values_recorded": true,
+      "cargo_config_capture": "SHA-256 presence/path/symlink-target/content identities for config and config.toml in CARGO_HOME and each .cargo directory from both source roots through filesystem root, recorded before and after every arm build and immediately before and after each target build, then checked unchanged",
+      "fixed_values": {
+        "CARGO_BUILD_JOBS": "4",
+        "CARGO_BUILD_TARGET": "aarch64-apple-darwin",
+        "CARGO_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo",
+        "CARGO_TARGET_DIR": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+        "RUSTC": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustc",
+        "RUSTUP_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/rustup",
+        "RUSTUP_TOOLCHAIN": "stable-aarch64-apple-darwin"
+      },
+      "inherited_allowlist": [
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "SDKROOT",
+        "DEVELOPER_DIR",
+        "MACOSX_DEPLOYMENT_TARGET"
+      ],
+      "schema": "execute.controlled-cargo-build-environment/1",
+      "unlisted_inherited_variables_forwarded": false
+    },
+    "build_target": "aarch64-apple-darwin",
+    "candidate_test_targets": [
+      "native_stream_status_bench",
+      "line_framing_lib_test"
+    ],
+    "preclean_metadata_includes_build_driver_sha256": true,
+    "release_test_profile": {
+      "artifact_fresh": false,
+      "debug_assertions": false,
+      "opt_level": "3"
+    },
+    "script": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/build_line_framing_pair.py",
+    "script_sha256": "91cc1f09f8e58206fe6358dacf922fb6222a7d252b02406e9d0272e451825d79",
+    "target_directory_shared_by_arms": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+    "test_execution": "not run by build script"
+  },
+  "candidate_product_patch_sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94",
+  "offline_test_file_sha256": "963872d01529c90b9e2e7ae21ba15c7db5408354513b6ef1a909bed621dafe30",
+  "paired_driver_plan": {
+    "benchmark_binary": "saved native_stream_status_bench integration test, invoked --exact public_native_stream_status_polling --ignored --nocapture --test-threads=1",
+    "candidate_preflight": "run only the saved candidate --lib test binary with --exact runtime::streaming::framing_evidence::borrowed_record_framing_matches_legacy_failures_and_bytes before any timed invocation; on failure, record it and skip all timing",
+    "cases": [
+      1,
+      4,
+      8
+    ],
+    "environment": {
+      "OPT_BENCH_REPORT": "unique create-new report path",
+      "OPT_BENCH_SAMPLES": "3",
+      "OPT_BENCH_SOURCE_REV": "derived from verified source fingerprint",
+      "OPT_BENCH_WARMUPS": "0"
+    },
+    "failure_policy": "retain all raw reports, logs, timeouts, launch losses, invalid oracles, and incomplete pairs; never retry",
+    "inner_samples_per_case_invocation": 3,
+    "inner_warmups": 0,
+    "measured_arm_order": "24 AB and 24 BA, alternating with first measured pair BA",
+    "measured_pairs": 48,
+    "order_rotations": [
+      [
+        1,
+        4,
+        8
+      ],
+      [
+        4,
+        8,
+        1
+      ],
+      [
+        8,
+        1,
+        4
+      ]
+    ],
+    "records_per_case_sample": 131072,
+    "retries": 0,
+    "timeout_seconds": 120,
+    "warmup_pairs": 3
+  },
+  "paired_runner_sha256": "64258df9b4a3e66d19e903e8ff2065a1c42a6a61a1d56e319f246515671fa7b0",
+  "schema": "execute.line-framing-pair-plan/1",
+  "source_pins": {
+    "baseline": {
+      "Cargo.lock": "2be0aa74e5bfe3e4897ea9ca9121efce663a94a4df7850958dc2cf511c6f427c",
+      "Cargo.toml": "2e2cd88356201ac07b3b8d68be1af9379d7c307bf2c5b67765a13d0f8e040874",
+      "HEAD": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "src/runtime/streaming.rs": "d7d18b92c9ad0ece03bdef875ca100734f36de5d19de1dad39fadcb63b9bfc3a",
+      "tests/native_stream_status_bench.rs": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad"
+    },
+    "candidate": {
+      "Cargo.lock": "364ea897bd0db1094c5f235f9431aa10dfcd0fdde317afd6b9da824e84f1dfad",
+      "Cargo.toml": "dd1ebd61a09bac5972ca8365e3be618ad4d8326361aff879568f7cae039a2b59",
+      "HEAD": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "src/runtime/streaming.rs": "5ada8d51fd5e1dea60a70a6e067bb56694ca48d6de1ed10a87e729f0e5f5049f",
+      "tests/native_stream_status_bench.rs": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+      "tracked_product_patch_sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94"
+    }
+  },
+  "status": "source_prep_complete_waiting_for_root_build_gate",
+  "worktrees": {
+    "baseline": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-baseline-a884",
+    "candidate": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-candidate-a884"
+  }
+}

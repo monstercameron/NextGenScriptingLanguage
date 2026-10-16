@@ -1,0 +1,18 @@
+Rust staged check: cargo fmt --check
+Rust staged check: cargo fmt --manifest-path browser/Cargo.toml --check
+Rust staged check: rustfmt --edition 2021 --check src/runtime/shared.rs
+Rust staged check: cargo clippy --offline --locked --all-targets -- -D warnings
+    Checking iana-time-zone v0.1.65 (/private/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/execute-staged-rust-19ztcur7/vendor/iana-time-zone)
+    Checking memchr v2.8.3
+    Checking chrono v0.4.45
+    Checking serde_json v1.0.154
+    Checking execute v0.9.0-rc.5 (/private/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/execute-staged-rust-19ztcur7)
+    Finished `dev` profile [unoptimized] target(s) in 17.47s
+Rust staged check: cargo clippy --manifest-path browser/Cargo.toml --offline --locked --target wasm32-unknown-unknown -- -D warnings
+    Checking memchr v2.8.3
+    Checking serde_json v1.0.154
+    Checking execute v0.9.0-rc.5 (/private/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/execute-staged-rust-19ztcur7)
+    Checking execute-browser v0.1.0 (/private/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/execute-staged-rust-19ztcur7/browser)
+    Finished `dev` profile [unoptimized] target(s) in 2.67s
+[main da81d26] perf(runtime): scan stream record boundaries with memchr
+ 4 files changed, 14 insertions(+), 5 deletions(-)

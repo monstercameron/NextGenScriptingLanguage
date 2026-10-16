@@ -1,0 +1,36 @@
+{
+  "artifacts": {
+    "combined-clippy.log": "c95be656356f4390ece76df569f132fd2939b301ba0140333c215b089543c840",
+    "combined-format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "combined-integration-product.patch": "b25eb3fe4a2dfa39b685f2314603e0f986b9c9643471c606af3a28a3769597c1",
+    "combined-integration-source-receipt.json": "6302cfac7bc4fd781b7841965c97818e5005acd0953afde31670c0eaa3ef9e53",
+    "combined-integration-validation-receipt.json": "ed11c8c566a4487436cb861b069de87e08a07d00f2742b46b0e1d99bc08ad467",
+    "combined-tests.log": "08599afb730f1e3fe59b44a3480619960923a0dcc6b54563066077975cf780a9",
+    "main-commit-hook.log": "abbf7c6dd5103a9a775006acb67062ceccddeccbbbc5a5a8ec4515709dbd77e6"
+  },
+  "combined_patch_sha256": "b25eb3fe4a2dfa39b685f2314603e0f986b9c9643471c606af3a28a3769597c1",
+  "commit": "da81d266d9f423ad979b8bc45d8139f2a0c272e2",
+  "commit_subject": "perf(runtime): scan stream record boundaries with memchr",
+  "integration_paths": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "browser/Cargo.lock",
+    "src/runtime/streaming.rs"
+  ],
+  "measured_native_patch_sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94",
+  "native_patch_exactly_included": true,
+  "parent": "4fd9fea11cf2494cb2a1dc2e184bacd6a613dffa",
+  "schema": "execute.line-framing-integration-followup/1",
+  "source_receipt_sha256": "6302cfac7bc4fd781b7841965c97818e5005acd0953afde31670c0eaa3ef9e53",
+  "validation": {
+    "failed": 0,
+    "format": "passed",
+    "integration_passed": 68,
+    "library_ignored": 20,
+    "library_passed": 313,
+    "native_all_target_clippy": "passed -D warnings",
+    "total_passed": 381,
+    "wasm_clippy": "passed -D warnings"
+  },
+  "validation_receipt_sha256": "ed11c8c566a4487436cb861b069de87e08a07d00f2742b46b0e1d99bc08ad467"
+}

@@ -1,0 +1,28 @@
+{
+  "binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/build/attempt-1/candidate-line_framing_lib_test-test-binary",
+  "binary_sha256": "90f80dc994469966b25ae23f608cb45de138d3638817ad7df9f7b26753c36ff5",
+  "command": [
+    "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/build/attempt-1/candidate-line_framing_lib_test-test-binary",
+    "--exact",
+    "runtime::streaming::framing_evidence::borrowed_record_framing_matches_legacy_failures_and_bytes",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "finished_at": "2026-10-16T10:26:26.760Z",
+  "one_expected_test_ran": true,
+  "passed": true,
+  "returncode": 0,
+  "schema": "execute.line-framing-differential-preflight/1",
+  "spawn_error": null,
+  "started_at": "2026-10-16T10:26:25.848Z",
+  "stderr_bytes": 0,
+  "stderr_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/paired-run-attempt-1/preflight/candidate-line-framing-differential.stderr",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_bytes": 222,
+  "stdout_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/paired-run-attempt-1/preflight/candidate-line-framing-differential.stdout",
+  "stdout_sha256": "2381feb1f9201925f696e2151c329b20e8c21d93029bb1b77989d2631a54649a",
+  "termination_error": null,
+  "test": "runtime::streaming::framing_evidence::borrowed_record_framing_matches_legacy_failures_and_bytes",
+  "timed_out": false,
+  "timeout_seconds": 120
+}

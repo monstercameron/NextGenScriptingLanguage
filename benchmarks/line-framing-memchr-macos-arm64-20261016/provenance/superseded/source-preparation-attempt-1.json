@@ -1,0 +1,80 @@
+{
+  "base_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "benchmark": {
+    "candidate_copy_sha256": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-baseline-a884/tests/native_stream_status_bench.rs",
+    "sha256": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+    "workload": "public runtime::run_stream; deterministic 131072-record JSONL; 1/4/8 /bin/cat stages; exact output bytes, records, digest, successful statuses, and launch counts"
+  },
+  "build_driver": {
+    "baseline_targets": [
+      "native_stream_status_bench"
+    ],
+    "candidate_targets": [
+      "native_stream_status_bench",
+      "line_framing_lib_test"
+    ],
+    "execution_by_preparation": "none",
+    "fresh_release_test_artifacts": "require Cargo JSONL rows fresh=false, opt_level=3, debug_assertions=false; save immutable copies before the next package clean",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/build_line_framing_pair.py",
+    "per_arm_package_clean": "cargo clean --release --package execute",
+    "sha256": "91cc1f09f8e58206fe6358dacf922fb6222a7d252b02406e9d0272e451825d79",
+    "shared_target": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate"
+  },
+  "execution": {
+    "Cargo": "not run by this preparation",
+    "Rust_tests": "not run by this preparation",
+    "benchmark_timing": "not run by this preparation",
+    "commit_or_push": "none",
+    "primary_worktree_edits": "none"
+  },
+  "offline_validation": {
+    "checks": [
+      "source/worktree pins",
+      "run-plan pins current build driver, paired runner, tests, patch, and harness",
+      "prepared worktree changes and build artifact plan",
+      "fixed balanced schedule",
+      "exact benchmark output-oracle validation",
+      "fresh artifact-kind validation",
+      "saved immutable binary hash and location",
+      "candidate differential preflight requires exactly one matching passing test"
+    ],
+    "command": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_line_framing_pair",
+    "result": "8 passed",
+    "tests_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/test_line_framing_pair.py",
+    "tests_sha256": "88f297cbb892f01c603537d2f589a9eb3f897cf19f484c0380233a6240452d6c"
+  },
+  "paired_runner": {
+    "candidate_preflight": "run saved candidate --lib test binary with the exact framing_evidence::borrowed_record_framing_matches_legacy_failures_and_bytes filter; require one named test to pass; skip timed schedule if it fails",
+    "execution_by_preparation": "none",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/line_framing_pair.py",
+    "protocol": "3 paired warmup rounds; 48 balanced AB/BA measured pairs; 0 inner warmups; 3 samples per case; 120-second invocation timeout; zero retries; preserve all losses and reports",
+    "sha256": "241b2de05018f3289686c291a3caeae1fa5dbd5c3a3fe5e7178adf65067f2247"
+  },
+  "product_patch": {
+    "description": "Use memchr::memchr_iter(b'\\n', bytes) to locate separators in LineSink::push; direct dependency only, locked memchr remains 2.8.3.",
+    "no_vendor_or_version_delta": true,
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/line-framing-memchr.patch",
+    "sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94",
+    "tracked_paths": [
+      "Cargo.lock",
+      "Cargo.toml",
+      "src/runtime/streaming.rs"
+    ]
+  },
+  "run_plan": {
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/run-plan.json",
+    "sha256": "ed2499f2bdf10bd99fb0f0d40ef08d9a66fec340a94607e3d1407cb055e91d92"
+  },
+  "schema": "execute.line-framing-source-preparation/1",
+  "source_review": {
+    "independent_review": "clear at source level; no Cargo, Rust test binary, benchmark timing, or performance claim",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source-review.md",
+    "sha256": "7cb20070ad731a9e68632539ae5eb1194fca4944a942c960c9d6f530568856a6"
+  },
+  "status": "ready_for_root_fresh_build_and_measurement_gate",
+  "worktrees": {
+    "baseline": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-baseline-a884",
+    "candidate": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-candidate-a884"
+  }
+}

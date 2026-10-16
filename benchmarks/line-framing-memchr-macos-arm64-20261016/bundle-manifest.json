@@ -1,0 +1,79 @@
+{
+  "bundle": "line-framing-memchr-macos-arm64-20261016",
+  "created_utc": "2026-10-16T10:42:25.513644+00:00",
+  "integration_followup": {
+    "combined_patch_sha256": "b25eb3fe4a2dfa39b685f2314603e0f986b9c9643471c606af3a28a3769597c1",
+    "commit": "da81d266d9f423ad979b8bc45d8139f2a0c272e2",
+    "format_passed": true,
+    "measured_native_patch_sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94",
+    "native_and_wasm_clippy_passed": true,
+    "native_patch_exactly_included": true,
+    "tests_failed": 0,
+    "tests_ignored": 20,
+    "tests_passed": 381,
+    "validation_receipt_sha256": "ed11c8c566a4487436cb861b069de87e08a07d00f2742b46b0e1d99bc08ad467"
+  },
+  "measured_pair_orders": {
+    "AB": 24,
+    "BA": 24
+  },
+  "measurement": {
+    "base_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+    "build_driver_sha256": "91cc1f09f8e58206fe6358dacf922fb6222a7d252b02406e9d0272e451825d79",
+    "harness_sha256": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+    "independent_audit_checks_passed": 85,
+    "independent_audit_receipt_sha256": "38022ec9de3450c9ff270806323fcb9bccfea2e3780c4fad38935fc14d78193a",
+    "independent_audit_sha256": "f3f07daccfb3e760f38f9996b61f2e588867ba7d7838f2974f9d6232b29b0aa2",
+    "invocation_losses": 0,
+    "measured_pairs_per_stage": 48,
+    "paired_invocations": 102,
+    "paired_slower_stage_outcomes": 29,
+    "preregistration_sha256": "9e0d3b55cb4c7b065d1b4e30f511d4d9fcc0cba4850eb4f97b51ab301360b92e",
+    "product_patch_sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94",
+    "raw_samples": 918,
+    "runner_sha256": "64258df9b4a3e66d19e903e8ff2065a1c42a6a61a1d56e319f246515671fa7b0"
+  },
+  "platform": "macOS arm64",
+  "related_native_observer_experiment": "separate, excluded, and unmerged",
+  "schema": "execute.line-framing-publication-bundle/1",
+  "source_snapshots": {
+    "baseline": {
+      "commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "fingerprint_sha256": "6347b1daef03f7f8696749aa4cb01eb8dc6c1df167c2fcc646e40a0c49a63bc7",
+      "fingerprinted_file_count": 125,
+      "product_patch_sha256": null
+    },
+    "candidate": {
+      "commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+      "fingerprint_sha256": "d6611f792471ed0d8f2f2df7b2f747505b4ae1fd7fa9fa205b4602a63f42d0e5",
+      "fingerprinted_file_count": 125,
+      "product_patch_sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94"
+    }
+  },
+  "summary_by_stage": [
+    {
+      "candidate_faster": 38,
+      "candidate_slower": 10,
+      "measured_pairs": 48,
+      "median_paired_delta_ns": -1598688.0,
+      "ratio_of_arm_medians": 0.9272534464429513,
+      "stage_count": 1
+    },
+    {
+      "candidate_faster": 40,
+      "candidate_slower": 8,
+      "measured_pairs": 48,
+      "median_paired_delta_ns": -1727354.0,
+      "ratio_of_arm_medians": 0.9355595729957681,
+      "stage_count": 4
+    },
+    {
+      "candidate_faster": 37,
+      "candidate_slower": 11,
+      "measured_pairs": 48,
+      "median_paired_delta_ns": -1878270.5,
+      "ratio_of_arm_medians": 0.9520760788156046,
+      "stage_count": 8
+    }
+  ]
+}

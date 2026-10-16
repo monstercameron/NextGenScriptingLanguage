@@ -1,0 +1,46 @@
+{
+  "harness_sha256": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+  "reports": {
+    "baseline": {
+      "accepted_raw_samples": 9,
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/native-observer-status-pair/correctness-smokes-attempt-1/baseline-report.json",
+      "sample_oracles": {
+        "all_valid": true,
+        "bytes": 5000698,
+        "output_sha256": "2ee93eabea3e8bdd50e7461df8242e78cf9eb9d57f84849154b4411433b698ce",
+        "records": 131072,
+        "stages": [
+          1,
+          4,
+          8
+        ]
+      },
+      "sha256": "0fa0c36412299e17717295e7e4da8eadba66cee3c7513c02fb31a7d93b5b00f9",
+      "source_revision": "baseline:a884f6561fd43f45e43b25a3cc2233be17ee3944:6347b1daef03f7f8696749aa4cb01eb8dc6c1df167c2fcc646e40a0c49a63bc7:clean",
+      "test_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/native-observer-status-pair/build/attempt-1/baseline-native_stream_status_bench-test-binary",
+      "test_binary_sha256": "a3e60cfdfc4e164fe9cc9a6e31c2276fd5862ec843ab61d115064faf419f1dfe"
+    },
+    "candidate": {
+      "accepted_raw_samples": 9,
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/native-observer-status-pair/correctness-smokes-attempt-1/candidate-report.json",
+      "sample_oracles": {
+        "all_valid": true,
+        "bytes": 5000698,
+        "output_sha256": "2ee93eabea3e8bdd50e7461df8242e78cf9eb9d57f84849154b4411433b698ce",
+        "records": 131072,
+        "stages": [
+          1,
+          4,
+          8
+        ]
+      },
+      "sha256": "4e4e1408a14b74486a550e8e9912e2d36e88fc8376228aeadc9f9bfb3535bcc5",
+      "source_revision": "candidate:a884f6561fd43f45e43b25a3cc2233be17ee3944:62cbfcc2f07396c80c86b78a42faae013700cdaff8a993cdd6e928bea47212d1:c9ae26e5c47f17bc0de53ada38f01520ede9291144f6b69eb8175e2746bb9ed4",
+      "test_binary": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/native-observer-status-pair/build/attempt-1/candidate-native_stream_status_bench-test-binary",
+      "test_binary_sha256": "61cf2b97581ec194f62d6a12b6860045076dbf9a95e99280d99676f520e5d88f"
+    }
+  },
+  "runner_sha256": "64258df9b4a3e66d19e903e8ff2065a1c42a6a61a1d56e319f246515671fa7b0",
+  "schema": "execute.line-framing-prior-smoke-schema-validation/1",
+  "validation_scope": "read-only report parsing; no binary execution or timing"
+}

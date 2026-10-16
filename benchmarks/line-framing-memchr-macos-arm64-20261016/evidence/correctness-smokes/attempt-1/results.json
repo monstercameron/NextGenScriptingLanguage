@@ -1,0 +1,37 @@
+[
+  {
+    "name": "candidate-library",
+    "command": [
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/build/attempt-1/candidate-line_framing_lib_test-test-binary",
+      "--test-threads=1"
+    ],
+    "returncode": 0,
+    "purpose": "correctness only; smoke timings are excluded from paired evidence"
+  },
+  {
+    "name": "baseline",
+    "command": [
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/build/attempt-1/baseline-native_stream_status_bench-test-binary",
+      "--exact",
+      "public_native_stream_status_polling",
+      "--ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "returncode": 0,
+    "purpose": "correctness only; smoke timings are excluded from paired evidence"
+  },
+  {
+    "name": "candidate",
+    "command": [
+      "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/build/attempt-1/candidate-native_stream_status_bench-test-binary",
+      "--exact",
+      "public_native_stream_status_polling",
+      "--ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "returncode": 0,
+    "purpose": "correctness only; smoke timings are excluded from paired evidence"
+  }
+]

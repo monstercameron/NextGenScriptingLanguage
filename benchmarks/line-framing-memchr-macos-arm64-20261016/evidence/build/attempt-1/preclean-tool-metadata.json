@@ -1,0 +1,445 @@
+{
+  "baseline_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "benchmark_harness_sha256": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+  "build_driver_sha256": "91cc1f09f8e58206fe6358dacf922fb6222a7d252b02406e9d0272e451825d79",
+  "build_environment": {
+    "effective_environment": {
+      "CARGO_BUILD_JOBS": "4",
+      "CARGO_BUILD_TARGET": "aarch64-apple-darwin",
+      "CARGO_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo",
+      "CARGO_TARGET_DIR": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+      "HOME": "/Users/earlcameron",
+      "LANG": "C.UTF-8",
+      "LC_ALL": "C.UTF-8",
+      "PATH": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin:/Applications/ChatGPT.app/Contents/Resources/codex-cli/codex-path:/Users/earlcameron/.local/bin:/Users/earlcameron/.nvm/versions/node/v22.22.1/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/usr/local/go/bin:/opt/homebrew/bin:/Users/earlcameron/.codex/tmp/arg0/codex-arg0twLbU3:/Applications/ChatGPT.app/Contents/Resources/codex-cli/codex-path:/Users/earlcameron/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/Users/earlcameron/.local/bin:/Users/earlcameron/.nvm/versions/node/v22.22.1/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/earlcameron/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources:/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS",
+      "RUSTC": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustc",
+      "RUSTUP_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/rustup",
+      "RUSTUP_TOOLCHAIN": "stable-aarch64-apple-darwin",
+      "SDKROOT": "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "TMPDIR": "/var/folders/sh/f_l0_b6n22xb06sbp7fpwvzw0000gn/T/"
+    },
+    "effective_environment_sha256": "04fe54fab4e4d3dd320ab64bd19eca5b79fd7797064b2adf4f323ed657462bb2",
+    "fixed_values": {
+      "CARGO_BUILD_JOBS": "4",
+      "CARGO_BUILD_TARGET": "aarch64-apple-darwin",
+      "CARGO_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo",
+      "CARGO_TARGET_DIR": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+      "RUSTC": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustc",
+      "RUSTUP_HOME": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/rustup",
+      "RUSTUP_TOOLCHAIN": "stable-aarch64-apple-darwin"
+    },
+    "inherited_allowlist": [
+      "PATH",
+      "HOME",
+      "TMPDIR",
+      "LANG",
+      "LC_ALL",
+      "TZ",
+      "SDKROOT",
+      "DEVELOPER_DIR",
+      "MACOSX_DEPLOYMENT_TARGET"
+    ],
+    "schema": "execute.controlled-cargo-build-environment/1",
+    "unlisted_inherited_variables_forwarded": false
+  },
+  "candidate_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "candidate_product_patch_sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94",
+  "captured_at_utc": "2026-10-16T10:10:43.593697+00:00",
+  "cargo_configuration_before_build": {
+    "cargo_home": {
+      "config_files": [
+        {
+          "path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/config",
+          "present": false,
+          "resolved_path": null,
+          "sha256": null,
+          "symlink_target": null
+        },
+        {
+          "path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/config.toml",
+          "present": false,
+          "resolved_path": null,
+          "sha256": null,
+          "symlink_target": null
+        }
+      ],
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo"
+    },
+    "schema": "execute.line-framing.cargo-configuration-fingerprint/1",
+    "sha256": "2aa9540cc43a92bd2f44cb35941eddf50c4db045b6753e5fae73c91aa9d71dec",
+    "source_roots": {
+      "baseline": {
+        "config_files": [
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-baseline-a884/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-baseline-a884/.cargo/config.toml",
+            "present": true,
+            "resolved_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-baseline-a884/.cargo/config.toml",
+            "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          }
+        ],
+        "home_is_ancestor": true,
+        "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-baseline-a884"
+      },
+      "candidate": {
+        "config_files": [
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-candidate-a884/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-candidate-a884/.cargo/config.toml",
+            "present": true,
+            "resolved_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-candidate-a884/.cargo/config.toml",
+            "sha256": "20d87f486001b16b8858604d35032cafe33635c931f109ed7a3a0ce5eaaa7771",
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/2026-10-15/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/Codex/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/Documents/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/earlcameron/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/Users/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/.cargo/config",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          },
+          {
+            "path": "/.cargo/config.toml",
+            "present": false,
+            "resolved_path": null,
+            "sha256": null,
+            "symlink_target": null
+          }
+        ],
+        "home_is_ancestor": true,
+        "root": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-candidate-a884"
+      }
+    }
+  },
+  "cargo_version_verbose": {
+    "argv": [
+      "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/cargo",
+      "--version",
+      "--verbose"
+    ],
+    "executable_path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/cargo",
+    "executable_sha256": "ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a",
+    "output": "cargo 1.99.0 (5f94df478 2026-08-27)\nrelease: 1.99.0\ncommit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e\ncommit-date: 2026-08-27\nhost: aarch64-apple-darwin\nlibgit2: 1.9.6 (sys:0.21.0 vendored)\nlibcurl: 8.7.1 (sys:0.4.90+curl-8.21.0 system ssl:(SecureTransport) LibreSSL/3.3.6)\nssl: OpenSSL 3.6.3 9 Jun 2026\nos: Mac OS 26.6.2 [64-bit]"
+  },
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "preclean_capture": true,
+  "python": "3.9.6 (default, May 22 2026, 11:13:45) \n[Clang 21.0.0 (clang-2100.1.1.101)]",
+  "rustc_sysroot": {
+    "argv": [
+      "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustc",
+      "--print",
+      "sysroot"
+    ],
+    "executable_path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustc",
+    "executable_sha256": "ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a",
+    "output": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/rustup/toolchains/stable-aarch64-apple-darwin"
+  },
+  "rustc_version_verbose": {
+    "argv": [
+      "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustc",
+      "--version",
+      "--verbose"
+    ],
+    "executable_path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustc",
+    "executable_sha256": "ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a",
+    "output": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: aarch64-apple-darwin\nrelease: 1.99.0\nLLVM version: 23.1.1"
+  },
+  "rustup_active_toolchain": {
+    "argv": [
+      "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustup",
+      "show",
+      "active-toolchain"
+    ],
+    "executable_path": "/Users/earlcameron/Documents/Codex/2026-10-12/you/work/rust/cargo/bin/rustup",
+    "executable_sha256": "ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a",
+    "output": "stable-aarch64-apple-darwin (overridden by environment variable RUSTUP_TOOLCHAIN)"
+  },
+  "target_directory_is_shared_across_arms": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate",
+  "uname": {
+    "machine": "arm64",
+    "node": "Earls-MacBook-Pro.local",
+    "processor": "arm",
+    "release": "25.6.0",
+    "system": "Darwin",
+    "version": "Darwin Kernel Version 25.6.0: Fri Jul 31 19:18:49 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T6000"
+  }
+}

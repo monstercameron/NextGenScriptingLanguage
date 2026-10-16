@@ -1,0 +1,32 @@
+{
+  "created_at": "2026-10-16T10:43:41.035941+00:00",
+  "product_commit": "da81d266d9f423ad979b8bc45d8139f2a0c272e2",
+  "measured_native_patch_sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94",
+  "combined_integration_patch_sha256": "b25eb3fe4a2dfa39b685f2314603e0f986b9c9643471c606af3a28a3769597c1",
+  "format": "passed",
+  "native_all_target_clippy": "passed -D warnings",
+  "library_passed": 313,
+  "library_ignored": 20,
+  "integration_passed": 68,
+  "total_passed": 381,
+  "failed": 0,
+  "staged_snapshot_native_and_wasm_hook": "passed -D warnings; no new warnings",
+  "logs": {
+    "combined-format-attempt-1.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "combined-clippy-attempt-1.log": {
+      "sha256": "c95be656356f4390ece76df569f132fd2939b301ba0140333c215b089543c840",
+      "bytes": 506
+    },
+    "combined-tests-attempt-1.log": {
+      "sha256": "08599afb730f1e3fe59b44a3480619960923a0dcc6b54563066077975cf780a9",
+      "bytes": 41202
+    },
+    "main-commit-hook.log": {
+      "sha256": "abbf7c6dd5103a9a775006acb67062ceccddeccbbbc5a5a8ec4515709dbd77e6",
+      "bytes": 1306
+    }
+  }
+}

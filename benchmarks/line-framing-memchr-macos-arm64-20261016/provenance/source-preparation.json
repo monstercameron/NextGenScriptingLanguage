@@ -1,0 +1,165 @@
+{
+  "actual_build_validation": {
+    "actual_target_specs_and_commands": {
+      "line_framing_lib_test": {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "--lib",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "target_spec": {
+          "cargo_args": [
+            "--lib"
+          ],
+          "crate_type": "lib",
+          "key": "line_framing_lib_test",
+          "kind": "lib",
+          "source": "src/lib.rs",
+          "target_name": "flow"
+        }
+      },
+      "native_stream_status_bench": {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "--test",
+          "native_stream_status_bench",
+          "--no-run",
+          "--message-format=json"
+        ],
+        "target_spec": {
+          "cargo_args": [
+            "--test",
+            "native_stream_status_bench"
+          ],
+          "crate_type": "bin",
+          "key": "native_stream_status_bench",
+          "kind": "test",
+          "source": "tests/native_stream_status_bench.rs",
+          "target_name": "native_stream_status_bench"
+        }
+      }
+    },
+    "build_dir": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/build/attempt-1",
+    "build_driver_sha256": "91cc1f09f8e58206fe6358dacf922fb6222a7d252b02406e9d0272e451825d79",
+    "build_driver_unchanged_from_pin": true,
+    "prepare_attempt_1": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/prepare-attempt-1.log",
+      "result": "failed; target_spec schema omitted key and cargo_args in runner contract; preserved unchanged",
+      "sha256": "042d98902ac39af390492799291bb06c6277447b31e980e5c2027277d54f1ee5"
+    },
+    "prepare_attempt_2": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/preregistration-attempt-2.json",
+      "result": "receipt validation passed before exact command-argv validation was added; retained as superseded provenance",
+      "sha256": "89b1493021e7fa429d8e967a55725669240bcf373002079c197709f49c0d3fcf"
+    },
+    "prepare_attempt_3": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/preregistration-attempt-3.json",
+      "result": "passed against the real build receipts; validates exact artifact target_spec and exact build command argv; prepare does not execute binaries",
+      "sha256": "9e0d3b55cb4c7b065d1b4e30f511d4d9fcc0cba4850eb4f97b51ab301360b92e"
+    }
+  },
+  "base_commit": "a884f6561fd43f45e43b25a3cc2233be17ee3944",
+  "benchmark": {
+    "candidate_copy_sha256": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-baseline-a884/tests/native_stream_status_bench.rs",
+    "sha256": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+    "workload": "public runtime::run_stream; deterministic 131072-record JSONL; 1/4/8 /bin/cat stages; exact output bytes, records, digest, successful statuses, and launch counts"
+  },
+  "build_driver": {
+    "baseline_targets": [
+      "native_stream_status_bench"
+    ],
+    "candidate_targets": [
+      "native_stream_status_bench",
+      "line_framing_lib_test"
+    ],
+    "execution_by_preparation": "none",
+    "fresh_release_test_artifacts": "require Cargo JSONL rows fresh=false, opt_level=3, debug_assertions=false; save immutable copies before the next package clean",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/build_line_framing_pair.py",
+    "per_arm_package_clean": "cargo clean --release --package execute",
+    "sha256": "91cc1f09f8e58206fe6358dacf922fb6222a7d252b02406e9d0272e451825d79",
+    "shared_target": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/perf-target-candidate"
+  },
+  "execution": {
+    "Cargo": "not run by this preparation",
+    "Rust_tests": "not run by this preparation",
+    "benchmark_timing": "not run by this preparation",
+    "commit_or_push": "none",
+    "primary_worktree_edits": "none"
+  },
+  "offline_validation": {
+    "checks": [
+      "source/worktree pins",
+      "run-plan pins current build driver, paired runner, tests, patch, and harness",
+      "prepared worktree changes and build artifact plan",
+      "fixed balanced schedule",
+      "exact benchmark output-oracle validation",
+      "fresh artifact-kind validation",
+      "saved immutable binary hash and location",
+      "candidate differential preflight requires exactly one matching passing test",
+      "actual build-receipt target_spec and exact Cargo command argv are validated against the pinned target contract"
+    ],
+    "command": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_line_framing_pair",
+    "result": "9 passed",
+    "tests_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/test_line_framing_pair.py",
+    "tests_sha256": "963872d01529c90b9e2e7ae21ba15c7db5408354513b6ef1a909bed621dafe30"
+  },
+  "paired_runner": {
+    "candidate_preflight": "run saved candidate --lib test binary with the exact framing_evidence::borrowed_record_framing_matches_legacy_failures_and_bytes filter; require one named test to pass; skip timed schedule if it fails",
+    "execution_by_preparation": "none",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/line_framing_pair.py",
+    "protocol": "3 paired warmup rounds; 48 balanced AB/BA measured pairs; 0 inner warmups; 3 samples per case; 120-second invocation timeout; zero retries; preserve all losses and reports",
+    "sha256": "64258df9b4a3e66d19e903e8ff2065a1c42a6a61a1d56e319f246515671fa7b0"
+  },
+  "prior_smoke_schema_validation": {
+    "harness_sha256": "7171a2cb59c6749d656ed8eb5202109c17810e22d5e41c4256daeeec926256ad",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/prior-smoke-schema-validation.json",
+    "reports": {
+      "baseline": {
+        "accepted_raw_samples": 9,
+        "all_exact_oracles_valid": true,
+        "sha256": "0fa0c36412299e17717295e7e4da8eadba66cee3c7513c02fb31a7d93b5b00f9"
+      },
+      "candidate": {
+        "accepted_raw_samples": 9,
+        "all_exact_oracles_valid": true,
+        "sha256": "4e4e1408a14b74486a550e8e9912e2d36e88fc8376228aeadc9f9bfb3535bcc5"
+      }
+    },
+    "scope": "read-only validation of prior native-observer smoke reports; report candidate source revision differs and this is harness-schema evidence only, not framer candidate performance evidence",
+    "sha256": "0b69ba16b6dd185898d6745352cfc923ce9a80a39002f2e56d22b77b4559d66c"
+  },
+  "product_patch": {
+    "description": "Use memchr::memchr_iter(b'\\n', bytes) to locate separators in LineSink::push; direct dependency only, locked memchr remains 2.8.3.",
+    "no_vendor_or_version_delta": true,
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/line-framing-memchr.patch",
+    "sha256": "eeb7c5512fd78c0264d6d96a85b6959c8f1302ac481ab1e98047e3fb52145c94",
+    "tracked_paths": [
+      "Cargo.lock",
+      "Cargo.toml",
+      "src/runtime/streaming.rs"
+    ]
+  },
+  "run_plan": {
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source/run-plan.json",
+    "sha256": "b5c0b7b784e15b21e0e0c3af6ed504d0492143b8a6337a17a0fc5ab93544d29b"
+  },
+  "schema": "execute.line-framing-source-preparation/1",
+  "source_review": {
+    "independent_review": "clear at source level; no Cargo, Rust test binary, benchmark timing, or performance claim",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/line-framing-memchr/source-review.md",
+    "sha256": "7cb20070ad731a9e68632539ae5eb1194fca4944a942c960c9d6f530568856a6"
+  },
+  "status": "ready_for_root_timed_measurement_gate",
+  "worktrees": {
+    "baseline": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-baseline-a884",
+    "candidate": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/line-framing-candidate-a884"
+  }
+}

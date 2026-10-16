@@ -20,8 +20,13 @@ when available, and shutdown status. Failure cleanup captures a guest artifact
 tar capped at 32 MiB and up to 800 journal lines capped at 8 MiB before asking
 the guest to power off or removing the overlay; collection status and errors
 are retained with the host teardown receipt. The guest disk is a throwaway QCOW2
-overlay. The job uses two emulated CPUs, 4 GiB of guest RAM, a 5 GiB per-file
-write limit, and a 35-minute job timeout.
+overlay. The pinned Arch cloud image is 2 GiB virtual size, while the overlay
+exposes an 8 GiB virtual disk. This disk capacity is separate from the 5 GiB
+host-side per-file write limit; qcow2 remains sparse. NoCloud user data requests
+cloud-init growpart and root-filesystem resize. Before package installation,
+the guest waits for cloud-init, records growpart, lsblk and df evidence, and
+requires at least 4 GiB total and 2 GiB available on root. The job uses two
+emulated CPUs, 4 GiB of guest RAM, and a 35-minute timeout.
 
 The runner uses Xvfb's virtual X11 display with GTK OpenGL and QEMU's
 `virtio-vga-gl`/virgl device. Mesa is forced to the llvmpipe CPU renderer. A

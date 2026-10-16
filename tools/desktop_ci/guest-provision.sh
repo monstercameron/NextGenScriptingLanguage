@@ -29,6 +29,51 @@ printf 'arch_boxes_release=%s\narch_archive_date=%s\ngithub_run_id=%s\ngithub_so
     "$ARCH_BOXES_RELEASE" "$ARCH_ARCHIVE_DATE" "$GH_RUN_ID" "$GH_SOURCE_SHA" \
     > "$ARTIFACTS/guest-provision-receipt.txt"
 
+cloud_init_status="$ARTIFACTS/cloud-init-status.txt"
+cloud_init_wait_status=complete
+if ! timeout --signal=TERM --kill-after=5s 300s cloud-init status --wait > "$cloud_init_status" 2>&1; then
+    cloud_init_wait_status=failed
+    cat "$cloud_init_status" >&2 || true
+fi
+cloud-init status --long >> "$cloud_init_status" 2>&1 || true
+
+growpart_path="$(command -v growpart || true)"
+root_size_bytes="$(df --output=size -B1 / | tail -n 1 | tr -d ' ')"
+root_available_bytes="$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')"
+{
+    printf 'cloud_init_wait_status=%s\n' "$cloud_init_wait_status"
+    printf 'growpart_path=%s\n' "$growpart_path"
+    printf 'root_source=%s\n' "$(findmnt --noheadings --output SOURCE /)"
+    printf 'root_fstype=%s\n' "$(findmnt --noheadings --output FSTYPE /)"
+    printf 'root_size_bytes=%s\n' "$root_size_bytes"
+    printf 'root_available_bytes=%s\n' "$root_available_bytes"
+    printf '\nlsblk:\n'
+    lsblk --bytes --output NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINTS
+    printf '\ndf:\n'
+    df --block-size=1 --portability /
+} > "$ARTIFACTS/disk-preflight.txt"
+
+if [[ "$cloud_init_wait_status" != complete ]]; then
+    echo "cloud-init did not finish successfully before desktop provisioning" >&2
+    exit 1
+fi
+if [[ -z "$growpart_path" ]]; then
+    echo "growpart is not installed in the Arch cloud image" >&2
+    exit 1
+fi
+if [[ ! "$root_size_bytes" =~ ^[0-9]+$ || ! "$root_available_bytes" =~ ^[0-9]+$ ]]; then
+    echo "could not determine root filesystem capacity" >&2
+    exit 1
+fi
+if (( root_size_bytes < 4294967296 )); then
+    echo "root filesystem was not expanded to at least 4 GiB" >&2
+    exit 1
+fi
+if (( root_available_bytes < 2147483648 )); then
+    echo "root filesystem has less than 2 GiB free before desktop package installation" >&2
+    exit 1
+fi
+
 cat > /etc/pacman.d/mirrorlist <<MIRROR
 Server = https://archive.archlinux.org/repos/$ARCH_ARCHIVE_DATE/\$repo/os/\$arch
 MIRROR

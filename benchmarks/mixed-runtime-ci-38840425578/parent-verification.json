@@ -1,0 +1,43 @@
+{
+  "schema": "execute.mixed-300000-parent-verification/1",
+  "status": "passed",
+  "source_commit": "71b9f0954236cfaa14076fa644d91b9b6283aa81",
+  "artifact_zip_sha256": "f6c35c6deedfafd298e179bd44c865f9d8e3209b63ddc65fc566673f3915823d",
+  "github_artifact_digest_matches": true,
+  "reports": [
+    {
+      "file": "artifacts/mixed-runtime-lifecycle-38840425578/graph-mixed-lifecycle-38840425578-1000-trial-1.json",
+      "sha256": "76699d25297eeb61d64e31cf31cb0d77fbf643bab39db8f2e9352639a3426bd0",
+      "source_comparisons": 87,
+      "validator_summary_matches": true,
+      "actors": 1000,
+      "window_ms": 300000,
+      "active_window_observed_us": 300042614,
+      "expected_timer_sources": 847,
+      "active_event_delta": 25410650,
+      "registry_worker_reap": {
+        "all_reaped_after_registry_drop": true,
+        "count": 16,
+        "ownership": "registry-shared ordinary applet pool; graph cancellation joins actor tasks, final registry/executor drop reaps retained workers"
+      }
+    },
+    {
+      "file": "artifacts/mixed-runtime-lifecycle-38840425578/graph-mixed-lifecycle-38840425578-32.json",
+      "sha256": "461d8c6dabad8cdc6084b7f8f76c83822e6fbd2e6ede0935be437bdd58f21030",
+      "source_comparisons": 87,
+      "validator_summary_matches": true,
+      "actors": 32,
+      "window_ms": 1000,
+      "active_window_observed_us": 1008012,
+      "expected_timer_sources": 22,
+      "active_event_delta": 2205,
+      "registry_worker_reap": {
+        "all_reaped_after_registry_drop": true,
+        "count": 1,
+        "ownership": "registry-shared ordinary applet pool; graph cancellation joins actor tasks, final registry/executor drop reaps retained workers"
+      }
+    }
+  ],
+  "all_source_hash_comparisons": 174,
+  "scope": "one32actor1ssmoke+one1000actor300sboundedfixedgraph; no retries; processlocalRSS only"
+}

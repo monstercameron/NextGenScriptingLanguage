@@ -1549,3 +1549,9 @@ and 48 preflights. Full 75-manifest `check --json` medians were 24.0–27.2%
 lower across the six measured cases. The first one-step p95 regression is
 preserved; ordinary-check and inert-catalog controls were mixed. This is a
 narrow local static-check result, with no general execution-speed claim.
+
+The [single five-minute mixed-graph observation](mixed-runtime-ci-38840425578/README.md)
+passed its registered 300-second window, source coverage, cancellation and
+worker-reaping checks. It retains process-local RSS/thread samples and the
+original preregistration; the fixed graph and whole-window coverage do not
+establish production endurance, churn or process-tree resource limits.

@@ -1,0 +1,176 @@
+{
+  "run": {
+    "branch": "codex/mixed-300000-519eb37",
+    "commit": "71b9f0954236cfaa14076fa644d91b9b6283aa81",
+    "conclusion": "success",
+    "event": "workflow_dispatch",
+    "id": 38840425578,
+    "inputs": {
+      "replications": "1",
+      "run_1000": true,
+      "window_ms": "300000"
+    },
+    "preregistered_plan_sha256": "948388e0ae67b1625397a418f7d703bf15993311e535ca14a9f6cb9dbdfeca14",
+    "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38840425578",
+    "workflow": "Mixed runtime lifecycle probe"
+  },
+  "schema": "execute.mixed-runtime-publication-summary/1",
+  "scope_limits": [
+    "One 300-second bounded observation of a fixed 1000-actor graph after one 32-actor smoke; no retries.",
+    "847 timer sources each progressed at least once during the full window; no claim of uninterrupted per-second progress.",
+    "Process RSS and thread samples cover the probe process only; no process-tree RSS, child CPU, or peak concurrent process-tree count is measured.",
+    "The fixed service fixture is pure in-process encoding; the remote fixture is loopback only.",
+    "Capacity-one lossless fan-in is configured, but this run does not assert that the queue saturated.",
+    "No sustained-availability, endurance, churn, 1000-independent-capability, broad-capacity, or cross-revision throughput claim."
+  ],
+  "smoke_32_actor": {
+    "active_window_observed_us": 1008012,
+    "actor_layout": {
+      "distinct_registry_workers": 1,
+      "in_process_applets": 2,
+      "loopback_remote_listeners": 1,
+      "native_finite_applets": 3,
+      "scheduled_program_services": 2,
+      "timer_collector": 1,
+      "timers": 22,
+      "total_graph_actors": 32
+    },
+    "cancel_join_us": 8786,
+    "claim": "none",
+    "registry_workers_reaped": true,
+    "report": "graph-mixed-lifecycle-38840425578-32.json",
+    "report_sha256": "461d8c6dabad8cdc6084b7f8f76c83822e6fbd2e6ede0935be437bdd58f21030",
+    "status": "measurement_recorded_no_claim",
+    "timers_progressed": 22
+  },
+  "trial_1000_actor": {
+    "active_window_observed_us": 300042614,
+    "active_window_requested_ms": 300000,
+    "actor_count": 1000,
+    "actor_layout": {
+      "distinct_registry_workers": 16,
+      "in_process_applets": 32,
+      "loopback_remote_listeners": 8,
+      "native_finite_applets": 64,
+      "scheduled_program_services": 32,
+      "timer_collector": 1,
+      "timers": 847,
+      "total_graph_actors": 1000
+    },
+    "cancel_join_us": 1421,
+    "claim": "none",
+    "distinct_backend_nodes_with_output": {
+      "in_process": 32,
+      "native": 64,
+      "remote_event": 8,
+      "service_event": 32,
+      "worker": 16
+    },
+    "loopback_requests": {
+      "discoveries": 8,
+      "event_streams": 8,
+      "expected_discoveries": 8,
+      "expected_event_streams": 8,
+      "requests": 16
+    },
+    "process_local_resource_samples": {
+      "after_join_and_reap": {
+        "rss_bytes": 25174016,
+        "threads": 2
+      },
+      "baseline": {
+        "rss_bytes": 10285056,
+        "threads": 2
+      },
+      "expected_finite_native_launches": 64,
+      "expected_registry_worker_launches": 16,
+      "launched_processes_reported_by_graph_metrics": 80,
+      "peak_sampled": {
+        "rss_bytes": 42680320,
+        "threads": 912
+      },
+      "worker_pids": [
+        6656,
+        6570,
+        6606,
+        6571,
+        6651,
+        6595,
+        6658,
+        6594,
+        6586,
+        6657,
+        6610,
+        6587,
+        6647,
+        6568,
+        6621,
+        6599
+      ]
+    },
+    "readiness_warmup_us": 466802,
+    "registry_worker_reap": {
+      "all_reaped_after_registry_drop": true,
+      "count": 16,
+      "ownership": "registry-shared ordinary applet pool; graph cancellation joins actor tasks, final registry/executor drop reaps retained workers"
+    },
+    "report": "graph-mixed-lifecycle-38840425578-1000-trial-1.json",
+    "report_sha256": "76699d25297eeb61d64e31cf31cb0d77fbf643bab39db8f2e9352639a3426bd0",
+    "same_release_binary_sha256": "5a41628a2e2f847c0b75da745f4ffbfac04c943362ad114a90ad1a70035cdda0",
+    "status": "measurement_recorded_no_claim",
+    "timer_event_delta_during_window": 25410650,
+    "timer_events_after_window": 0,
+    "timers_progressed_at_least_once_during_whole_window": 847
+  },
+  "verification": {
+    "artifact_zip_sha256": "f6c35c6deedfafd298e179bd44c865f9d8e3209b63ddc65fc566673f3915823d",
+    "failure_sidecars": [],
+    "github_artifact_digest_matches": true,
+    "parent_receipt": {
+      "all_source_hash_comparisons": 174,
+      "artifact_zip_sha256": "f6c35c6deedfafd298e179bd44c865f9d8e3209b63ddc65fc566673f3915823d",
+      "github_artifact_digest_matches": true,
+      "reports": [
+        {
+          "active_event_delta": 25410650,
+          "active_window_observed_us": 300042614,
+          "actors": 1000,
+          "expected_timer_sources": 847,
+          "file": "artifacts/mixed-runtime-lifecycle-38840425578/graph-mixed-lifecycle-38840425578-1000-trial-1.json",
+          "registry_worker_reap": {
+            "all_reaped_after_registry_drop": true,
+            "count": 16,
+            "ownership": "registry-shared ordinary applet pool; graph cancellation joins actor tasks, final registry/executor drop reaps retained workers"
+          },
+          "sha256": "76699d25297eeb61d64e31cf31cb0d77fbf643bab39db8f2e9352639a3426bd0",
+          "source_comparisons": 87,
+          "validator_summary_matches": true,
+          "window_ms": 300000
+        },
+        {
+          "active_event_delta": 2205,
+          "active_window_observed_us": 1008012,
+          "actors": 32,
+          "expected_timer_sources": 22,
+          "file": "artifacts/mixed-runtime-lifecycle-38840425578/graph-mixed-lifecycle-38840425578-32.json",
+          "registry_worker_reap": {
+            "all_reaped_after_registry_drop": true,
+            "count": 1,
+            "ownership": "registry-shared ordinary applet pool; graph cancellation joins actor tasks, final registry/executor drop reaps retained workers"
+          },
+          "sha256": "461d8c6dabad8cdc6084b7f8f76c83822e6fbd2e6ede0935be437bdd58f21030",
+          "source_comparisons": 87,
+          "validator_summary_matches": true,
+          "window_ms": 1000
+        }
+      ],
+      "schema": "execute.mixed-300000-parent-verification/1",
+      "scope": "one32actor1ssmoke+one1000actor300sboundedfixedgraph; no retries; processlocalRSS only",
+      "source_commit": "71b9f0954236cfaa14076fa644d91b9b6283aa81",
+      "status": "passed"
+    },
+    "reports_share_exact_source_manifest": true,
+    "same_release_binary_sha256": true,
+    "source_manifest_file_count": 87
+  }
+}

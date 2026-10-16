@@ -1,0 +1,28 @@
+{
+  "failure_sidecars": [],
+  "full_workflow_log": {
+    "download_url": "https://api.github.com/repos/monstercameron/NextGenScriptingLanguage/actions/runs/38840425578/logs",
+    "included_in_publication_bundle": false,
+    "local_retained_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/mixed-runtime-ci-38840425578/workflow-job.log",
+    "run_url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38840425578",
+    "sha256": "0a3a018a204ae4f4af813c04ea6fcf9c3aeea8d5f660744ad6225a3777220d31"
+  },
+  "job_url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38840425578/job/116779008351",
+  "original_github_artifact": {
+    "artifact_id": 12021471733,
+    "digest": "sha256:f6c35c6deedfafd298e179bd44c865f9d8e3209b63ddc65fc566673f3915823d",
+    "download_url": "https://api.github.com/repos/monstercameron/NextGenScriptingLanguage/actions/artifacts/12021471733/zip",
+    "included_in_publication_bundle": false,
+    "local_retained_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/mixed-runtime-ci-38840425578/artifact-original.zip",
+    "members": [
+      "graph-mixed-lifecycle-38840425578-32.json",
+      "graph-mixed-lifecycle-38840425578-1000-trial-1.json"
+    ],
+    "name": "mixed-runtime-lifecycle-38840425578",
+    "sha256": "f6c35c6deedfafd298e179bd44c865f9d8e3209b63ddc65fc566673f3915823d",
+    "web_url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38840425578/artifacts/12021471733"
+  },
+  "parent_independent_verification_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/work/mixed-runtime-publication-38840425578/parent-verification.json",
+  "run_url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38840425578",
+  "schema": "execute.mixed-runtime-external-evidence/1"
+}

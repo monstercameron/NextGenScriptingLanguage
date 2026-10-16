@@ -1,0 +1,75 @@
+{
+  "excluded_duplicate_originals": {
+    "artifact_zip": {
+      "github_url": "https://api.github.com/repos/monstercameron/NextGenScriptingLanguage/actions/artifacts/12021471733/zip",
+      "retained_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/mixed-runtime-ci-38840425578/artifact-original.zip",
+      "sha256": "f6c35c6deedfafd298e179bd44c865f9d8e3209b63ddc65fc566673f3915823d"
+    },
+    "workflow_job_log": {
+      "download_url": "https://api.github.com/repos/monstercameron/NextGenScriptingLanguage/actions/runs/38840425578/logs",
+      "retained_path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/mixed-runtime-ci-38840425578/workflow-job.log",
+      "run_url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38840425578",
+      "sha256": "0a3a018a204ae4f4af813c04ea6fcf9c3aeea8d5f660744ad6225a3777220d31"
+    }
+  },
+  "failure_sidecars": [],
+  "included_files": [
+    {
+      "path": "README.md",
+      "sha256": "56efaa6d12a108602132b09293f4b63ea9287a0a941fff43e12b9617c10e5f61",
+      "size_bytes": 3780
+    },
+    {
+      "path": "artifact-metadata.json",
+      "sha256": "4dd4baadeabf860a46c1522cf583237f2d5aa4b8421e6d32ad3603377713d3fb",
+      "size_bytes": 794
+    },
+    {
+      "path": "external-evidence.json",
+      "sha256": "cbf88a7a1ae2341a57e2e2f0bb34879132199a07b87a6242b09eeb3afb20d065",
+      "size_bytes": 2048
+    },
+    {
+      "path": "graph-mixed-lifecycle-38840425578-1000-trial-1.json",
+      "sha256": "76699d25297eeb61d64e31cf31cb0d77fbf643bab39db8f2e9352639a3426bd0",
+      "size_bytes": 78330
+    },
+    {
+      "path": "graph-mixed-lifecycle-38840425578-32.json",
+      "sha256": "461d8c6dabad8cdc6084b7f8f76c83822e6fbd2e6ede0935be437bdd58f21030",
+      "size_bytes": 22009
+    },
+    {
+      "path": "parent-verification.json",
+      "sha256": "82f79eda30e35e9851545f844060e15958d4c862b5c211bc3441ba5c0d75f046",
+      "size_bytes": 1846
+    },
+    {
+      "path": "preregistered-plan.json",
+      "sha256": "948388e0ae67b1625397a418f7d703bf15993311e535ca14a9f6cb9dbdfeca14",
+      "size_bytes": 11038
+    },
+    {
+      "path": "run-metadata.json",
+      "sha256": "7efee553bdefeaea926a6fc681f6791cfa43bfebb51310f96d44d13d8ae8f116",
+      "size_bytes": 2782
+    },
+    {
+      "path": "source-hashes-71b9f09.json",
+      "sha256": "792166a2401f3327d56bd57700aec965b1fa7656e02af235738006e1f712904e",
+      "size_bytes": 9220
+    },
+    {
+      "path": "summary.json",
+      "sha256": "b412f6deae424c2493d82763b5ef73c9764836f47ad209e55b6d85fdba334408",
+      "size_bytes": 6658
+    },
+    {
+      "path": "verification.json",
+      "sha256": "faab2a3b3d39a6851ec3ba1ab868a9e3f5634fcd4c78f4d182acfd15fe53dec2",
+      "size_bytes": 11628
+    }
+  ],
+  "run_id": 38840425578,
+  "schema": "execute.mixed-runtime-publication-manifest/1"
+}

@@ -1,0 +1,272 @@
+{
+  "artifact": {
+    "failure_sidecars": [],
+    "github_digest_verified": true,
+    "id": 12021471733,
+    "name": "mixed-runtime-lifecycle-38840425578",
+    "sha256": "f6c35c6deedfafd298e179bd44c865f9d8e3209b63ddc65fc566673f3915823d",
+    "zip_members": [
+      "graph-mixed-lifecycle-38840425578-1000-trial-1.json",
+      "graph-mixed-lifecycle-38840425578-32.json"
+    ]
+  },
+  "cross_revision_performance_inference": "none",
+  "inputs": {
+    "replications": "1",
+    "run_1000": true,
+    "window_ms": "300000"
+  },
+  "overall_scope": "One fixed mixed graph on one Ubuntu GitHub runner, one 300000 ms active window, after a successful 32 actor 1000 ms smoke. Reports carry claim=none; this does not establish sustained production availability, churn, process-tree resource usage, or 1000 independent capabilities.",
+  "preregistered_plan_sha256": "948388e0ae67b1625397a418f7d703bf15993311e535ca14a9f6cb9dbdfeca14",
+  "reports": {
+    "1000_actor_single_trial": {
+      "active_window": {
+        "active_watchdog_fired_and_joined": true,
+        "graph_deadline_budget_ms": 320000,
+        "observed_us": 300042614,
+        "requested_ms": 300000
+      },
+      "actor_layout": {
+        "ceilings": {
+          "graph_actors": 1000,
+          "native_finite_child_launches": 64,
+          "probe_helper_threads": 3,
+          "program_service_actors": 32,
+          "registry_worker_pool": 16,
+          "remote_event_reader_slots": 8,
+          "remote_listener_actors": 8
+        },
+        "distinct_registry_workers": 16,
+        "in_process_applets": 32,
+        "loopback_remote_listeners": 8,
+        "native_finite_applets": 64,
+        "scheduled_program_services": 32,
+        "timer_collector": 1,
+        "timers": 847,
+        "total_graph_actors": 1000
+      },
+      "all_correctness_boolean_flags_true": true,
+      "backend_outputs": {
+        "in_process": 32,
+        "native": 64,
+        "remote_event": 8,
+        "service_event": 32,
+        "worker": 16
+      },
+      "cancel_and_join_us": 1421,
+      "claim": "none",
+      "claim_limits": {
+        "active_window": "duration, exact event-counter deltas, and per-timer progress are measured with synchronized instrumentation; this is not a cross-revision throughput comparison",
+        "backpressure": "this probe uses capacity-one lossless timer fan-in, but does not assert that it saturated; graph_program_services has a separate observed full-queue cancellation regression",
+        "native_processes": "finite command launch count is recorded; child RSS/CPU and peak concurrent process-tree size are not measured",
+        "program_services": "service fixture is pure program-module encoding; no child command or worker is launched by service handlers",
+        "registry_workers": "ordinary applet workers are retained by the registry pool and are expected to reap when the final registry/executor reference is dropped",
+        "remote": "loopback fixture only; remote server resources are not measured",
+        "rss_and_threads": "Rust probe process only; sampled RSS may miss short peaks",
+        "system": "does not certify machine-wide resource ceilings, disk, power, WAN, desktop, or platform fault behavior",
+        "thread_admission": "graph actor tasks are capped at the requested actor count; remote event readers are separately capped at eight; the probe adds one resource monitor, one loopback server, and one watchdog, while runtime command I/O helpers have no separate probe-wide thread cap"
+      },
+      "layout": "847 timers + 64 native + 16 registry workers + 32 in-process + 32 scheduled services + 8 loopback listeners + 1 collector",
+      "loopback_fixture_requests": {
+        "discoveries": 8,
+        "event_streams": 8,
+        "expected_discoveries": 8,
+        "expected_event_streams": 8,
+        "requests": 16
+      },
+      "nodes": 1000,
+      "process_local_resources_only": {
+        "after_join_and_reap": {
+          "rss_bytes": 25174016,
+          "threads": 2
+        },
+        "baseline": {
+          "rss_bytes": 10285056,
+          "threads": 2
+        },
+        "expected_finite_native_launches": 64,
+        "expected_registry_worker_launches": 16,
+        "launched_processes_reported_by_graph_metrics": 80,
+        "peak_sampled": {
+          "rss_bytes": 42680320,
+          "threads": 912
+        },
+        "worker_pids": [
+          6656,
+          6570,
+          6606,
+          6571,
+          6651,
+          6595,
+          6658,
+          6594,
+          6586,
+          6657,
+          6610,
+          6587,
+          6647,
+          6568,
+          6621,
+          6599
+        ]
+      },
+      "readiness_warmup_us": 466802,
+      "report": "graph-mixed-lifecycle-38840425578-1000-trial-1.json",
+      "report_sha256": "76699d25297eeb61d64e31cf31cb0d77fbf643bab39db8f2e9352639a3426bd0",
+      "report_validator_replay_matches_published_summary": true,
+      "same_release_binary_sha256": "5a41628a2e2f847c0b75da745f4ffbfac04c943362ad114a90ad1a70035cdda0",
+      "source_manifest": {
+        "file_count": 87,
+        "matches_pinned_plan_and_checked_out_source": true
+      },
+      "status": "measurement_recorded_no_claim",
+      "timer_oracle": {
+        "active_events": 25410650,
+        "active_window_exact_ids": true,
+        "counter_after_end": 0,
+        "counter_end": 25438601,
+        "counter_start": 27951,
+        "expected_ids": 847,
+        "overall_exact_ids": true,
+        "positive_exact_delta": true
+      },
+      "unexpected_output_reader_error": null,
+      "worker_reap": {
+        "all_reaped_after_registry_drop": true,
+        "expected_workers": 16,
+        "ownership": "registry-shared ordinary applet pool; graph cancellation joins actor tasks, final registry/executor drop reaps retained workers",
+        "workers_alive_before_registry_drop": true
+      }
+    },
+    "32_actor_smoke": {
+      "active_window": {
+        "active_watchdog_fired_and_joined": true,
+        "graph_deadline_budget_ms": 21000,
+        "observed_us": 1008012,
+        "requested_ms": 1000
+      },
+      "actor_layout": {
+        "ceilings": {
+          "graph_actors": 1000,
+          "native_finite_child_launches": 64,
+          "probe_helper_threads": 3,
+          "program_service_actors": 32,
+          "registry_worker_pool": 16,
+          "remote_event_reader_slots": 8,
+          "remote_listener_actors": 8
+        },
+        "distinct_registry_workers": 1,
+        "in_process_applets": 2,
+        "loopback_remote_listeners": 1,
+        "native_finite_applets": 3,
+        "scheduled_program_services": 2,
+        "timer_collector": 1,
+        "timers": 22,
+        "total_graph_actors": 32
+      },
+      "all_correctness_boolean_flags_true": true,
+      "backend_outputs": {
+        "in_process": 2,
+        "native": 3,
+        "remote_event": 1,
+        "service_event": 2,
+        "worker": 1
+      },
+      "cancel_and_join_us": 8786,
+      "claim": "none",
+      "claim_limits": {
+        "active_window": "duration, exact event-counter deltas, and per-timer progress are measured with synchronized instrumentation; this is not a cross-revision throughput comparison",
+        "backpressure": "this probe uses capacity-one lossless timer fan-in, but does not assert that it saturated; graph_program_services has a separate observed full-queue cancellation regression",
+        "native_processes": "finite command launch count is recorded; child RSS/CPU and peak concurrent process-tree size are not measured",
+        "program_services": "service fixture is pure program-module encoding; no child command or worker is launched by service handlers",
+        "registry_workers": "ordinary applet workers are retained by the registry pool and are expected to reap when the final registry/executor reference is dropped",
+        "remote": "loopback fixture only; remote server resources are not measured",
+        "rss_and_threads": "Rust probe process only; sampled RSS may miss short peaks",
+        "system": "does not certify machine-wide resource ceilings, disk, power, WAN, desktop, or platform fault behavior",
+        "thread_admission": "graph actor tasks are capped at the requested actor count; remote event readers are separately capped at eight; the probe adds one resource monitor, one loopback server, and one watchdog, while runtime command I/O helpers have no separate probe-wide thread cap"
+      },
+      "layout": "22 timers + 3 native + 1 registry workers + 2 in-process + 2 scheduled services + 1 loopback listeners + 1 collector",
+      "loopback_fixture_requests": {
+        "discoveries": 1,
+        "event_streams": 1,
+        "expected_discoveries": 1,
+        "expected_event_streams": 1,
+        "requests": 2
+      },
+      "nodes": 32,
+      "process_local_resources_only": {
+        "after_join_and_reap": {
+          "rss_bytes": 9408512,
+          "threads": 2
+        },
+        "baseline": {
+          "rss_bytes": 7376896,
+          "threads": 2
+        },
+        "expected_finite_native_launches": 3,
+        "expected_registry_worker_launches": 1,
+        "launched_processes_reported_by_graph_metrics": 4,
+        "peak_sampled": {
+          "rss_bytes": 9736192,
+          "threads": 33
+        },
+        "worker_pids": [
+          5555
+        ]
+      },
+      "readiness_warmup_us": 31268,
+      "report": "graph-mixed-lifecycle-38840425578-32.json",
+      "report_sha256": "461d8c6dabad8cdc6084b7f8f76c83822e6fbd2e6ede0935be437bdd58f21030",
+      "report_validator_replay_matches_published_summary": true,
+      "same_release_binary_sha256": "5a41628a2e2f847c0b75da745f4ffbfac04c943362ad114a90ad1a70035cdda0",
+      "source_manifest": {
+        "file_count": 87,
+        "matches_pinned_plan_and_checked_out_source": true
+      },
+      "status": "measurement_recorded_no_claim",
+      "timer_oracle": {
+        "active_events": 2205,
+        "active_window_exact_ids": true,
+        "counter_after_end": 0,
+        "counter_end": 2271,
+        "counter_start": 66,
+        "expected_ids": 22,
+        "overall_exact_ids": true,
+        "positive_exact_delta": true
+      },
+      "unexpected_output_reader_error": null,
+      "worker_reap": {
+        "all_reaped_after_registry_drop": true,
+        "expected_workers": 1,
+        "ownership": "registry-shared ordinary applet pool; graph cancellation joins actor tasks, final registry/executor drop reaps retained workers",
+        "workers_alive_before_registry_drop": true
+      }
+    }
+  },
+  "run": {
+    "branch": "codex/mixed-300000-519eb37",
+    "commit": "71b9f0954236cfaa14076fa644d91b9b6283aa81",
+    "conclusion": "success",
+    "id": 38840425578,
+    "status": "completed",
+    "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38840425578",
+    "workflow": "Mixed runtime lifecycle probe"
+  },
+  "schema": "execute.mixed-runtime-300000-verification/1",
+  "source_comparison": {
+    "differing_tracked_src_files": [
+      {
+        "candidate_sha256": "21059aff69b7fa62715beffe50fd03e20cc0d1c43d4e57ea241e774377123ac3",
+        "path": "src/main.rs",
+        "runtime58_sha256": "424459615a63e1c89f96180cc7ec4119702f3bc20227799ab6d0c2d59229efc1"
+      }
+    ],
+    "interpretation": "Only tracked src/main.rs differs in production Rust source. The probe and wrapper are changed for this bounded trial; this cross-revision difference is not evidence for throughput comparison.",
+    "reference_commit": "58b42f65d8c4de171baf8f3049ab70cf37c51af4"
+  },
+  "workflow_job": {
+    "all_steps_successful": true,
+    "completed_at_utc": "2026-10-16T02:33:48Z",
+    "started_at_utc": "2026-10-16T02:26:28Z"
+  }
+}

@@ -1,0 +1,11 @@
+# Public pilot publication package
+
+This package contains a small public-development generation pilot for three public tasks and six public fixture cases. It is not the held-out 100-script study and makes no superiority, economic, or held-out-performance claim.
+
+`summary.md` and `summary.json` give first-cohort counts and task/language splits. `raw-evaluator-report.public.json.gz` is a deterministic, lossless gzip of the path-sanitized evaluator JSON; the original raw report SHA-256 and sanitized JSON/gzip hashes are in `raw-report-provenance.json`. Absolute local binary/catalog paths and archive locations were replaced by role labels or package-relative candidate paths. All case observations, byte captures, hashes, and filesystem effects are retained. The original unredacted report and all original plan/ledger files remain unchanged in the private working pilot directory.
+
+`candidates/` stores exact source copies from the initial archive. The initial Bash filesystem participant remains a missing row in `candidates/index.json`; the separately labeled recovery replacement has its own source file and result. `dispatch/` contains path-sanitized dispatch prompts and ledgers with original prompt/ledger fingerprints and external dispatch/return observations. The public task contract and only the approved generic language reference/catalog copies are under `task/` and `materials/`; no private corpus documents are included.
+
+The original pre-dispatch plan SHA-256 values and both amendments are recorded in `protocol/fingerprints.json`. Path-sanitized plan copies are included for review, while the original files remain unmodified in the working pilot. `SHA256SUMS.txt` lists every package file except itself.
+
+`evaluator/` retains the frozen adapter source as an audit-only gzip, with its sole local-default-path substitution and original/source/compressed hashes recorded separately. It requires the original campaign layout and is not a portable rerun command. The ordinary public fixture evaluator is retained in Git at the recorded runtime revision. The approved language reference is stored losslessly as `materials/docs/language.md.gz`; decompress it to recover the exact originally supplied bytes and compare its recorded original hash.

@@ -1,0 +1,10 @@
+{
+  "schema": "execute.public-pilot-evaluator-audit/1",
+  "original_sha256": "ed87fa65561d7d720ee0d79ad1158e98dbd74ac6ca9bd6e10b87c3b700f358d0",
+  "sanitized_sha256": "6c16453b209f1cbe50a3aabb13bcce91df96e744db8caf3843b6a4fa5ab6624b",
+  "compressed_sha256": "3738ae0f62dcf35d1fb37e0e589807cdcdd141c6962588783c21ada1d533be9b",
+  "transformation": "Only DEFAULT_REPO absolute default replaced with <RECORDED_REPOSITORY>; all other source bytes unchanged.",
+  "scope": "Frozen audit source, not a portable execution entry point: original campaign plans, ledgers, archive layout, exact pinned runtime and explicit execution authorization remain required.",
+  "public_oracle_evaluator_source": "benchmarks/ai_productivity/evaluate.py at c1d9ffed3afcdbe37236260a6c0de37807773e9e",
+  "public_oracle_evaluator_sha256": "9d639c17d0680bc718cc858c4a6f50f116aff1783ece1bf49f97e0404a376fc7"
+}

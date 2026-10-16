@@ -1,0 +1,26 @@
+{
+  "schema": "execute.ai-productivity.public-pilot-replacement-dispatch/1",
+  "source_ledger_sha256": "8fc4cdb20ccf9cfd26b969523245878eb319f9eeeaf9e140d15e0ac951bc3b56",
+  "replacement_id": "filesystem_inventory__bash__replacement1",
+  "replaces_cell": "filesystem_inventory__bash",
+  "reason": "Initial participant and its path-recovery turn both claimed completion, but the assigned candidate file remained absent after each return; preserve this failure and use one fresh fork-none programmer for the missing cell.",
+  "task_id": "filesystem_inventory",
+  "arm": "bash",
+  "model": "gpt-6-luna",
+  "reasoning_effort": "max",
+  "prompt_sha256": "d9b8a0b8e0252131c40b8744f1c8e203099eb1584af925fc4aebe19d0d610842",
+  "original_dispatch_prompt_sha256": "ee379d6fdab648b3d70d9228978538ca97a63456b6d0e278b329912f8c5660ed",
+  "dispatched_at_utc": "2026-10-15 23:12:36 UTC",
+  "returned_observed_by_utc": "2026-10-15 23:13:06 UTC",
+  "outcome": "artifact_returned",
+  "artifact_sha256": "2f88fa37c60655698c744548af6e93d906e9070b8900fd986f6eb9482e09e69b",
+  "artifact_bytes": 578,
+  "archive_sha256": "2f88fa37c60655698c744548af6e93d906e9070b8900fd986f6eb9482e09e69b",
+  "archive_byte_match": true,
+  "non_reference_files_in_workspace": [
+    "candidate.sh"
+  ],
+  "language": "bash",
+  "agent_label": "public_filesystem_bash_replacement1",
+  "prompt_public_copy": "dispatch/prompts/filesystem_inventory__bash__replacement1.txt"
+}

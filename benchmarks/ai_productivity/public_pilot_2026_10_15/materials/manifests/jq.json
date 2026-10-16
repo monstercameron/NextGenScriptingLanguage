@@ -1,0 +1,32 @@
+{
+  "name": "jq",
+  "binary": "jq",
+  "accepts_stdin": true,
+  "cacheable": false,
+  "parameters": {
+    "flags": {
+      "type": "list",
+      "items": "string"
+    },
+    "filter": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    },
+    {
+      "literal": "--"
+    },
+    {
+      "parameter": "filter"
+    }
+  ]
+}

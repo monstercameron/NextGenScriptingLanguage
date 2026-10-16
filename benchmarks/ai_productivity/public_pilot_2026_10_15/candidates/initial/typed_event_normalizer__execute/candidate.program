@@ -1,0 +1,4 @@
+accept events_path as text
+run "mkdir" with arguments ["-p", "reports"]
+run "jq" with arguments ["-c", "--", "{event_id: .id, occurred_at: .at, kind: .type, source: .source, actor: (if has(\"actor\") then .actor else null end)}", events_path]
+then save to "reports/normalized.jsonl"

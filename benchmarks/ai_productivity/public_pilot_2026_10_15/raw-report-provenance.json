@@ -1,0 +1,13 @@
+{
+  "schema": "execute.ai-productivity.public-pilot-raw-report-provenance/1",
+  "source_filename": "public-fixture-results-b200-2026-10-15.json",
+  "source_original_sha256": "214433a0357269c0df1773cf612d51a4169281bd4fc667d2306999c1535047a2",
+  "source_original_bytes": 59969,
+  "published_sanitized_json_sha256": "2bba417ba8eef5e182b6f57f893f86192c180ba829b7d3101777dba8be226e64",
+  "published_sanitized_json_bytes": 58384,
+  "published_gzip_filename": "raw-evaluator-report.public.json.gz",
+  "published_gzip_sha256": "422bc6da85f7a8696bef0e2532b8d63559bce1ce7a1562d46080afd5b8965aa0",
+  "compression": "gzip, lossless for the sanitized JSON bytes; mtime=0",
+  "sanitization": "Only three top-level absolute binary/catalog paths and nine participant archive paths were replaced with role tokens or package-relative candidate paths. All case outcomes and byte observations are otherwise retained.",
+  "unredacted_source_retained": "Exact original JSON remains unchanged in the private working campaign evaluation directory; it is not included in this path-sanitized publication bundle."
+}

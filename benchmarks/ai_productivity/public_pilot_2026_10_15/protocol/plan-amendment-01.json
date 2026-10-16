@@ -1,0 +1,23 @@
+{
+  "schema": "execute.ai-productivity.public-pilot-plan-amendment/1",
+  "amendment_id": "public-pilot-candidate-tree-e1640b7a",
+  "recorded_utc": "2026-10-15T23:19:10Z",
+  "source": "Root conductor's review message in the current Codex task",
+  "scope": "candidate-tree binding for the small public-development generation pilot only",
+  "original_plan_sha256": "8968c71324fedf40acd6698f9733396d2b7582d523bc5f7b3160711ac5ede1d1",
+  "dated_plan_sha256": "525d3b0375665469854d92c40fc8739bb1c948b3fb928d7c9ba4cb4df633f1f9",
+  "previous_staged_tree": "a0ced1f4f5b9c7e1e3b854eea72e2bf8bf7179a1",
+  "amended_staged_tree": "e1640b7a9ad9822fa3b50af5ab83dbc01c4432e7",
+  "reason": "The a0ced1f4 tree was the historical first full-check tree that failed two direct supervisor unit fixtures. The corrected e1640b7a tree adds only two test-setup preload calls in src/runtime/jobs.rs. Root reports runtime behavior and language/reference/catalog bytes are unchanged.",
+  "validation_at_recording": "Root reports full make check 2 running in session 27255 with source frozen at e1640b7a; no pass is claimed by this amendment.",
+  "pilot_effect": "The evaluator may bind expected_revision to amended_staged_tree after root reports the fresh combined candidate validated and explicitly authorizes correctness execution.",
+  "preserved": {
+    "plan_json_modified": false,
+    "dated_plan_modified": false,
+    "candidate_artifacts_modified": false,
+    "prompts_modified": false,
+    "public_oracles_modified": false,
+    "first_cohort_missing_artifact_replaced": false
+  },
+  "later_supplement": "An actual commit SHA may be recorded as an additional binding when available; it does not replace amended_staged_tree."
+}

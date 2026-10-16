@@ -1,0 +1,33 @@
+{
+  "name": "mkdir",
+  "binary": "mkdir",
+  "cacheable": false,
+  "parameters": {
+    "flags": {
+      "type": "list",
+      "items": "string"
+    },
+    "paths": {
+      "type": "list",
+      "items": "string",
+      "required": true,
+      "min_items": 1
+    }
+  },
+  "arguments": [
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    },
+    {
+      "literal": "--"
+    },
+    {
+      "spread": "paths"
+    }
+  ]
+}

@@ -1,0 +1,94 @@
+{
+  "schema": "execute.ai-productivity.public-pilot-prompts/1",
+  "redaction_note": "Prompt copies have only local absolute path strings replaced; original dispatch prompt SHA-256 values are retained per row.",
+  "prompts": [
+    {
+      "participant_id": "filesystem_inventory__bash",
+      "kind": "initial",
+      "source_prompt_sha256": "ee379d6fdab648b3d70d9228978538ca97a63456b6d0e278b329912f8c5660ed",
+      "published_path": "dispatch/prompts/filesystem_inventory__bash.txt",
+      "published_sanitized_sha256": "5e84916b2c7076afa5708b9141b660232997694aeb196f56d2cbc86b32040300",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "filesystem_inventory__nushell",
+      "kind": "initial",
+      "source_prompt_sha256": "ffdcacd22b7bc1fc68a5d55668f8b34de267ecd1657f0ec561057484abbad576",
+      "published_path": "dispatch/prompts/filesystem_inventory__nushell.txt",
+      "published_sanitized_sha256": "fd407f7e24b8e574207af4de8389657ba055b699f9d809526107c5f87f958dd0",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "filesystem_inventory__execute",
+      "kind": "initial",
+      "source_prompt_sha256": "abfb01cf0886d1b7cb166cc1bff69155a62c539d4edc1e8d450c8c8242fb3c41",
+      "published_path": "dispatch/prompts/filesystem_inventory__execute.txt",
+      "published_sanitized_sha256": "5ea4264ee4056594700f91a3c9392b3f51219dd5c75388117cf764f033ed9e80",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "layered_config_merge__bash",
+      "kind": "initial",
+      "source_prompt_sha256": "0cd4372b27dd702701ccd021095346114d9a0240ab535713766fb16d5e577514",
+      "published_path": "dispatch/prompts/layered_config_merge__bash.txt",
+      "published_sanitized_sha256": "86923b4347bdbfb15f9c16069aa12d0a8e17613687a96800091bdff5fa5836bb",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "layered_config_merge__nushell",
+      "kind": "initial",
+      "source_prompt_sha256": "d15bfcb82aeb7f1cb6ed8d4ffd2d9ea00cc4319bfc50c03c1338f7423b2d9859",
+      "published_path": "dispatch/prompts/layered_config_merge__nushell.txt",
+      "published_sanitized_sha256": "430f0ede2a564f332475f3842787f9977099d84d06101482d28e7a084444ef6a",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "layered_config_merge__execute",
+      "kind": "initial",
+      "source_prompt_sha256": "310c19b13e965ad09e90337f2559bc711ca46f0306f9606e1ead25d108af297f",
+      "published_path": "dispatch/prompts/layered_config_merge__execute.txt",
+      "published_sanitized_sha256": "2c8aed880ca296abecc5fd2a54acafa2d69bb170dd1c4ffa4dd59fca0b750a52",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "typed_event_normalizer__bash",
+      "kind": "initial",
+      "source_prompt_sha256": "2bd422b620a8c83d16b13613eef3d92690b9da3e6caefaa3fc3fd1268541bc86",
+      "published_path": "dispatch/prompts/typed_event_normalizer__bash.txt",
+      "published_sanitized_sha256": "2b60c5ee7bfd232acbe81f427a4ec0cdafadad80ab20ffa1c37f4add06c2367c",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "typed_event_normalizer__nushell",
+      "kind": "initial",
+      "source_prompt_sha256": "5848a0b86a2a79f13db21d95802cf8cb7d7eb43d8541fcf5c5befe16d7220b9a",
+      "published_path": "dispatch/prompts/typed_event_normalizer__nushell.txt",
+      "published_sanitized_sha256": "cbedc1bac91fbd47691aad924bb464c13f41a4c0dd5ddf8845fdd32ce767f5fe",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "typed_event_normalizer__execute",
+      "kind": "initial",
+      "source_prompt_sha256": "2404ef7cbb6c68552ca09aa9e6d07b78870d3445bbcd61d9527257738f889d95",
+      "published_path": "dispatch/prompts/typed_event_normalizer__execute.txt",
+      "published_sanitized_sha256": "57a68f774a7bd311b0679c87f712112e12b5b6770e24cd600460a15c472aad6b",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "filesystem_inventory__bash__recovery_attempt",
+      "kind": "recovery_attempt",
+      "source_prompt_sha256": "ccd547a34d22872952f3895695a8dc17a39bf70621f3033463907209eb1fe93b",
+      "published_path": "dispatch/prompts/filesystem_inventory__bash__recovery_attempt.txt",
+      "published_sanitized_sha256": "fbb7a4c638d23e8e74a3cb467b9588c0733ce25a57910971a2460e2df5b12312",
+      "local_paths_redacted": true
+    },
+    {
+      "participant_id": "filesystem_inventory__bash__replacement1",
+      "kind": "replacement",
+      "source_prompt_sha256": "d9b8a0b8e0252131c40b8744f1c8e203099eb1584af925fc4aebe19d0d610842",
+      "published_path": "dispatch/prompts/filesystem_inventory__bash__replacement1.txt",
+      "published_sanitized_sha256": "a3446d1838e58a033e467fd64b45edd6f92d0e570b9ae9e0fcea86371e3be7f7",
+      "local_paths_redacted": true
+    }
+  ]
+}

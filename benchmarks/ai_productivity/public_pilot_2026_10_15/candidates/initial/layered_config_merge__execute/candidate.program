@@ -1,0 +1,5 @@
+accept settings_path as text
+run mkdir with flags ["-p"] and paths ["reports"]
+read settings_path
+then jq with filter "def merge($left; $right): if ($left|type) == \"object\" and ($right|type) == \"object\" then reduce ($right | keys[]) as $key ($left; .[$key] = if has($key) then merge(.[$key]; $right[$key]) else $right[$key] end) else $right end; reduce .layers[] as $layer ({}; merge(.; $layer))" and flags ["-cS"]
+then save to "reports/effective.json"

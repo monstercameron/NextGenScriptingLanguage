@@ -1,8 +1,9 @@
 # Held-out AI productivity evaluation
 
 This directory freezes the evaluation protocol and supplies a standard-library
-importer for independently collected results. It contains no model-generated
-trial results. `preregistration.json` records the split policy, task-family
+importer for independently collected results. Held-out trial results remain
+pending; a separate [small public pilot](public_pilot_2026_10_15/summary.md)
+retains generated candidates and their fixture outcomes. `preregistration.json` records the split policy, task-family
 holdout rules, success criteria, repair budget, model-parameter capture, the
 hash-locked maintainability rubric, blinded scoring, and planned paired
 analysis. The sealed task roster, provider
@@ -326,13 +327,32 @@ not guaranteed language-blind review.
 
 `real_bash_100.py` only makes the schedule and validates/imports evidence. It
 does not run models, execute candidates, build hidden oracles, certify a
-sandbox, review the corpus, or create a freeze receipt. No pilot or full trial
-has been run. The three checked-in development fixtures and synthetic unit
+sandbox, review the corpus, or create a freeze receipt. No focused 100-script
+trial has been run. The three checked-in development fixtures and synthetic unit
 fixtures remain test material and do not count toward the 100 real-script
 objective. The importer can validate that a submitted row matches the
-precommitted schedule and declared hashes; it cannot independently attest that
-an external archive reference contains the bytes named by an artifact hash or
-that an evaluator executed the hidden oracle honestly.
+precommitted schedule and declared hashes, checks archived artifact and observer
+bytes, and recomputes criteria from captured case observations. It cannot
+independently attest that a conductor ran the hidden oracle honestly or that
+the frozen source-derived behavior brief preserves the original Bash script.
+
+## October 15 public generation pilot
+
+The [retained pilot](public_pilot_2026_10_15/summary.md) has nine initial
+Luna/max assignments across three public tasks and three language arms. Its
+18 first-cohort cases contain 12 passes, four failures and two unavailable
+cases. The initial Bash filesystem artifact was missing; a separately
+dispatched recovery replacement passed its two cases. Nushell's filesystem
+candidate adds a stdout newline and its event candidate emits pretty JSON,
+causing the four failures. Execute passed all six of its public cases.
+
+The package retains exact generated sources, dispatch history, public task
+materials, byte observations and runtime/catalog fingerprints. Candidates
+were not repaired after evaluation. Stderr was captured but unscored;
+inference latency, tokens, tool-call counts and cost are unavailable. This
+small public development exercise provides no held-out or superiority claim.
+The [matched reference runtime benchmark](../matched-language-macos-arm64-987ef77-summary.json)
+uses separate hand-authored references and has its own scope and results.
 
 ## Run the public development fixtures
 

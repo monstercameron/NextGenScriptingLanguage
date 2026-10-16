@@ -1,0 +1,90 @@
+{
+  "schema": "execute.ai-productivity.public-pilot-fingerprints/1",
+  "runtime_source": {
+    "actual_commit_sha": "c1d9ffed3afcdbe37236260a6c0de37807773e9e",
+    "git_tree_sha": "b2004326c008540d4e57880352bfefd1c8409e37",
+    "binding_result": "passed; binary and manifest catalog hashes matched before/after candidate execution"
+  },
+  "binary_and_catalog": {
+    "execute_sha256": "f005d5a230705cce75a62e195424018a6ea495ade949ecef993e489f312c0e96",
+    "execute_sha256_before": "f005d5a230705cce75a62e195424018a6ea495ade949ecef993e489f312c0e96",
+    "execute_sha256_after": "f005d5a230705cce75a62e195424018a6ea495ade949ecef993e489f312c0e96",
+    "manifest_catalog_sha256": "10d776484d2f19a1fb478f9d94882cc056609c7063ef51fd63cb847391b712cc",
+    "manifest_catalog_sha256_before": "10d776484d2f19a1fb478f9d94882cc056609c7063ef51fd63cb847391b712cc",
+    "manifest_catalog_sha256_after": "10d776484d2f19a1fb478f9d94882cc056609c7063ef51fd63cb847391b712cc",
+    "nushell_release": "0.116.0",
+    "nushell_sha256": "54f326d4015679a6d943e6ff3d1ff1d23f5c282cb1158ba76fa07ee2f6212675",
+    "bash_path_observed_during_publication": "/bin/bash",
+    "bash_version_observed_during_publication": "GNU bash 3.2.57(1)-release (arm64-apple-darwin25)",
+    "bash_sha256_observed_during_publication": "16303dedab719ddb63efd9dd68092a0da37b397bfd4fcb856d5f1c86c5ee414b",
+    "jq_path_observed_during_publication": "/usr/bin/jq",
+    "jq_version_observed_during_publication": "jq-1.7.1-apple",
+    "jq_sha256_observed_during_publication": "b16bc93b2f3c69ce3134f20b796bb72aa3410b10166566ac2ca1bee5e4153ed5",
+    "bash_jq_capture_note": "Follow-up publication-time observations; unlike Execute/catalog, Bash and jq were not guarded by before/after hashes in the raw evaluator report."
+  },
+  "generation": {
+    "model_alias": "gpt-6-luna",
+    "reasoning_effort": "max",
+    "initial_assignments": 9,
+    "all_initial_assignments_same_model_settings": true,
+    "recovery_replacement_model_alias": "gpt-6-luna",
+    "recovery_replacement_reasoning_effort": "max",
+    "cost": "unavailable",
+    "tokens": "unavailable",
+    "tool_calls": "unavailable",
+    "model_inference_latency": "unavailable"
+  },
+  "plan_and_dispatch": {
+    "plan_json_sha256": "8968c71324fedf40acd6698f9733396d2b7582d523bc5f7b3160711ac5ede1d1",
+    "dated_plan_sha256": "525d3b0375665469854d92c40fc8739bb1c948b3fb928d7c9ba4cb4df633f1f9",
+    "amendment_01_sha256": "ba78075745a1ef18e9f223e5741c8b4cc73750670fb419be17bbea0bb3223d55",
+    "amendment_02_sha256": "e300ba55f54d689aaf368d1cd8fe4a4105b026a64d983578179a69431c35b12f",
+    "dispatch_ledger_sha256": "3736c7c08b60b32c1d980ae2e092f5e3f6a270b83784e1fe01b5f7bc57741f95",
+    "replacement_dispatch_sha256": "8fc4cdb20ccf9cfd26b969523245878eb319f9eeeaf9e140d15e0ac951bc3b56",
+    "execution_attempts_sha256": "6a367b0f9410d9259debf3fdfdcced50a35c9770a9aba4333da10c43349013f5",
+    "candidate_integrity_record_sha256": "b0b14b3faba7c74666979877331b1162f78941de355545fcfe64288a6a94ee62",
+    "public_development_json_sha256": "e02fc57cb4a40c5ee7f4deb4dc82c80f8a2f649bc614b3adb88295f3ccff1e84",
+    "task_prompt_sha256": {
+      "filesystem_inventory": "fcb142bbcca01281d98714c8158cba217e7f4b0a86849ec57e6fa9e6db2228e9",
+      "layered_config_merge": "5f5dffef639cafd659e6ca3bfaf020868e22e2fe2d5330180961945cccfd0e8e",
+      "typed_event_normalizer": "596aa3a45dc9c1578478f624fe7ba1643e9d26130a14832fedca9e3ba5695251"
+    },
+    "participant_dispatch_prompt_sha256": {
+      "filesystem_inventory__bash": "ee379d6fdab648b3d70d9228978538ca97a63456b6d0e278b329912f8c5660ed",
+      "filesystem_inventory__nushell": "ffdcacd22b7bc1fc68a5d55668f8b34de267ecd1657f0ec561057484abbad576",
+      "filesystem_inventory__execute": "abfb01cf0886d1b7cb166cc1bff69155a62c539d4edc1e8d450c8c8242fb3c41",
+      "layered_config_merge__bash": "0cd4372b27dd702701ccd021095346114d9a0240ab535713766fb16d5e577514",
+      "layered_config_merge__nushell": "d15bfcb82aeb7f1cb6ed8d4ffd2d9ea00cc4319bfc50c03c1338f7423b2d9859",
+      "layered_config_merge__execute": "310c19b13e965ad09e90337f2559bc711ca46f0306f9606e1ead25d108af297f",
+      "typed_event_normalizer__bash": "2bd422b620a8c83d16b13613eef3d92690b9da3e6caefaa3fc3fd1268541bc86",
+      "typed_event_normalizer__nushell": "5848a0b86a2a79f13db21d95802cf8cb7d7eb43d8541fcf5c5befe16d7220b9a",
+      "typed_event_normalizer__execute": "2404ef7cbb6c68552ca09aa9e6d07b78870d3445bbcd61d9527257738f889d95"
+    },
+    "recovery_attempt_prompt_sha256": "ccd547a34d22872952f3895695a8dc17a39bf70621f3033463907209eb1fe93b",
+    "replacement_prompt_sha256": "d9b8a0b8e0252131c40b8744f1c8e203099eb1584af925fc4aebe19d0d610842",
+    "approved_reference_sha256": {
+      "docs/language.md": "e3adff36821adecc76b67060d2e0c33f894c3fc79370e3d3a2e92f65e66a40de",
+      "manifests/cat.json": "483117c32690b423ab88e9443cc7ce0787545f07833576d678b1d0472f19ab3a",
+      "manifests/core.fs_read.json": "44ed96496c80adc848283d6aee23a3d61535abdfbd4d5f2aa8501058ecca8489",
+      "manifests/core.fs_write_atomic.json": "cebaeb1f4088a38a0b8442979cc95f478d2d2a1ef775604f627f7a6799e8506b",
+      "manifests/core.json_filter.json": "28a595a004185f48d11df39f8b6a83b713a17897867ecf1e71611531ad9e3cf0",
+      "manifests/core.json_get.json": "5d0a5618080ae281f5ee84653abb0e045cc5993b132d6400628d2f70910c8537",
+      "manifests/core.json_map.json": "d349fc6e8d99190a9df87fda906a9e6c1c3f738fa875d00ef10487f6d8beb119",
+      "manifests/core.json_parse.json": "7bf89dc1ae80517ba1a21058dfd9817d69c66be23194779c322b4a616648d05a",
+      "manifests/core.json_stringify.json": "69d121310f54ce696c1bca2d40a1692d0b1a6dbc89928cad95f5218bba5e5585",
+      "manifests/jq.json": "2f6585cff672a91e630833a4b3fc7bc61c9a59d82e5478d926a509d5154f1792",
+      "manifests/ls.json": "3c193cb2c0f1397e6600ddf3de9b8219110a26d5ae5661281c5263f50b74d17d",
+      "manifests/mkdir.json": "05ff3c97d1b4c03994f3f3d1d3cf0cf868c6b865cf1722501cc240c25a4ec61a",
+      "manifests/printf.json": "abe61c4481c94396e230406897d253ff8ba0f9c854fb09ecc098b85870b0237e",
+      "manifests/sort.json": "6d953c33eed06e702c5781290d76929b8e19d62d283b999321e42de19d779b50"
+    },
+    "evaluator_adapter_sha256": "ed87fa65561d7d720ee0d79ad1158e98dbd74ac6ca9bd6e10b87c3b700f358d0",
+    "public_oracle_evaluator_sha256": "9d639c17d0680bc718cc858c4a6f50f116aff1783ece1bf49f97e0404a376fc7",
+    "public_fixture_package_sha256": "e02fc57cb4a40c5ee7f4deb4dc82c80f8a2f649bc614b3adb88295f3ccff1e84",
+    "published_sanitized_original_plan_json_sha256": "fd3319fcf59fb14f62684a45f35f8c826f101124b03bd0f2e537eb2f9d82cc62",
+    "published_sanitized_dated_plan_sha256": "9041b253ddb97b7b6d57793720c3bbd811f070a9bdd0cd7b805915f0ae8915c7"
+  },
+  "raw_report_original_sha256": "214433a0357269c0df1773cf612d51a4169281bd4fc667d2306999c1535047a2",
+  "published_sanitized_report_sha256": "2bba417ba8eef5e182b6f57f893f86192c180ba829b7d3101777dba8be226e64",
+  "report_redaction_count": 12
+}

@@ -1,0 +1,405 @@
+{
+  "schema": "execute.ai-productivity.public-generation-pilot-summary/1",
+  "title": "Small public-development generation pilot",
+  "campaign_date": "2026-10-15",
+  "scope": {
+    "task_count": 3,
+    "public_fixture_case_count": 6,
+    "initial_participant_assignments": 9,
+    "initial_artifact_files_available": 8,
+    "recovery_replacement_rows": 1,
+    "development_only": true,
+    "held_out_100_script_study": false,
+    "superiority_claim": "none",
+    "economic_claim": "none"
+  },
+  "case_counts": {
+    "first_cohort": {
+      "pass": 12,
+      "fail": 4,
+      "unavailable": 2
+    },
+    "recovery_replacement": {
+      "pass": 2,
+      "fail": 0,
+      "unavailable": 0
+    },
+    "all_rows_including_replacement": {
+      "pass": 14,
+      "fail": 4,
+      "unavailable": 2
+    }
+  },
+  "first_cohort_splits": {
+    "by_task": {
+      "filesystem_inventory": {
+        "pass": 2,
+        "fail": 2,
+        "unavailable": 2
+      },
+      "layered_config_merge": {
+        "pass": 6,
+        "fail": 0,
+        "unavailable": 0
+      },
+      "typed_event_normalizer": {
+        "pass": 4,
+        "fail": 2,
+        "unavailable": 0
+      }
+    },
+    "by_language": {
+      "bash": {
+        "pass": 4,
+        "fail": 0,
+        "unavailable": 2
+      },
+      "nushell": {
+        "pass": 2,
+        "fail": 4,
+        "unavailable": 0
+      },
+      "execute": {
+        "pass": 6,
+        "fail": 0,
+        "unavailable": 0
+      }
+    },
+    "by_task_and_language": {
+      "filesystem_inventory": {
+        "bash": {
+          "pass": 0,
+          "fail": 0,
+          "unavailable": 2
+        },
+        "nushell": {
+          "pass": 0,
+          "fail": 2,
+          "unavailable": 0
+        },
+        "execute": {
+          "pass": 2,
+          "fail": 0,
+          "unavailable": 0
+        }
+      },
+      "layered_config_merge": {
+        "bash": {
+          "pass": 2,
+          "fail": 0,
+          "unavailable": 0
+        },
+        "nushell": {
+          "pass": 2,
+          "fail": 0,
+          "unavailable": 0
+        },
+        "execute": {
+          "pass": 2,
+          "fail": 0,
+          "unavailable": 0
+        }
+      },
+      "typed_event_normalizer": {
+        "bash": {
+          "pass": 2,
+          "fail": 0,
+          "unavailable": 0
+        },
+        "nushell": {
+          "pass": 0,
+          "fail": 2,
+          "unavailable": 0
+        },
+        "execute": {
+          "pass": 2,
+          "fail": 0,
+          "unavailable": 0
+        }
+      }
+    }
+  },
+  "recovery_replacement_split": {
+    "participant_id": "filesystem_inventory__bash__replacement1",
+    "task_id": "filesystem_inventory",
+    "language": "bash",
+    "cases": {
+      "pass": 2,
+      "fail": 0,
+      "unavailable": 0
+    },
+    "counted_in_first_cohort": false
+  },
+  "fixture_case_ids": {
+    "filesystem_inventory": [
+      "names_with_spaces_and_hidden_files",
+      "second_directory_and_different_names"
+    ],
+    "layered_config_merge": [
+      "nested_object_and_array_replacement",
+      "empty_layers_are_an_empty_object"
+    ],
+    "typed_event_normalizer": [
+      "mixed_optional_actor_fields",
+      "different_event_content"
+    ]
+  },
+  "participant_outcomes": [
+    {
+      "participant_id": "filesystem_inventory__bash",
+      "cohort": "initial",
+      "task_id": "filesystem_inventory",
+      "language": "bash",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": null,
+      "artifact_status": "missing",
+      "participant_status": "unavailable",
+      "case_outcomes": [
+        {
+          "case_id": "names_with_spaces_and_hidden_files",
+          "status": "unavailable"
+        },
+        {
+          "case_id": "second_directory_and_different_names",
+          "status": "unavailable"
+        }
+      ]
+    },
+    {
+      "participant_id": "filesystem_inventory__nushell",
+      "cohort": "initial",
+      "task_id": "filesystem_inventory",
+      "language": "nushell",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": "0e89ba5df0b276801cb8b15707f412214f3720238054e64bb54968457f61663b",
+      "artifact_status": "present",
+      "participant_status": "fail",
+      "case_outcomes": [
+        {
+          "case_id": "names_with_spaces_and_hidden_files",
+          "status": "fail"
+        },
+        {
+          "case_id": "second_directory_and_different_names",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "participant_id": "filesystem_inventory__execute",
+      "cohort": "initial",
+      "task_id": "filesystem_inventory",
+      "language": "execute",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": "dd590280cc77509de8fc2e691760a48cc6dc413e39808131e4439c7b743f7124",
+      "artifact_status": "present",
+      "participant_status": "pass",
+      "case_outcomes": [
+        {
+          "case_id": "names_with_spaces_and_hidden_files",
+          "status": "pass"
+        },
+        {
+          "case_id": "second_directory_and_different_names",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "participant_id": "layered_config_merge__bash",
+      "cohort": "initial",
+      "task_id": "layered_config_merge",
+      "language": "bash",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": "b5bad3927abc86c49dac432bdbbf38368c627acb6d06418a477c396929588627",
+      "artifact_status": "present",
+      "participant_status": "pass",
+      "case_outcomes": [
+        {
+          "case_id": "nested_object_and_array_replacement",
+          "status": "pass"
+        },
+        {
+          "case_id": "empty_layers_are_an_empty_object",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "participant_id": "layered_config_merge__nushell",
+      "cohort": "initial",
+      "task_id": "layered_config_merge",
+      "language": "nushell",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": "bfee58a0996f3e1abfe10523e888e841471a2213a5233db36c2f2bc45424cd3e",
+      "artifact_status": "present",
+      "participant_status": "pass",
+      "case_outcomes": [
+        {
+          "case_id": "nested_object_and_array_replacement",
+          "status": "pass"
+        },
+        {
+          "case_id": "empty_layers_are_an_empty_object",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "participant_id": "layered_config_merge__execute",
+      "cohort": "initial",
+      "task_id": "layered_config_merge",
+      "language": "execute",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": "0ab41d3fc59ad740a4b5644a444e7c6de34ba542a081ab5c6121866d55db706e",
+      "artifact_status": "present",
+      "participant_status": "pass",
+      "case_outcomes": [
+        {
+          "case_id": "nested_object_and_array_replacement",
+          "status": "pass"
+        },
+        {
+          "case_id": "empty_layers_are_an_empty_object",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "participant_id": "typed_event_normalizer__bash",
+      "cohort": "initial",
+      "task_id": "typed_event_normalizer",
+      "language": "bash",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": "f40e5880bb847681c9f29a68f53f7ecfaff579ae6b992195c40fa548c02cb51a",
+      "artifact_status": "present",
+      "participant_status": "pass",
+      "case_outcomes": [
+        {
+          "case_id": "mixed_optional_actor_fields",
+          "status": "pass"
+        },
+        {
+          "case_id": "different_event_content",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "participant_id": "typed_event_normalizer__nushell",
+      "cohort": "initial",
+      "task_id": "typed_event_normalizer",
+      "language": "nushell",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": "231049edfd30b074800c1958e3c75c54909dc3291d4464162511f2d443833209",
+      "artifact_status": "present",
+      "participant_status": "fail",
+      "case_outcomes": [
+        {
+          "case_id": "mixed_optional_actor_fields",
+          "status": "fail"
+        },
+        {
+          "case_id": "different_event_content",
+          "status": "fail"
+        }
+      ]
+    },
+    {
+      "participant_id": "typed_event_normalizer__execute",
+      "cohort": "initial",
+      "task_id": "typed_event_normalizer",
+      "language": "execute",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": "2692a6eaaf76d8b04c0f7a50bc27634f1aa31e0a66005a9fbcf87d217daafcfb",
+      "artifact_status": "present",
+      "participant_status": "pass",
+      "case_outcomes": [
+        {
+          "case_id": "mixed_optional_actor_fields",
+          "status": "pass"
+        },
+        {
+          "case_id": "different_event_content",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "participant_id": "filesystem_inventory__bash__replacement1",
+      "cohort": "recovery_replacement",
+      "task_id": "filesystem_inventory",
+      "language": "bash",
+      "model": "gpt-6-luna",
+      "reasoning_effort": "max",
+      "artifact_sha256": "2f88fa37c60655698c744548af6e93d906e9070b8900fd986f6eb9482e09e69b",
+      "artifact_status": "present",
+      "participant_status": "pass",
+      "case_outcomes": [
+        {
+          "case_id": "names_with_spaces_and_hidden_files",
+          "status": "pass"
+        },
+        {
+          "case_id": "second_directory_and_different_names",
+          "status": "pass"
+        }
+      ]
+    }
+  ],
+  "failure_notes": [
+    {
+      "participant_id": "filesystem_inventory__nushell",
+      "case_ids": [
+        "names_with_spaces_and_hidden_files",
+        "second_directory_and_different_names"
+      ],
+      "reason": "stdout has one extra LF in each case; output file contents and filesystem delta match."
+    },
+    {
+      "participant_id": "typed_event_normalizer__nushell",
+      "case_ids": [
+        "mixed_optional_actor_fields",
+        "different_event_content"
+      ],
+      "reason": "pretty-printed JSON instead of required compact, ordered JSON Lines; stdout and output file contents differ."
+    }
+  ],
+  "evaluation": {
+    "runtime_commit_sha": "c1d9ffed3afcdbe37236260a6c0de37807773e9e",
+    "runtime_tree_sha": "b2004326c008540d4e57880352bfefd1c8409e37",
+    "execute_sha256": "f005d5a230705cce75a62e195424018a6ea495ade949ecef993e489f312c0e96",
+    "manifest_catalog_sha256": "10d776484d2f19a1fb478f9d94882cc056609c7063ef51fd63cb847391b712cc",
+    "before_after_integrity": "passed",
+    "all_executed_processes_exit_0": true,
+    "timeouts": 0,
+    "runner_errors": 0,
+    "stderr": "Captured exactly; unscored because the public task contract specifies no expected stderr stream.",
+    "timed_runtime_benchmark": "not performed"
+  },
+  "generation_metrics": {
+    "dispatch_and_return_wall_clock": "retained in sanitized dispatch ledger; external generation elapsed observations only",
+    "inference_latency": "unavailable",
+    "tokens": "unavailable",
+    "tool_calls": "unavailable",
+    "cost": "unavailable"
+  },
+  "artifacts": {
+    "raw_report": "raw-evaluator-report.public.json.gz",
+    "raw_report_provenance": "raw-report-provenance.json",
+    "candidate_index": "candidates/index.json",
+    "dispatch_ledger": "dispatch/dispatch-ledger.public.json",
+    "attempt_ledger": "dispatch/execution-attempts.public.jsonl",
+    "fingerprints": "protocol/fingerprints.json"
+  },
+  "claim": "none"
+}

@@ -1,0 +1,26 @@
+{
+  "schema": "execute.ai-productivity.public-pilot-plan-amendment/1",
+  "amendment_id": "public-pilot-candidate-tree-b2004326",
+  "recorded_utc": "2026-10-15T23:41:40Z",
+  "source": "Root conductor's fresh validation update in the current Codex task",
+  "scope": "candidate-tree binding for the small public-development generation pilot only",
+  "original_plan_sha256": "8968c71324fedf40acd6698f9733396d2b7582d523bc5f7b3160711ac5ede1d1",
+  "dated_plan_sha256": "525d3b0375665469854d92c40fc8739bb1c948b3fb928d7c9ba4cb4df633f1f9",
+  "previous_amendment": "pre-execution-amendment-2026-10-15.json",
+  "previous_amendment_sha256": "ba78075745a1ef18e9f223e5741c8b4cc73750670fb419be17bbea0bb3223d55",
+  "previous_staged_tree": "e1640b7a9ad9822fa3b50af5ab83dbc01c4432e7",
+  "amended_staged_tree": "b2004326c008540d4e57880352bfefd1c8409e37",
+  "reason": "Native make check passed on e1640b7a with 899 Rust tests, 28 ignored, and 26 editor checks. The commit hook then found a WASM compile failure because shared calls::Frame required the native-only job_scope field during browser construction. The b2004326 tree cfg-gates that field to non-wasm32 and adds a browser regression that rejects direct and nested reusable-job syntax before virtual-file effects. Root reports native product behavior unchanged.",
+  "validation_at_recording": "Root reports focused native call/job/library checks and full playground checks running on source-frozen b2004326; no b2004326 full-check pass or candidate execution is claimed by this amendment.",
+  "pilot_effect": "The evaluator must bind expected_revision to amended_staged_tree after root supplies the validated binary SHA and actual commit SHA and explicitly authorizes correctness execution.",
+  "unchanged_pilot_material": {
+    "candidate_artifacts": true,
+    "prompts": true,
+    "public_oracles": true,
+    "manifest_catalog": true,
+    "original_plan_json": true,
+    "dated_plan": true,
+    "first_amendment": true
+  },
+  "actual_commit_requirement": "The evaluator requires the actual commit SHA and verifies that its Git tree equals amended_staged_tree before any candidate process is launched."
+}

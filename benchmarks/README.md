@@ -162,6 +162,29 @@ XZ instead of adding a 102 MB JSON file to Git. The summary records compressed
 and uncompressed hashes; decompression was checked against the original bytes.
 Use `xz -dc benchmarks/source-pair-macos-arm64-1eabbfa.json.xz` to inspect it.
 
+## October 15 matched public reference workflows
+
+The [summary](matched-language-macos-arm64-987ef77-summary.json) and [lossless raw report](matched-language-macos-arm64-987ef77.json.xz) record Execute `987ef77` (rc.5), macOS Bash 3.2.57 and Nushell 0.116.0 on local macOS arm64. Three checked-in public reference workflows each have two fixture cases. These are hand-authored evaluator references; the separate AI-generation pilot has its own results.
+
+Each language has 30 measured samples and five excluded warmups per case, interleaved through all six language-order permutations. All 540 measured invocations, 90 warmups and 18 preflights passed exact stdout, empty stderr, zero status, output-file and allowed workspace-effect oracles. Recorded source, catalog, executable and tool fingerprints matched before and after. The summary independently recomputes medians and nearest-rank p95 from the raw samples.
+
+| Fixture case | Execute median / p95 (ms) | Bash median / p95 (ms) | Nu median / p95 (ms) |
+| --- | ---: | ---: | ---: |
+| filesystem_inventory/names_with_spaces_and_hidden_files | 25.828 / 40.521 | 17.011 / 19.183 | 30.239 / 37.541 |
+| filesystem_inventory/second_directory_and_different_names | 25.764 / 36.802 | 17.042 / 32.462 | 28.943 / 39.316 |
+| layered_config_merge/nested_object_and_array_replacement | 18.727 / 21.986 | 9.555 / 11.499 | 21.515 / 26.463 |
+| layered_config_merge/empty_layers_are_an_empty_object | 18.728 / 23.217 | 9.600 / 15.356 | 20.472 / 29.791 |
+| typed_event_normalizer/mixed_optional_actor_fields | 18.673 / 21.189 | 9.561 / 11.973 | 20.700 / 25.127 |
+| typed_event_normalizer/different_event_content | 18.440 / 21.439 | 9.447 / 11.387 | 19.807 / 23.903 |
+
+Bash has lower medians in all six cases. Execute has lower medians than Nu in all six; its first filesystem-case p95 is higher than Nu. The workloads have matched behavior but different command plans: Execute uses internal `save` and an explicit `cat` stage for `jq`, while shell references use `tee` or file arguments. Timings include fresh interpreter startup, command execution, stream capture and exit. Fixture setup and correctness checks are outside the timed interval.
+
+This is one local run with warm working filesystems and an idle measurement window. It measures neither CPU nor peak RSS, interpreter-only overhead, cold startup, failure contracts, other operating systems, held-out tasks, nor programmer tokens/cost. Execute-only graph and catalog workloads have no matched shell arm and remain explicitly excluded in the raw report. No broad Bash replacement or AI superiority claim follows.
+
+An earlier attempt stopped before timing because the harness reused the first task’s reference path for later tasks. Commit `987ef77` selects each task’s own script and adds a regression covering all six cases; the failed preflight is not counted as a measurement.
+
+The raw JSON is retained losslessly as XZ with both hashes in the summary. Inspect it with `xz -dc benchmarks/matched-language-macos-arm64-987ef77.json.xz`.
+
 # Native stream framing
 
 The [stream-framing report](performance-2026-10-14-stream-framing.json) compares

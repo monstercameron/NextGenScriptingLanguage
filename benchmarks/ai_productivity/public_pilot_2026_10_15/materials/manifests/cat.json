@@ -1,0 +1,40 @@
+{
+  "name": "cat",
+  "phrases": [
+    "copy"
+  ],
+  "binary": "cat",
+  "accepts_stdin": true,
+  "cacheable": false,
+  "parameters": {
+    "path": {
+      "type": "string"
+    },
+    "files": {
+      "type": "list",
+      "items": "string",
+      "min_items": 1
+    }
+  },
+  "arguments": [
+    {
+      "literal": "--"
+    },
+    {
+      "when_present": "path",
+      "append": [
+        {
+          "parameter": "path"
+        }
+      ]
+    },
+    {
+      "when_present": "files",
+      "append": [
+        {
+          "spread": "files"
+        }
+      ]
+    }
+  ]
+}

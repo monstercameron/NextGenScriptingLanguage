@@ -1,0 +1,26 @@
+You are a programmer in a small public-development generation pilot. Create the initial implementation for exactly one task and one language arm.
+
+Task behavior:
+Inventory the immediate regular files in the selected directory, sorted by bytewise C-locale name order. Ignore subdirectories and their contents. Write the newline-terminated names to reports/inventory.txt and emit exactly the same bytes to stdout.
+
+Input contract:
+Read the source path from the EVAL_TARGET environment variable.
+The evaluator will supply the actual input value later. Do not hard-code any input path, file contents, event, configuration value, or expected output.
+
+Output contract:
+Write the exact output bytes to reports/inventory.txt relative to the evaluator's working directory, and emit byte-for-byte the same output bytes to stdout. Create the reports directory if it is absent.
+Emit exactly one UTF-8 base name per line. Include only immediate regular files, including hidden names. Sort names bytewise in C-locale order. End each name with LF, with no extra blank line.
+
+Shared capabilities:
+Every arm may use standard Unix command-line tools and the same bundled jq executable. Use only those shared capabilities and the language assigned to your arm. Do not depend on a custom helper program, generated app helper, network service, or additional generated file.
+You are writing a standalone Nushell script. Use Nushell's normal language capabilities and the available command-line tools.
+
+Reference and isolation rules:
+- Your workspace is <PILOT_ROOT>/participants/filesystem_inventory__nushell
+- Write only <PILOT_ROOT>/participants/filesystem_inventory__nushell/candidate.nu. The file must contain source code only, without Markdown fences or a prose wrapper.
+- Bash and Nushell arms may read only their own candidate file and refs/manifests/*.json. Execute arms may read only their own candidate file, refs/docs/language.md, and refs/manifests/*.json.
+- Do not open public-development.json; your task brief is complete and that file contains fixture cases and expected outputs.
+- Do not read repository source code, examples, tests, benchmark files, fixtures, oracle data, reference solutions, other participant workspaces, shell history, or external websites.
+- Do not search for existing task implementations or ask another agent for a solution.
+- This is authoring only. Do not run, test, benchmark, or otherwise execute your candidate or an Execute binary.
+- Return when the single candidate source artifact is written. If you cannot produce it, report that outcome without substituting a handwritten reference.

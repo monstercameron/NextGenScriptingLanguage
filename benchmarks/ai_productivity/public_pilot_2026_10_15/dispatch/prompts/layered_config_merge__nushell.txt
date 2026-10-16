@@ -1,0 +1,26 @@
+You are a programmer in a small public-development generation pilot. Create the initial implementation for exactly one task and one language arm.
+
+Task behavior:
+Read a JSON document with an ordered layers array and recursively merge its object layers from left to right. Later scalar and array values replace earlier ones; nested objects merge recursively. Emit the effective JSON value and write it to reports/effective.json.
+
+Input contract:
+Read the source path from the EVAL_SETTINGS environment variable.
+The evaluator will supply the actual input value later. Do not hard-code any input path, file contents, event, configuration value, or expected output.
+
+Output contract:
+Write the exact output bytes to reports/effective.json relative to the evaluator's working directory, and emit byte-for-byte the same output bytes to stdout. Create the reports directory if it is absent.
+Emit one compact JSON value with all object keys sorted lexicographically at every depth, followed by one LF. Do not add spaces outside JSON strings.
+
+Shared capabilities:
+Every arm may use standard Unix command-line tools and the same bundled jq executable. Use only those shared capabilities and the language assigned to your arm. Do not depend on a custom helper program, generated app helper, network service, or additional generated file.
+You are writing a standalone Nushell script. Use Nushell's normal language capabilities and the available command-line tools.
+
+Reference and isolation rules:
+- Your workspace is <PILOT_ROOT>/participants/layered_config_merge__nushell
+- Write only <PILOT_ROOT>/participants/layered_config_merge__nushell/candidate.nu. The file must contain source code only, without Markdown fences or a prose wrapper.
+- Bash and Nushell arms may read only their own candidate file and refs/manifests/*.json. Execute arms may read only their own candidate file, refs/docs/language.md, and refs/manifests/*.json.
+- Do not open public-development.json; your task brief is complete and that file contains fixture cases and expected outputs.
+- Do not read repository source code, examples, tests, benchmark files, fixtures, oracle data, reference solutions, other participant workspaces, shell history, or external websites.
+- Do not search for existing task implementations or ask another agent for a solution.
+- This is authoring only. Do not run, test, benchmark, or otherwise execute your candidate or an Execute binary.
+- Return when the single candidate source artifact is written. If you cannot produce it, report that outcome without substituting a handwritten reference.

@@ -1,0 +1,26 @@
+You are a programmer in a small public-development generation pilot. Create the initial implementation for exactly one task and one language arm.
+
+Task behavior:
+Consume JSON Lines event records in input order. For each record emit one compact JSON object with event_id from id, occurred_at from at, kind from type, source from source, and actor from actor (use JSON null when actor is absent). Write the same newline-delimited output to reports/normalized.jsonl.
+
+Input contract:
+At the top level, declare accept events_path as text and use that declared input as the source path.
+The evaluator will supply the actual input value later. Do not hard-code any input path, file contents, event, configuration value, or expected output.
+
+Output contract:
+Write the exact output bytes to reports/normalized.jsonl relative to the evaluator's working directory, and emit byte-for-byte the same output bytes to stdout. Create the reports directory if it is absent.
+Emit one compact JSON object per input record, preserving input record order. Each object must have keys in exactly this order: event_id, occurred_at, kind, source, actor. Use JSON null when actor is absent. End every object with LF.
+
+Shared capabilities:
+Every arm may use standard Unix command-line tools and the same bundled jq executable. Use only those shared capabilities and the language assigned to your arm. Do not depend on a custom helper program, generated app helper, network service, or additional generated file.
+You are writing Execute source. You may read only your own candidate file, refs/docs/language.md, and refs/manifests/*.json in your workspace.
+
+Reference and isolation rules:
+- Your workspace is <PILOT_ROOT>/participants/typed_event_normalizer__execute
+- Write only <PILOT_ROOT>/participants/typed_event_normalizer__execute/candidate.program. The file must contain source code only, without Markdown fences or a prose wrapper.
+- Bash and Nushell arms may read only their own candidate file and refs/manifests/*.json. Execute arms may read only their own candidate file, refs/docs/language.md, and refs/manifests/*.json.
+- Do not open public-development.json; your task brief is complete and that file contains fixture cases and expected outputs.
+- Do not read repository source code, examples, tests, benchmark files, fixtures, oracle data, reference solutions, other participant workspaces, shell history, or external websites.
+- Do not search for existing task implementations or ask another agent for a solution.
+- This is authoring only. Do not run, test, benchmark, or otherwise execute your candidate or an Execute binary.
+- Return when the single candidate source artifact is written. If you cannot produce it, report that outcome without substituting a handwritten reference.

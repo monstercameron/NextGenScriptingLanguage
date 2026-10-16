@@ -320,8 +320,13 @@ pub struct NodeIo {
     inputs: BTreeMap<String, Vec<Arc<BoundedQueue>>>,
     input_schemas: BTreeMap<String, PortSchema>,
     initial_inputs: BTreeMap<String, Value>,
+    /// Sorted, stable name indices shared with the per-port queue cursors.
+    input_names: Vec<String>,
+    /// Compact active positions preserve the old rotation while seed-only
+    /// names disappear after their initial value is consumed.
+    active_input_names: Vec<usize>,
     input_name_cursor: usize,
-    input_queue_cursors: BTreeMap<String, usize>,
+    input_queue_cursors: Vec<usize>,
     output_sinks: BTreeMap<String, Vec<QueueSink>>,
     schemas: BTreeMap<String, PortSchema>,
     generation: u64,
@@ -334,7 +339,39 @@ pub struct NodeIo {
     max_message_bytes: usize,
 }
 
+fn cached_input_names(
+    inputs: &BTreeMap<String, Vec<Arc<BoundedQueue>>>,
+    initial_inputs: &BTreeMap<String, Value>,
+) -> Vec<String> {
+    inputs
+        .keys()
+        .chain(initial_inputs.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 impl NodeIo {
+    fn input_name_index(&self, port: &str) -> Option<usize> {
+        self.input_names
+            .binary_search_by(|candidate| candidate.as_str().cmp(port))
+            .ok()
+    }
+
+    fn discard_seed_only_name(&mut self, name_index: usize) {
+        if self.inputs.contains_key(&self.input_names[name_index]) {
+            return;
+        }
+        if let Some(active_index) = self
+            .active_input_names
+            .iter()
+            .position(|index| *index == name_index)
+        {
+            self.active_input_names.remove(active_index);
+        }
+    }
+
     pub fn has_input(&self, port: &str) -> bool {
         self.initial_inputs.contains_key(port)
             || self
@@ -378,10 +415,12 @@ impl NodeIo {
         event
     }
 
-    fn take_initial_input(&mut self, port: &str) -> Result<Option<EventEnvelope>> {
-        let Some(value) = self.initial_inputs.remove(port) else {
+    fn take_initial_input(&mut self, name_index: usize) -> Result<Option<EventEnvelope>> {
+        let Some(value) = self.initial_inputs.remove(&self.input_names[name_index]) else {
             return Ok(None);
         };
+        self.discard_seed_only_name(name_index);
+        let port = self.input_names[name_index].as_str();
         let schema = self.input_schemas.get(port).ok_or_else(|| {
             anyhow!(
                 "initial input {}.{} has no declared schema",
@@ -406,33 +445,46 @@ impl NodeIo {
         })))
     }
 
+    fn try_recv_from_any_input(&self, name_index: usize) -> Result<Option<(EventEnvelope, usize)>> {
+        let name = &self.input_names[name_index];
+        let queues = self.inputs.get(name).map(Vec::as_slice).unwrap_or_default();
+        let queue_start = self.input_queue_cursors[name_index] % queues.len().max(1);
+        for queue_offset in 0..queues.len() {
+            let queue_index = (queue_start + queue_offset) % queues.len();
+            if let Some(event) = queues[queue_index].try_recv()? {
+                return Ok(Some((event, queue_index)));
+            }
+        }
+        Ok(None)
+    }
+
     /// Receive the next message from one named input. Multi-edge inputs merge
     /// in the order messages become available, with a stable queue cursor.
     pub fn recv(&mut self, port: &str) -> Result<Option<EventEnvelope>> {
         self.check_cancelled()?;
-        if let Some(event) = self.take_initial_input(port)? {
-            return Ok(Some(event));
+        if let Some(name_index) = self.input_name_index(port) {
+            if let Some(event) = self.take_initial_input(name_index)? {
+                return Ok(Some(event));
+            }
         }
         let queues = self.inputs.get(port).cloned().unwrap_or_default();
         if queues.is_empty() {
             return Ok(None);
         }
+        let cursor_index = self
+            .input_name_index(port)
+            .expect("bound input has a cached queue cursor");
         if queues.len() == 1 {
             let event = queues[0].recv(&self.token)?;
             return Ok(event.map(|event| self.observe_input(event)));
         }
         loop {
             self.check_cancelled()?;
-            let start = self
-                .input_queue_cursors
-                .get(port)
-                .copied()
-                .unwrap_or_default()
-                % queues.len();
+            let start = self.input_queue_cursors[cursor_index] % queues.len();
             for offset in 0..queues.len() {
                 let index = (start + offset) % queues.len();
                 if let Some(event) = queues[index].try_recv()? {
-                    self.input_queue_cursors.insert(port.to_owned(), index + 1);
+                    self.input_queue_cursors[cursor_index] = index + 1;
                     return Ok(Some(self.observe_input(event)));
                 }
             }
@@ -454,25 +506,25 @@ impl NodeIo {
     pub fn recv_timeout(&mut self, port: &str, timeout: Duration) -> Result<Option<EventEnvelope>> {
         self.check_cancelled()?;
         let deadline = Instant::now().checked_add(timeout);
-        if let Some(event) = self.take_initial_input(port)? {
-            return Ok(Some(event));
+        if let Some(name_index) = self.input_name_index(port) {
+            if let Some(event) = self.take_initial_input(name_index)? {
+                return Ok(Some(event));
+            }
         }
         let queues = self.inputs.get(port).cloned().unwrap_or_default();
         if queues.is_empty() {
             return Ok(None);
         }
+        let cursor_index = self
+            .input_name_index(port)
+            .expect("bound input has a cached queue cursor");
         loop {
             self.check_cancelled()?;
-            let start = self
-                .input_queue_cursors
-                .get(port)
-                .copied()
-                .unwrap_or_default()
-                % queues.len();
+            let start = self.input_queue_cursors[cursor_index] % queues.len();
             for offset in 0..queues.len() {
                 let index = (start + offset) % queues.len();
                 if let Some(event) = queues[index].try_recv()? {
-                    self.input_queue_cursors.insert(port.to_owned(), index + 1);
+                    self.input_queue_cursors[cursor_index] = index + 1;
                     return Ok(Some(self.observe_input(event)));
                 }
             }
@@ -500,48 +552,28 @@ impl NodeIo {
     /// Receive the next message from any bound input. `event.input` identifies
     /// the destination port so adapters can update the matching parameter.
     pub fn recv_any(&mut self) -> Result<Option<EventEnvelope>> {
-        let names = self
-            .inputs
-            .keys()
-            .chain(self.initial_inputs.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        if names.is_empty() {
+        if self.active_input_names.is_empty() {
             return Ok(None);
         }
         loop {
             self.check_cancelled()?;
-            let start = self.input_name_cursor % names.len();
-            for offset in 0..names.len() {
-                let index = (start + offset) % names.len();
-                if let Some(event) = self.take_initial_input(&names[index])? {
-                    self.input_name_cursor = index + 1;
+            let active_count = self.active_input_names.len();
+            let start = self.input_name_cursor % active_count;
+            for offset in 0..active_count {
+                let active_index = (start + offset) % active_count;
+                let name_index = self.active_input_names[active_index];
+                if let Some(event) = self.take_initial_input(name_index)? {
+                    self.input_name_cursor = active_index + 1;
                     return Ok(Some(event));
                 }
-                let queues = self
-                    .inputs
-                    .get(&names[index])
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
-                let queue_start = self
-                    .input_queue_cursors
-                    .get(&names[index])
-                    .copied()
-                    .unwrap_or_default()
-                    % queues.len().max(1);
-                for queue_offset in 0..queues.len() {
-                    let queue_index = (queue_start + queue_offset) % queues.len();
-                    if let Some(event) = queues[queue_index].try_recv()? {
-                        self.input_name_cursor = index + 1;
-                        self.input_queue_cursors
-                            .insert(names[index].clone(), queue_index + 1);
-                        return Ok(Some(self.observe_input(event)));
-                    }
+                if let Some((event, queue_index)) = self.try_recv_from_any_input(name_index)? {
+                    self.input_name_cursor = active_index + 1;
+                    self.input_queue_cursors[name_index] = queue_index + 1;
+                    return Ok(Some(self.observe_input(event)));
                 }
             }
-            let all_closed = names.iter().all(|name| {
+            let all_closed = self.active_input_names.iter().all(|name_index| {
+                let name = &self.input_names[*name_index];
                 !self.initial_inputs.contains_key(name)
                     && self
                         .inputs
@@ -561,49 +593,28 @@ impl NodeIo {
 
     pub fn recv_any_timeout(&mut self, timeout: Duration) -> Result<Option<EventEnvelope>> {
         let deadline = Instant::now().checked_add(timeout);
-        let names = self
-            .inputs
-            .keys()
-            .chain(self.initial_inputs.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        if names.is_empty() {
+        if self.active_input_names.is_empty() {
             return Ok(None);
         }
         loop {
             self.check_cancelled()?;
-            let start = self.input_name_cursor % names.len();
-            for offset in 0..names.len() {
-                let index = (start + offset) % names.len();
-                if let Some(event) = self.take_initial_input(&names[index])? {
-                    self.input_name_cursor = index + 1;
+            let active_count = self.active_input_names.len();
+            let start = self.input_name_cursor % active_count;
+            for offset in 0..active_count {
+                let active_index = (start + offset) % active_count;
+                let name_index = self.active_input_names[active_index];
+                if let Some(event) = self.take_initial_input(name_index)? {
+                    self.input_name_cursor = active_index + 1;
                     return Ok(Some(event));
                 }
-                let queues = self
-                    .inputs
-                    .get(&names[index])
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
-                let queue_start = self
-                    .input_queue_cursors
-                    .get(&names[index])
-                    .copied()
-                    .unwrap_or_default()
-                    % queues.len().max(1);
-                for queue_offset in 0..queues.len() {
-                    let queue_index = (queue_start + queue_offset) % queues.len();
-                    let queue = &queues[queue_index];
-                    if let Some(event) = queue.try_recv()? {
-                        self.input_name_cursor = index + 1;
-                        self.input_queue_cursors
-                            .insert(names[index].clone(), queue_index + 1);
-                        return Ok(Some(self.observe_input(event)));
-                    }
+                if let Some((event, queue_index)) = self.try_recv_from_any_input(name_index)? {
+                    self.input_name_cursor = active_index + 1;
+                    self.input_queue_cursors[name_index] = queue_index + 1;
+                    return Ok(Some(self.observe_input(event)));
                 }
             }
-            let all_closed = names.iter().all(|name| {
+            let all_closed = self.active_input_names.iter().all(|name_index| {
+                let name = &self.input_names[*name_index];
                 !self.initial_inputs.contains_key(name)
                     && self
                         .inputs
@@ -958,6 +969,9 @@ impl GraphSession {
                 .get(&node.id)
                 .cloned()
                 .unwrap_or_default();
+            let input_names = cached_input_names(&node_inputs, &initial_inputs);
+            let active_input_names = (0..input_names.len()).collect();
+            let input_queue_cursors = vec![0; input_names.len()];
             let mut node_outputs = BTreeMap::new();
             let mut schemas = BTreeMap::new();
             for (name, schema) in node.outputs.iter().chain(node.events.iter()) {
@@ -975,8 +989,10 @@ impl GraphSession {
                 inputs: node_inputs,
                 input_schemas: node.inputs.clone(),
                 initial_inputs,
+                input_names,
+                active_input_names,
                 input_name_cursor: 0,
-                input_queue_cursors: BTreeMap::new(),
+                input_queue_cursors,
                 output_sinks: node_outputs,
                 schemas,
                 generation: context.generation,
@@ -2823,14 +2839,28 @@ mod input_cursor_tests {
         inputs: BTreeMap<String, Vec<Arc<BoundedQueue>>>,
         token: CancellationToken,
     ) -> NodeIo {
+        node_io_with_initial(inputs, BTreeMap::new(), BTreeMap::new(), token)
+    }
+
+    fn node_io_with_initial(
+        inputs: BTreeMap<String, Vec<Arc<BoundedQueue>>>,
+        initial_inputs: BTreeMap<String, Value>,
+        input_schemas: BTreeMap<String, PortSchema>,
+        token: CancellationToken,
+    ) -> NodeIo {
         let cancelled = token.cancellation_flag();
+        let input_names = cached_input_names(&inputs, &initial_inputs);
+        let active_input_names = (0..input_names.len()).collect();
+        let input_queue_cursors = vec![0; input_names.len()];
         NodeIo {
             node: "collector".into(),
             inputs,
-            input_schemas: BTreeMap::new(),
-            initial_inputs: BTreeMap::new(),
+            input_schemas,
+            initial_inputs,
+            input_names,
+            active_input_names,
             input_name_cursor: 0,
-            input_queue_cursors: BTreeMap::new(),
+            input_queue_cursors,
             output_sinks: BTreeMap::new(),
             schemas: BTreeMap::new(),
             generation: 1,
@@ -2846,6 +2876,146 @@ mod input_cursor_tests {
 
     fn lossless_queue() -> Arc<BoundedQueue> {
         BoundedQueue::new(1, BufferPolicy::Lossless)
+    }
+
+    fn seeded_node_io(token: CancellationToken) -> NodeIo {
+        let beta = lossless_queue();
+        enqueue(&beta, "beta_source".into(), "beta", 20, &token);
+        let gamma = lossless_queue();
+        enqueue(&gamma, "gamma_source".into(), "gamma", 30, &token);
+        let inputs = BTreeMap::from([("beta".into(), vec![beta]), ("gamma".into(), vec![gamma])]);
+        let input_schemas = BTreeMap::from([(
+            "alpha".into(),
+            PortSchema::single(crate::contracts::ValueSchema {
+                kind: OutputType::Integer,
+                nullable: false,
+                items: None,
+                fields: BTreeMap::new(),
+                required: Vec::new(),
+                enum_values: None,
+            }),
+        )]);
+        node_io_with_initial(
+            inputs,
+            BTreeMap::from([("alpha".into(), Value::Integer(10))]),
+            input_schemas,
+            token,
+        )
+    }
+
+    fn assert_input_order(io: &mut NodeIo, expected_ports: &[&str]) {
+        for expected_port in expected_ports {
+            let event = io.recv_any().unwrap().unwrap();
+            assert_eq!(event.input.as_ref().unwrap().port.as_str(), *expected_port);
+        }
+    }
+
+    #[test]
+    fn seed_only_ports_leave_cached_rotation_at_the_compacted_position() {
+        let task_scope = TaskScope::new(1, None).unwrap();
+        let token = task_scope.cancellation_token();
+
+        let mut named = seeded_node_io(token.clone());
+        let seed = named.recv("alpha").unwrap().unwrap();
+        assert_eq!(seed.payload, PortValue::Value(Value::Integer(10)));
+        assert_input_order(&mut named, &["beta", "gamma"]);
+
+        let mut any = seeded_node_io(token.clone());
+        let seed = any.recv_any().unwrap().unwrap();
+        assert_eq!(seed.input.as_ref().unwrap().port, "alpha");
+        assert_input_order(&mut any, &["gamma", "beta"]);
+
+        let mut timed = seeded_node_io(token);
+        let seed = timed
+            .recv_any_timeout(Duration::from_millis(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(seed.input.as_ref().unwrap().port, "alpha");
+        assert_input_order(&mut timed, &["gamma", "beta"]);
+    }
+
+    #[test]
+    fn cached_seed_names_and_edge_cursors_survive_mixed_receive_methods() {
+        let task_scope = TaskScope::new(1, None).unwrap();
+        let token = task_scope.cancellation_token();
+        let beta_queues = (0..2)
+            .map(|index| {
+                let queue = BoundedQueue::new(2, BufferPolicy::Lossless);
+                for tick in 0..2 {
+                    enqueue(
+                        &queue,
+                        format!("beta_source_{index}"),
+                        "beta",
+                        100 + (index * 10 + tick) as u64,
+                        &token,
+                    );
+                }
+                queue
+            })
+            .collect::<Vec<_>>();
+        let gamma_queues = (0..2)
+            .map(|index| {
+                let queue = BoundedQueue::new(2, BufferPolicy::Lossless);
+                for tick in 0..2 {
+                    enqueue(
+                        &queue,
+                        format!("gamma_source_{index}"),
+                        "gamma",
+                        200 + (index * 10 + tick) as u64,
+                        &token,
+                    );
+                }
+                queue
+            })
+            .collect::<Vec<_>>();
+        let inputs = BTreeMap::from([("beta".into(), beta_queues), ("gamma".into(), gamma_queues)]);
+        let input_schemas = BTreeMap::from([(
+            "alpha".into(),
+            PortSchema::single(crate::contracts::ValueSchema {
+                kind: OutputType::Integer,
+                nullable: false,
+                items: None,
+                fields: BTreeMap::new(),
+                required: Vec::new(),
+                enum_values: None,
+            }),
+        )]);
+        let mut io = node_io_with_initial(
+            inputs,
+            BTreeMap::from([("alpha".into(), Value::Integer(10))]),
+            input_schemas,
+            token,
+        );
+
+        let seed = io.recv_any().unwrap().unwrap();
+        assert_eq!(seed.input.as_ref().unwrap().port, "alpha");
+        let beta_from_timeout = io
+            .recv_timeout("beta", Duration::from_millis(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(beta_from_timeout.sequence, 100);
+        assert_eq!(beta_from_timeout.port.node, "beta_source_0");
+        let gamma_from_any = io.recv_any().unwrap().unwrap();
+        assert_eq!(gamma_from_any.sequence, 200);
+        assert_eq!(gamma_from_any.port.node, "gamma_source_0");
+        let beta_from_recv = io.recv("beta").unwrap().unwrap();
+        assert_eq!(beta_from_recv.sequence, 110);
+        assert_eq!(beta_from_recv.port.node, "beta_source_1");
+        let beta_from_any_timeout = io
+            .recv_any_timeout(Duration::from_millis(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(beta_from_any_timeout.sequence, 101);
+        assert_eq!(beta_from_any_timeout.port.node, "beta_source_0");
+        let gamma_from_timeout = io
+            .recv_timeout("gamma", Duration::from_millis(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(gamma_from_timeout.sequence, 210);
+        assert_eq!(gamma_from_timeout.port.node, "gamma_source_1");
+        let gamma_from_any_again = io.recv_any().unwrap().unwrap();
+        assert_eq!(gamma_from_any_again.sequence, 201);
+        assert_eq!(gamma_from_any_again.port.node, "gamma_source_0");
     }
 
     #[test]
@@ -2939,6 +3109,267 @@ mod input_cursor_tests {
                 (turn + EDGES_PER_PORT * 2) as u64,
                 &token,
             );
+        }
+    }
+
+    mod recv_any_preloaded_bench {
+        use super::*;
+
+        const EVENTS_PER_CASE: usize = 54_208;
+        const SAMPLES_PER_CASE: usize = 3;
+        const ORDER_ORACLE: &str =
+            "sorted input-name round robin; per-input edge round robin; FIFO within each edge";
+
+        #[derive(serde::Serialize)]
+        struct ThroughputSample {
+            case: String,
+            source_count: usize,
+            input_count: usize,
+            messages_per_source: usize,
+            sample_index: usize,
+            events: usize,
+            duration_ns: u64,
+            ns_per_event: f64,
+            checksum: u128,
+            order_oracle: &'static str,
+        }
+
+        #[derive(serde::Serialize)]
+        struct ThroughputCase {
+            case: String,
+            p50_ns_per_event: f64,
+            samples: Vec<ThroughputSample>,
+        }
+
+        #[derive(serde::Serialize)]
+        struct ThroughputReport {
+            format_version: u32,
+            harness: &'static str,
+            cases: Vec<ThroughputCase>,
+        }
+
+        #[derive(Debug, PartialEq, Eq)]
+        struct ExpectedReceive {
+            source: String,
+            input: String,
+            sequence: u64,
+        }
+
+        fn reference_receive_order(
+            mut queues: Vec<Vec<VecDeque<ExpectedReceive>>>,
+        ) -> Vec<ExpectedReceive> {
+            let total = queues
+                .iter()
+                .flat_map(|port_queues| port_queues.iter())
+                .map(VecDeque::len)
+                .sum();
+            let mut expected = Vec::with_capacity(total);
+            let mut input_cursor = 0usize;
+            let mut queue_cursors = vec![0usize; queues.len()];
+
+            while expected.len() < total {
+                let mut selected = None;
+                for input_offset in 0..queues.len() {
+                    let input_index = (input_cursor + input_offset) % queues.len();
+                    let port_queues = &mut queues[input_index];
+                    if port_queues.is_empty() {
+                        continue;
+                    }
+                    let queue_start = queue_cursors[input_index] % port_queues.len();
+                    for queue_offset in 0..port_queues.len() {
+                        let queue_index = (queue_start + queue_offset) % port_queues.len();
+                        if let Some(message) = port_queues[queue_index].pop_front() {
+                            selected = Some((input_index, queue_index, message));
+                            break;
+                        }
+                    }
+                    if selected.is_some() {
+                        break;
+                    }
+                }
+
+                let (input_index, queue_index, message) =
+                    selected.expect("reference scheduler must find a preloaded event");
+                input_cursor = input_index + 1;
+                queue_cursors[input_index] = queue_index + 1;
+                expected.push(message);
+            }
+            expected
+        }
+
+        fn run_preloaded_case(source_count: usize, input_count: usize) -> (Duration, u128) {
+            assert!(source_count > 0);
+            assert!(input_count > 0);
+            assert_eq!(
+                EVENTS_PER_CASE % source_count,
+                0,
+                "benchmark event count must divide evenly across sources"
+            );
+            let messages_per_source = EVENTS_PER_CASE / source_count;
+
+            let task_scope = TaskScope::new(1, None).unwrap();
+            let token = task_scope.cancellation_token();
+            let input_names = (0..input_count)
+                .map(|index| format!("port_{index:02}"))
+                .collect::<Vec<_>>();
+            let mut inputs = input_names
+                .iter()
+                .cloned()
+                .map(|name| (name, Vec::new()))
+                .collect::<BTreeMap<_, Vec<Arc<BoundedQueue>>>>();
+            let mut expected_queues = (0..input_count)
+                .map(|_| Vec::<VecDeque<ExpectedReceive>>::new())
+                .collect::<Vec<_>>();
+            let mut sequence = 1u64;
+
+            for source_index in 0..source_count {
+                let input_index = source_index % input_count;
+                let input = &input_names[input_index];
+                let source = format!("source_{source_index:04}");
+                let queue = BoundedQueue::new(messages_per_source, BufferPolicy::Lossless);
+                let mut queue_expected = VecDeque::with_capacity(messages_per_source);
+                for _ in 0..messages_per_source {
+                    enqueue(&queue, source.clone(), input, sequence, &token);
+                    queue_expected.push_back(ExpectedReceive {
+                        source: source.clone(),
+                        input: input.clone(),
+                        sequence,
+                    });
+                    sequence += 1;
+                }
+                inputs.get_mut(input).unwrap().push(Arc::clone(&queue));
+                expected_queues[input_index].push(queue_expected);
+            }
+
+            let expected = reference_receive_order(expected_queues);
+            let total = expected.len();
+            let expected_checksum = expected
+                .iter()
+                .map(|message| u128::from(message.sequence))
+                .sum::<u128>();
+            let queues = inputs
+                .values()
+                .flat_map(|port_queues| port_queues.iter().cloned())
+                .collect::<Vec<_>>();
+            let mut io = node_io(inputs, token);
+            let mut received = Vec::with_capacity(total);
+
+            // All producers, queue setup, expected-order generation, and output
+            // allocation happen before timing. The known event count avoids the
+            // 2 ms idle receive wait; EOF is checked after the timer stops.
+            let started = Instant::now();
+            for _ in 0..total {
+                received.push(io.recv_any().unwrap().expect("preloaded event"));
+            }
+            let elapsed = started.elapsed();
+
+            let mut checksum = 0u128;
+            for (turn, (event, expected)) in received.iter().zip(&expected).enumerate() {
+                assert_eq!(event.port.node, expected.source, "source at turn {turn}");
+                assert_eq!(event.port.port, "tick", "source port at turn {turn}");
+                assert_eq!(
+                    event.input.as_ref().map(|input| input.port.as_str()),
+                    Some(expected.input.as_str()),
+                    "destination input at turn {turn}"
+                );
+                assert_eq!(event.input.as_ref().unwrap().node, "collector");
+                assert_eq!(event.generation, 1, "generation at turn {turn}");
+                assert_eq!(event.revision, 1, "revision at turn {turn}");
+                assert_eq!(event.sequence, expected.sequence, "sequence at turn {turn}");
+                assert_eq!(
+                    event.payload,
+                    PortValue::Value(Value::Integer(expected.sequence as i64)),
+                    "typed payload at turn {turn}"
+                );
+                let observed_value = match &event.payload {
+                    PortValue::Value(Value::Integer(value)) => *value,
+                    payload => panic!("unexpected payload at turn {turn}: {payload:?}"),
+                };
+                checksum += u128::from(observed_value as u64);
+            }
+            assert_eq!(received.len(), total, "all preloaded events were delivered");
+            assert_eq!(checksum, expected_checksum, "exact event checksum");
+
+            for queue in queues {
+                queue.close();
+            }
+            assert!(io.recv_any().unwrap().is_none(), "closed queues reach EOF");
+            (elapsed, checksum)
+        }
+
+        #[test]
+        #[ignore = "diagnostic throughput measurement; run explicitly after a paired-baseline gate"]
+        fn recv_any_preloaded_bounded_queue_throughput() {
+            let mut report = ThroughputReport {
+                format_version: 1,
+                harness: "recv_any_preloaded_bounded_queue_throughput",
+                cases: Vec::with_capacity(6),
+            };
+            for source_count in [1, 16, 847] {
+                for input_count in [1, 8] {
+                    let case = format!("sources={source_count},inputs={input_count}");
+                    let events = EVENTS_PER_CASE;
+                    let mut raw_samples = Vec::with_capacity(SAMPLES_PER_CASE);
+                    let mut checksums = Vec::with_capacity(SAMPLES_PER_CASE);
+                    for sample_index in 0..SAMPLES_PER_CASE {
+                        let (elapsed, sample_checksum) =
+                            run_preloaded_case(source_count, input_count);
+                        checksums.push(sample_checksum);
+                        raw_samples.push(ThroughputSample {
+                            case: case.clone(),
+                            source_count,
+                            input_count,
+                            messages_per_source: events / source_count,
+                            sample_index,
+                            events,
+                            duration_ns: elapsed.as_nanos() as u64,
+                            ns_per_event: elapsed.as_nanos() as f64 / events as f64,
+                            checksum: sample_checksum,
+                            order_oracle: ORDER_ORACLE,
+                        });
+                    }
+                    assert!(
+                        checksums.iter().all(|checksum| *checksum == checksums[0]),
+                        "checksums must agree across samples for {case}"
+                    );
+                    let mut sorted_durations = raw_samples
+                        .iter()
+                        .map(|sample| sample.duration_ns)
+                        .collect::<Vec<_>>();
+                    sorted_durations.sort_unstable();
+                    let p50_ns_per_event =
+                        sorted_durations[SAMPLES_PER_CASE / 2] as f64 / events as f64;
+                    for sample in &raw_samples {
+                        eprintln!(
+                            "recv_any_preloaded sample case={} index={} events={} duration_ns={} ns_per_event={:.1} checksum={} order={}",
+                            sample.case,
+                            sample.sample_index,
+                            sample.events,
+                            sample.duration_ns,
+                            sample.ns_per_event,
+                            sample.checksum,
+                            sample.order_oracle
+                        );
+                    }
+                    eprintln!(
+                        "recv_any_preloaded case={} p50_ns_per_event={:.1} samples={}",
+                        case, p50_ns_per_event, SAMPLES_PER_CASE
+                    );
+                    report.cases.push(ThroughputCase {
+                        case,
+                        p50_ns_per_event,
+                        samples: raw_samples,
+                    });
+                }
+            }
+            if let Some(path) = std::env::var_os("FLOW_RECV_ANY_BENCH_JSON") {
+                let path = PathBuf::from(path);
+                assert!(
+                    path.is_absolute(),
+                    "FLOW_RECV_ANY_BENCH_JSON must be an absolute output path"
+                );
+                std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+            }
         }
     }
 }

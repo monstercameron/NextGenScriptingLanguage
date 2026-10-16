@@ -74,9 +74,9 @@ ShellRoot {
                     sourceComponent: componentName === "button" ? buttonComponent : textComponent
 
                     onLoaded: {
-                        item.text = widgetLoader.text;
+                        item.text = Qt.binding(function() { return widgetLoader.text; });
                         if (widgetLoader.componentName === "button")
-                            item.enabled = widgetLoader.enabled;
+                            item.enabled = Qt.binding(function() { return widgetLoader.enabled; });
                     }
 
                     Connections {
@@ -164,7 +164,7 @@ ShellRoot {
         case "patch":
             return patch(request);
         case "destroy":
-            return destroy(request);
+            return destroyWidget(request);
         case "poll_events":
             return pollEvents(request);
         case "ack_events":
@@ -292,7 +292,7 @@ ShellRoot {
         return applied(request);
     }
 
-    function destroy(request): string {
+    function destroyWidget(request): string {
         const body = request.body;
         const key = widgetKey(body.applet_id, body.widget_id);
         if (widgets[key] === undefined)

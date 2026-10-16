@@ -41,6 +41,15 @@ EVENT_LIMIT = 256
 COMMAND_TIMEOUT = 3.0
 RENDERER_LOG_TAIL_BYTES = 64 * 1024
 IPC_DIAGNOSTIC_TAIL_BYTES = 8 * 1024
+RENDERED_WIDGET_TEXT_LIMIT = 256
+RENDERED_WIDGET_RESPONSE_LIMIT = 2048
+RENDERED_WIDGET_TIMEOUT = 3.0
+RENDERED_WIDGET_POLL_INTERVAL = 0.05
+TEST_OBSERVER_IDENTITY = "execute.acceptance.rendered-widget-observer.v1"
+TEST_OBSERVER_WIDGETS = {
+    "desktop_demo::clock_text": "text",
+    "desktop_demo::action_button": "button",
+}
 
 
 def capture_command_output_tail(payload: bytes) -> dict[str, Any]:
@@ -51,6 +60,212 @@ def capture_command_output_tail(payload: bytes) -> dict[str, Any]:
         "captured_bytes": len(tail),
         "truncated": len(payload) > len(tail),
         "tail_utf8": tail.decode("utf-8", "replace"),
+    }
+
+
+def build_test_observer_qml(qml_text: str, ipc_target: str, observer_target: str) -> str:
+    """Add a private, read-only observer to the acceptance QML copy only."""
+    target_marker = 'property string ipcTarget: "__EXECUTE_RENDERER_IPC_TARGET__"'
+    repeater_anchor = "            Repeater {\n                model: widgetModel"
+    dispatch_anchor = "    function dispatch(frameText: string): string {\n"
+    observer_marker = f"// {TEST_OBSERVER_IDENTITY}"
+    if qml_text.count(target_marker) != 1:
+        raise RuntimeError("QML source must contain exactly one renderer IPC target placeholder")
+    if qml_text.count(repeater_anchor) != 1 or qml_text.count(dispatch_anchor) != 1:
+        raise RuntimeError("QML observer injection anchors must each occur exactly once")
+    if observer_marker in qml_text or "acceptanceWidgetRepeater" in qml_text:
+        raise RuntimeError("QML source already contains acceptance observer instrumentation")
+
+    generated = qml_text.replace(
+        target_marker,
+        f'property string ipcTarget: {json.dumps(ipc_target)}',
+        1,
+    )
+    generated = generated.replace(
+        repeater_anchor,
+        "            Repeater {\n                id: acceptanceWidgetRepeater\n                model: widgetModel",
+        1,
+    )
+    observer_qml = "\n".join(
+        [
+            "    IpcHandler {",
+            f"        target: {json.dumps(observer_target)}",
+            "",
+            "        function inspectRenderedWidget(widgetKey: string): string {",
+            "            return root.inspectRenderedWidget(widgetKey);",
+            "        }",
+            "    }",
+            "",
+            f"    {observer_marker}",
+            "    function inspectRenderedWidget(widgetKey: string): string {",
+            '        const allowed = ["desktop_demo::clock_text", "desktop_demo::action_button"];',
+            "        if (typeof widgetKey !== \"string\" || allowed.indexOf(widgetKey) < 0)",
+            '            return JSON.stringify({status: "rejected", widget_key: ""});',
+            "",
+            "        for (let index = 0; index < widgetModel.count; index++) {",
+            "            const loader = acceptanceWidgetRepeater.itemAt(index);",
+            "            if (!loader || loader.widgetKey !== widgetKey)",
+            "                continue;",
+            "            if (!loader.item)",
+            '                return JSON.stringify({status: "not_loaded", widget_key: widgetKey});',
+            "",
+            "            const renderedText = loader.item.text;",
+            f"            if (typeof renderedText !== \"string\" || renderedText.length > {RENDERED_WIDGET_TEXT_LIMIT})",
+            '                return JSON.stringify({status: "invalid_text", widget_key: widgetKey});',
+            '            const renderedEnabled = loader.componentName === "button" ? loader.item.enabled : null;',
+            '            if (loader.componentName === "button" && typeof renderedEnabled !== "boolean")',
+            '                return JSON.stringify({status: "invalid_enabled", widget_key: widgetKey});',
+            "            return JSON.stringify({",
+            '                status: "loaded",',
+            "                widget_key: widgetKey,",
+            "                component: loader.componentName,",
+            "                text: renderedText,",
+            "                enabled: renderedEnabled",
+            "            });",
+            "        }",
+            '        return JSON.stringify({status: "not_found", widget_key: widgetKey});',
+            "    }",
+            "",
+            "",
+        ]
+    )
+    return generated.replace(dispatch_anchor, observer_qml + dispatch_anchor, 1)
+
+
+def decode_rendered_widget_response(payload: bytes, expected_key: str) -> dict[str, Any]:
+    if len(payload) > RENDERED_WIDGET_RESPONSE_LIMIT:
+        raise RuntimeError("rendered-widget observer response exceeds byte limit")
+    try:
+        response = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"rendered-widget observer returned malformed JSON: {error}") from error
+    if not isinstance(response, dict):
+        raise RuntimeError("rendered-widget observer response must be an object")
+    if response.get("widget_key") != expected_key:
+        raise RuntimeError("rendered-widget observer response key did not match")
+    status = response.get("status")
+    if not isinstance(status, str):
+        raise RuntimeError("rendered-widget observer response status must be a string")
+    if status in {"not_loaded", "not_found"}:
+        return {"status": status, "widget_key": expected_key}
+    if status != "loaded":
+        raise RuntimeError(f"rendered-widget observer failed with status {str(status)[:64]}")
+    expected_component = TEST_OBSERVER_WIDGETS.get(expected_key)
+    if expected_component is None or response.get("component") != expected_component:
+        raise RuntimeError("rendered-widget observer returned an unsupported component")
+    text = response.get("text")
+    if not isinstance(text, str) or len(text) > RENDERED_WIDGET_TEXT_LIMIT:
+        raise RuntimeError("rendered-widget observer returned invalid or oversized text")
+    enabled = response.get("enabled")
+    if expected_component == "button":
+        if not isinstance(enabled, bool):
+            raise RuntimeError("rendered button observer did not return a boolean enabled state")
+    elif enabled is not None:
+        raise RuntimeError("rendered text observer returned an unexpected enabled state")
+    return {
+        "status": "loaded",
+        "widget_key": expected_key,
+        "component": expected_component,
+        "text": text,
+        "enabled": enabled,
+    }
+
+
+def inspect_rendered_widget(
+    binary: str,
+    config_path: Path,
+    observer_target: str,
+    widget_key: str,
+) -> dict[str, Any]:
+    if widget_key not in TEST_OBSERVER_WIDGETS:
+        raise RuntimeError("rendered-widget observer key is not in the fixed acceptance allowlist")
+    command = [
+        binary,
+        "ipc",
+        "--path",
+        str(config_path),
+        "call",
+        observer_target,
+        "inspectRenderedWidget",
+        widget_key,
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=RENDERED_WIDGET_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(
+            f"rendered-widget observer command failed: {type(error).__name__}: {str(error)[:240]}"
+        ) from error
+    if completed.returncode != 0:
+        stdout = capture_command_output_tail(completed.stdout)["tail_utf8"]
+        stderr = capture_command_output_tail(completed.stderr)["tail_utf8"]
+        raise RuntimeError(
+            f"rendered-widget observer exited {completed.returncode}; "
+            f"stdout tail={stdout[-400:]!r}; stderr tail={stderr[-400:]!r}"
+        )
+    return decode_rendered_widget_response(completed.stdout, widget_key)
+
+
+def wait_for_rendered_widget(
+    binary: str,
+    config_path: Path,
+    observer_target: str,
+    widget_key: str,
+    *,
+    text: str | None = None,
+    enabled: bool | None = None,
+    timeout: float = RENDERED_WIDGET_TIMEOUT,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    polls = 0
+    last_actual: dict[str, Any] | None = None
+    last_error: str | None = None
+    while True:
+        polls += 1
+        try:
+            actual = inspect_rendered_widget(binary, config_path, observer_target, widget_key)
+            last_actual = actual
+            last_error = None
+            if actual.get("status") == "loaded":
+                text_matches = text is None or actual.get("text") == text
+                enabled_matches = enabled is None or actual.get("enabled") is enabled
+                if text_matches and enabled_matches:
+                    expected: dict[str, Any] = {}
+                    if text is not None:
+                        expected["text"] = text
+                    if enabled is not None:
+                        expected["enabled"] = enabled
+                    return {
+                        "status": "pass",
+                        "widget_key": widget_key,
+                        "expected": expected,
+                        "actual": actual,
+                        "polls": polls,
+                    }
+        except RuntimeError as error:
+            last_error = str(error)[:512]
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(min(RENDERED_WIDGET_POLL_INTERVAL, max(0.0, deadline - time.monotonic())))
+    expected = {}
+    if text is not None:
+        expected["text"] = text
+    if enabled is not None:
+        expected["enabled"] = enabled
+    return {
+        "status": "fail",
+        "widget_key": widget_key,
+        "expected": expected,
+        "actual": last_actual,
+        "polls": polls,
+        "error": last_error or "rendered child properties did not reach the expected state before the deadline",
     }
 
 
@@ -508,12 +723,25 @@ class RendererClient:
         }
 
     def call(self, request: dict[str, Any], *, allow_error: bool = False) -> dict[str, Any]:
-        if self.process.poll() is not None:
-            raise RuntimeError(f"Quickshell process exited with status {self.process.returncode}")
         request_body = request.get("body")
         is_negotiation = isinstance(request_body, dict) and request_body.get("kind") == "negotiate"
+        request_id = request.get("request_id")
+        request_kind = request_body.get("kind") if isinstance(request_body, dict) else None
+        attempt: dict[str, Any] = {
+            "request_id": request_id if type(request_id) is int and 0 <= request_id <= (1 << 63) - 1 else None,
+            "request_kind": request_kind[:64] if isinstance(request_kind, str) else None,
+            "response_kind": None,
+            "status": "started",
+        }
+        if self.ipc_diagnostics is None:
+            self.ipc_diagnostics = {}
+        self.ipc_diagnostics["last_attempt"] = attempt
+        if self.process.poll() is not None:
+            attempt.update({"status": "process_exited", "returncode": self.process.returncode})
+            raise RuntimeError(f"Quickshell process exited with status {self.process.returncode}")
         encoded = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
         if len(encoded.encode("utf-8")) > FRAME_LIMIT:
+            attempt.update({"status": "request_rejected", "failure": "frame_too_large"})
             raise RuntimeError("request exceeds frame size limit")
         command = [
             self.binary,
@@ -535,20 +763,27 @@ class RendererClient:
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
+            attempt.update({
+                "status": "command_timeout" if isinstance(error, subprocess.TimeoutExpired) else "command_error",
+                "failure_type": type(error).__name__,
+                "failure_detail": str(error)[:160],
+            })
             raise RuntimeError(f"Quickshell IPC failed: {error}") from error
+        # Before completion, call remains the previous completed result. Once
+        # subprocess.run returns, both keys share this one canonical record.
+        attempt.update({
+            "argv": command[:-1] + ["<request frame omitted>"],
+            "returncode": completed.returncode,
+            "stdout": capture_command_output_tail(completed.stdout),
+            "stderr": capture_command_output_tail(completed.stderr),
+            "status": "command_failed" if completed.returncode != 0 else "response_pending",
+        })
+        self.ipc_diagnostics["call"] = attempt
         if completed.returncode != 0:
-            if self.ipc_diagnostics is None:
-                self.ipc_diagnostics = {}
-            self.ipc_diagnostics["call"] = {
-                "argv": command,
-                "returncode": completed.returncode,
-                "stdout": capture_command_output_tail(completed.stdout),
-                "stderr": capture_command_output_tail(completed.stderr),
-            }
             if not is_negotiation:
                 self.capture_ipc_inventory()
-            stderr = self.ipc_diagnostics["call"]["stderr"]["tail_utf8"]
-            stdout = self.ipc_diagnostics["call"]["stdout"]["tail_utf8"]
+            stderr = attempt["stderr"]["tail_utf8"]
+            stdout = attempt["stdout"]["tail_utf8"]
             details = []
             if stderr:
                 details.append(f"stderr: {stderr[-1000:]}")
@@ -557,24 +792,61 @@ class RendererClient:
             detail = "; ".join(details) if details else "stdout and stderr were empty"
             raise RuntimeError(f"Quickshell IPC exited {completed.returncode}: {detail}")
         if len(completed.stdout) > FRAME_LIMIT:
+            attempt.update({"status": "invalid_response", "failure": "response_too_large"})
             raise RuntimeError("renderer response exceeds frame size limit")
         try:
             response = json.loads(completed.stdout.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            attempt.update({
+                "status": "invalid_response",
+                "failure": "invalid_json",
+                "failure_detail": str(error)[:160],
+            })
             raise RuntimeError(f"invalid Quickshell IPC response: {error}") from error
+        if not isinstance(response, dict):
+            attempt.update({"status": "invalid_response", "failure": "response_not_object"})
+            raise RuntimeError("renderer response must be a JSON object")
+        response_body = response.get("body")
+        response_kind = response_body.get("kind") if isinstance(response_body, dict) else None
+        attempt["response_kind"] = response_kind[:64] if isinstance(response_kind, str) else None
+        attempt["status"] = "response_parsed"
         for field in ("protocol", "request_id", "session_id", "generation", "revision"):
             expected = request[field]
             if response.get(field) != expected:
+                attempt.update({
+                    "status": "response_mismatch",
+                    "failure": "request_field_mismatch",
+                    "failure_detail": field,
+                })
+                attempt["mismatch_field"] = field
                 raise RuntimeError(f"renderer response {field} did not match request")
         if response.get("protocol") != PROTOCOL:
+            attempt.update({
+                "status": "response_mismatch",
+                "failure": "unsupported_protocol",
+                "failure_detail": "protocol",
+            })
+            attempt["mismatch_field"] = "protocol"
             raise RuntimeError("renderer response protocol did not match")
         if not is_negotiation and response.get("version") != self.version:
+            attempt.update({
+                "status": "response_mismatch",
+                "failure": "version_mismatch",
+                "failure_detail": "version",
+            })
+            attempt["mismatch_field"] = "version"
             raise RuntimeError("renderer response protocol version changed within the session")
         body = response.get("body")
         if not isinstance(body, dict):
+            attempt.update({
+                "status": "invalid_response",
+                "failure": "response_body_missing",
+            })
             raise RuntimeError("renderer response body is missing")
         if body.get("kind") == "error" and not allow_error:
+            attempt.update({"status": "renderer_error", "failure": "renderer_error"})
             raise RuntimeError(f"renderer rejected request ({body.get('code')}): {body.get('message')}")
+        attempt["status"] = "accepted"
         return response
 
     def negotiate(self) -> None:
@@ -842,20 +1114,25 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
         qml_source = REPO / "desktop" / "quickshell" / "shell.qml"
         renderer_session_id = f"accept-{run_id[:16]}"
         ipc_target = f"executeDesktop-{renderer_session_id}"
+        observer_target = f"executeDesktopObserver-{renderer_session_id}"
         qml_text = qml_source.read_text(encoding="utf-8")
-        marker = 'property string ipcTarget: "__EXECUTE_RENDERER_IPC_TARGET__"'
-        if qml_text.count(marker) != 1:
-            raise RuntimeError("QML source must contain exactly one renderer IPC target placeholder")
+        generated_qml = build_test_observer_qml(qml_text, ipc_target, observer_target)
         qml_copy = temp_path / "shell.qml"
-        qml_copy.write_text(
-            qml_text.replace(marker, f"property string ipcTarget: {json.dumps(ipc_target)}"),
-            encoding="utf-8",
-        )
+        qml_copy.write_text(generated_qml, encoding="utf-8")
         os.chmod(qml_copy, 0o600)
         report["renderer_launch"] = {
             "argv": [qs_path, "--path", str(qml_copy)],
             "source_qml_sha256": sha256_file(qml_source),
             "launched_qml_sha256": sha256_file(qml_copy),
+            "test_observer": {
+                "identity": TEST_OBSERVER_IDENTITY,
+                "target": observer_target,
+                "method": "inspectRenderedWidget",
+                "widget_keys": sorted(TEST_OBSERVER_WIDGETS),
+                "response_limit_bytes": RENDERED_WIDGET_RESPONSE_LIMIT,
+                "text_limit_characters": RENDERED_WIDGET_TEXT_LIMIT,
+                "injection": "private QML copy: fixed read-only IpcHandler and Repeater.itemAt(index).item property lookup",
+            },
         }
         logs = temp_path / "logs"
         logs.mkdir(mode=0o700)
@@ -883,19 +1160,63 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
         client.negotiate()
         outcomes["protocol_negotiation"] = {"status": "pass", "version": client.version, "generation": client.generation}
 
+        def verify_rendered_widget(
+            name: str,
+            widget_key: str,
+            *,
+            text: str | None = None,
+            enabled: bool | None = None,
+        ) -> dict[str, Any]:
+            result = wait_for_rendered_widget(
+                qs_path,
+                qml_copy,
+                observer_target,
+                widget_key,
+                text=text,
+                enabled=enabled,
+            )
+            outcomes[name] = result
+            if result["status"] != "pass":
+                raise RuntimeError(f"rendered child property proof failed for {widget_key}: {result.get('error')}")
+            return result
+
         text_contract = build_contract("text")
         button_contract = build_contract("button")
         _, text_revision = client.mutation(
             {"kind": "instantiate", "applet_id": "desktop_demo", "widget_id": "clock_text", "contract": text_contract, "properties": {"text": "09:41"}}
         )
+        verify_rendered_widget(
+            "rendered_clock_create",
+            "desktop_demo::clock_text",
+            text="09:41",
+        )
         _, patch_revision = client.mutation(
             {"kind": "patch", "applet_id": "desktop_demo", "widget_id": "clock_text", "properties": {"text": "09:42"}}
+        )
+        verify_rendered_widget(
+            "rendered_clock_patch",
+            "desktop_demo::clock_text",
+            text="09:42",
+        )
+        _, destroy_revision = client.mutation(
+            {"kind": "destroy", "applet_id": "desktop_demo", "widget_id": "clock_text"}
         )
         _, button_revision = client.mutation(
             {"kind": "instantiate", "applet_id": "desktop_demo", "widget_id": "action_button", "contract": button_contract, "properties": {"text": "Acknowledge", "enabled": True}}
         )
-        _, destroy_revision = client.mutation(
-            {"kind": "destroy", "applet_id": "desktop_demo", "widget_id": "clock_text"}
+        verify_rendered_widget(
+            "rendered_button_create_enabled",
+            "desktop_demo::action_button",
+            text="Acknowledge",
+            enabled=True,
+        )
+        _, disabled_revision = client.mutation(
+            {"kind": "patch", "applet_id": "desktop_demo", "widget_id": "action_button", "properties": {"enabled": False}}
+        )
+        verify_rendered_widget(
+            "rendered_button_disabled",
+            "desktop_demo::action_button",
+            enabled=False,
         )
         outcomes["widget_create_update_destroy"] = {
             "status": "pass",
@@ -903,68 +1224,147 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
             "patch_revision": patch_revision,
             "button_revision": button_revision,
             "destroy_revision": destroy_revision,
+            "disabled_revision": disabled_revision,
         }
 
         click_path = shutil.which("wtype")
-        click_status = {"status": "pending", "reason": "wtype is unavailable; physical button event was not exercised"}
-        if click_path:
-            try:
-                clients = subprocess.run(
-                    [hyprctl_path, "clients", "-j"],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=COMMAND_TIMEOUT,
-                    check=True,
-                    text=True,
+        if not click_path:
+            outcomes["quickshell_button_event"] = {
+                "status": "fail",
+                "reason": "wtype is unavailable; enabled/disabled real-input proof cannot run",
+            }
+            raise RuntimeError("wtype is required for the enabled/disabled actual-input acceptance proof")
+
+        clients = subprocess.run(
+            [hyprctl_path, "clients", "-j"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=COMMAND_TIMEOUT,
+            check=True,
+            text=True,
+        )
+        windows = json.loads(clients.stdout)
+        match = next((window for window in windows if window.get("title") == "Execute generic renderer"), None)
+        if match is None or not match.get("address"):
+            raise RuntimeError("Quickshell surface was not found in Hyprland client list")
+        window_address = str(match["address"])
+
+        focus_attempts: list[dict[str, Any]] = []
+
+        def focus_renderer() -> dict[str, Any]:
+            evidence = focus_hyprland_window(
+                hyprctl_path,
+                tool_checks["hyprctl"]["stdout"],
+                window_address,
+            )
+            focus_attempts.append(evidence)
+            outcomes["hyprland_window_focus"] = {
+                "status": evidence["status"],
+                "attempts": focus_attempts.copy(),
+            }
+            if evidence["status"] != "pass":
+                raise RuntimeError(f"Hyprland focus was not verified: {evidence.get('reason', 'unknown failure')}")
+            return evidence
+
+        def send_tab_return() -> dict[str, Any]:
+            command = [click_path, "-k", "Tab", "-k", "Return"]
+            completed = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=COMMAND_TIMEOUT,
+                check=False,
+            )
+            evidence = {"argv": command, "returncode": completed.returncode}
+            if completed.returncode != 0:
+                stdout = capture_command_output_tail(completed.stdout)["tail_utf8"][-400:]
+                stderr = capture_command_output_tail(completed.stderr)["tail_utf8"][-400:]
+                raise RuntimeError(
+                    f"wtype keyboard input failed ({completed.returncode}); "
+                    f"stdout tail={stdout!r}; stderr tail={stderr!r}"
                 )
-                windows = json.loads(clients.stdout)
-                match = next((window for window in windows if window.get("title") == "Execute generic renderer"), None)
-                if match is None or not match.get("address"):
-                    raise RuntimeError("Quickshell surface was not found in Hyprland client list")
-                focus_evidence = focus_hyprland_window(
-                    hyprctl_path,
-                    tool_checks["hyprctl"]["stdout"],
-                    str(match["address"]),
-                )
-                outcomes["hyprland_window_focus"] = focus_evidence
-                if focus_evidence["status"] != "pass":
-                    raise RuntimeError(f"Hyprland focus was not verified: {focus_evidence.get('reason', 'unknown failure')}")
-                key_result = subprocess.run(
-                    [click_path, "-k", "Tab", "-k", "Return"],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=COMMAND_TIMEOUT,
-                    check=True,
-                    text=True,
-                )
-                del key_result
-                deadline = time.monotonic() + 5.0
-                events: list[dict[str, Any]] = []
-                while time.monotonic() < deadline and not events:
-                    events = client.poll()
-                    if not events:
-                        time.sleep(0.1)
-                matched_event = next(
-                    (
-                        event
-                        for event in events
-                        if event.get("applet_id") == "desktop_demo"
-                        and event.get("widget_id") == "action_button"
-                        and event.get("signal") == "clicked"
-                        and event.get("generation") == client.generation
-                        and event.get("source_revision") == button_revision
-                        and event.get("payload") == {}
-                    ),
-                    None,
-                )
-                if matched_event is None:
-                    raise RuntimeError("no typed button event arrived after actual Wayland key input")
-                click_status = {"status": "pass", "cursor": matched_event["cursor"], "source_revision": button_revision}
-            except Exception as error:
-                click_status = {"status": "fail", "reason": str(error)}
+            return evidence
+
+        focus_renderer()
+        disabled_input_command = send_tab_return()
+        disabled_events: list[dict[str, Any]] = []
+        disabled_deadline = time.monotonic() + 1.0
+        while time.monotonic() < disabled_deadline:
+            disabled_events.extend(client.poll())
+            if time.monotonic() < disabled_deadline:
+                time.sleep(0.1)
+        unexpected_disabled_clicks = [
+            event
+            for event in disabled_events
+            if event.get("applet_id") == "desktop_demo"
+            and event.get("widget_id") == "action_button"
+            and event.get("signal") == "clicked"
+        ]
+        disabled_input_status = {
+            "status": "pass" if not unexpected_disabled_clicks else "fail",
+            "input": ["Tab", "Return"],
+            "enabled": False,
+            "source_revision": disabled_revision,
+            "command": disabled_input_command,
+            "observed_event_count": len(disabled_events),
+            "unexpected_button_clicks": unexpected_disabled_clicks[:4],
+        }
+        outcomes["disabled_button_input"] = disabled_input_status
+
+        _, enabled_revision = client.mutation(
+            {"kind": "patch", "applet_id": "desktop_demo", "widget_id": "action_button", "properties": {"enabled": True}}
+        )
+        verify_rendered_widget(
+            "rendered_button_reenabled",
+            "desktop_demo::action_button",
+            enabled=True,
+        )
+        focus_renderer()
+        enabled_input_command = send_tab_return()
+        positive_deadline = time.monotonic() + 5.0
+        positive_events: list[dict[str, Any]] = []
+        matched_event: dict[str, Any] | None = None
+        while time.monotonic() < positive_deadline and matched_event is None:
+            positive_events.extend(client.poll())
+            matched_event = next(
+                (
+                    event
+                    for event in positive_events
+                    if event.get("applet_id") == "desktop_demo"
+                    and event.get("widget_id") == "action_button"
+                    and event.get("signal") == "clicked"
+                    and event.get("generation") == client.generation
+                    and event.get("source_revision") == enabled_revision
+                    and event.get("payload") == {}
+                ),
+                None,
+            )
+            if matched_event is None:
+                time.sleep(0.1)
+        wrong_revision_clicks = [
+            event
+            for event in positive_events
+            if event.get("applet_id") == "desktop_demo"
+            and event.get("widget_id") == "action_button"
+            and event.get("signal") == "clicked"
+            and event is not matched_event
+        ]
+        click_status = {
+            "status": "pass" if matched_event is not None and not unexpected_disabled_clicks and not wrong_revision_clicks else "fail",
+            "input": ["Tab", "Return"],
+            "disabled_source_revision": disabled_revision,
+            "enabled_source_revision": enabled_revision,
+            "source_revision": matched_event.get("source_revision") if matched_event is not None else None,
+            "cursor": matched_event.get("cursor") if matched_event is not None else None,
+            "command": enabled_input_command,
+            "disabled_input": disabled_input_status,
+            "wrong_revision_clicks": wrong_revision_clicks[:4],
+        }
         outcomes["quickshell_button_event"] = click_status
+        if click_status["status"] != "pass":
+            raise RuntimeError("enabled/disabled actual Wayland input did not produce the expected typed click event")
 
         restart_widget = {"applet_id": "desktop_demo", "widget_id": "restart_text", "contract": text_contract, "properties": {"text": "replayed"}}
         _, first_generation_revision = client.mutation({"kind": "instantiate", **restart_widget})
@@ -1011,8 +1411,24 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
         report["checks"] = {
             "opt_in": {"status": "pass", "reason": "explicit disposable-session marker and flag were supplied"},
             "target_preflight": {"status": "pass", "reason": "Arch, Wayland, Hyprland, D-Bus, and owned runtime directory were verified"},
-            "quickshell_wayland_smoke": {"status": "pass", "results": ["negotiation", "create", "typed patch", "destroy", "renderer restart replay", "old generation rejected"]},
-            "applet_lifecycle": {"status": "partial", "results": ["widget create/update/destroy", "renderer restart"], "reason": "full workflow and login/logout remain pending"},
+            "quickshell_wayland_smoke": {
+                "status": "pass",
+                "results": [
+                    "negotiation",
+                    "create/update with actual Loader child text observed as 09:41 then 09:42",
+                    "button child enabled observed true, false, then true",
+                    "disabled real keyboard input emitted no button event",
+                    "reenabled real keyboard input emitted the typed button event at the final enabled revision",
+                    "destroy",
+                    "renderer restart replay",
+                    "old generation rejected",
+                ],
+            },
+            "applet_lifecycle": {
+                "status": "partial",
+                "results": ["widget create/update/destroy", "rendered child property transitions", "renderer restart"],
+                "reason": "full workflow and login/logout remain pending",
+            },
             "button_signal": click_status,
             "display_changes": {"status": "pending", "reason": "requires a real isolated display hotplug scenario"},
             "login_logout": {"status": "pending", "reason": "requires separate real login and logout sessions"},

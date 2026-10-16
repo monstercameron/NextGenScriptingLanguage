@@ -326,12 +326,13 @@ def _source_ancestor_directories(root: Path, home: Path) -> tuple[list[Path], bo
     home = home.resolve(strict=True)
     directories: list[Path] = []
     current = root
+    home_is_ancestor = False
     while True:
         directories.append(current)
         if current == home:
-            return directories, True
+            home_is_ancestor = True
         if current == current.parent:
-            return directories, False
+            return directories, home_is_ancestor
         current = current.parent
 
 
@@ -419,6 +420,11 @@ def build_metadata(environment: dict[str, str]) -> dict[str, Any]:
         "selected_build_environment": selected_build_environment(environment),
         "captured_before_clean_and_build": True,
     }
+
+
+def validate_build_metadata_pair(baseline: dict[str, Any], candidate: dict[str, Any]) -> None:
+    """Exercise the unchanged runner's real build-receipt validation contract."""
+    pair._validate_build_metadata_pair(baseline, candidate, baseline)
 
 
 def select_test_artifact(
@@ -556,8 +562,7 @@ def build_pair(campaign_root: Path, evidence_root: Path, target_parent: Path) ->
         environment = environments[side]
         if side == "candidate":
             metadata[side] = build_metadata(environment)
-            pair._validate_build_metadata(metadata[side], "candidate")
-            pair._validate_build_metadata_pair(metadata["baseline"], metadata[side], metadata["baseline"])
+            validate_build_metadata_pair(metadata["baseline"], metadata[side])
         _record_tool_versions(environment, out / "tool-versions-before-build.txt")
         (evidence_root / f"{side}-release-clean-attempt-1.log").write_text(
             f"No cargo clean invoked. This arm uses a dedicated target that did not exist before this build: {target}\n",

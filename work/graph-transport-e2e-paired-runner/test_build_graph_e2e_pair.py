@@ -86,6 +86,8 @@ class HostedGraphBuildTests(unittest.TestCase):
             (cargo_home / "config.toml").write_text("[net]\noffline = false\n", encoding="utf-8")
             (home / "work/.cargo").mkdir()
             (home / "work/.cargo/config").write_text("[http]\ntimeout = 30\n", encoding="utf-8")
+            (home.parent / ".cargo").mkdir()
+            (home.parent / ".cargo/config.toml").write_text("[net]\nretry = 1\n", encoding="utf-8")
 
             host = {
                 "HOME": str(home),
@@ -120,6 +122,15 @@ class HostedGraphBuildTests(unittest.TestCase):
             common_hash = support.paired_cargo_configuration_sha256(fingerprint)
             self.assertEqual(len(common_hash), 64)
             self.assertIn("sha256", fingerprint["cargo_home"]["config_files"][1])
+            self.assertTrue(fingerprint["source_roots"]["baseline"]["home_is_ancestor"])
+            ancestors, home_is_ancestor = support._source_ancestor_directories(roots["baseline"], home)
+            self.assertTrue(home_is_ancestor)
+            self.assertEqual(ancestors[-1], Path(ancestors[-1].anchor))
+            recorded_paths = {
+                Path(item["path"])
+                for item in fingerprint["source_roots"]["baseline"]["config_files"]
+            }
+            self.assertIn((home.parent / ".cargo/config.toml").resolve(), recorded_paths)
             self.assertNotIn("offline = false", json.dumps(fingerprint))
             support.verify_cargo_configuration_fingerprint(fingerprint, roots, base, "before test")
             (roots["candidate"] / ".cargo/config.toml").write_text("[net]\nretry = 3\n", encoding="utf-8")
@@ -144,6 +155,30 @@ class HostedGraphBuildTests(unittest.TestCase):
                 if key != "CARGO_TARGET_DIR"
             }
             self.assertEqual(normalized_base, normalized_candidate)
+
+    def test_candidate_metadata_uses_the_runner_validation_contract(self) -> None:
+        baseline = {
+            "rustc_vv": "rustc 1.90.0\n",
+            "cargo_version": "cargo 1.90.0\n",
+            "selected_build_environment": {
+                "PATH": "/toolchain/bin:/usr/bin",
+                "CARGO_HOME": "/home/runner/.cargo",
+                "RUSTUP_HOME": "/home/runner/.rustup",
+                "RUSTUP_TOOLCHAIN": "stable",
+                "CARGO_BUILD_JOBS": "4",
+                "CARGO_TARGET_DIR": "/tmp/targets/baseline",
+                "CARGO_INCREMENTAL": "0",
+            },
+            "captured_before_clean_and_build": True,
+        }
+        candidate = copy.deepcopy(baseline)
+        candidate["selected_build_environment"]["CARGO_TARGET_DIR"] = "/tmp/targets/candidate"
+        support.validate_build_metadata_pair(baseline, candidate)
+
+        invalid = copy.deepcopy(candidate)
+        del invalid["selected_build_environment"]["PATH"]
+        with self.assertRaises(support.pair.PairError):
+            support.validate_build_metadata_pair(baseline, invalid)
 
     def test_hosted_workflow_is_manual_fixed_and_preserves_failure_artifacts(self) -> None:
         workflow = (HERE.parents[1] / ".github/workflows/graph-collector-e2e-hosted-replication.yml").read_text(encoding="utf-8")

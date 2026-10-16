@@ -112,7 +112,6 @@ ShellRoot {
     }
 
     component ButtonComponent: Button {
-        property string text: ""
         signal activated()
         onClicked: activated()
     }

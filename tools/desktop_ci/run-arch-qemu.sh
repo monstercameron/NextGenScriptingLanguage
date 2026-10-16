@@ -39,6 +39,8 @@ SSH_PORT=22222
 VM_CPUS=2
 VM_MEMORY_MIB=4096
 VM_OVERLAY_LIMIT_BYTES=5368709120
+VM_VIRTUAL_DISK_SIZE=8G
+VM_VIRTUAL_DISK_SIZE_BYTES=8589934592
 VM_ACCEPTANCE_SECONDS=900
 IMAGE_NAME="Arch-Linux-x86_64-cloudimg-$ARCH_BOXES_RELEASE.qcow2"
 IMAGE_BASE_URL="https://fastly.mirror.pkgbuild.com/images/v$ARCH_BOXES_RELEASE"
@@ -278,6 +280,8 @@ fi
     printf 'qemu_cpus=%s\n' "$VM_CPUS"
     printf 'qemu_memory_mib=%s\n' "$VM_MEMORY_MIB"
     printf 'qemu_overlay_file_limit_bytes=%s\n' "$VM_OVERLAY_LIMIT_BYTES"
+    printf 'qemu_virtual_disk_size=%s\n' "$VM_VIRTUAL_DISK_SIZE"
+    printf 'qemu_virtual_disk_size_bytes=%s\n' "$VM_VIRTUAL_DISK_SIZE_BYTES"
     printf 'qemu_display=gtk_x11_egl_xvfb_llvmpipe\n'
     printf 'host_rendernode_required=false\n'
     printf 'github_run_id=%s\n' "$RUN_ID"
@@ -337,6 +341,10 @@ ssh-keygen -q -t ed25519 -N "" -C "desktop-acceptance-$RUN_ID" -f "$RUN_DIR/ci_e
 pubkey="$(cat "$RUN_DIR/ci_ed25519.pub")"
 cat > "$RUN_DIR/user-data" <<CLOUD
 #cloud-config
+growpart:
+  mode: auto
+  devices: ["/"]
+resize_rootfs: true
 users:
   - default
 ssh_authorized_keys:
@@ -351,8 +359,21 @@ META
 cloud-localds "$RUN_DIR/seed.iso" "$RUN_DIR/user-data" "$RUN_DIR/meta-data"
 
 qemu-img create -f qcow2 -F qcow2 \
-    -b "$RUN_DIR/$IMAGE_NAME" "$RUN_DIR/arch-overlay.qcow2" \
+    -b "$RUN_DIR/$IMAGE_NAME" "$RUN_DIR/arch-overlay.qcow2" "$VM_VIRTUAL_DISK_SIZE" \
     > "$ARTIFACT_DIR/qemu-overlay.log" 2>&1
+qemu-img info --output=json "$RUN_DIR/arch-overlay.qcow2" > "$ARTIFACT_DIR/arch-overlay-info.json"
+python3 - "$ARTIFACT_DIR/arch-overlay-info.json" "$VM_VIRTUAL_DISK_SIZE_BYTES" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    actual_bytes = json.load(source)["virtual-size"]
+expected_bytes = int(sys.argv[2])
+if actual_bytes != expected_bytes:
+    raise SystemExit(
+        f"qcow2 virtual size is {actual_bytes} bytes, expected {expected_bytes}"
+    )
+PY
 
 git -C "$GITHUB_WORKSPACE" archive --format=tar --prefix=execute/ "$SOURCE_SHA" \
     | gzip -1 > "$RUN_DIR/source.tar.gz"

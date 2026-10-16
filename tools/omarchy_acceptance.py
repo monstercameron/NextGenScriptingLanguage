@@ -39,6 +39,7 @@ FRAME_LIMIT = 1024 * 1024
 WIDGET_LIMIT = 256
 EVENT_LIMIT = 256
 COMMAND_TIMEOUT = 3.0
+RENDERER_LOG_TAIL_BYTES = 64 * 1024
 
 
 def sha256_file(path: Path) -> str | None:
@@ -50,6 +51,49 @@ def sha256_file(path: Path) -> str | None:
         return digest.hexdigest()
     except OSError:
         return None
+
+
+def capture_renderer_log_tail(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("rb") as source:
+            total_bytes = os.fstat(source.fileno()).st_size
+            offset = max(0, total_bytes - RENDERER_LOG_TAIL_BYTES)
+            source.seek(offset)
+            tail = source.read(RENDERER_LOG_TAIL_BYTES)
+        return {
+            "status": "captured",
+            "path": path.name,
+            "total_bytes": total_bytes,
+            "captured_bytes": len(tail),
+            "truncated": offset > 0,
+            "tail_utf8": tail.decode("utf-8", "replace"),
+        }
+    except FileNotFoundError as error:
+        return {
+            "status": "missing",
+            "path": path.name,
+            "total_bytes": None,
+            "captured_bytes": 0,
+            "truncated": False,
+            "error": {
+                "type": type(error).__name__,
+                "errno": error.errno,
+                "message": error.strerror or str(error),
+            },
+        }
+    except OSError as error:
+        return {
+            "status": "read_error",
+            "path": path.name,
+            "total_bytes": None,
+            "captured_bytes": 0,
+            "truncated": False,
+            "error": {
+                "type": type(error).__name__,
+                "errno": error.errno,
+                "message": error.strerror or str(error),
+            },
+        }
 
 
 def source_hashes() -> dict[str, Any]:
@@ -583,14 +627,22 @@ def build_contract(component: str) -> dict[str, Any]:
 def start_quickshell(qs: str, config: Path, log_path: Path, environment: dict[str, str]) -> tuple[subprocess.Popen[bytes], Any, Any]:
     stdout = log_path.with_suffix(".stdout.log").open("wb")
     stderr = log_path.with_suffix(".stderr.log").open("wb")
-    process = subprocess.Popen(
-        [qs, "--path", str(config)],
-        stdin=subprocess.DEVNULL,
-        stdout=stdout,
-        stderr=stderr,
-        env=environment,
-        start_new_session=True,
-    )
+    try:
+        process = subprocess.Popen(
+            [qs, "--path", str(config)],
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
+            env=environment,
+            start_new_session=True,
+        )
+    except Exception:
+        for handle in (stdout, stderr):
+            try:
+                handle.close()
+            except OSError:
+                pass
+        raise
     return process, stdout, stderr
 
 
@@ -694,6 +746,7 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
     temp_path: Path | None = None
     process: subprocess.Popen[bytes] | None = None
     process_logs: list[Any] = []
+    renderer_log_paths: list[tuple[str, Path, Path]] = []
     outcomes: dict[str, Any] = {}
     cleanup: dict[str, Any] = {"status": "not_started"}
     try:
@@ -715,6 +768,11 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
             encoding="utf-8",
         )
         os.chmod(qml_copy, 0o600)
+        report["renderer_launch"] = {
+            "argv": [qs_path, "--path", str(qml_copy)],
+            "source_qml_sha256": sha256_file(qml_source),
+            "launched_qml_sha256": sha256_file(qml_copy),
+        }
         logs = temp_path / "logs"
         logs.mkdir(mode=0o700)
         isolated_env = os.environ.copy()
@@ -732,6 +790,9 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
         for directory in temp_path.iterdir():
             os.chmod(directory, 0o700)
 
+        renderer_log_paths.append(
+            ("initial", logs / "renderer.stdout.log", logs / "renderer.stderr.log")
+        )
         process, stdout_log, stderr_log = start_quickshell(qs_path, qml_copy, logs / "renderer", isolated_env)
         process_logs.extend((stdout_log, stderr_log))
         client = RendererClient(qs_path, process, renderer_session_id)
@@ -830,6 +891,9 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
         process_logs.clear()
 
         client.generation += 1
+        renderer_log_paths.append(
+            ("restart", logs / "renderer-restart.stdout.log", logs / "renderer-restart.stderr.log")
+        )
         process, stdout_log, stderr_log = start_quickshell(qs_path, qml_copy, logs / "renderer-restart", isolated_env)
         process_logs.extend((stdout_log, stderr_log))
         client.process = process
@@ -891,6 +955,17 @@ def invoke_live(binary: Path, report: dict[str, Any]) -> None:
             except OSError:
                 pass
         report["cleanup"] = {"renderer": final_stop}
+        report["renderer_diagnostics"] = {
+            "tail_limit_bytes_per_stream": RENDERER_LOG_TAIL_BYTES,
+            "logs": [
+                {
+                    "stage": stage,
+                    "stdout": capture_renderer_log_tail(stdout_path),
+                    "stderr": capture_renderer_log_tail(stderr_path),
+                }
+                for stage, stdout_path, stderr_path in renderer_log_paths
+            ],
+        }
         if temp_path is not None:
             try:
                 parent = temp_path.parent.resolve(strict=True)

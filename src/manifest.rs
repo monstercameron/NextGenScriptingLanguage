@@ -685,6 +685,7 @@ impl Manifest {
         }
     }
 
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn has_json_encoded_output_schema(&self) -> bool {
         self.contract
             .as_ref()
@@ -692,6 +693,7 @@ impl Manifest {
             .is_some_and(|schema| schema.encoding == OutputEncoding::Json)
     }
 
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn decode_json_output_value(
         &self,
         value: serde_json::Value,

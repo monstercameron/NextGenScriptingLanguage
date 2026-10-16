@@ -466,8 +466,10 @@ pub struct OutputSchema {
 // This is only a fast-path eligibility bound. Deeper values go through the
 // original strict byte parser, which remains authoritative for recursion
 // limits and therefore preserves acceptance and error behavior.
+#[cfg(any(not(target_arch = "wasm32"), test))]
 const MAX_PREDECODED_JSON_CONTAINER_DEPTH: usize = 64;
 
+#[cfg(any(not(target_arch = "wasm32"), test))]
 fn predecoded_json_depth_is_safe(value: &serde_json::Value) -> bool {
     fn visit(value: &serde_json::Value, depth: usize) -> bool {
         match value {
@@ -1066,6 +1068,7 @@ impl OutputSchema {
         }
     }
 
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn decode_json_value_or_bytes(
         &self,
         json: serde_json::Value,
@@ -1887,6 +1890,7 @@ impl AppletContract {
         )
     }
 
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(crate) fn decode_json_output_value(
         &self,
         value: serde_json::Value,

@@ -496,8 +496,8 @@ mod tests {
         let rendered = render_for_workflow_with_manifest_catalog(&request, &catalog).unwrap();
         let canonical_catalog = fs::canonicalize(catalog).unwrap();
         let canonical_catalog = canonical_catalog.to_string_lossy();
-        assert!(rendered.contains("--manifest-catalog"));
-        assert!(rendered.contains(canonical_catalog.as_ref()));
+        let catalog_argument = exec_argument(&canonical_catalog).unwrap();
+        assert!(rendered.contains(&format!("\"--manifest-catalog\" {catalog_argument}")));
         assert!(!rendered.contains("--manifest-dir"));
     }
 

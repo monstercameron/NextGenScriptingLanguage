@@ -54,8 +54,8 @@ jobs:
           [[ "$INVOCATION_TIMEOUT_SECONDS" == "60" ]]
           printf '%s  %s\n' "$DRIVER_SHA256" benchmarks/emit_perf/emit_perf_pair.py | sha256sum --check
           printf '%s  %s\n' "$HARNESS_SHA256" benchmarks/emit_perf/emit-perf-harness-final.rs | sha256sum --check
-          printf '%s  %s\n' "$BASELINE_PATCH_XZ_SHA256" benchmarks/emit_perf/$BASELINE_PATCH_ARCHIVE | sha256sum --check
-          printf '%s  %s\n' "$CANDIDATE_PATCH_XZ_SHA256" benchmarks/emit_perf/$CANDIDATE_PATCH_ARCHIVE | sha256sum --check
+          printf '%s  %s\n' "$BASELINE_PATCH_XZ_SHA256" "benchmarks/emit_perf/$BASELINE_PATCH_ARCHIVE" | sha256sum --check
+          printf '%s  %s\n' "$CANDIDATE_PATCH_XZ_SHA256" "benchmarks/emit_perf/$CANDIDATE_PATCH_ARCHIVE" | sha256sum --check
           python3 -m unittest discover -s benchmarks/emit_perf -p 'test_hosted_emit_support.py'
           mkdir -p evidence/emit-perf/build evidence/emit-perf/paired-runs
           {

@@ -54,6 +54,7 @@ applet-boundaries-harness-check:
 	$(PYTHON) tests/omarchy_success_bench.py
 	$(PYTHON) tests/source_pair_bench.py
 	$(PYTHON) tests/matched_language.py
+	FLOW_THESIS_REPO_ROOT="$(CURDIR)" $(PYTHON) -m unittest discover -s benchmarks/equal_command_plan_control/tests
 
 stress-evidence-harness-check:
 	$(PYTHON) tests/mixed_stress_evidence.py

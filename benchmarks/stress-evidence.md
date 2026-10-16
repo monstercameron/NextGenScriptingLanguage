@@ -1,8 +1,7 @@
 # Graph, remote, resource, and fault workloads
 
-These are opt-in measurement harnesses, not retained performance results.
-No graph stress run, remote endpoint call, model trial, or Arch/Omarchy
-certification has been performed by adding these files.
+These opt-in measurement harnesses include retained lifecycle evidence: the mixed RuntimeGraphExecutor probe has a 32-actor smoke and an explicit 1,000-actor Linux run in [workflow 38833931575](https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38833931575), built from [commit 58b42f6](https://github.com/monstercameron/NextGenScriptingLanguage/commit/58b42f65d8c4de171baf8f3049ab70cf37c51af4). The [retained reports and summary](mixed-runtime-ci-38833931575/README.md) include source-bound JSON and the earlier failed attempt.
+The separate graph lifecycle stress target below remains unrun. These receipts cover loopback remote fixtures only; no external remote endpoint, model trial, or actual Arch/Omarchy session is certified.
 
 The graph lifecycle target builds a real typed graph with 2,048 timer workers
 by default, one bounded event queue per timer, and a merged event collector.

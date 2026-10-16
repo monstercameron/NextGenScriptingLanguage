@@ -1,0 +1,27 @@
+{
+  "schema": "execute.mixed-runtime-parent-verification/1",
+  "verified_utc": "2026-10-16T01:19:19.389703+00:00",
+  "source_commit": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+  "artifact_zip_digest_matches_github": true,
+  "reports": [
+    {
+      "nodes": 32,
+      "report_sha256": "b3ace60bd5addd626b36a928e0cab825e51396713acb7a1bcdf92a6b6e35211c",
+      "source_hashes_verified": 87,
+      "active_timer_sources": 22,
+      "active_window_us": 1007093,
+      "active_delta": 2200,
+      "current_validator_summary_identical": true
+    },
+    {
+      "nodes": 1000,
+      "report_sha256": "877eb0ed293f3024f5629a65e4dc38947e4934d7b715196e41804e2711fab0e9",
+      "source_hashes_verified": 87,
+      "active_timer_sources": 847,
+      "active_window_us": 1042569,
+      "active_delta": 85282,
+      "current_validator_summary_identical": true
+    }
+  ],
+  "scope": "Revalidated retained measurement receipts and source binding; did not rerun the probe. Resource samples are process-local, not tree peaks."
+}

@@ -1514,3 +1514,22 @@ balanced across all six language orders. Raw base64 streams, per-sample wall
 times, paired differences against Execute, exact environment, artifact hashes,
 and unavailable/unmatched cells are retained. Run only in a serialized idle
 window. This code addition includes no comparative timing receipt.
+
+## Retained equal-plan controls and mixed lifecycle run
+
+The [equal-command-plan control](equal_command_plan_control/README.md) retains
+1,152 measured invocations over six public fixtures on macOS ARM64 at source
+`58b42f6`, plus 120 excluded warmups and 24 preflights. All byte/status/effect
+checks passed. Bash had the lowest median in every fixture; full-catalog
+Execute medians were lower than Nushell. The one-entry unreferenced catalog
+reduced paired Execute medians by 2.824–3.758 ms; it is a diagnostic arm rather
+than default runtime behavior. Raw samples, source/tool hashes, independent
+public-fixture audit and reproduction sources are retained.
+
+The [Linux mixed lifecycle receipts](mixed-runtime-ci-38833931575/README.md)
+retain the successful 32- and 1,000-actor runs and the earlier 846/847-timer
+failure. The later 1,000-actor run observed all 847 timers during its measured
+1,042,569 µs window and reaped all 16 registry workers. Its 44,191,744-byte
+sampled RSS peak covers the Rust probe process only. This bounded run does not
+establish independent capability count, process-tree capacity, sustained
+operation, desktop behavior, or cross-revision throughput.

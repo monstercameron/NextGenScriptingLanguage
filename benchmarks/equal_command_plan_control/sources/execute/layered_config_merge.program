@@ -1,0 +1,3 @@
+accept settings_path as text
+run "jq" with arguments ["-cS", "reduce .layers[] as $layer ({}; . * $layer)", settings_path]
+then "tee" with arguments ["reports/effective.json"]

@@ -1,0 +1,217 @@
+{
+  "earlier_run": {
+    "1000_actor_failure": {
+      "expected_timer_sources": 847,
+      "failure": "timer fan-in observed 846 distinct timer nodes; expected 847",
+      "file": "graph-mixed-lifecycle-38827031141-1000-failure.json",
+      "note": "Retained failure evidence. Runtime behavior and instrumentation changed before the later run; the runs are not a throughput comparison.",
+      "observed_timer_sources": 846,
+      "sha256": "2f3f1aac20559a9c535984aa46a3072d3f47c32ef95c29f2b9fad4d20fb39ba6",
+      "status": "failed_unverified"
+    },
+    "32_actor_report": {
+      "actor_count": 32,
+      "claim": "none",
+      "file": "graph-mixed-lifecycle-38827031141-32.json",
+      "sha256": "4ddf92966b91aa75cce5cae35f6ac7879cfabf26d76f896d20b61f480e4599ee",
+      "status": "measurement_recorded_no_claim"
+    },
+    "run_id": 38827031141,
+    "run_url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38827031141"
+  },
+  "environment": {
+    "architecture": "x86_64",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "logical_cpu_count": 4,
+    "os": "Linux",
+    "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "published_file_sha256": {
+    "graph-mixed-lifecycle-38827031141-1000-failure.json": "2f3f1aac20559a9c535984aa46a3072d3f47c32ef95c29f2b9fad4d20fb39ba6",
+    "graph-mixed-lifecycle-38827031141-32.json": "4ddf92966b91aa75cce5cae35f6ac7879cfabf26d76f896d20b61f480e4599ee",
+    "graph-mixed-lifecycle-38833931575-1000.json": "877eb0ed293f3024f5629a65e4dc38947e4934d7b715196e41804e2711fab0e9",
+    "graph-mixed-lifecycle-38833931575-32.json": "b3ace60bd5addd626b36a928e0cab825e51396713acb7a1bcdf92a6b6e35211c",
+    "parent-verification.json": "606ff77c9a80384401b6c5ce048e49fb30fab3ef7a986f2086e186bfda07eb06",
+    "receipt-manifest.json": "21d2403decfc5b9bed81296349fe9aaf9ab68dbb4ddfb975b7161aa3f1be9e1b"
+  },
+  "schema": "execute.mixed-runtime-publication-summary/1",
+  "scope_and_limits": [
+    "One Linux CI runner and one bounded mixed graph per requested actor count; these are lifecycle/correctness and resource receipts, not a general 1,000-instance capacity guarantee or independent capabilities.",
+    "The successful 1,000-actor graph contains 847 timers, 64 finite native command applets, 16 registry-owned workers, 32 in-process applets, 32 pure in-process scheduled .program services, 8 loopback remote listeners, and one timer collector.",
+    "RSS and thread samples cover only the Rust probe process. They are not child-process, process-tree, remote-server, or machine-wide peaks; sampled RSS may miss short peaks.",
+    "Capacity-one lossless timer fan-in was exercised, but saturation is not claimed; a separate regression covers full-queue cancellation.",
+    "Registry workers were observed alive before final registry drop and reaped afterward. Graph cancellation joins actor tasks.",
+    "Do not compare throughput against run 38827031141 because runtime behavior and measurement instrumentation changed.",
+    "No actual Arch/Omarchy, desktop, WAN, power, disk-exhaustion, or full process-tree resource certification follows from these runs."
+  ],
+  "source": {
+    "artifact_digest_verified_against_github": true,
+    "artifact_name": "mixed-runtime-lifecycle-38833931575",
+    "artifact_sha256": "95f47dbb21beb08352e69cb57008467921c239e307599362053d9a8068437ffb",
+    "commit": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+    "commit_url": "https://github.com/monstercameron/NextGenScriptingLanguage/commit/58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+    "run_id": 38833931575,
+    "run_url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38833931575",
+    "source_file_hashes_verified_per_report": 87,
+    "verification_note": "Parent validation checked the archived artifact digest, per-report source hashes, readiness/active timer IDs, event-counter deltas and identical validator summaries. It did not rerun the probe.",
+    "workflow": "manual Linux mixed RuntimeGraphExecutor probe"
+  },
+  "successful_reports": [
+    {
+      "active_window": {
+        "active_timer_sources": 22,
+        "event_counters": {
+          "after_end": 0,
+          "barrier": 66,
+          "end": 2266,
+          "start": 66,
+          "total": 2266
+        },
+        "observed_us": 1007093,
+        "requested_ms": 1000,
+        "timer_events_during_window": 2200,
+        "timer_events_recorded_during_window": 2200,
+        "timer_events_total_including_warmup": 2266
+      },
+      "actor_count": 32,
+      "actor_layout": {
+        "distinct_registry_workers": 1,
+        "in_process_applets": 2,
+        "loopback_remote_listeners": 1,
+        "native_finite_applets": 3,
+        "scheduled_program_services": 2,
+        "timer_collector": 1,
+        "timers": 22,
+        "total_graph_actors": 32
+      },
+      "claim": "none",
+      "cleanup_us": {
+        "cancel_and_join": 9737,
+        "registry_worker_reap": 5
+      },
+      "file": "graph-mixed-lifecycle-38833931575-32.json",
+      "readiness": {
+        "expected_timer_sources": 22,
+        "observed_terminal_actor_count": 9,
+        "observed_timer_sources": 22,
+        "status": "ready",
+        "warmup_us": 31109,
+        "watchdog_joined": true,
+        "watchdog_status": "stopped_after_ready"
+      },
+      "registry_worker_reap": {
+        "all_reaped_after_registry_drop": true,
+        "count": 1,
+        "ownership": "registry-shared ordinary applet pool; graph cancellation joins actor tasks, final registry/executor drop reaps retained workers"
+      },
+      "rust_process_resources_only": {
+        "after_join_and_reap": {
+          "rss_bytes": 9433088,
+          "threads": 2
+        },
+        "baseline": {
+          "rss_bytes": 7376896,
+          "threads": 2
+        },
+        "expected_finite_native_launches": 3,
+        "expected_registry_worker_launches": 1,
+        "launched_processes_reported_by_graph_metrics": 4,
+        "peak_sampled": {
+          "rss_bytes": 9752576,
+          "threads": 33
+        },
+        "worker_pids": [
+          5700
+        ]
+      },
+      "sha256": "b3ace60bd5addd626b36a928e0cab825e51396713acb7a1bcdf92a6b6e35211c",
+      "status": "measurement_recorded_no_claim"
+    },
+    {
+      "active_window": {
+        "active_timer_sources": 847,
+        "event_counters": {
+          "after_end": 0,
+          "barrier": 22284,
+          "end": 107582,
+          "start": 22300,
+          "total": 107582
+        },
+        "observed_us": 1042569,
+        "requested_ms": 1000,
+        "timer_events_during_window": 85282,
+        "timer_events_recorded_during_window": 85282,
+        "timer_events_total_including_warmup": 107582
+      },
+      "actor_count": 1000,
+      "actor_layout": {
+        "distinct_registry_workers": 16,
+        "in_process_applets": 32,
+        "loopback_remote_listeners": 8,
+        "native_finite_applets": 64,
+        "scheduled_program_services": 32,
+        "timer_collector": 1,
+        "timers": 847,
+        "total_graph_actors": 1000
+      },
+      "claim": "none",
+      "cleanup_us": {
+        "cancel_and_join": 2412,
+        "registry_worker_reap": 45
+      },
+      "file": "graph-mixed-lifecycle-38833931575-1000.json",
+      "readiness": {
+        "expected_timer_sources": 847,
+        "observed_terminal_actor_count": 152,
+        "observed_timer_sources": 847,
+        "status": "ready",
+        "warmup_us": 344459,
+        "watchdog_joined": true,
+        "watchdog_status": "stopped_after_ready"
+      },
+      "registry_worker_reap": {
+        "all_reaped_after_registry_drop": true,
+        "count": 16,
+        "ownership": "registry-shared ordinary applet pool; graph cancellation joins actor tasks, final registry/executor drop reaps retained workers"
+      },
+      "rust_process_resources_only": {
+        "after_join_and_reap": {
+          "rss_bytes": 26275840,
+          "threads": 2
+        },
+        "baseline": {
+          "rss_bytes": 10391552,
+          "threads": 2
+        },
+        "expected_finite_native_launches": 64,
+        "expected_registry_worker_launches": 16,
+        "launched_processes_reported_by_graph_metrics": 80,
+        "peak_sampled": {
+          "rss_bytes": 44191744,
+          "threads": 913
+        },
+        "worker_pids": [
+          6722,
+          6727,
+          6728,
+          6731,
+          6730,
+          6732,
+          6725,
+          6723,
+          6724,
+          6733,
+          6729,
+          6764,
+          6726,
+          6767,
+          6766,
+          6783
+        ]
+      },
+      "sha256": "877eb0ed293f3024f5629a65e4dc38947e4934d7b715196e41804e2711fab0e9",
+      "status": "measurement_recorded_no_claim"
+    }
+  ]
+}

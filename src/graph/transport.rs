@@ -1368,11 +1368,172 @@ fn service_cancellation_failure(message: &str) -> anyhow::Error {
     .into()
 }
 
+struct JsonSizeCounter {
+    bytes: usize,
+}
+
+impl std::io::Write for JsonSizeCounter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self
+            .bytes
+            .checked_add(buffer.len())
+            .ok_or_else(|| std::io::Error::other("serialized JSON size overflow"))?;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_json_size(value: &impl Serialize) -> Result<usize> {
+    let mut counter = JsonSizeCounter { bytes: 0 };
+    serde_json::to_writer(&mut counter, value)?;
+    Ok(counter.bytes)
+}
+
 fn payload_size(payload: &PortValue) -> Result<usize> {
-    Ok(match payload {
-        PortValue::Bytes(bytes) => bytes.len(),
-        PortValue::Value(value) => serde_json::to_vec(value)?.len(),
-    })
+    match payload {
+        PortValue::Bytes(bytes) => Ok(bytes.len()),
+        PortValue::Value(value) => serialized_json_size(value),
+    }
+}
+
+#[cfg(test)]
+mod payload_size_tests {
+    use super::*;
+    use crate::contracts::ValueSchema;
+
+    fn scalar_schema(kind: OutputType) -> ValueSchema {
+        ValueSchema {
+            kind,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+        }
+    }
+
+    fn value_cases() -> Vec<Value> {
+        vec![
+            Value::String("é🦀\n\t\0\"\\".into()),
+            Value::Integer(i64::MIN),
+            Value::Bool(true),
+            Value::Null,
+            Value::Number(serde_json::Number::from_f64(1.25).unwrap()),
+            Value::Reference("node.port".into()),
+            Value::List(vec![Value::Integer(1), Value::String("line\nfeed".into())]),
+            Value::Record(BTreeMap::from([
+                ("escaped\"key".into(), Value::String("\\\t".into())),
+                (
+                    "nested".into(),
+                    Value::List(vec![Value::Bool(false), Value::Null]),
+                ),
+            ])),
+        ]
+    }
+
+    fn node_io(max_message_bytes: usize) -> (TaskScope, NodeIo, Arc<BoundedQueue>) {
+        let scope = TaskScope::new(1, None).unwrap();
+        let token = scope.cancellation_token();
+        let queue = BoundedQueue::new(1, BufferPolicy::Lossless);
+        let sink = QueueSink {
+            queue: Arc::clone(&queue),
+            input: Some(PortRef::new("sink", "in")),
+        };
+        let cancelled = token.cancellation_flag();
+        let io = NodeIo {
+            node: "emitter".into(),
+            inputs: BTreeMap::new(),
+            input_schemas: BTreeMap::new(),
+            initial_inputs: BTreeMap::new(),
+            input_names: Vec::new(),
+            active_input_names: Vec::new(),
+            input_name_cursor: 0,
+            input_queue_cursors: Vec::new(),
+            output_sinks: BTreeMap::from([("out".into(), vec![sink])]),
+            schemas: BTreeMap::from([(
+                "out".into(),
+                PortSchema::events(scalar_schema(OutputType::Text)),
+            )]),
+            generation: 1,
+            revision: 1,
+            next_sequence: Arc::new(AtomicU64::new(1)),
+            token,
+            external_cancelled: cancelled,
+            deadline: None,
+            input_sensitivity: None,
+            max_message_bytes,
+        };
+        (scope, io, queue)
+    }
+
+    #[test]
+    fn counted_json_sizes_match_full_serde_json_bytes() {
+        for value in value_cases() {
+            let expected_bytes = serde_json::to_vec(&value).unwrap();
+            assert_eq!(serialized_json_size(&value).unwrap(), expected_bytes.len());
+            assert_eq!(
+                payload_size(&PortValue::Value(value)).unwrap(),
+                expected_bytes.len()
+            );
+        }
+    }
+
+    #[test]
+    fn byte_payload_size_remains_raw_byte_length() {
+        let bytes = vec![0, 255, 10, b'"', b'\\'];
+        assert_eq!(
+            payload_size(&PortValue::Bytes(bytes.clone())).unwrap(),
+            bytes.len()
+        );
+    }
+
+    #[test]
+    fn emit_preserves_exact_size_boundaries_and_validation_order() {
+        let value = Value::String("é🦀\n\t\0\"\\".into());
+        let exact_size = serde_json::to_vec(&value).unwrap().len();
+
+        let (_scope, mut at_limit, queue) = node_io(exact_size);
+        let sequence = Arc::clone(&at_limit.next_sequence);
+        let report = at_limit
+            .emit("out", PortValue::Value(value.clone()))
+            .unwrap();
+        assert_eq!(report.delivered, 1);
+        assert_eq!(sequence.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            queue.try_recv().unwrap().unwrap().payload,
+            PortValue::Value(value.clone())
+        );
+
+        let (_scope, mut below_limit, queue) = node_io(exact_size - 1);
+        let sequence = Arc::clone(&below_limit.next_sequence);
+        let error = below_limit
+            .emit("out", PortValue::Value(value))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&format!("graph message limit of {} bytes", exact_size - 1)));
+        assert_eq!(sequence.load(Ordering::Relaxed), 1);
+        assert!(queue.try_recv().unwrap().is_none());
+
+        let (_scope, mut invalid_type, queue) = node_io(0);
+        let sequence = Arc::clone(&invalid_type.next_sequence);
+        let error = invalid_type
+            .emit("out", PortValue::Value(Value::Integer(1)))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("payload for emitter.out"));
+        assert_eq!(sequence.load(Ordering::Relaxed), 1);
+        assert!(queue.try_recv().unwrap().is_none());
+    }
+
+    #[test]
+    fn json_size_counter_rejects_usize_overflow() {
+        let mut counter = JsonSizeCounter { bytes: usize::MAX };
+        assert!(std::io::Write::write(&mut counter, &[0]).is_err());
+        assert_eq!(counter.bytes, usize::MAX);
+    }
 }
 
 fn next_sequence(sequence: &AtomicU64) -> Result<u64> {

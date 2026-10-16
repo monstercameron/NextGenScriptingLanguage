@@ -1,0 +1,94 @@
+{
+  "name": "fs.write_atomic",
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true
+    },
+    "expected_content_hash": {
+      "type": "string",
+      "required": true
+    },
+    "symlink_policy": {
+      "type": "string",
+      "required": true
+    },
+    "permissions_policy": {
+      "type": "string",
+      "required": true
+    },
+    "lock": {
+      "type": "path"
+    },
+    "content": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "integer"
+    },
+    "lock_timeout_ms": {
+      "type": "integer"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.write_atomic"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 1,
+        "name": "absence",
+        "kind": "absence"
+      },
+      {
+        "status": 2,
+        "name": "failure",
+        "kind": "failure"
+      },
+      {
+        "status": 75,
+        "name": "retryable",
+        "kind": "retryable"
+      },
+      {
+        "status": 76,
+        "name": "uncertain_effect",
+        "kind": "failure"
+      }
+    ],
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "result_envelope": true
+  }
+}

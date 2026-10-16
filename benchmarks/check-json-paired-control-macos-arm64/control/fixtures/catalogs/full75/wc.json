@@ -1,0 +1,17 @@
+{
+  "name": "wc",
+  "binary": "wc",
+  "accepts_stdin": true,
+  "cacheable": false,
+  "parameters": {
+    "flags": { "type": "list", "items": "string" }
+  },
+  "arguments": [
+    {
+      "when_present": "flags",
+      "append": [
+        { "spread": "flags" }
+      ]
+    }
+  ]
+}

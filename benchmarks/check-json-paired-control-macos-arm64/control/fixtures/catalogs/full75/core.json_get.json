@@ -1,0 +1,70 @@
+{
+  "name": "json.get",
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "document": {
+      "type": "json"
+    },
+    "pointer": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "json.get"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "json.inspect"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "document": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "pointer": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single",
+          "encoding": "json"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

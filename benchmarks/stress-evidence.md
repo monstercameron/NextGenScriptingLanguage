@@ -1,6 +1,8 @@
 # Graph, remote, resource, and fault workloads
 
 These opt-in measurement harnesses include retained lifecycle evidence: the mixed RuntimeGraphExecutor probe has a 32-actor smoke and an explicit 1,000-actor Linux run in [workflow 38833931575](https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38833931575), built from [commit 58b42f6](https://github.com/monstercameron/NextGenScriptingLanguage/commit/58b42f65d8c4de171baf8f3049ab70cf37c51af4). The [retained reports and summary](mixed-runtime-ci-38833931575/README.md) include source-bound JSON and the earlier failed attempt.
+A [separate fixed replication](mixed-runtime-ci-38835685785/README.md) retained the 32-actor smoke and all three declared 1,000-actor, 10-second trials. Every trial observed all 847 timer sources during its active window and reaped all 16 registry workers; measured Rust-process RSS peaks were 43,819,008–45,264,896 bytes. These remain bounded repetitions, with no process-tree resource or sustained-operation claim.
+
 The separate graph lifecycle stress target below remains unrun. These receipts cover loopback remote fixtures only; no external remote endpoint, model trial, or actual Arch/Omarchy session is certified.
 
 The graph lifecycle target builds a real typed graph with 2,048 timer workers

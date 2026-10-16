@@ -1,0 +1,41 @@
+{
+  "change": "Create an exclusive running report before the first Execute invocation; persist after every completed cell; on exceptions persist status=failed, error details, completed cell records, and the current cell raw invocation records with phase/side. If a process raises before producing Completed, record the exception chain, timeout, phase/side, and explicitly null status/output/timing fields. Return nonzero and do not retry. Incomplete cells are not recorded as successful workloads.",
+  "current_files": {
+    "driver": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/check-json-reuse-control/driver.py",
+      "sha256": "696807cb02408f89c86e5169f5b802d78ac76c15c7ffd842a10151557e917194"
+    },
+    "test": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/check-json-reuse-control/test_control.py",
+      "sha256": "6b8c9bf5cf1609ab280a2cd3a5298024cb327ca07fc349ada6c564d3e2767147"
+    }
+  },
+  "invariants": "The original sample plan, workloads, binary/source pins, oracles, environment handling, and timing boundary are unchanged.",
+  "preregistration": {
+    "baseline_binary_sha256": "c1b39031fa4f7924093179c1aeb57fe92d01ad85e1ecb834b0d72968c309ed69",
+    "candidate_binary_sha256": "5a2d2d0eea72e7154f4cca26aaa7fa12e8329423917c2e22d45f346fe8b6a331",
+    "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/check-json-reuse-control-preregistration.json",
+    "reviewed_patch_sha256": "70867f9c719038cd7043e9c38cb948d65f73056ae42bd43917569aebcb9be362",
+    "sha256_unchanged": "68e70b4246fd274d063590ece956c6b8e5cff2fd2367adcefb1e2d19456538ba"
+  },
+  "prior_files": {
+    "driver_archive": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/check-json-reuse-control-driver-before-amendment-2026-10-15.py",
+      "sha256": "1187053a4192b5d324a25ee69a9381f5f129cb7138573373783881bb8a498b2c"
+    },
+    "test_archive": {
+      "path": "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/check-json-reuse-control-tests-before-amendment-2026-10-15.py",
+      "sha256": "76f079da28808e853bd57174aab7a42c66a066ab131e6007552bcf6eb23ac508"
+    }
+  },
+  "reason": "The original driver wrote a report only after all eight cells. An oracle, timeout, or parity failure in a later cell could therefore discard already completed cells and the current cell raw captures.",
+  "recorded_at_utc": "2026-10-16T01:52:27.305938+00:00",
+  "schema": "execute.check-json-reuse-control-preamendment/1",
+  "status": "premeasurement amendment; no product execution or timing collected",
+  "validation": {
+    "failure_regression": "A fake timeout in cell 2 returns code 1 and the saved report remains failed with cell 1 complete/raw outputs, cell 2 current raw records, and a failed sample record containing phase=sample, side=baseline, null status/time/output, and exception text.",
+    "focused_tests": "5 passed using fake runners; no Execute binary launched",
+    "no_measurement": true,
+    "python_compile": "passed for driver.py and test_control.py"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "asset_sha256sums_sha256": "6ea9185be848427bc09addb798ac613954bf09b0dc0821ed0ac17ac3905e938e",
+  "expected_asset_count": 12,
+  "expected_assets_equal_receipt_asset_list": true,
+  "expected_assets_equal_sha256sums_names": true,
+  "extra_assets": [],
+  "missing_assets": [],
+  "receipt_asset_count": 12,
+  "receipt_hashes_equal_sha256sums_hashes": true,
+  "release_py_sha256": "cf39aa607ea3fa73f2b29a27d33291e188abb937c2aa4deec0a362c8a0406528",
+  "release_py_source_commit": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+  "release_version": "0.9.0-rc.5",
+  "run_id": 38836416853,
+  "sha256sums_entry_count": 12,
+  "source_commit": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+  "status": "passed"
+}

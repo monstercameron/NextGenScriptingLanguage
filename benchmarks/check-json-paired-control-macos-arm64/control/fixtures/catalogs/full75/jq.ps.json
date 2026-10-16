@@ -1,0 +1,35 @@
+{
+  "name": "jq.ps",
+  "binary": "jq",
+  "accepts_stdin": true,
+  "cacheable": false,
+  "parameters": {
+    "limit": {
+      "type": "integer",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "-R"
+    },
+    {
+      "literal": "-s"
+    },
+    {
+      "literal": "--argjson"
+    },
+    {
+      "literal": "limit"
+    },
+    {
+      "parameter": "limit"
+    },
+    {
+      "literal": "--"
+    },
+    {
+      "literal": "if ($limit < 0 or $limit > 256) then error(\"limit must be between 0 and 256\") else split(\"\\n\") | map(select(test(\"\\\\S\")) | (capture(\"^\\\\s*(?<pid>[0-9]+)\\\\s+(?<cpu>[0-9]+(?:[.,][0-9]+)?)\\\\s+(?<command>.+?)\\\\s*$\") // error(\"Unexpected ps row\")) | {pid:(.pid|tonumber),cpu:(.cpu|gsub(\",\";\".\")|tonumber),command:.command,name:(.command|split(\"/\")|last)} | . + {label:((.pid|tostring)+\" \"+.name)}) | sort_by([-.cpu,.pid]) | .[:$limit] end"
+    }
+  ]
+}

@@ -1,0 +1,275 @@
+{
+  "artifact": {
+    "failure_sidecars": [],
+    "github_digest_matches_local_zip": true,
+    "id": 12019111300,
+    "name": "mixed-runtime-lifecycle-38835685785",
+    "zip_sha256": "6a147c66806c53f245f8b9308ffd9549949e7f889540b511ecd9ea6eb0f33e00"
+  },
+  "reports": [
+    {
+      "active_timer_events": 2205,
+      "active_timer_sources": 22,
+      "active_window_observed_us": 1008236,
+      "active_window_requested_ms": 1000,
+      "actor_count": 32,
+      "actor_layout": {
+        "distinct_registry_workers": 1,
+        "in_process_applets": 2,
+        "loopback_remote_listeners": 1,
+        "native_finite_applets": 3,
+        "scheduled_program_services": 2,
+        "timer_collector": 1,
+        "timers": 22,
+        "total_graph_actors": 32
+      },
+      "all_boolean_correctness_checks_true": true,
+      "cancel_and_join_us": 2121,
+      "claim": "none",
+      "expected_timer_sources": 22,
+      "file": "graph-mixed-lifecycle-38835685785-32.json",
+      "process_local_resources": {
+        "after_join_and_reap": {
+          "rss_bytes": 9539584,
+          "threads": 2
+        },
+        "baseline": {
+          "rss_bytes": 7417856,
+          "threads": 2
+        },
+        "expected_finite_native_launches": 3,
+        "expected_registry_worker_launches": 1,
+        "launched_processes_reported_by_graph_metrics": 4,
+        "peak_sampled": {
+          "rss_bytes": 9920512,
+          "threads": 33
+        },
+        "worker_pids": [
+          5332
+        ]
+      },
+      "readiness_warmup_us": 29270,
+      "registry_worker_reap_us": 4,
+      "registry_workers_reaped_after_drop": true,
+      "sha256": "48204a1d83140fdd99855b53940c8b0eeb237d350bc378694c08811e734ec1bd",
+      "status": "measurement_recorded_no_claim"
+    },
+    {
+      "active_timer_events": 847314,
+      "active_timer_sources": 847,
+      "active_window_observed_us": 10034641,
+      "active_window_requested_ms": 10000,
+      "actor_count": 1000,
+      "actor_layout": {
+        "distinct_registry_workers": 16,
+        "in_process_applets": 32,
+        "loopback_remote_listeners": 8,
+        "native_finite_applets": 64,
+        "scheduled_program_services": 32,
+        "timer_collector": 1,
+        "timers": 847,
+        "total_graph_actors": 1000
+      },
+      "all_boolean_correctness_checks_true": true,
+      "cancel_and_join_us": 783,
+      "claim": "none",
+      "expected_timer_sources": 847,
+      "file": "graph-mixed-lifecycle-38835685785-1000-trial-1.json",
+      "process_local_resources": {
+        "after_join_and_reap": {
+          "rss_bytes": 27398144,
+          "threads": 2
+        },
+        "baseline": {
+          "rss_bytes": 10362880,
+          "threads": 2
+        },
+        "expected_finite_native_launches": 64,
+        "expected_registry_worker_launches": 16,
+        "launched_processes_reported_by_graph_metrics": 80,
+        "peak_sampled": {
+          "rss_bytes": 45264896,
+          "threads": 935
+        },
+        "worker_pids": [
+          6441,
+          6347,
+          6344,
+          6349,
+          6345,
+          6350,
+          6351,
+          6377,
+          6355,
+          6352,
+          6353,
+          6354,
+          6357,
+          6356,
+          6358,
+          6361
+        ]
+      },
+      "readiness_warmup_us": 202184,
+      "registry_worker_reap_us": 25,
+      "registry_workers_reaped_after_drop": true,
+      "sha256": "bfc9d589e9c75be5f83360d63a722f2ce6591b4735c1f318cee86e52ba59455b",
+      "status": "measurement_recorded_no_claim"
+    },
+    {
+      "active_timer_events": 847426,
+      "active_timer_sources": 847,
+      "active_window_observed_us": 10034576,
+      "active_window_requested_ms": 10000,
+      "actor_count": 1000,
+      "actor_layout": {
+        "distinct_registry_workers": 16,
+        "in_process_applets": 32,
+        "loopback_remote_listeners": 8,
+        "native_finite_applets": 64,
+        "scheduled_program_services": 32,
+        "timer_collector": 1,
+        "timers": 847,
+        "total_graph_actors": 1000
+      },
+      "all_boolean_correctness_checks_true": true,
+      "cancel_and_join_us": 674,
+      "claim": "none",
+      "expected_timer_sources": 847,
+      "file": "graph-mixed-lifecycle-38835685785-1000-trial-2.json",
+      "process_local_resources": {
+        "after_join_and_reap": {
+          "rss_bytes": 27172864,
+          "threads": 2
+        },
+        "baseline": {
+          "rss_bytes": 10436608,
+          "threads": 2
+        },
+        "expected_finite_native_launches": 64,
+        "expected_registry_worker_launches": 16,
+        "launched_processes_reported_by_graph_metrics": 80,
+        "peak_sampled": {
+          "rss_bytes": 43819008,
+          "threads": 917
+        },
+        "worker_pids": [
+          7511,
+          7512,
+          7538,
+          7536,
+          7550,
+          7521,
+          7535,
+          7480,
+          7513,
+          7539,
+          7519,
+          7547,
+          7518,
+          7515,
+          7510,
+          7549
+        ]
+      },
+      "readiness_warmup_us": 272425,
+      "registry_worker_reap_us": 24,
+      "registry_workers_reaped_after_drop": true,
+      "sha256": "63a08612c385ffcddc4aec33c0657b83e7be727e4bf2e79822e8688c8d5a5940",
+      "status": "measurement_recorded_no_claim"
+    },
+    {
+      "active_timer_events": 847438,
+      "active_timer_sources": 847,
+      "active_window_observed_us": 10033734,
+      "active_window_requested_ms": 10000,
+      "actor_count": 1000,
+      "actor_layout": {
+        "distinct_registry_workers": 16,
+        "in_process_applets": 32,
+        "loopback_remote_listeners": 8,
+        "native_finite_applets": 64,
+        "scheduled_program_services": 32,
+        "timer_collector": 1,
+        "timers": 847,
+        "total_graph_actors": 1000
+      },
+      "all_boolean_correctness_checks_true": true,
+      "cancel_and_join_us": 1140,
+      "claim": "none",
+      "expected_timer_sources": 847,
+      "file": "graph-mixed-lifecycle-38835685785-1000-trial-3.json",
+      "process_local_resources": {
+        "after_join_and_reap": {
+          "rss_bytes": 26542080,
+          "threads": 2
+        },
+        "baseline": {
+          "rss_bytes": 10432512,
+          "threads": 2
+        },
+        "expected_finite_native_launches": 64,
+        "expected_registry_worker_launches": 16,
+        "launched_processes_reported_by_graph_metrics": 80,
+        "peak_sampled": {
+          "rss_bytes": 44879872,
+          "threads": 916
+        },
+        "worker_pids": [
+          8596,
+          8581,
+          8580,
+          8599,
+          8598,
+          8595,
+          8593,
+          8594,
+          8597,
+          8579,
+          8605,
+          8654,
+          8655,
+          8657,
+          8658,
+          8659
+        ]
+      },
+      "readiness_warmup_us": 234065,
+      "registry_worker_reap_us": 26,
+      "registry_workers_reaped_after_drop": true,
+      "sha256": "b5f2eff8101ea5a33e2ddcb724a4d89ddbae76739f52e067396ebc5c02d50bb7",
+      "status": "measurement_recorded_no_claim"
+    }
+  ],
+  "runtime_source": {
+    "all_four_source_manifests_identical": true,
+    "commit": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+    "commit_url": "https://github.com/monstercameron/NextGenScriptingLanguage/commit/58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+    "shared_test_binary_sha256": "cd58323e368fa4632fde5d6198044ed157b43a156e1e4bba686252bd564387ab",
+    "source_files_checked_per_report": 87,
+    "source_manifest_sha256_canonical_json": "01a9429065a5f0d02f6801c33b5724f5f5788848d70f31673c9724b61b9a583e"
+  },
+  "schema": "execute.mixed-runtime-publication-summary/1",
+  "scope_and_limits": [
+    "One sequential Linux CI workflow run with a 32-actor smoke and three bounded 10-second 1000-actor trials; this is bounded replication evidence, not a sustained-running or churn test.",
+    "The 1000-actor layout is 847 timers, 64 finite native applets, 16 registry-owned workers, 32 in-process applets, 32 pure in-process scheduled program services, 8 loopback remote listeners, and one collector.",
+    "Each report records process-local Rust probe RSS and thread samples only. They are not child-process, process-tree, loopback-server, or machine-wide measurements, and sampled RSS can miss short peaks.",
+    "The 1000-actor run did not establish 1000 independent capabilities, a general capacity limit, or resource ceilings. The timers used capacity-one lossless edges, but this run does not claim queue saturation.",
+    "The reports have measurement_recorded_no_claim status. Their event totals are separate trial receipts, not a throughput claim or comparison.",
+    "The workflow commit is e4d9176ee40bc98e0b16325f7d48db0b76b0befa; all reported runtime source-file hashes match commit 58b42f65d8c4de171baf8f3049ab70cf37c51af4."
+  ],
+  "workflow": {
+    "branch": "codex/mixed-window-58b42f6",
+    "inputs": {
+      "replications": 3,
+      "run_1000": true,
+      "window_ms": 10000
+    },
+    "job_conclusion": "success",
+    "job_id": 116764176225,
+    "ordering": "32-actor 1-second smoke first, then all three declared 1000-actor 10-second trials sequentially",
+    "run_id": 38835685785,
+    "run_url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38835685785",
+    "workflow_commit": "e4d9176ee40bc98e0b16325f7d48db0b76b0befa"
+  }
+}

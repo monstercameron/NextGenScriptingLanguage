@@ -1,0 +1,48 @@
+{
+  "name": "csv.stringify",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "table": { "type": "json", "required": true }
+  },
+  "arguments": [
+    { "literal": "csv.stringify" },
+    { "literal": "--args" },
+    { "json_arguments": true }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": { "kind": "oneshot" },
+    "output": { "type": "text", "encoding": "json" },
+    "capabilities": ["csv.convert"],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "table": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "headers": { "type": "list", "items": { "type": "text" } },
+              "rows": {
+                "type": "list",
+                "items": {
+                  "type": "list",
+                  "items": { "type": "text" }
+                }
+              }
+            },
+            "required": ["headers", "rows"]
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": { "type": "text" },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

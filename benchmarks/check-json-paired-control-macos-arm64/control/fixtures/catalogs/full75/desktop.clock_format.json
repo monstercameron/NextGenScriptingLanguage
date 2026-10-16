@@ -1,0 +1,35 @@
+{
+  "name": "desktop.clock_format",
+  "binary": "python3",
+  "accepts_stdin": false,
+  "parameters": {"seconds": {"type": "integer", "required": true}},
+  "arguments": [{"json_arguments": true}],
+  "contract": {
+    "version": 1,
+    "backend": "json_lines_worker",
+    "lifecycle": {
+      "kind": "json_lines",
+      "startup_arguments": ["-u", "examples/desktop/workers.py", "--worker", "clock_format"],
+      "timeout_ms": 3000,
+      "max_frame_bytes": 1048576,
+      "max_stderr_bytes": 8192
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {"text": {"type": "text"}},
+      "required": ["text"]
+    },
+    "capabilities": ["time.format"],
+    "effects": [],
+    "ports": {
+      "inputs": {"seconds": {"schema": {"type": "integer"}, "delivery": "records"}},
+      "outputs": {
+        "value": {
+          "schema": {"type": "record", "fields": {"text": {"type": "text"}}, "required": ["text"]},
+          "delivery": "records"
+        }
+      }
+    }
+  }
+}

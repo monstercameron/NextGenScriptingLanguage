@@ -1,0 +1,49 @@
+{
+  "schema": "execute.check-json-fixed-replication-execution/1",
+  "runs": [
+    {
+      "label": "repeat-2",
+      "started_utc": "2026-10-16T01:59:21.558658+00:00",
+      "command": [
+        "/Library/Developer/CommandLineTools/usr/bin/python3",
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/check-json-reuse-control/driver.py",
+        "--primary-root",
+        "/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow",
+        "--candidate-root",
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/check-json-reuse-worktree",
+        "--baseline-binary",
+        "/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow/target/release/execute",
+        "--candidate-binary",
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/check-json-reuse-worktree/target/release/execute",
+        "--report",
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/check-json-reuse-control-macos-arm64-repeat-2.raw.json",
+        "--confirm-idle-window"
+      ],
+      "exit_code": 0,
+      "finished_utc": "2026-10-16T01:59:32.374142+00:00",
+      "raw_sha256": "022c790c3c0c05f43a6f7479d3280c6a14cad3092e2ad3b60bc6689e53e68310"
+    },
+    {
+      "label": "repeat-3",
+      "started_utc": "2026-10-16T01:59:32.445871+00:00",
+      "command": [
+        "/Library/Developer/CommandLineTools/usr/bin/python3",
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/check-json-reuse-control/driver.py",
+        "--primary-root",
+        "/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow",
+        "--candidate-root",
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/check-json-reuse-worktree",
+        "--baseline-binary",
+        "/Users/earlcameron/Documents/Codex/2026-10-12/you/outputs/flow/target/release/execute",
+        "--candidate-binary",
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/check-json-reuse-worktree/target/release/execute",
+        "--report",
+        "/Users/earlcameron/Documents/Codex/2026-10-15/users-earlcameron-documents-codex-2026-10/work/execute-thesis-2026-10-15/evidence/check-json-reuse-control-macos-arm64-repeat-3.raw.json",
+        "--confirm-idle-window"
+      ],
+      "exit_code": 0,
+      "finished_utc": "2026-10-16T01:59:44.159687+00:00",
+      "raw_sha256": "ca04d8b04da8207790b3f7ce775de316f03a1b2cf4f2319da95bbf2317f4dd7b"
+    }
+  ]
+}

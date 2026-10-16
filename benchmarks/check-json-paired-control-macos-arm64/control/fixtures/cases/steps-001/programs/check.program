@@ -1,0 +1,3 @@
+accept path as text
+run "execute-check-json-reuse-nonexistent-command" with arguments [path]
+then save to "forbidden"

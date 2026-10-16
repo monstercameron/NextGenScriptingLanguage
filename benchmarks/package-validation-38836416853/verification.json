@@ -1,0 +1,226 @@
+{
+  "artifact_count": 8,
+  "artifacts": [
+    {
+      "assets": [
+        "execute-0.9.0-rc.5-linux-arm64.flatpak"
+      ],
+      "created_at": "2026-10-16T01:52:36Z",
+      "digest": "sha256:8865660b992cda33edfd537b017208284c87b0d2978ac1135efae0640adb81b8",
+      "id": 12019399527,
+      "name": "flatpak-aarch64",
+      "size_in_bytes": 2974981
+    },
+    {
+      "assets": [
+        "execute-0.9.0-rc.5-linux-x64.flatpak"
+      ],
+      "created_at": "2026-10-16T01:49:22Z",
+      "digest": "sha256:20095c47f53b21d2dcb30aea178b9dba3b6766c6e9e3227b43882532aba5415e",
+      "id": 12019222762,
+      "name": "flatpak-x86_64",
+      "size_in_bytes": 3496225
+    },
+    {
+      "assets": [
+        "execute-0.9.0-rc.5-macos-arm64.tar.gz"
+      ],
+      "created_at": "2026-10-16T01:42:59Z",
+      "digest": "sha256:2f4f4437b7c24eade1ff4c26b2ddd1c151f1feef83ffb3e5f43ad0f1445a21fd",
+      "id": 12018982418,
+      "name": "packages-aarch64-apple-darwin",
+      "size_in_bytes": 5432093
+    },
+    {
+      "assets": [
+        "execute-0.9.0-rc.5-windows-arm64.zip"
+      ],
+      "created_at": "2026-10-16T01:43:58Z",
+      "digest": "sha256:dde9ab51b68db4aa0d554d55d351027eccac174b673d1f6b0ff12d0d4fafa944",
+      "id": 12019268356,
+      "name": "packages-aarch64-pc-windows-msvc",
+      "size_in_bytes": 4348481
+    },
+    {
+      "assets": [
+        "execute-0.9.0-rc.5-1.aarch64.rpm",
+        "execute-0.9.0-rc.5-linux-arm64.tar.gz",
+        "execute_0.9.0-rc.5_arm64.deb"
+      ],
+      "created_at": "2026-10-16T01:43:01Z",
+      "digest": "sha256:57955a6e91fff084fea66cfb3e077b44f9a74a995a4715d099c82f2fd87f7197",
+      "id": 12019805883,
+      "name": "packages-aarch64-unknown-linux-musl",
+      "size_in_bytes": 14848727
+    },
+    {
+      "assets": [
+        "execute-0.9.0-rc.5-macos-x64.tar.gz"
+      ],
+      "created_at": "2026-10-16T01:46:54Z",
+      "digest": "sha256:856c59be6248d39425f1fe869fb288e0ea8f088bd7fc8abbb5ea7840b8844b1e",
+      "id": 12019990370,
+      "name": "packages-x86_64-apple-darwin",
+      "size_in_bytes": 5828525
+    },
+    {
+      "assets": [
+        "execute-0.9.0-rc.5-windows-x64.zip"
+      ],
+      "created_at": "2026-10-16T01:44:12Z",
+      "digest": "sha256:f2e6322d0b2d2962da839d3f756db7fb8f9cea53d2995297ca044ddbe8ed04bc",
+      "id": 12018869472,
+      "name": "packages-x86_64-pc-windows-msvc",
+      "size_in_bytes": 4708886
+    },
+    {
+      "assets": [
+        "execute-0.9.0-rc.5-1.x86_64.rpm",
+        "execute-0.9.0-rc.5-linux-x64.tar.gz",
+        "execute_0.9.0-rc.5_amd64.deb"
+      ],
+      "created_at": "2026-10-16T01:43:18Z",
+      "digest": "sha256:f84629933810dcc56eaa05a1424d45b71f24fdffbf126c992fe8891dad56d1b1",
+      "id": 12019127144,
+      "name": "packages-x86_64-unknown-linux-musl",
+      "size_in_bytes": 16287884
+    }
+  ],
+  "asset_count": 12,
+  "asset_verification": {
+    "command": "python3 validator-source/tools/release.py verify-assets asset-set",
+    "sha256sums_check": "passed (shasum -a 256 -c SHA256SUMS from asset-set)",
+    "sha256sums_path": "asset-set/SHA256SUMS",
+    "sha256sums_sha256": "6ea9185be848427bc09addb798ac613954bf09b0dc0821ed0ac17ac3905e938e",
+    "validator_commit": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+    "validator_path": "validator-source/tools/release.py",
+    "validator_sha256": "cf39aa607ea3fa73f2b29a27d33291e188abb937c2aa4deec0a362c8a0406528"
+  },
+  "assets": [
+    {
+      "name": "execute-0.9.0-rc.5-1.aarch64.rpm",
+      "sha256": "a09090a05e63915a1783c65350729beae65b6369cfa9f52346adba01d40f1fd3",
+      "size_bytes": 5719726
+    },
+    {
+      "name": "execute-0.9.0-rc.5-1.x86_64.rpm",
+      "sha256": "12c8d68170f2e85b3275720beaeac547dd5f5097f505b3c454ba45aa961ab0a5",
+      "size_bytes": 6247422
+    },
+    {
+      "name": "execute-0.9.0-rc.5-linux-arm64.flatpak",
+      "sha256": "d136f88a4d56e1b49fda691c90ecffae4b2d1c47169acee2a6da2ae4a55a07c0",
+      "size_bytes": 2974240
+    },
+    {
+      "name": "execute-0.9.0-rc.5-linux-arm64.tar.gz",
+      "sha256": "fbf3d7bba483a55ea21afb391683b57599f0a651c40d9717ef4be8e886c0b9c3",
+      "size_bytes": 5702920
+    },
+    {
+      "name": "execute-0.9.0-rc.5-linux-x64.flatpak",
+      "sha256": "867c274c8495a9f23cc1d8f4b06235ba1327d3fef6da1eb6c4b864cf3a99d3e9",
+      "size_bytes": 3495328
+    },
+    {
+      "name": "execute-0.9.0-rc.5-linux-x64.tar.gz",
+      "sha256": "735ec8e1fde02d4143f224076c5a90417510adbde4855f20796f570450833df0",
+      "size_bytes": 6230093
+    },
+    {
+      "name": "execute-0.9.0-rc.5-macos-arm64.tar.gz",
+      "sha256": "23a05aaccd7ab37ac1e79dd333d59086fae01e66090b43819d53d7ef82839ec9",
+      "size_bytes": 5437813
+    },
+    {
+      "name": "execute-0.9.0-rc.5-macos-x64.tar.gz",
+      "sha256": "c13937e939f679a18d57b2df1f0848d205a6626726d50a2c0c376aedcfac8d63",
+      "size_bytes": 5833062
+    },
+    {
+      "name": "execute-0.9.0-rc.5-windows-arm64.zip",
+      "sha256": "8a3a8dc5a759b4368476e6fe9237e97a77bf371da10343772ae9864245b82dd7",
+      "size_bytes": 4362456
+    },
+    {
+      "name": "execute-0.9.0-rc.5-windows-x64.zip",
+      "sha256": "332de31cfc028700cd51573ee52bd47273c08466a600e2fc42fb7e17875db7da",
+      "size_bytes": 4724029
+    },
+    {
+      "name": "execute_0.9.0-rc.5_amd64.deb",
+      "sha256": "d5d1e1b1a0b4c81901865d5fdf6ae2b42eef27b91a67258a884fc31f68002c35",
+      "size_bytes": 3833750
+    },
+    {
+      "name": "execute_0.9.0-rc.5_arm64.deb",
+      "sha256": "1629a8d84d6b67661a85a1b841720d3bf1d929df9a3a97ca6485fca314241f5e",
+      "size_bytes": 3448398
+    }
+  ],
+  "checkout_evidence": "run-complete.log contains one fetch of 58b42f65d8c4de171baf8f3049ab70cf37c51af4 for each of the eight jobs",
+  "checkout_source_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+  "job_count": 8,
+  "jobs": [
+    {
+      "conclusion": "success",
+      "id": 116766461413,
+      "name": "Package (x86_64-unknown-linux-musl)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 116766461533,
+      "name": "Package (aarch64-pc-windows-msvc)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 116766461665,
+      "name": "Package (x86_64-apple-darwin)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 116766461685,
+      "name": "Package (aarch64-apple-darwin)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 116766461705,
+      "name": "Package (x86_64-pc-windows-msvc)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 116766462030,
+      "name": "Package (aarch64-unknown-linux-musl)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 116768329258,
+      "name": "Flatpak (aarch64)",
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "id": 116768329277,
+      "name": "Flatpak (x86_64)",
+      "status": "completed"
+    }
+  ],
+  "run": {
+    "branch": "main",
+    "conclusion": "success",
+    "created_at": "2026-10-16T01:40:49Z",
+    "head_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+    "id": 38836416853,
+    "started_at": "2026-10-16T01:40:49Z",
+    "status": "completed",
+    "updated_at": "2026-10-16T01:52:39Z",
+    "url": "https://github.com/monstercameron/NextGenScriptingLanguage/actions/runs/38836416853",
+    "workflow": "Package validation"
+  }
+}

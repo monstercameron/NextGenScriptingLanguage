@@ -1,0 +1,26 @@
+{
+  "source_commit": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+  "version": "0.9.0-rc.5",
+  "target": "aarch64-apple-darwin",
+  "status": "passed",
+  "checks": {"passed": 20, "total": 20},
+  "subprocess_steps": {"passed": 21, "total": 21},
+  "started_utc": "2026-10-16T01:18:52.717296+00:00",
+  "finished_utc": "2026-10-16T01:21:30.460991+00:00",
+  "archive": {
+    "sha256": "f1a2368c49e328399abe62cab45d54cce5a9f26a2f37ef71bfac1c229f648f67",
+    "size_bytes": 5440927,
+    "package_smoke": "passed",
+    "extracted_root_smoke": "passed"
+  },
+  "additional_checks": {
+    "manifest_tree_entries": 78,
+    "source_and_packaged_manifest_tree_sha256_match": true,
+    "built_and_packaged_binary_sha256_match": true,
+    "catalog_list_and_inspect": "passed",
+    "path_basename": "passed",
+    "shebang_from_spaced_path": "passed",
+    "file_transaction_rollback": "passed; exact original bytes restored"
+  },
+  "scope": "Fresh local macOS ARM64 archive validation only; not cross-platform CI or a release."
+}

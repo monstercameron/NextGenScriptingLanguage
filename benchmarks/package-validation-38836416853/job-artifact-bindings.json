@@ -1,0 +1,115 @@
+{
+  "checkout_binding_basis": "The corresponding checkout log for each job fetched the run SHA from origin/main; all eight observed the same SHA.",
+  "jobs": [
+    {
+      "artifact_id": 12019127144,
+      "artifact_name": "packages-x86_64-unknown-linux-musl",
+      "artifact_size_bytes": 16287884,
+      "asset_names": [
+        "execute-0.9.0-rc.5-1.x86_64.rpm",
+        "execute-0.9.0-rc.5-linux-x64.tar.gz",
+        "execute_0.9.0-rc.5_amd64.deb"
+      ],
+      "checkout_source_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+      "github_artifact_digest": "sha256:f84629933810dcc56eaa05a1424d45b71f24fdffbf126c992fe8891dad56d1b1",
+      "job_conclusion": "success",
+      "job_id": 116766461413,
+      "job_name": "Package (x86_64-unknown-linux-musl)"
+    },
+    {
+      "artifact_id": 12019268356,
+      "artifact_name": "packages-aarch64-pc-windows-msvc",
+      "artifact_size_bytes": 4348481,
+      "asset_names": [
+        "execute-0.9.0-rc.5-windows-arm64.zip"
+      ],
+      "checkout_source_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+      "github_artifact_digest": "sha256:dde9ab51b68db4aa0d554d55d351027eccac174b673d1f6b0ff12d0d4fafa944",
+      "job_conclusion": "success",
+      "job_id": 116766461533,
+      "job_name": "Package (aarch64-pc-windows-msvc)"
+    },
+    {
+      "artifact_id": 12019990370,
+      "artifact_name": "packages-x86_64-apple-darwin",
+      "artifact_size_bytes": 5828525,
+      "asset_names": [
+        "execute-0.9.0-rc.5-macos-x64.tar.gz"
+      ],
+      "checkout_source_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+      "github_artifact_digest": "sha256:856c59be6248d39425f1fe869fb288e0ea8f088bd7fc8abbb5ea7840b8844b1e",
+      "job_conclusion": "success",
+      "job_id": 116766461665,
+      "job_name": "Package (x86_64-apple-darwin)"
+    },
+    {
+      "artifact_id": 12018982418,
+      "artifact_name": "packages-aarch64-apple-darwin",
+      "artifact_size_bytes": 5432093,
+      "asset_names": [
+        "execute-0.9.0-rc.5-macos-arm64.tar.gz"
+      ],
+      "checkout_source_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+      "github_artifact_digest": "sha256:2f4f4437b7c24eade1ff4c26b2ddd1c151f1feef83ffb3e5f43ad0f1445a21fd",
+      "job_conclusion": "success",
+      "job_id": 116766461685,
+      "job_name": "Package (aarch64-apple-darwin)"
+    },
+    {
+      "artifact_id": 12018869472,
+      "artifact_name": "packages-x86_64-pc-windows-msvc",
+      "artifact_size_bytes": 4708886,
+      "asset_names": [
+        "execute-0.9.0-rc.5-windows-x64.zip"
+      ],
+      "checkout_source_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+      "github_artifact_digest": "sha256:f2e6322d0b2d2962da839d3f756db7fb8f9cea53d2995297ca044ddbe8ed04bc",
+      "job_conclusion": "success",
+      "job_id": 116766461705,
+      "job_name": "Package (x86_64-pc-windows-msvc)"
+    },
+    {
+      "artifact_id": 12019805883,
+      "artifact_name": "packages-aarch64-unknown-linux-musl",
+      "artifact_size_bytes": 14848727,
+      "asset_names": [
+        "execute-0.9.0-rc.5-1.aarch64.rpm",
+        "execute-0.9.0-rc.5-linux-arm64.tar.gz",
+        "execute_0.9.0-rc.5_arm64.deb"
+      ],
+      "checkout_source_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+      "github_artifact_digest": "sha256:57955a6e91fff084fea66cfb3e077b44f9a74a995a4715d099c82f2fd87f7197",
+      "job_conclusion": "success",
+      "job_id": 116766462030,
+      "job_name": "Package (aarch64-unknown-linux-musl)"
+    },
+    {
+      "artifact_id": 12019399527,
+      "artifact_name": "flatpak-aarch64",
+      "artifact_size_bytes": 2974981,
+      "asset_names": [
+        "execute-0.9.0-rc.5-linux-arm64.flatpak"
+      ],
+      "checkout_source_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+      "github_artifact_digest": "sha256:8865660b992cda33edfd537b017208284c87b0d2978ac1135efae0640adb81b8",
+      "job_conclusion": "success",
+      "job_id": 116768329258,
+      "job_name": "Flatpak (aarch64)"
+    },
+    {
+      "artifact_id": 12019222762,
+      "artifact_name": "flatpak-x86_64",
+      "artifact_size_bytes": 3496225,
+      "asset_names": [
+        "execute-0.9.0-rc.5-linux-x64.flatpak"
+      ],
+      "checkout_source_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+      "github_artifact_digest": "sha256:20095c47f53b21d2dcb30aea178b9dba3b6766c6e9e3227b43882532aba5415e",
+      "job_conclusion": "success",
+      "job_id": 116768329277,
+      "job_name": "Flatpak (x86_64)"
+    }
+  ],
+  "run_head_sha": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+  "run_id": 38836416853
+}

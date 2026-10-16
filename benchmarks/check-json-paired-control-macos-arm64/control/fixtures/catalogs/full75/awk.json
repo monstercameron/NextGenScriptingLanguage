@@ -1,0 +1,30 @@
+{
+  "name": "awk",
+  "binary": "awk",
+  "accepts_stdin": true,
+  "parameters": {
+    "delimiter": {
+      "type": "string"
+    },
+    "program": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "when_present": "delimiter",
+      "append": [
+        {
+          "literal": "-F"
+        },
+        {
+          "parameter": "delimiter"
+        }
+      ]
+    },
+    {
+      "parameter": "program"
+    }
+  ]
+}

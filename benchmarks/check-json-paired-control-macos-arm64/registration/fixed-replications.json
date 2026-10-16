@@ -1,0 +1,15 @@
+{
+  "schema": "execute.check-json-control-fixed-replication/1",
+  "recorded_utc": "2026-10-16T01:59:04.966286+00:00",
+  "original_raw_sha256": "63e2e10227541f97eada1d4d79c391a0ac92c1afb16e08d94900a8d91e466f4b",
+  "reason": "Full75 JSON median lower in initial two cells but one-step candidate p95 worsened (45.004125ms vs24.715792ms). Inspect fixed repetitions for variation without discarding original or choosing until green.",
+  "additional_runs": 2,
+  "labels": [
+    "repeat-2",
+    "repeat-3"
+  ],
+  "same_driver_sha256": "696807cb02408f89c86e5169f5b802d78ac76c15c7ffd842a10151557e917194",
+  "same_candidate_tree": "ed2d0882d3d799cae321dca4f95fe6e6767f46b8",
+  "same_eight_cells_samples_warmups_oracles": true,
+  "retention": "Retain every run and outcome; no further timing repetitions in this block."
+}

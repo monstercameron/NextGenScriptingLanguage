@@ -1,0 +1,31 @@
+{
+  "name": "grep",
+  "binary": "grep",
+  "accepts_stdin": true,
+  "parameters": {
+    "pattern": {
+      "type": "string",
+      "required": true
+    },
+    "flags": {
+      "type": "list",
+      "items": "string"
+    }
+  },
+  "arguments": [
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    },
+    {
+      "literal": "--"
+    },
+    {
+      "parameter": "pattern"
+    }
+  ]
+}

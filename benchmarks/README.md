@@ -1533,3 +1533,19 @@ failure. The later 1,000-actor run observed all 847 timers during its measured
 sampled RSS peak covers the Rust probe process only. This bounded run does not
 establish independent capability count, process-tree capacity, sustained
 operation, desktop behavior, or cross-revision throughput.
+
+The [fixed 3 × 10-second Linux replication](mixed-runtime-ci-38835685785/README.md)
+retains every declared trial, each with all 847 timer sources active and all 16
+registry workers reaped. It extends the bounded lifecycle evidence; it does not
+establish sustained operation or process-tree resource limits.
+
+[Package validation evidence](package-validation-38836416853/README.md) records
+all six native targets, both Flatpak targets and the exact twelve-asset hash
+set for source `58b42f6`. The newer source candidate remains unpublished.
+
+The [paired JSON-check control](check-json-paired-control-macos-arm64/README.md)
+retains all three fixed runs: 2,304 measured invocations, 240 excluded warmups
+and 48 preflights. Full 75-manifest `check --json` medians were 24.0–27.2%
+lower across the six measured cases. The first one-step p95 regression is
+preserved; ordinary-check and inert-catalog controls were mixed. This is a
+narrow local static-check result, with no general execution-speed claim.

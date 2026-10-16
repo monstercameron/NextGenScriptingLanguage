@@ -1,0 +1,57 @@
+{
+  "schema": "execute.mixed-replication-parent-verification/1",
+  "verified_utc": "2026-10-16T01:44:34.896785+00:00",
+  "workflow_commit": "e4d9176ee40bc98e0b16325f7d48db0b76b0befa",
+  "runtime_source_commit": "58b42f65d8c4de171baf8f3049ab70cf37c51af4",
+  "native_source_and_probe_identical_between_commits": true,
+  "artifact_digest_matches": true,
+  "declared_large_trials": 3,
+  "large_reports": 3,
+  "reports": [
+    {
+      "report": "graph-mixed-lifecycle-38835685785-1000-trial-1.json",
+      "sha256": "bfc9d589e9c75be5f83360d63a722f2ce6591b4735c1f318cee86e52ba59455b",
+      "nodes": 1000,
+      "window_ms": 10000,
+      "active_us": 10034641,
+      "active_events": 847314,
+      "active_sources": 847,
+      "source_hashes_verified": 87,
+      "summary_identical": true
+    },
+    {
+      "report": "graph-mixed-lifecycle-38835685785-1000-trial-2.json",
+      "sha256": "63a08612c385ffcddc4aec33c0657b83e7be727e4bf2e79822e8688c8d5a5940",
+      "nodes": 1000,
+      "window_ms": 10000,
+      "active_us": 10034576,
+      "active_events": 847426,
+      "active_sources": 847,
+      "source_hashes_verified": 87,
+      "summary_identical": true
+    },
+    {
+      "report": "graph-mixed-lifecycle-38835685785-1000-trial-3.json",
+      "sha256": "b5f2eff8101ea5a33e2ddcb724a4d89ddbae76739f52e067396ebc5c02d50bb7",
+      "nodes": 1000,
+      "window_ms": 10000,
+      "active_us": 10033734,
+      "active_events": 847438,
+      "active_sources": 847,
+      "source_hashes_verified": 87,
+      "summary_identical": true
+    },
+    {
+      "report": "graph-mixed-lifecycle-38835685785-32.json",
+      "sha256": "48204a1d83140fdd99855b53940c8b0eeb237d350bc378694c08811e734ec1bd",
+      "nodes": 32,
+      "window_ms": 1000,
+      "active_us": 1008236,
+      "active_events": 2205,
+      "active_sources": 22,
+      "source_hashes_verified": 87,
+      "summary_identical": true
+    }
+  ],
+  "scope": "Three bounded ten-second trials, not churn, long-running, independently implemented capability, tree RSS, or machine capacity proof."
+}

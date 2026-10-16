@@ -256,6 +256,75 @@ class RendererIpcDiagnosticsTests(unittest.TestCase):
         self.assertIn("executeDesktop-accept-test", diagnostics["inventory"]["stdout"]["tail_utf8"])
 
 
+class RendererIpcResponseTests(unittest.TestCase):
+    def make_client(self) -> ACCEPTANCE.RendererClient:
+        process = SimpleNamespace(poll=lambda: None, returncode=None)
+        config = pathlib.Path("/run/user/1000/execute-omarchy-test/shell.qml")
+        return ACCEPTANCE.RendererClient("/usr/bin/qs", process, "accept-test", config)
+
+    def make_response(self, request: dict[str, object], version: int, body: dict[str, object]) -> dict[str, object]:
+        response: dict[str, object] = {
+            field: request[field]
+            for field in ("protocol", "request_id", "session_id", "generation", "revision")
+        }
+        response.update({"version": version, "body": body})
+        return response
+
+    @staticmethod
+    def completed(response: dict[str, object]) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout=json.dumps(response).encode("utf-8"), stderr=b"")
+
+    def test_negotiation_accepts_supported_new_version(self) -> None:
+        client = self.make_client()
+
+        def respond(command: list[str], **_kwargs: object) -> SimpleNamespace:
+            request = json.loads(command[-1])
+            response = self.make_response(request, ACCEPTANCE.PROTOCOL_VERSION, {"kind": "negotiated"})
+            return self.completed(response)
+
+        with mock.patch.object(ACCEPTANCE.subprocess, "run", side_effect=respond) as run:
+            client.negotiate()
+
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(client.version, ACCEPTANCE.PROTOCOL_VERSION)
+
+    def test_ordinary_call_accepts_current_version(self) -> None:
+        client = self.make_client()
+        client.version = ACCEPTANCE.PROTOCOL_VERSION
+        request = client.frame({"kind": "create"})
+        response = self.make_response(request, client.version, {"kind": "applied"})
+
+        with mock.patch.object(ACCEPTANCE.subprocess, "run", return_value=self.completed(response)):
+            actual = client.call(request)
+
+        self.assertEqual(actual, response)
+
+    def test_ordinary_call_rejects_changed_version(self) -> None:
+        client = self.make_client()
+        client.version = ACCEPTANCE.PROTOCOL_VERSION
+        request = client.frame({"kind": "create"})
+        response = self.make_response(request, client.version + 1, {"kind": "applied"})
+
+        with mock.patch.object(ACCEPTANCE.subprocess, "run", return_value=self.completed(response)):
+            with self.assertRaisesRegex(RuntimeError, "protocol version changed within the session"):
+                client.call(request)
+
+    def test_allow_error_returns_renderer_error_with_matching_request_fields(self) -> None:
+        client = self.make_client()
+        client.version = ACCEPTANCE.PROTOCOL_VERSION
+        request = client.frame({"kind": "poll_events"})
+        response = self.make_response(
+            request,
+            client.version,
+            {"kind": "error", "code": "stale_session", "message": "generation changed"},
+        )
+
+        with mock.patch.object(ACCEPTANCE.subprocess, "run", return_value=self.completed(response)):
+            actual = client.call(request, allow_error=True)
+
+        self.assertEqual(actual, response)
+
+
 class DesktopAcceptanceHarnessTests(unittest.TestCase):
     def run_harness(self, *arguments: str) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
         environment = os.environ.copy()

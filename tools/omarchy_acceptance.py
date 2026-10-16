@@ -510,6 +510,8 @@ class RendererClient:
     def call(self, request: dict[str, Any], *, allow_error: bool = False) -> dict[str, Any]:
         if self.process.poll() is not None:
             raise RuntimeError(f"Quickshell process exited with status {self.process.returncode}")
+        request_body = request.get("body")
+        is_negotiation = isinstance(request_body, dict) and request_body.get("kind") == "negotiate"
         encoded = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
         if len(encoded.encode("utf-8")) > FRAME_LIMIT:
             raise RuntimeError("request exceeds frame size limit")
@@ -543,7 +545,7 @@ class RendererClient:
                 "stdout": capture_command_output_tail(completed.stdout),
                 "stderr": capture_command_output_tail(completed.stderr),
             }
-            if request.get("body", {}).get("kind") != "negotiate":
+            if not is_negotiation:
                 self.capture_ipc_inventory()
             stderr = self.ipc_diagnostics["call"]["stderr"]["tail_utf8"]
             stdout = self.ipc_diagnostics["call"]["stdout"]["tail_utf8"]
@@ -566,7 +568,7 @@ class RendererClient:
                 raise RuntimeError(f"renderer response {field} did not match request")
         if response.get("protocol") != PROTOCOL:
             raise RuntimeError("renderer response protocol did not match")
-        if not negotiation and response.get("version") != self.version:
+        if not is_negotiation and response.get("version") != self.version:
             raise RuntimeError("renderer response protocol version changed within the session")
         body = response.get("body")
         if not isinstance(body, dict):

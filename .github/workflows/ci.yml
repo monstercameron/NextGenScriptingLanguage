@@ -9,7 +9,9 @@ permissions:
   contents: read
 concurrency:
   group: native-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # On main, let a started run finish so every push stream gets complete Unix results;
+  # a newer push still replaces a run that is only queued.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   workflows:
     name: Release contracts and workflow lint

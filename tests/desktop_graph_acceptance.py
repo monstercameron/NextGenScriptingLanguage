@@ -209,7 +209,7 @@ class CancellationContractTests(unittest.TestCase):
         main = (ROOT / "src" / "main.rs").read_text(encoding="utf-8")
         self.assertIn('bail!("graph session cancelled")', graph)
         self.assertIn("let signal = signal_hook::consts::SIGINT;", main)
-        self.assertIn(".unwrap_or(1);", main)
+        self.assertIn(".unwrap_or(1)", main)
 
     def test_source_pinned_cancel_exit_and_diagnostic_pass(self) -> None:
         result = HARNESS.cancellation_result(1, "execute: graph session cancelled\n", forced_cleanup=False)

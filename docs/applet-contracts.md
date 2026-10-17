@@ -729,6 +729,57 @@ take boolean at "/changed" from made_dir as dir_changed
 The example `examples/stdlib/ensure-config.program` combines these with
 `path.join`. Coverage is in `tests/lane_a_ensure.rs`.
 
+## Checking programs in CI
+
+`execute check FILE` validates a program without running its applets or effects.
+`--json` prints the full diagnostic record. `--format github` prints one GitHub
+Actions workflow command per diagnostic, so a pull request shows the problem on the
+line it names: `::error file=...,line=...,col=...,title=CODE::message`. Warnings
+become `::warning`, and hints become `::notice`. The file name is relative to the
+working directory with forward slashes. The exit status is unchanged, so a failing
+check still fails the job. `--format` accepts only `github` or `json`.
+
+The repository's composite action builds the CLI and adds it to `PATH`:
+
+```yaml
+# .github/workflows/programs.yml
+name: check programs
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-execute
+      - name: Check every program
+        run: |
+          status=0
+          for file in examples/*.program; do
+            execute check "$file" --format github --manifest-dir manifests || status=1
+          done
+          exit "$status"
+```
+
+Programs that declare required inputs need `--input NAME=VALUE` in the check, or
+they report the missing input. GitLab does not render workflow commands, so its
+example stores the JSON record as an artifact and fails the job on the same exit
+status:
+
+```yaml
+# .gitlab-ci.yml
+check-programs:
+  image: rust:latest
+  script:
+    - cargo build --locked --release --bin execute
+    - status=0
+    - for file in examples/*.program; do ./target/release/execute check "$file" --json --manifest-dir manifests > "$(basename "$file").check.json" || status=1; done
+    - exit "$status"
+  artifacts:
+    when: always
+    paths:
+      - "*.check.json"
+```
+
 ## Theme switching
 
 `examples/desktop/theme-switch.program` composes the applets above into a theme

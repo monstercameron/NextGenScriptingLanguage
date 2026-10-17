@@ -1,0 +1,11 @@
+name: Setup Execute
+description: Build the execute CLI from this repository and add it to PATH for later steps.
+runs:
+  using: composite
+  steps:
+    - name: Build execute
+      shell: bash
+      run: cargo build --locked --release --bin execute
+    - name: Add execute to PATH
+      shell: bash
+      run: echo "$GITHUB_WORKSPACE/target/release" >> "$GITHUB_PATH"

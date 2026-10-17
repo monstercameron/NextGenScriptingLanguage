@@ -15,11 +15,14 @@ use std::os::unix::ffi::OsStringExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 
+mod github_annotations;
+
 #[derive(Debug)]
 struct Args {
     inputs: BTreeMap<String, String>,
     program_arguments: Vec<String>,
     json: bool,
+    github: bool,
     command: String,
     file: PathBuf,
     manifest_dir: Option<PathBuf>,
@@ -217,6 +220,7 @@ fn execute() -> Result<()> {
             _ => (Vec::new(), None),
         };
         let data_flow_warning = args.capability_policy.is_some() && args.data_flow_policy.is_none();
+        let github = args.github;
         let result = execute_workflow(args, finite_check_snapshot);
         let mut diagnostics = static_diagnostics
             .iter()
@@ -241,11 +245,15 @@ fn execute() -> Result<()> {
                 }));
             }
         }
-        write_json(&serde_json::json!({
-            "protocol": "execute.check/1", "validation": "static",
-            "ok": result.is_ok(), "path": path, "path_bytes": path_bytes,
-            "diagnostics": diagnostics
-        }))?;
+        if github {
+            github_annotations::write(&path, &diagnostics)?;
+        } else {
+            write_json(&serde_json::json!({
+                "protocol": "execute.check/1", "validation": "static",
+                "ok": result.is_ok(), "path": path, "path_bytes": path_bytes,
+                "diagnostics": diagnostics
+            }))?;
+        }
         if result.is_err() {
             // Validation has no spawned workers/effects. The JSON response is
             // complete; preserve the ordinary failing-check exit status.
@@ -867,6 +875,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
 
     let mut file = None;
     let mut json = false;
+    let mut github = false;
     let mut inputs = BTreeMap::new();
     let mut program_arguments = Vec::new();
     let mut manifest_dir = None;
@@ -908,6 +917,15 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
             "--json" if command == "check" => {
                 if json {
                     bail!("--json may be specified only once");
+                }
+                json = true;
+            }
+            "--format" if command == "check" => {
+                let format = take_option_value(&arguments, &mut index, "--format", "github|json")?;
+                match &*format {
+                    "github" => github = true,
+                    "json" => {}
+                    other => bail!("--format accepts github or json, not {other:?}"),
                 }
                 json = true;
             }
@@ -1146,6 +1164,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         inputs,
         program_arguments,
         json,
+        github,
         command,
         file,
         manifest_dir,

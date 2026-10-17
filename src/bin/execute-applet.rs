@@ -214,7 +214,7 @@ fn help() -> &'static str {
      text.lines, text.split, text.default_if_empty, text.replace,\n\
      text.strip_prefix, text.strip_suffix, text.lower, text.upper, text.join,\n\
      path.join, text.render, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
-     ini.parse, ini.stringify, fs.test, fs.glob, fs.ensure_file, fs.ensure_line,\n\
+     ini.parse, ini.stringify, env.load, fs.test, fs.glob, fs.ensure_file, fs.ensure_line,\n\
      fs.ensure_symlink, fs.ensure_dir,\n\
      fs.read, fs.snapshot,\n\
      fs.write_atomic, fs.unlink_checked, fs.transaction, fs.transaction.recover,\n\

@@ -35,7 +35,7 @@ pub fn run_recorded(
         directory,
         program_source: &source,
         plan: &plan,
-        inputs: record::inputs_json(&options.inputs),
+        inputs: record::inputs_json_for(&options.inputs, &program.inputs),
         registry,
     })?);
     let guard = runtime::observe::install(recorder.clone())?;
@@ -125,6 +125,21 @@ pub fn replay(arguments: &[String]) -> Result<()> {
         .with_context(|| format!("parsing {}", source_path.display()))?;
     if let Some(reason) = replay::unsupported_reason(&program) {
         bail!("replay does not support {reason}");
+    }
+    // A secret answer was withheld from the record, so a replay cannot reproduce the
+    // run. Refusing here is better than replaying with a marker in its place.
+    if let Some(name) = record.run["inputs"]
+        .as_object()
+        .and_then(|fields| {
+            fields
+                .iter()
+                .find(|(_, value)| value.get("withheld").is_some())
+        })
+        .map(|(name, _)| name.clone())
+    {
+        bail!(
+            "replay cannot reproduce the secret answer for input {name:?}; the record withholds it"
+        );
     }
     let inputs: BTreeMap<String, Value> = serde_json::from_value(record.run["inputs"].clone())
         .context("the record's inputs cannot be read")?;

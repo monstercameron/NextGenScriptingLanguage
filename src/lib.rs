@@ -5,6 +5,7 @@ pub mod applets;
 pub mod ast;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capabilities;
+pub mod compile_sh;
 pub mod contracts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
@@ -25,6 +26,8 @@ pub mod modules;
 pub mod parser;
 pub mod privilege;
 pub mod program_files;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod prompt;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod record;
 #[cfg(not(target_arch = "wasm32"))]

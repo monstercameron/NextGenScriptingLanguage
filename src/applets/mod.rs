@@ -8,6 +8,7 @@ mod arithmetic;
 mod config;
 mod csv;
 mod ensure;
+mod env_file;
 mod file_test;
 mod filesystem;
 mod glob;
@@ -228,6 +229,7 @@ pub fn execute_with_context(
         "yaml.stringify" => yaml::stringify(args),
         "toml.parse" => toml::parse(args, input, context),
         "toml.stringify" => toml::stringify(args),
+        "env.load" => env_file::load(input),
         "ini.parse" => ini::parse(args, input, context),
         "ini.stringify" => ini::stringify(args),
         "path.join" => path::join(args),

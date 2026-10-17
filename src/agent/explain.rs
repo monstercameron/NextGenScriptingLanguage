@@ -171,6 +171,10 @@ fn input_summary(input: &crate::ast::InputDeclaration) -> Json {
     if let Some(choices) = &input.choices {
         spec["choices"] = choices.clone().into();
     }
+    // A prompt is listed with its question, so a reviewer sees what will be asked.
+    if let Some(crate::ast::InputSource::Prompt { question, secret }) = &input.source {
+        spec["prompt"] = json!({ "question": question, "secret": secret });
+    }
     spec
 }
 

@@ -560,7 +560,30 @@ impl State {
         value
     }
     pub fn snapshot(&self) -> Json {
-        json!({"state":self.doc,"runtime":self.runtime(true),"events":self.events})
+        json!({"state":self.masked_document(),"runtime":self.runtime(true),"events":self.events})
+    }
+    /// The names of the program's secret prompt inputs. Their answers are withheld from
+    /// every read, as records withhold them.
+    fn secret_names(&self) -> Vec<String> {
+        self.plan
+            .program
+            .inputs
+            .iter()
+            .filter(|input| {
+                matches!(
+                    input.source,
+                    Some(crate::ast::InputSource::Prompt { secret: true, .. })
+                )
+            })
+            .map(|input| input.name.clone())
+            .collect()
+    }
+    /// The state document with every secret answer replaced by the withheld marker.
+    fn masked_document(&self) -> Json {
+        let mut value = serde_json::to_value(&self.doc).unwrap_or(Json::Null);
+        let masked = withhold_secret_bindings(&self.doc.bindings, &self.secret_names());
+        value["bindings"] = json!(masked);
+        value
     }
     fn ack(&self) -> Json {
         json!({"ok":true,"revision":self.revision,"result":{"status":self.status,"running":self.running,"in_flight":self.in_flight,"cursor":self.doc.cursor,"effects_may_be_incomplete":self.uncertain}})
@@ -579,14 +602,16 @@ impl State {
                 }
             }
             "events" => (json!(self.events), 1),
-            "bindings" if parts.len() > 1 => (
-                self.doc
+            "bindings" if parts.len() > 1 => {
+                let value = self
+                    .doc
                     .bindings
                     .get(&parts[1])
                     .cloned()
-                    .ok_or_else(|| fail("not_found", "path does not exist"))?,
-                2,
-            ),
+                    .ok_or_else(|| fail("not_found", "path does not exist"))?;
+                let withheld = self.secret_names().contains(&parts[1]);
+                (if withheld { withheld_marker() } else { value }, 2)
+            }
             "user" if parts.len() > 1 => (
                 self.doc
                     .user
@@ -599,7 +624,13 @@ impl State {
                 let index = array_index(&parts[1], self.doc.inbox.len(), false)?;
                 (json!(self.doc.inbox[index]), 2)
             }
-            "bindings" => (json!(self.doc.bindings), 1),
+            "bindings" => (
+                json!(withhold_secret_bindings(
+                    &self.doc.bindings,
+                    &self.secret_names()
+                )),
+                1,
+            ),
             "user" => (json!(self.doc.user), 1),
             "inbox" => (json!(self.doc.inbox), 1),
             "input" => (json!(self.doc.input), 1),
@@ -630,6 +661,102 @@ impl State {
         Ok(selected.clone())
     }
 }
+/// The value a read shows in place of a withheld secret answer.
+pub(crate) fn withheld_marker() -> Json {
+    json!({ "withheld": "secret" })
+}
+
+/// Whether a value is the withheld marker, not an answer.
+pub(crate) fn is_withheld_marker(value: &Json) -> bool {
+    value.get("withheld").is_some()
+}
+
+/// A copy of `bindings` with each present secret answer replaced by the marker.
+pub(crate) fn withhold_secret_bindings(
+    bindings: &BTreeMap<String, Json>,
+    secret: &[String],
+) -> BTreeMap<String, Json> {
+    let mut masked = bindings.clone();
+    for name in secret {
+        if masked.contains_key(name) {
+            masked.insert(name.clone(), withheld_marker());
+        }
+    }
+    masked
+}
+
+/// Put back the stored answer wherever a write carried the marker for a secret. A
+/// marker with nothing stored is removed, so the marker is never kept as an answer.
+pub(crate) fn restore_secret_bindings(
+    candidate: &mut BTreeMap<String, Json>,
+    stored: &BTreeMap<String, Json>,
+    secret: &[String],
+) {
+    for name in secret {
+        if candidate.get(name).is_some_and(is_withheld_marker) {
+            match stored.get(name) {
+                Some(answer) => {
+                    candidate.insert(name.clone(), answer.clone());
+                }
+                None => {
+                    candidate.remove(name);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod secret_binding_tests {
+    use super::*;
+
+    fn bindings() -> BTreeMap<String, Json> {
+        BTreeMap::from([
+            ("token".to_owned(), json!("hunter2")),
+            ("name".to_owned(), json!("ada")),
+        ])
+    }
+
+    #[test]
+    fn reads_withhold_only_present_secret_answers() {
+        let masked =
+            withhold_secret_bindings(&bindings(), &["token".to_owned(), "absent".to_owned()]);
+        assert_eq!(masked["token"], withheld_marker());
+        assert_eq!(masked["name"], json!("ada"));
+        assert!(!masked.contains_key("absent"));
+        assert!(!serde_json::to_string(&masked).unwrap().contains("hunter2"));
+    }
+
+    #[test]
+    fn a_write_that_carries_the_marker_keeps_the_stored_answer() {
+        let mut candidate = BTreeMap::from([
+            ("token".to_owned(), withheld_marker()),
+            ("name".to_owned(), json!("grace")),
+        ]);
+        restore_secret_bindings(&mut candidate, &bindings(), &["token".to_owned()]);
+        assert_eq!(candidate["token"], json!("hunter2"));
+        assert_eq!(
+            candidate["name"],
+            json!("grace"),
+            "ordinary bindings are not touched"
+        );
+    }
+
+    #[test]
+    fn a_marker_with_nothing_stored_is_removed_not_kept() {
+        let mut candidate = BTreeMap::from([("token".to_owned(), withheld_marker())]);
+        restore_secret_bindings(&mut candidate, &BTreeMap::new(), &["token".to_owned()]);
+        assert!(!candidate.contains_key("token"));
+    }
+
+    #[test]
+    fn a_real_answer_written_by_a_client_is_accepted() {
+        let mut candidate = BTreeMap::from([("token".to_owned(), json!("new-answer"))]);
+        restore_secret_bindings(&mut candidate, &bindings(), &["token".to_owned()]);
+        assert_eq!(candidate["token"], json!("new-answer"));
+    }
+}
+
 pub(crate) struct Shared {
     pub state: Mutex<State>,
     pub wake: Condvar,
@@ -1038,6 +1165,13 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
             }
             let mut candidate: Document =
                 serde_json::from_value(candidate).context("invalid state document")?;
+            // A client that sends back a read of a secret binding sends the marker. The
+            // stored answer stays; the marker is never stored in its place.
+            restore_secret_bindings(
+                &mut candidate.bindings,
+                &state.doc.bindings,
+                &state.secret_names(),
+            );
             if candidate.source != state.doc.source {
                 let plan = Plan::parse(&candidate.source)?;
                 candidate.ui = if let Some(screen) = &plan.screen {

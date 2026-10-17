@@ -23,3 +23,4 @@ pub mod instance;
 pub mod policy;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod what_if;
+pub mod what_if_key;

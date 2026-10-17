@@ -155,6 +155,7 @@ fn validate_schema<'a>(
     declarations: &'a [InputDeclaration],
     mut insert: impl FnMut(&'a InputDeclaration) -> bool,
 ) -> Result<()> {
+    let mut spellings: BTreeSet<&str> = BTreeSet::new();
     for input in declarations {
         if !crate::parser::is_identifier(&input.name)
             || matches!(input.name.as_str(), "true" | "false")
@@ -181,6 +182,9 @@ fn validate_schema<'a>(
                     );
                 }
             }
+            Some(InputSource::Flag { .. } | InputSource::Option { .. }) => {
+                validate_flag_spelling(input, &mut spellings)?;
+            }
             Some(InputSource::Argument(position)) if !(1..=1_000_000).contains(position) => {
                 bail!(
                     "line {}: argument position must be between 1 and 1000000",
@@ -203,6 +207,22 @@ fn validate_schema<'a>(
         }
     }
     Ok(())
+}
+
+/// The values with every secret prompt answer removed, for display.
+pub(crate) fn without_secret_answers(
+    declarations: &[InputDeclaration],
+    mut values: BTreeMap<String, Value>,
+) -> BTreeMap<String, Value> {
+    for declaration in declarations {
+        if matches!(
+            declaration.source,
+            Some(InputSource::Prompt { secret: true, .. })
+        ) {
+            values.remove(&declaration.name);
+        }
+    }
+    values
 }
 
 /// Return resolved declared values. `allow_extra` permits host-provided local
@@ -254,13 +274,19 @@ pub fn resolve(
                 .get(&input.name)
                 .or(environment.as_ref())
                 .or(input.default.as_ref())
-                .ok_or_else(|| {
-                    anyhow!(
+                .ok_or_else(|| match &input.source {
+                    Some(InputSource::Prompt { question, .. }) => anyhow!(
+                        "line {}: input {:?} needs an answer to the prompt {question:?}; answer it on a terminal or supply --input {}=VALUE",
+                        input.line,
+                        input.name,
+                        input.name
+                    ),
+                    _ => anyhow!(
                         "line {}: missing required input {:?}; supply --input {}=VALUE",
                         input.line,
                         input.name,
                         input.name
-                    )
+                    ),
                 })?;
             input.validate_value(value)?;
             Ok((input.name.clone(), value.clone()))
@@ -294,6 +320,15 @@ pub fn parse_cli_arguments(
     arguments: &[String],
 ) -> Result<BTreeMap<String, Value>> {
     let mut values = parse_cli(declarations, supplied)?;
+    let SplitArguments {
+        flagged,
+        positional: arguments,
+    } = split_flags(declarations, arguments)?;
+    for (name, value) in flagged {
+        if values.insert(name.clone(), value).is_some() {
+            bail!("input {name:?} is given by --input and by a flag or option");
+        }
+    }
     let variadic = declarations
         .iter()
         .any(|d| d.source == Some(InputSource::Arguments));
@@ -333,7 +368,210 @@ pub fn parse_cli_arguments(
             values.insert(input.name.clone(), value);
         }
     }
+    // An absent flag is false unless the program gives it a default.
+    for input in declarations {
+        if matches!(input.source, Some(InputSource::Flag { .. }))
+            && input.default.is_none()
+            && !values.contains_key(&input.name)
+        {
+            values.insert(input.name.clone(), Value::Bool(false));
+        }
+    }
     Ok(values)
+}
+
+/// A flag or option spelling: `--` then a lowercase letter or digit, then lowercase
+/// letters, digits or hyphens.
+fn is_long_spelling(spelling: &str) -> bool {
+    spelling.strip_prefix("--").is_some_and(|rest| {
+        rest.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && rest
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    })
+}
+
+/// An alias: one dash and one letter or digit.
+fn is_short_spelling(spelling: &str) -> bool {
+    matches!(spelling.as_bytes(), [b'-', letter] if letter.is_ascii_alphanumeric())
+}
+
+/// Checks a flag or option declaration: its type, its spellings, and that no spelling
+/// is declared twice. `--help` and `-h` belong to the generated help.
+fn validate_flag_spelling<'a>(
+    input: &'a InputDeclaration,
+    spellings: &mut BTreeSet<&'a str>,
+) -> Result<()> {
+    let (name, alias) = match &input.source {
+        Some(InputSource::Flag { name, alias }) | Some(InputSource::Option { name, alias }) => {
+            (name.as_str(), alias.as_deref())
+        }
+        _ => return Ok(()),
+    };
+    match &input.source {
+        Some(InputSource::Flag { .. }) if input.kind != InputType::Boolean => {
+            bail!("line {}: flag {name:?} must be a boolean input", input.line)
+        }
+        Some(InputSource::Option { .. })
+            if !matches!(input.kind, InputType::Text | InputType::Integer) =>
+        {
+            bail!(
+                "line {}: option {name:?} must be a text or integer input",
+                input.line
+            )
+        }
+        _ => {}
+    }
+    if !is_long_spelling(name) {
+        bail!(
+            "line {}: flag or option name {name:?} must start with -- and use lowercase letters, digits or hyphens",
+            input.line
+        );
+    }
+    if name == "--help" || alias == Some("-h") {
+        bail!(
+            "line {}: --help and -h are reserved for the generated help",
+            input.line
+        );
+    }
+    if !spellings.insert(name) {
+        bail!(
+            "line {}: flag or option {name:?} is declared more than once",
+            input.line
+        );
+    }
+    if let Some(alias) = alias {
+        if !is_short_spelling(alias) {
+            bail!(
+                "line {}: alias {alias:?} must be one dash and one letter or digit",
+                input.line
+            );
+        }
+        if !spellings.insert(alias) {
+            bail!(
+                "line {}: alias {alias:?} is declared more than once",
+                input.line
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The flag and option spellings a program declares, each mapped to its input.
+struct FlagTable<'a> {
+    by_spelling: BTreeMap<&'a str, &'a InputDeclaration>,
+}
+
+impl<'a> FlagTable<'a> {
+    fn new(declarations: &'a [InputDeclaration]) -> Self {
+        let mut by_spelling = BTreeMap::new();
+        for input in declarations {
+            if let Some(InputSource::Flag { name, alias })
+            | Some(InputSource::Option { name, alias }) = &input.source
+            {
+                by_spelling.insert(name.as_str(), input);
+                if let Some(alias) = alias {
+                    by_spelling.insert(alias.as_str(), input);
+                }
+            }
+        }
+        Self { by_spelling }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_spelling.is_empty()
+    }
+
+    fn find(&self, spelling: &str) -> Option<&'a InputDeclaration> {
+        self.by_spelling.get(spelling).copied()
+    }
+
+    fn known(&self) -> String {
+        self.by_spelling
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// Separates the declared flags and options from the positional arguments. A program
+/// with no flags or options keeps every argument positional.
+/// The declared flag and option values, and the arguments that stay positional.
+struct SplitArguments {
+    flagged: Vec<(String, Value)>,
+    positional: Vec<String>,
+}
+
+fn split_flags(declarations: &[InputDeclaration], arguments: &[String]) -> Result<SplitArguments> {
+    let table = FlagTable::new(declarations);
+    if table.is_empty() {
+        return Ok(SplitArguments {
+            flagged: Vec::new(),
+            positional: arguments.to_vec(),
+        });
+    }
+    let mut found: Vec<(String, Value)> = Vec::new();
+    let mut positional = Vec::new();
+    let mut remaining = arguments.iter();
+    while let Some(argument) = remaining.next() {
+        // `--name=value` carries its value; a bare spelling takes the next argument.
+        let (spelling, inline) = match argument.split_once('=') {
+            Some((head, value)) if head.starts_with("--") => (head, Some(value)),
+            _ => (argument.as_str(), None),
+        };
+        let Some(input) = table.find(spelling) else {
+            if argument.starts_with("--") && argument != "--" {
+                bail!(
+                    "unknown flag {spelling:?}; the program declares {}",
+                    table.known()
+                );
+            }
+            positional.push(argument.clone());
+            continue;
+        };
+        if found.iter().any(|(name, _)| *name == input.name) {
+            bail!("{spelling} is given more than once");
+        }
+        let value = match &input.source {
+            Some(InputSource::Flag { .. }) => {
+                if inline.is_some() {
+                    bail!("{spelling} takes no value");
+                }
+                Value::Bool(true)
+            }
+            _ => {
+                let text = match inline {
+                    Some(text) => text.to_owned(),
+                    None => remaining
+                        .next()
+                        .with_context(|| format!("{spelling} needs a value"))?
+                        .clone(),
+                };
+                input.parse_cli(&text)?
+            }
+        };
+        found.push((input.name.clone(), value));
+    }
+    Ok(SplitArguments {
+        flagged: found,
+        positional,
+    })
+}
+
+/// Whether the program declares any flag or option.
+pub fn declares_flags(declarations: &[InputDeclaration]) -> bool {
+    !FlagTable::new(declarations).is_empty()
+}
+
+/// Whether the arguments ask for the generated help. `--help` does for any program;
+/// `-h` only for programs that declare flags or options, since it is otherwise a value.
+pub fn is_help_request(declarations: &[InputDeclaration], arguments: &[String]) -> bool {
+    match arguments.first().map(String::as_str) {
+        Some("--help") => true,
+        Some("-h") => declares_flags(declarations),
+        _ => false,
+    }
 }
 
 /// Describe a partial input interface without requiring values or running effects.
@@ -369,6 +607,16 @@ pub fn describe(
             Some(InputSource::ProgramPath) => {
                 spec["source"] = serde_json::json!({"kind":"program_path"});
             }
+            Some(InputSource::Prompt { question, secret }) => {
+                spec["source"] =
+                    serde_json::json!({"kind":"prompt", "question":question, "secret":secret});
+            }
+            Some(InputSource::Flag { name, alias }) => {
+                spec["source"] = serde_json::json!({"kind":"flag", "name":name, "alias":alias});
+            }
+            Some(InputSource::Option { name, alias }) => {
+                spec["source"] = serde_json::json!({"kind":"option", "name":name, "alias":alias});
+            }
             None => {}
         }
         if let Some(text) = &input.description {
@@ -377,8 +625,14 @@ pub fn describe(
         if let Some(choices) = &input.choices {
             spec["choices"] = choices.clone().into();
         }
+        // A secret answer is never printed, so its value is withheld, not shown.
+        let secret = matches!(input.source, Some(InputSource::Prompt { secret: true, .. }));
         if let Some(value) = known.get(&input.name) {
-            spec["value"] = literal_json(value)?;
+            if secret {
+                spec["value_withheld"] = true.into();
+            } else {
+                spec["value"] = literal_json(value)?;
+            }
         } else {
             missing.push(&input.name);
         }

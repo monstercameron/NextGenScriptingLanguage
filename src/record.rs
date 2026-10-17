@@ -562,6 +562,33 @@ fn redact_json(redactor: &SecretRedactor, value: &Json) -> Json {
     }
 }
 
+/// Input values for a record. A secret prompt's answer is withheld: the record keeps a
+/// marker in its place, so the answer is never written to disk.
+pub fn inputs_json_for(
+    inputs: &BTreeMap<String, crate::ast::Value>,
+    declarations: &[crate::ast::InputDeclaration],
+) -> Json {
+    let secret: std::collections::BTreeSet<&str> = declarations
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.source,
+                Some(crate::ast::InputSource::Prompt { secret: true, .. })
+            )
+        })
+        .map(|d| d.name.as_str())
+        .collect();
+    let mut json = inputs_json(inputs);
+    if let Json::Object(fields) = &mut json {
+        for name in secret {
+            if fields.contains_key(name) {
+                fields.insert(name.to_owned(), serde_json::json!({ "withheld": "secret" }));
+            }
+        }
+    }
+    json
+}
+
 /// Input values as JSON for a record, from the run's named inputs.
 pub fn inputs_json(inputs: &BTreeMap<String, crate::ast::Value>) -> Json {
     Json::Object(

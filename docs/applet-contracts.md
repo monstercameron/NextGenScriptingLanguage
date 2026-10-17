@@ -690,6 +690,29 @@ fail, nesting is limited to 64 levels, input is limited to 16 MiB, and a documen
 may hold at most 1,000,000 values. Output keys are sorted. Comments are not
 preserved, so these operations do not edit a file in place.
 
+## Environment files without `source`
+
+`env.load` parses `KEY=VALUE` shell environment files, such as `/etc/os-release` or a
+theme file, and returns a JSON object of text values. It never runs the file. A line
+may begin with `export`; blank and `#` comment lines are skipped. A value is unquoted,
+single-quoted (literal), or double-quoted with the escapes `\\`, `\"`, `\$` and
+``\` ``. A value that a shell would expand, run, or split is refused with its line
+number: `$`, backquotes, and other shell metacharacters outside single quotes, an
+unquoted value with spaces, and a name set twice. Errors name a line, never a value.
+
+The file is read by an ordinary `read` step, so the read is a host read that the
+capability policy authorizes as any other read is. `env.load` takes that text as its
+pipeline input:
+
+```program
+read "/etc/os-release"
+then env.load
+```
+
+Its result is a JSON value, so `take json at "/ID"` reads one name. The applet has no
+effects and runs under a strict policy. Values in a file that the policy marks as
+sensitive are not yet labelled; the file's values are ordinary text.
+
 YAML supports block mappings and sequences indented with spaces, plain, single-
 and double-quoted scalars, one-line flow collections, literal (`|`) and folded
 (`>`) block scalars with clip, strip and keep chomping, comments, and a single

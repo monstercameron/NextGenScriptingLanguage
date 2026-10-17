@@ -943,7 +943,21 @@ with temporary file as left
     run "diff" with arguments [left, right]
 ```
 
-FIFOs and stdout-to-path job routing are not part of this version. Temporary scopes are refused under `--checkpoint`, in live programs, in browser programs, and in TUI handlers, because a checkpoint cannot replay a path that a previous run created.
+FIFOs and stdout-to-path job routing are not part of this version. Temporary scopes are refused under `--checkpoint`, in live programs, in program modules, in browser programs, and in TUI handlers, because a checkpoint cannot replay a path that a previous run created.
+
+### Compile to POSIX sh
+
+`execute compile --to sh FILE [--out PATH]` writes a POSIX sh script for the part of a program that has a faithful sh form. Without `--out` the script goes to standard output; with it, only that path is written. The compiler never drops or approximates a statement: every statement it cannot translate is refused by name and line, and nothing is written.
+
+The compiled forms are native commands (`run "program" with arguments [...]` and named applets whose manifest renders a native command), `pipe to`, `and stderr to`, `and stderr appended to`, `and stderr merged`, `and stdout to stderr`, `and discard stderr`, `with environment` on one command, `if run ... succeeds` or `fails` with `otherwise`, `repeat N times`, `for each NAME in [...]` over literal text, `break`, `continue`, `exit with status`, and `fail with message`.
+
+These are refused: in-process applets such as `number.to_text`, built-in commands, applets whose contract remaps exit statuses, programs with inputs, triggers, or reusable definitions, bindings and `keep` options, retries, caching, `save`, `append`, `read`, `while` loops, try and catch, background jobs, parallel groups, temporary scopes, hand over, detached launch, and interactive commands.
+
+The script keeps execute's output rule. A command's stdout becomes the pipeline value, except that a command followed by another fresh command or by the end of the program streams straight to stdout, as it does under `execute run`. A failed command leaves the previous value in place, and the final value is printed before the script exits, on success or failure.
+
+The script must pass `dash -n`. The integration tests also compare its stdout and success with `execute run` under dash on Unix, and run shellcheck when it is installed.
+
+Two limits follow from sh itself. Applet arguments are expanded when the script is compiled, so a leading `~` takes the home directory of the compiling user. Output containing NUL bytes cannot pass through a sh variable.
 
 ## Finite stdin and Unix composition
 
@@ -1103,6 +1117,37 @@ its own `with default`. A called file's location inputs name that file's directo
 not the caller's. Programs run from text with no file path have no location, so the
 input is required there.
 
+### Prompted inputs
+
+`from prompt "QUESTION"` declares an input that a person answers on the terminal.
+`from secret prompt "QUESTION"` does the same with echo off. A prompt is a declared
+input, so `execute inspect` and `execute explain --json` list its question, and an
+agent can see every question before the run starts.
+
+```program
+accept name as text from prompt "Your name?"
+accept token as text from secret prompt "Access token?"
+accept mode as text one of ["light", "dark"] from prompt "Theme?" with default "light"
+```
+
+An answer is supplied in one of three ways, and the first that applies wins:
+`--input NAME=VALUE`, then an answers file given as `--answers FILE` (a JSON object
+whose values are text, numbers, or booleans), then the terminal. A prompt with a
+default takes it for an empty answer. A prompt that has no answer and no terminal
+fails the run before any step starts, and the error names the question. Set
+`EXECUTE_NO_PROMPT=1` to turn terminal prompts off, so an unattended run fails the
+same way. Only `run` asks; `check`, `inspect`, `explain`, and service deployment never
+prompt.
+
+A secret answer is never printed or recorded. `inspect` reports `value_withheld`
+instead of the value, and a run's record keeps a `withheld` marker in place of it. A
+checkpoint records a keyed HMAC of the answer under the per-user key, not the answer.
+A replay of a run with a withheld answer is refused, because the answer is needed
+again. A secret prompt must be `text` and cannot declare `one of`, since a choice
+error would quote the answer. The answer is still on the command line when given
+with `--input`, as any `--input` value is, so unattended use should prefer
+`--answers`.
+
 ### Agent interface discovery
 
 Use `execute inspect FILE [--input NAME=VALUE]`.
@@ -1220,8 +1265,17 @@ names, types, and values; the working directory; the contents of the
 `--capability-policy` and `--data-flow-policy` files; the contents of each `.json`
 manifest in the `--manifest-dir` directory, or of the `--manifest-catalog` file; and
 the program's version. The bundled manifests are covered by that version only. A
-value from an environment input appears as a SHA-256 digest and is never printed,
-and a policy file appears as its path and digest. Changing any covered setting
+value from an environment input is a candidate secret. The report shows it as
+`{"sensitive": true, "hmac_sha256": ...}`, an HMAC-SHA256 under a per-user key, and the
+fingerprint covers that HMAC. A changed secret therefore needs a new review, and an
+offline guess at a short secret cannot be checked without the key. The key is 32
+random bytes, created on first use at `$XDG_STATE_HOME/execute/what-if.key` (or
+`~/.local/state/execute/what-if.key`), or `%LOCALAPPDATA%\execute\what-if.key` on
+Windows. On Unix it must be a regular file with no group or other permission bits and
+exactly 32 bytes. A key that fails these checks is refused, and a review with an
+environment input then fails rather than falling back to an unkeyed value. On Windows
+the file takes the user profile's owner-only ACL, which this release does not verify.
+A policy file appears as its path and digest. Changing any other covered setting
 requires a new `--what-if` review. Both options apply to finite programs and to `run`
 only, and `--what-if` takes precedence when both are given.
 

@@ -1838,6 +1838,9 @@ pub fn explain_with_inputs(
     validate(program, registry)?;
     let known = crate::inputs::known_values(&program.inputs, supplied)?;
     preflight_inputs(program, registry, &known)?;
+    // The rows below only display values. A secret answer is left out, so an argument
+    // that uses it is shown by its reference, never by its value.
+    let known = crate::inputs::without_secret_answers(&program.inputs, known);
     let mut rows = Vec::new();
     for input in &program.inputs {
         rows.push(format!(

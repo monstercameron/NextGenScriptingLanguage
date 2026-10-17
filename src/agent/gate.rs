@@ -193,9 +193,17 @@ pub fn verdict(
             violations.push(violation);
         }
     }
+    // Prompts are listed so a reviewer sees each question a run will ask.
+    let prompts: Vec<&Value> = explain["inputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|input| input.get("prompt").is_some())
+        .collect();
     json!({
         "protocol": PROTOCOL,
         "program": explain["program"],
+        "prompts": prompts,
         "allowed_categories": allowed.iter().collect::<Vec<_>>(),
         "declared_categories": declared.map(|declared| declared.iter().collect::<Vec<_>>()),
         "retries": retries,

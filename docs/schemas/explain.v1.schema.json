@@ -21,7 +21,16 @@
           "type": { "type": "string" },
           "required": { "type": "boolean" },
           "line": { "type": "integer", "minimum": 1 },
-          "choices": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+          "choices": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "prompt": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["question", "secret"],
+            "properties": {
+              "question": { "type": "string" },
+              "secret": { "type": "boolean" }
+            }
+          }
         }
       }
     },

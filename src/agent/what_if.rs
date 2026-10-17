@@ -5,9 +5,11 @@
 //! The fingerprint covers everything that decides what the run does: the explain
 //! plan; the resolved input names, types, and values; the working directory; the
 //! capability and data-flow policy file contents; the manifest files; and the
-//! program's version. A value from an environment input is hashed, not printed, and
-//! so is every other value the report would otherwise show for it.
+//! program's version. A value from an environment input is a candidate secret. The
+//! review shows it as an HMAC-SHA256 under a per-user key (see `what_if_key`), so a
+//! changed secret still changes the fingerprint, and an offline guess needs the key.
 
+use crate::agent::what_if_key::{self, hmac_sha256};
 use crate::ast::{InputDeclaration, InputSource, Value as ProgramValue};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -33,13 +35,11 @@ pub struct RunSettings<'a> {
 
 /// SHA-256 as lowercase hex.
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex(&Sha256::digest(bytes))
 }
 
-/// The digest of a value's canonical JSON bytes. Object keys are sorted, so the same
-/// value always gives the same digest.
-fn value_digest(value: &ProgramValue) -> Result<String> {
-    Ok(digest(&serde_json::to_vec(value)?))
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// A file's digest, or null when no file is named.
@@ -84,20 +84,38 @@ fn manifest_digests(context: &RunSettings<'_>) -> Result<Value> {
     Ok(Value::Array(files))
 }
 
-/// The resolved input values. A value from an environment input is replaced by its
-/// digest, so the report and the fingerprint never carry it.
+/// The resolved input values. A value from an environment input is shown as an
+/// HMAC under the per-user key, bound to the input's name. Without the key, the
+/// digest cannot be checked against a guess. With a sensitive input present and no
+/// usable key, the review fails rather than falling back to an unkeyed value.
 fn input_covered(context: &RunSettings<'_>) -> Result<Value> {
     let values = crate::inputs::resolve(context.declarations, context.inputs, false)?;
+    let key = if context
+        .declarations
+        .iter()
+        .any(|declaration| matches!(declaration.source, Some(InputSource::Environment(_))))
+    {
+        Some(what_if_key::load_or_create().context(
+            "an environment input is sensitive, so the what-if review needs its private key",
+        )?)
+    } else {
+        None
+    };
     let mut inputs = Vec::new();
     for declaration in context.declarations {
         let value = values
             .get(&declaration.name)
             .context("a declared input has no resolved value")?;
+        let literal = crate::inputs::literal_json(value)?;
         let sensitive = matches!(declaration.source, Some(InputSource::Environment(_)));
-        let shown = if sensitive {
-            json!({ "sensitive": true, "sha256": value_digest(value)? })
-        } else {
-            crate::inputs::literal_json(value)?
+        let shown = match (&key, sensitive) {
+            (Some(key), true) => {
+                let mut message = declaration.name.as_bytes().to_vec();
+                message.push(0);
+                message.extend(serde_json::to_vec(&literal)?);
+                json!({ "sensitive": true, "hmac_sha256": hex(&hmac_sha256(key, &message)) })
+            }
+            _ => literal,
         };
         inputs.push(json!({
             "name": declaration.name,

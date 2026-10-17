@@ -233,6 +233,18 @@ fn validate_service_inputs(
             // The loader always supplies a location default, so this arm is unreachable
             // for loaded programs; a service reads its own program file's location.
             Some(InputSource::ProgramDirectory | InputSource::ProgramPath) => {}
+            // An absent flag is false, so a service needs no value for it.
+            Some(InputSource::Flag { .. }) => {}
+            Some(InputSource::Option { .. }) => bail!(
+                "workflow option {:?} has no value for the generated service; supply `--input {}=VALUE` or give the option a default",
+                declaration.name,
+                declaration.name
+            ),
+            Some(InputSource::Prompt { .. }) => bail!(
+                "workflow input {:?} is asked on a terminal; supply it with `--input {}=VALUE` or a default so the generated service needs no terminal",
+                declaration.name,
+                declaration.name
+            ),
             Some(InputSource::Argument(position)) if *position <= positional_count => {}
             Some(InputSource::Argument(position)) => bail!(
                 "workflow needs positional input {:?} at argument {position}; supply it after `--`",

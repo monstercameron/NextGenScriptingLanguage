@@ -126,15 +126,95 @@ fn a_different_input_value_is_refused_before_any_effect() {
 }
 
 #[test]
-fn an_environment_value_is_covered_but_never_printed() {
+fn an_environment_value_is_covered_by_a_keyed_digest_and_never_printed() {
+    // The secret changes the fingerprint, so a changed secret needs a new review. The
+    // report shows only an HMAC under the per-user key, never the value.
     let root = tempfile::tempdir().unwrap();
     write(
         root.path(),
         "job.program",
-        "accept target as text from environment \"EXECUTE_WHAT_IF_TARGET\"\nuse value \"payload\"\nthen save to target\n",
+        "accept target as text from environment \"EXECUTE_WHAT_IF_TARGET\"
+use value \"payload\"
+then save to target
+",
     );
     manifests(root.path(), "--version");
-    let reviewed = Command::new(env!("CARGO_BIN_EXE_execute"))
+    let state = root.path().join("state");
+    let review = |value: &str, args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_execute"))
+            .args(args)
+            .arg("--manifest-dir")
+            .arg("manifests")
+            .env("EXECUTE_WHAT_IF_TARGET", value)
+            .env("XDG_STATE_HOME", &state)
+            .env("LOCALAPPDATA", &state)
+            .current_dir(root.path())
+            .output()
+            .unwrap()
+    };
+
+    let reviewed = review(
+        "reviewed-secret-path.txt",
+        &["run", "job.program", "--what-if"],
+    );
+    assert!(
+        reviewed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reviewed.stderr)
+    );
+    let shown = String::from_utf8_lossy(&reviewed.stdout).into_owned();
+    assert!(!shown.contains("reviewed-secret-path.txt"), "{shown}");
+    let report: Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(report["settings"]["inputs"][0]["value"]["sensitive"], true);
+    assert_eq!(
+        report["settings"]["inputs"][0]["value"]["hmac_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    let fingerprint = report["fingerprint"].as_str().unwrap().to_owned();
+
+    let same = review(
+        "reviewed-secret-path.txt",
+        &["run", "job.program", "--confirm", &fingerprint],
+    );
+    assert!(
+        same.status.success(),
+        "{}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+
+    let changed = review(
+        "other-path.txt",
+        &["run", "job.program", "--confirm", &fingerprint],
+    );
+    assert!(
+        refused(&changed),
+        "{}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_environment_input_refuses_the_review_when_the_key_is_readable_by_others() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        "job.program",
+        "accept target as text from environment \"EXECUTE_WHAT_IF_TARGET\"
+use value \"payload\"
+then save to target
+",
+    );
+    manifests(root.path(), "--version");
+    let state = root.path().join("state");
+    let key = state.join("execute").join("what-if.key");
+    write(root.path(), "state/execute/what-if.key", &"k".repeat(32));
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args([
             "run",
             "job.program",
@@ -143,35 +223,14 @@ fn an_environment_value_is_covered_but_never_printed() {
             "manifests",
         ])
         .env("EXECUTE_WHAT_IF_TARGET", "reviewed-secret-path.txt")
+        .env("XDG_STATE_HOME", &state)
         .current_dir(root.path())
         .output()
         .unwrap();
-    assert!(reviewed.status.success());
-    let shown = String::from_utf8_lossy(&reviewed.stdout).into_owned();
-    assert!(!shown.contains("reviewed-secret-path.txt"), "{shown}");
-    let fingerprint = serde_json::from_slice::<Value>(&reviewed.stdout).unwrap()["fingerprint"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
-    let changed = Command::new(env!("CARGO_BIN_EXE_execute"))
-        .args([
-            "run",
-            "job.program",
-            "--confirm",
-            &fingerprint,
-            "--manifest-dir",
-            "manifests",
-        ])
-        .env("EXECUTE_WHAT_IF_TARGET", "other-path.txt")
-        .current_dir(root.path())
-        .output()
-        .unwrap();
-    assert!(
-        refused(&changed),
-        "{}",
-        String::from_utf8_lossy(&changed.stderr)
-    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.contains("readable by other users"), "{stderr}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("reviewed-secret-path.txt"));
 }
 
 #[test]

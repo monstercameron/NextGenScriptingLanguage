@@ -206,3 +206,37 @@ fn a_diff_of_two_sorted_listings_runs_on_temporary_paths() {
         entries(temp.path())
     );
 }
+
+/// A policy that grants no write to the temporary directory refuses the scope before
+/// it creates anything, and before the stale sweep can remove anything.
+#[test]
+fn a_policy_without_the_temporary_directory_refuses_scopes_before_any_effect() {
+    let directory = tempdir().unwrap();
+    let temp = tempdir().unwrap();
+    let stale = temp.path().join("execute-scope-dead");
+    fs::create_dir(&stale).unwrap();
+    fs::write(stale.join("owner"), "4000000000").unwrap();
+    let policy = directory.path().join("policy.json");
+    fs::write(&policy, r#"{"version":1,"applets":{}}"#).unwrap();
+    let program = write_program(
+        directory.path(),
+        "with temporary file as scratch\n  exit with status 0\n",
+    );
+    let output = execute_in(
+        &[
+            "run",
+            program.to_str().unwrap(),
+            "--capability-policy",
+            policy.to_str().unwrap(),
+        ],
+        directory.path(),
+        temp.path(),
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a scope ran under a policy that forbids the temporary directory"
+    );
+    assert!(stale.exists(), "the stale sweep ran under that policy");
+    assert_eq!(entries(temp.path()), vec!["execute-scope-dead".to_string()]);
+}

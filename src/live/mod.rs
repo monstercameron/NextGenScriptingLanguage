@@ -434,6 +434,11 @@ fn dispatch(
             doc.bindings =
                 serde_json::from_str(bindings).context("--bindings requires a JSON object")?;
         }
+        // A withheld marker is what a read shows for a secret answer. It is not an answer,
+        // so a state file or bindings that carry one cannot start a run.
+        if doc.bindings.values().any(is_withheld_marker) {
+            bail!("the state carries a withheld secret answer; supply the answer with --bindings");
+        }
         let breakpoints = debug::lines_text(opts.flags.get("--breakpoints").map(String::as_str))?;
         let max_bytes = usize::try_from(numeric(&opts, "--max-output-bytes")?.unwrap_or(262144))?;
         if max_bytes == 0 || max_bytes > MAX_MESSAGE {

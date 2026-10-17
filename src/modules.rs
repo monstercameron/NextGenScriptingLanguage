@@ -1346,10 +1346,11 @@ fn parse_module_source(source: &str, source_path: &Path) -> Result<Program> {
                     | crate::ast::StepKind::Interactive
                     | crate::ast::StepKind::HandOver
                     | crate::ast::StepKind::LaunchDetached { .. }
+                    | crate::ast::StepKind::TempScope { .. }
             )
         }) {
             bail!(
-                "line {}: program module {} cannot exit, fail, or hand over the terminal; return output from the module instead",
+                "line {}: program module {} cannot exit, fail, hand over the terminal, or open temporary scopes; return output from the module instead",
                 step.line,
                 source_path.display()
             );
@@ -2393,10 +2394,13 @@ mod tests {
         for source in [
             "define a program named stop\n  exit with status 2\n",
             "define a program named stop\n  fail with message \"no\"\n",
+            "define a program named scratch\n  with temporary file as tmp\n    run text.trim_final_lf with text \"x\"\n",
         ] {
             let error = parse_module_source(source, Path::new("stop.program")).unwrap_err();
             assert!(
-                format!("{error:#}").contains("cannot exit, fail, or hand over the terminal"),
+                format!("{error:#}").contains(
+                    "cannot exit, fail, hand over the terminal, or open temporary scopes"
+                ),
                 "{error:#}"
             );
         }

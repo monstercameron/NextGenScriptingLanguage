@@ -47,23 +47,55 @@ pub fn render_program_help(program: &Program, program_path: &str) -> String {
 /// The help object for one parsed program.
 pub fn describe(program: &Program, program_path: &str) -> Value {
     let inputs: Vec<Value> = program.inputs.iter().map(input_entry).collect();
+    let options = if program.inputs.iter().any(is_option) {
+        " [OPTIONS]"
+    } else {
+        ""
+    };
     json!({
         "protocol": PROTOCOL,
         "program": program_path,
-        "usage": format!("execute {program_path} [--input NAME=VALUE ...]"),
+        "usage": format!("execute {program_path}{options} [--input NAME=VALUE ...]"),
         "inputs": inputs,
     })
+}
+
+/// A flag or option: a named command-line switch, not a positional input.
+fn is_option(input: &InputDeclaration) -> bool {
+    matches!(
+        input.source,
+        Some(InputSource::Flag { .. } | InputSource::Option { .. })
+    )
 }
 
 fn input_entry(input: &InputDeclaration) -> Value {
     json!({
         "name": input.name,
         "type": type_label(input.kind),
-        "required": input.default.is_none(),
-        "default": input.default.as_ref().map(plain_json),
+        // A flag without a default is simply false when absent.
+        "required": input.default.is_none() && !matches!(input.source, Some(InputSource::Flag { .. })),
+        "default": input
+            .default
+            .as_ref()
+            .map(plain_json)
+            .or_else(|| matches!(input.source, Some(InputSource::Flag { .. })).then(|| json!(false))),
         "source": input.source.as_ref().map(source_label),
-        "description": null,
+        "spelling": flag_spelling(input),
+        "description": input.description,
         "line": input.line,
+    })
+}
+
+/// The command-line spelling of a flag or option, for example `--output VALUE, -o VALUE`.
+fn flag_spelling(input: &InputDeclaration) -> Option<String> {
+    let (name, alias, value) = match &input.source {
+        Some(InputSource::Flag { name, alias }) => (name, alias, ""),
+        Some(InputSource::Option { name, alias }) => (name, alias, " VALUE"),
+        _ => return None,
+    };
+    Some(match alias {
+        Some(alias) => format!("{name}{value}, {alias}{value}"),
+        None => format!("{name}{value}"),
     })
 }
 
@@ -107,6 +139,10 @@ fn source_label(source: &InputSource) -> String {
         InputSource::Arguments => "all arguments".to_owned(),
         InputSource::ProgramDirectory => "program directory".to_owned(),
         InputSource::ProgramPath => "program path".to_owned(),
+        InputSource::Prompt { secret: true, .. } => "secret prompt".to_owned(),
+        InputSource::Prompt { secret: false, .. } => "prompt".to_owned(),
+        InputSource::Flag { name, .. } => format!("flag {name}"),
+        InputSource::Option { name, .. } => format!("option {name}"),
     }
 }
 
@@ -120,23 +156,51 @@ fn render_text(description: &Value) -> String {
         text.push_str("\nInputs: none\n");
         return text;
     }
-    text.push_str("\nInputs:\n");
-    for input in &inputs {
-        let requirement = if input["required"] == true {
-            "required".to_owned()
-        } else {
-            format!("default {}", input["default"])
-        };
-        text.push_str(&format!(
-            "  {}  {}  {}",
-            input["name"].as_str().unwrap_or(""),
-            input["type"].as_str().unwrap_or(""),
-            requirement
-        ));
-        if let Some(source) = input["source"].as_str() {
-            text.push_str(&format!("  (from {source})"));
+    let (options, arguments): (Vec<&Value>, Vec<&Value>) = inputs
+        .iter()
+        .partition(|input| input["spelling"].is_string());
+    if !options.is_empty() {
+        text.push_str("\nOptions:\n");
+        for option in options {
+            let spelling = option["spelling"].as_str().unwrap_or("");
+            text.push_str(&format!(
+                "  {spelling:<30}  {}  {}",
+                option["type"].as_str().unwrap_or(""),
+                requirement(option)
+            ));
+            push_description(&mut text, option);
         }
-        text.push('\n');
+        text.push_str("  -h, --help                      show this help\n");
+    }
+    if !arguments.is_empty() {
+        text.push_str("\nInputs:\n");
+        for input in arguments {
+            text.push_str(&format!(
+                "  {}  {}  {}",
+                input["name"].as_str().unwrap_or(""),
+                input["type"].as_str().unwrap_or(""),
+                requirement(input)
+            ));
+            if let Some(source) = input["source"].as_str() {
+                text.push_str(&format!("  (from {source})"));
+            }
+            push_description(&mut text, input);
+        }
     }
     text
+}
+
+fn requirement(input: &Value) -> String {
+    if input["required"] == true {
+        "required".to_owned()
+    } else {
+        format!("default {}", input["default"])
+    }
+}
+
+fn push_description(text: &mut String, input: &Value) {
+    if let Some(description) = input["description"].as_str() {
+        text.push_str(&format!("  {description}"));
+    }
+    text.push('\n');
 }

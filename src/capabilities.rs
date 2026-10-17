@@ -1695,6 +1695,12 @@ fn preflight_host_paths(
         dynamic_cwd: bool,
     ) -> Result<()> {
         for step in steps {
+            // A temporary scope creates its path under the system temporary directory,
+            // so the policy must allow writing there before any scope is created.
+            if matches!(step.kind, StepKind::TempScope { .. }) {
+                authorize_host_path(registry, &std::env::temp_dir(), true, cwd)?;
+                continue;
+            }
             let (path, write) = match &step.kind {
                 StepKind::UseFolder { path } | StepKind::Read { path, .. } => (path, false),
                 StepKind::Save { path, .. } => (path, true),
@@ -1962,6 +1968,7 @@ fn is_policy_safe_in_process(name: &str) -> bool {
             | "toml.stringify"
             | "ini.parse"
             | "ini.stringify"
+            | "env.load"
             | "json.parse"
             | "json.stringify"
             | "json.get"

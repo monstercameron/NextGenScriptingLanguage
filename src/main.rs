@@ -24,6 +24,8 @@ mod test_runner;
 #[derive(Debug)]
 struct Args {
     inputs: BTreeMap<String, String>,
+    /// `--answers FILE`: a JSON object of answers for declared prompts and inputs.
+    answers: Option<PathBuf>,
     program_arguments: Vec<String>,
     /// True when program arguments followed an explicit `--` separator, so a
     /// leading `--help` is data for the program rather than a help request.
@@ -68,8 +70,6 @@ struct Args {
     control: bool,
     /// `run --control --break-at LINE`: pause before these source lines from the start.
     break_at: Vec<usize>,
-    /// `run --daemon` or `EXECUTE_DAEMON=1`: ask for the warm daemon when one is running.
-    acceleration: flow::agent::daemon::Acceleration,
 }
 
 struct FiniteCheckSnapshot {
@@ -125,38 +125,104 @@ fn register_cancellation_signal(
 
 fn main() {
     if let Err(error) = execute() {
-        if is_closed_stdout(&error) {
-            // The reader went away; stop quietly without a diagnostic.
-            std::process::exit(STDOUT_CLOSED_EXIT);
-        }
-        // The run has already cleaned up its children before returning this error.
-        // An interrupt keeps its status; otherwise the failing command decides.
-        let interrupted = runtime::interrupt_exit_code();
-        let status = interrupted.unwrap_or_else(|| {
-            error
-                .downcast_ref::<runtime::CommandFailed>()
-                .map(|failure| {
-                    failure
-                        .status
-                        .code()
-                        .unwrap_or_else(|| signal_status(&failure.status))
-                })
-                .filter(|status| {
-                    if cfg!(windows) {
-                        *status != 0
-                    } else {
-                        (1..=255).contains(status)
-                    }
-                })
-                .unwrap_or(1)
-        });
-        if flow::agent::errors::enabled() {
-            flow::agent::errors::write_stderr(&error, interrupted.is_some(), status);
-        } else {
-            runtime::write_diagnostic(format!("execute: {error:#}\n").as_bytes());
-        }
-        std::process::exit(status);
+        std::process::exit(report_error(&error));
     }
+}
+
+/// Print a failed run's diagnostic and return its exit status. The normal entry point and
+/// a forwarded run in a daemon child both use it.
+fn report_error(error: &anyhow::Error) -> i32 {
+    if is_closed_stdout(error) {
+        // The reader went away; stop quietly without a diagnostic.
+        return STDOUT_CLOSED_EXIT;
+    }
+    // The run has already cleaned up its children before returning this error.
+    // An interrupt keeps its status; otherwise the failing command decides.
+    let interrupted = runtime::interrupt_exit_code();
+    let status = interrupted.unwrap_or_else(|| {
+        error
+            .downcast_ref::<runtime::CommandFailed>()
+            .map(|failure| {
+                failure
+                    .status
+                    .code()
+                    .unwrap_or_else(|| signal_status(&failure.status))
+            })
+            .filter(|status| {
+                if cfg!(windows) {
+                    *status != 0
+                } else {
+                    (1..=255).contains(status)
+                }
+            })
+            .unwrap_or(1)
+    });
+    if flow::agent::errors::enabled() {
+        flow::agent::errors::write_stderr(error, interrupted.is_some(), status);
+    } else {
+        runtime::write_diagnostic(format!("execute: {error:#}\n").as_bytes());
+    }
+    status
+}
+
+/// `run --daemon`, or `run` with `EXECUTE_DAEMON=1`: the run goes to a warm daemon when one
+/// answers. Returns the status when the daemon ran it; `None` means run here.
+fn daemon_forward(arguments: &[String]) -> Option<i32> {
+    if arguments.first().map(String::as_str) != Some("run") {
+        return None;
+    }
+    let separator = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    let flag = arguments[..separator]
+        .iter()
+        .position(|argument| argument == "--daemon");
+    let selected = env::var("EXECUTE_DAEMON").is_ok_and(|value| value == "1");
+    if flag.is_none() && !selected {
+        return None;
+    }
+    let forwarded: Vec<String> = arguments
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != flag)
+        .map(|(_, argument)| argument.clone())
+        .collect();
+    match flow::agent::daemon::forward_run(&forwarded) {
+        flow::agent::daemon::Forwarding::Ran(status) => Some(status),
+        flow::agent::daemon::Forwarding::Cold { note } => {
+            if let Some(note) = note {
+                eprintln!("{note}");
+            }
+            None
+        }
+    }
+}
+
+/// The entry point of a daemon child: the run as the normal path does it. A program that
+/// may take the terminal is declined before it runs, so the client runs it instead.
+fn forwarded_run(arguments: &[String], context: &mut flow::agent::daemon::RunContext) -> i32 {
+    if program_takes_terminal(arguments) {
+        context.decline("the program takes the terminal");
+        return 0;
+    }
+    match execute_arguments(arguments.to_vec()) {
+        Ok(()) => 0,
+        Err(error) => report_error(&error),
+    }
+}
+
+/// Whether a run may take the terminal. The check is textual and conservative: a program
+/// whose source cannot be read, or that mentions either form, is declined.
+fn program_takes_terminal(arguments: &[String]) -> bool {
+    let Ok(Some(args)) = parse_args(arguments.to_vec()) else {
+        return true;
+    };
+    let Ok(source) = fs::read_to_string(&args.file) else {
+        return true;
+    };
+    let source = source.to_lowercase();
+    source.contains("interactively") || source.contains("hand over")
 }
 
 fn execute() -> Result<()> {
@@ -169,6 +235,13 @@ fn execute() -> Result<()> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    if let Some(status) = daemon_forward(&arguments) {
+        std::process::exit(status);
+    }
+    execute_arguments(arguments)
+}
+
+fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if let Some(worker_arguments) = init_worker_arguments(&arguments)? {
         #[cfg(unix)]
         {
@@ -220,6 +293,9 @@ fn execute() -> Result<()> {
     if arguments.first().is_some_and(|a| a == "modules") {
         return modules_cli(&arguments[1..]);
     }
+    if arguments.first().is_some_and(|a| a == "compile") {
+        return compile_cli(&arguments[1..]);
+    }
     if arguments.first().is_some_and(|a| a == "service") {
         return service_cli(&arguments[1..]);
     }
@@ -249,7 +325,7 @@ fn execute() -> Result<()> {
         std::process::exit(flow::agent::dap::cli(&arguments[1..])?);
     }
     if arguments.first().is_some_and(|a| a == "daemon") {
-        std::process::exit(flow::agent::daemon::cli(&arguments[1..])?);
+        std::process::exit(flow::agent::daemon::cli(&arguments[1..], forwarded_run)?);
     }
     let args = match parse_args(arguments)? {
         Some(args) => args,
@@ -373,6 +449,7 @@ fn init_worker_arguments(arguments: &[String]) -> Result<Option<Vec<String>>> {
                 | "resume"
                 | "applets"
                 | "modules"
+                | "compile"
                 | "service"
                 | "lsp"
                 | "live"
@@ -422,13 +499,6 @@ fn remote_resolve(arguments: &[String]) -> Result<()> {
 }
 
 fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapshot>) -> Result<()> {
-    if args.acceleration == flow::agent::daemon::Acceleration::Daemon
-        && flow::agent::daemon::probe() == flow::agent::daemon::Probe::Running
-    {
-        eprintln!(
-            "note: a daemon is running; this build runs the program cold until daemon forwarding lands"
-        );
-    }
     let capability_policy = args
         .capability_policy
         .as_deref()
@@ -823,13 +893,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     )
     .with_context(|| format!("could not parse workflow {}", args.file.display()))?;
     // A script's own `--help` (from a shebang line) shows its accept declarations.
+    // Literal arguments keep `--help` as a value for positional programs; a program with
+    // flags or options always answers `--help` with its generated help.
     if args.command == "run"
-        && !args.program_arguments_literal
-        && args
-            .program_arguments
-            .first()
-            .is_some_and(|a| a == "--help")
+        && (!args.program_arguments_literal || flow::inputs::declares_flags(&program.inputs))
         && !program.inputs.is_empty()
+        && flow::inputs::is_help_request(&program.inputs, &args.program_arguments)
     {
         write!(
             io::stdout(),
@@ -838,8 +907,37 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         )?;
         return Ok(());
     }
-    let inputs =
-        flow::inputs::parse_cli_arguments(&program.inputs, &args.inputs, &args.program_arguments)?;
+    // A journal keeps the bindings and the pipeline data of every completed step, and a
+    // secret answer, or any value computed from it, would be written to disk. Such a run
+    // is refused rather than checkpointed.
+    if args.checkpoint_dir.is_some()
+        && program.inputs.iter().any(|input| {
+            matches!(
+                input.source,
+                Some(flow::ast::InputSource::Prompt { secret: true, .. })
+            )
+        })
+    {
+        bail!(
+            "--checkpoint cannot be used with a secret prompt input: a journal would keep the answer or data computed from it"
+        );
+    }
+    // Supplied answers win over the answers file, which wins over a terminal prompt.
+    let mut supplied = args.inputs.clone();
+    if let Some(path) = &args.answers {
+        for (name, text) in flow::prompt::answers_from_file(path)? {
+            supplied.entry(name).or_insert(text);
+        }
+    }
+    let mut inputs =
+        flow::inputs::parse_cli_arguments(&program.inputs, &supplied, &args.program_arguments)?;
+    if args.command == "run" {
+        flow::prompt::fill_missing(
+            &program.inputs,
+            &mut inputs,
+            &mut flow::prompt::terminal_ask,
+        )?;
+    }
     if args.control {
         return run_with_control(&args, program.trigger.is_some());
     }
@@ -1131,6 +1229,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut single_instance = None;
     let mut github = false;
     let mut inputs = BTreeMap::new();
+    let mut answers: Option<PathBuf> = None;
     let mut program_arguments = Vec::new();
     let mut program_arguments_literal = false;
     let mut manifest_dir = None;
@@ -1157,12 +1256,6 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut max_record_bytes_seen = false;
     let mut control = false;
     let mut break_at: Vec<usize> = Vec::new();
-    let mut acceleration =
-        if command == "run" && std::env::var("EXECUTE_DAEMON").is_ok_and(|v| v == "1") {
-            flow::agent::daemon::Acceleration::Daemon
-        } else {
-            flow::agent::daemon::Acceleration::Cold
-        };
     let mut index = first_argument;
     while index < arguments.len() {
         let argument = &arguments[index];
@@ -1248,6 +1341,12 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     .context("--input requires NAME=VALUE")?;
                 if inputs.insert(name.to_owned(), value.to_owned()).is_some() {
                     bail!("duplicate program input {name:?}");
+                }
+            }
+            "--answers" => {
+                let path = take_option_value(&arguments, &mut index, "--answers", "FILE")?;
+                if answers.replace(PathBuf::from(path)).is_some() {
+                    bail!("--answers may be specified only once");
                 }
             }
             "--help" | "-h" => {
@@ -1482,9 +1581,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 }
                 control = true;
             }
-            "--daemon" if command == "run" => {
-                acceleration = flow::agent::daemon::Acceleration::Daemon;
-            }
+            // Taken before parsing: see daemon_forward.
+            "--daemon" if command == "run" => {}
             "--break-at" if command == "run" => {
                 let line = parse_positive_usize(&arguments, &mut index, "--break-at")?;
                 break_at.push(line);
@@ -1508,6 +1606,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     }
     Ok(Some(Args {
         inputs,
+        answers,
         program_arguments,
         program_arguments_literal,
         json,
@@ -1542,7 +1641,6 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         record_dir,
         control,
         break_at,
-        acceleration,
     }))
 }
 
@@ -1888,6 +1986,69 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
             "applets": manifests.iter().map(|manifest| manifest.contract()).collect::<Vec<_>>()
         }))
     }
+}
+
+/// `execute compile --to sh FILE [--out PATH]`: write a checked POSIX sh script.
+/// Without `--out` the script goes to standard output; with it, only that path is written.
+fn compile_cli(arguments: &[String]) -> Result<()> {
+    const HELP: &str = "Usage: execute compile --to sh FILE [--out PATH]\n\nCompile a program to a POSIX sh script. Statements with no faithful sh equivalent are refused by name and line; nothing is approximated. Output goes to standard output unless --out names a file.";
+    if arguments == ["--help"] || arguments == ["-h"] {
+        writeln!(io::stdout(), "{HELP}")?;
+        return Ok(());
+    }
+    let mut target = None;
+    let mut output = None;
+    let mut file = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--to" => {
+                let value = arguments.get(index + 1).context(HELP)?;
+                if value != "sh" {
+                    bail!("compile supports only --to sh\n{HELP}");
+                }
+                target = Some(value.as_str());
+                index += 2;
+            }
+            "--out" => {
+                output = Some(PathBuf::from(arguments.get(index + 1).context(HELP)?));
+                index += 2;
+            }
+            flag if flag.starts_with('-') => bail!("unknown compile option {flag:?}\n{HELP}"),
+            path => {
+                if file.replace(PathBuf::from(path)).is_some() {
+                    bail!("compile takes one program file\n{HELP}");
+                }
+                index += 1;
+            }
+        }
+    }
+    if target.is_none() {
+        bail!("compile needs --to sh\n{HELP}");
+    }
+    let file = file.context(HELP)?;
+    let registry = load_registry(None, None)?;
+    let bytes = fs::read(&file).with_context(|| format!("reading program {}", file.display()))?;
+    let source = std::str::from_utf8(&bytes)
+        .with_context(|| format!("program {} is not valid UTF-8", file.display()))?;
+    let cwd = fs::canonicalize(env::current_dir()?)?;
+    let program = flow::program_files::parse_source(
+        &file,
+        source,
+        Some(flow::program_files::Access {
+            registry: &registry,
+            cwd: &cwd,
+        }),
+    )
+    .with_context(|| format!("parsing program {}", file.display()))?;
+    let script =
+        flow::compile_sh::compile(&program, &registry, &file.display().to_string(), &bytes)?;
+    match output {
+        Some(path) => fs::write(&path, script)
+            .with_context(|| format!("writing compiled script {}", path.display()))?,
+        None => io::stdout().write_all(script.as_bytes())?,
+    }
+    Ok(())
 }
 
 fn modules_cli(arguments: &[String]) -> Result<()> {

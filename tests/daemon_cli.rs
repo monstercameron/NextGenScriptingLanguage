@@ -1,19 +1,21 @@
-//! `execute daemon` (#77, first slice): status, serve, stop, directory checks, and the
-//! `run --daemon` probe. Program output must match a cold run exactly.
+//! `execute daemon` (#77): status, serve, stop, directory and peer checks, and forwarded
+//! runs. A forwarded run must match a cold run in output and exit status.
 #![cfg(unix)]
 
 use serde_json::Value;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+const PRINT_OUT: &str = r#"run printf with message "out""#;
 
 fn manifests() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
@@ -33,6 +35,7 @@ fn daemon_output(runtime_dir: &Path, arguments: &[&str]) -> Output {
 
 /// The socket `daemon serve` uses when no `--socket` is given under `runtime_dir`.
 fn default_socket_under(runtime_dir: &Path) -> PathBuf {
+    // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
     runtime_dir
         .join(format!("execute-{uid}"))
@@ -59,7 +62,7 @@ fn serve_in_background(runtime_dir: &Path) -> Daemon {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let status = daemon_output(runtime_dir, &["status"]);
-        let reply: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+        let reply: Value = serde_json::from_slice(&status.stdout).unwrap();
         if reply["running"] == true {
             return daemon;
         }
@@ -71,17 +74,46 @@ fn serve_in_background(runtime_dir: &Path) -> Daemon {
     }
 }
 
-fn run_program(runtime_dir: &Path, directory: &Path, extra: &[&str]) -> Output {
+/// Run `source` as a program. Stdin is null so an interactive program cannot block.
+fn run_source(runtime_dir: &Path, directory: &Path, source: &str, extra: &[&str]) -> Output {
     let path = directory.join("workflow.program");
-    fs::write(&path, r#"run printf with message "out""#).unwrap();
+    fs::write(&path, source).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
-    command.env("XDG_RUNTIME_DIR", runtime_dir);
-    command.env_remove("EXECUTE_DAEMON");
-    command.current_dir(directory);
-    command.arg("run").arg(&path);
-    command.arg("--manifest-dir").arg(manifests());
-    command.args(extra);
+    command
+        .env("XDG_RUNTIME_DIR", runtime_dir)
+        .env_remove("EXECUTE_DAEMON")
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .arg("run")
+        .arg(&path)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .args(extra);
     command.output().unwrap()
+}
+
+fn run_program(runtime_dir: &Path, directory: &Path, extra: &[&str]) -> Output {
+    run_source(runtime_dir, directory, PRINT_OUT, extra)
+}
+
+/// One request on a fresh connection, read up to its newline.
+fn raw_request(socket: &Path, operation: &str) -> Value {
+    let mut stream = UnixStream::connect(socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let request = format!("{{\"protocol\":\"execute.daemon/1\",\"op\":\"{operation}\"}}\n");
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let count = stream.read(&mut byte).unwrap();
+        if count == 0 || byte[0] == b'\n' {
+            break;
+        }
+        line.push(byte[0]);
+    }
+    serde_json::from_slice(&line).unwrap()
 }
 
 #[test]
@@ -89,7 +121,7 @@ fn daemon_status_reports_not_running_when_no_socket_exists() {
     let runtime = tempfile::tempdir().unwrap();
     let output = daemon_output(runtime.path(), &["status"]);
     assert!(output.status.success(), "{:?}", output);
-    let reply: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let reply: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(reply["running"], false);
     assert_eq!(reply["protocol"], "execute.daemon/1");
 }
@@ -101,7 +133,7 @@ fn daemon_serve_answers_status_and_stop_removes_its_socket() {
     let mut daemon = serve_in_background(runtime.path());
 
     let status = daemon_output(runtime.path(), &["status"]);
-    let reply: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    let reply: Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(reply["running"], true);
     assert!(socket.exists(), "socket at {}", socket.display());
 
@@ -143,7 +175,7 @@ fn daemon_serve_refuses_a_directory_that_is_not_private() {
 }
 
 #[test]
-fn run_with_daemon_flag_prints_the_same_output_and_notes_the_daemon() {
+fn run_with_daemon_flag_prints_the_same_output_silently() {
     let runtime = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
     let cold = run_program(runtime.path(), work.path(), &[]);
@@ -153,8 +185,11 @@ fn run_with_daemon_flag_prints_the_same_output_and_notes_the_daemon() {
     let warm = run_program(runtime.path(), work.path(), &["--daemon"]);
     assert!(warm.status.success(), "{:?}", warm);
     assert_eq!(warm.stdout, cold.stdout);
-    let stderr = String::from_utf8_lossy(&warm.stderr);
-    assert!(stderr.contains("daemon is running"), "{stderr}");
+    assert!(
+        warm.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
 }
 
 #[test]
@@ -172,21 +207,58 @@ fn run_with_daemon_flag_without_a_daemon_is_silent_and_cold() {
 }
 
 #[test]
-fn daemon_status_reports_not_running_without_creating_a_missing_directory() {
-    let runtime = TempDir::new().unwrap();
-    let missing = runtime.path().join("nope");
-    let output = daemon_output(
-        runtime.path(),
-        &[
-            "status",
-            "--socket",
-            missing.join("daemon.sock").to_str().unwrap(),
-        ],
-    );
-    assert!(output.status.success());
-    let reply: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(reply["running"], false);
-    assert!(!missing.exists());
+fn forwarded_run_exit_status_and_output_match_a_cold_run() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let source = "run printf with message \"a\"\nexit with status 7\n";
+    let cold = run_source(runtime.path(), work.path(), source, &[]);
+    assert_eq!(cold.status.code(), Some(7), "{:?}", cold);
+
+    let _daemon = serve_in_background(runtime.path());
+    let warm = run_source(runtime.path(), work.path(), source, &["--daemon"]);
+    assert_eq!(warm.status.code(), Some(7), "{:?}", warm);
+    assert_eq!(warm.stdout, cold.stdout);
+}
+
+#[test]
+fn concurrent_forwarded_runs_each_get_their_own_output_and_status() {
+    let runtime = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let handles: Vec<_> = (0..4_i32)
+        .map(|index| {
+            let runtime = runtime.path().to_path_buf();
+            thread::spawn(move || {
+                let work = tempfile::tempdir().unwrap();
+                let source = format!(
+                    "run printf with message \"run{index}\"\nexit with status {}\n",
+                    10 + index
+                );
+                (
+                    index,
+                    run_source(&runtime, work.path(), &source, &["--daemon"]),
+                )
+            })
+        })
+        .collect();
+    for handle in handles {
+        let (index, output) = handle.join().unwrap();
+        assert_eq!(output.status.code(), Some(10 + index), "{:?}", output);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("run{index}\n")
+        );
+    }
+}
+
+#[test]
+fn a_program_that_takes_the_terminal_is_declined_before_it_runs() {
+    let runtime = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let source = "interactively printf with message \"x\"\n";
+    let output = run_source(runtime.path(), work.path(), source, &["--daemon"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("will not run this program"), "{stderr}");
 }
 
 #[test]
@@ -231,5 +303,54 @@ fn a_socket_in_a_non_private_directory_is_never_contacted() {
         contacted.load(Ordering::SeqCst),
         0,
         "a request reached the untrusted socket"
+    );
+}
+
+/// Measures the warm round trip (connect, request, reply) and the end-to-end wall time of a
+/// forwarded run against a cold one. The figures are printed for CI; the assertion only
+/// guards against a gross regression.
+#[test]
+fn warm_round_trip_and_forwarded_run_latency_are_measured() {
+    let runtime = tempfile::tempdir().unwrap();
+    let socket = default_socket_under(runtime.path());
+    let _daemon = serve_in_background(runtime.path());
+
+    let mut round_trips = Vec::new();
+    for _ in 0..200 {
+        let started = Instant::now();
+        let reply = raw_request(&socket, "ping");
+        round_trips.push(started.elapsed());
+        assert_eq!(reply["ok"], true);
+    }
+    round_trips.sort();
+    let p50 = round_trips[round_trips.len() / 2];
+    let p95 = round_trips[round_trips.len() * 95 / 100];
+    eprintln!("daemon ping round trip (connect, request, reply): p50 {p50:?}, p95 {p95:?}");
+    assert!(
+        p50 < Duration::from_millis(20),
+        "ping round trip p50 {p50:?} is far above the target"
+    );
+
+    let work = tempfile::tempdir().unwrap();
+    let mut forwarded = Vec::new();
+    let mut cold = Vec::new();
+    for _ in 0..10 {
+        let started = Instant::now();
+        let output = run_program(runtime.path(), work.path(), &["--daemon"]);
+        forwarded.push(started.elapsed());
+        assert!(output.status.success(), "{:?}", output);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
+
+        let started = Instant::now();
+        let output = run_program(runtime.path(), work.path(), &[]);
+        cold.push(started.elapsed());
+        assert!(output.status.success(), "{:?}", output);
+    }
+    forwarded.sort();
+    cold.sort();
+    eprintln!(
+        "end-to-end run wall time: forwarded p50 {:?}, cold p50 {:?}",
+        forwarded[forwarded.len() / 2],
+        cold[cold.len() / 2]
     );
 }

@@ -1055,6 +1055,29 @@ pub(crate) fn parse_raw(source: &str) -> Result<RawProgram> {
     })
 }
 
+/// The quoted long name of a flag or option, then an optional `alias "-x"`. The
+/// spelling rules are checked where inputs are validated.
+fn parse_flag_spelling(
+    tokens: &[Token<'_>],
+    cursor: &mut usize,
+) -> Result<(String, Option<String>)> {
+    let Some(Token::String(name)) = tokens.get(*cursor) else {
+        bail!("a flag or option must be followed by a quoted name, for example \"--verbose\"");
+    };
+    *cursor += 1;
+    let alias = if word_is(tokens.get(*cursor), "alias") {
+        *cursor += 1;
+        let Some(Token::String(alias)) = tokens.get(*cursor) else {
+            bail!("`alias` must be followed by a quoted short name, for example \"-v\"");
+        };
+        *cursor += 1;
+        Some(alias.clone().into_owned())
+    } else {
+        None
+    };
+    Ok((name.clone().into_owned(), alias))
+}
+
 fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
     let name = parse_binding_identifier(tokens.get(1), "input name")?;
     if !word_is(tokens.get(2), "as") {
@@ -1116,8 +1139,40 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
                 cursor += 2;
                 InputSource::ProgramPath
             }
+            Some(Token::Word("prompt")) => {
+                cursor += 1;
+                let Some(Token::String(question)) = tokens.get(cursor) else {
+                    bail!("`from prompt` must be followed by a quoted question");
+                };
+                cursor += 1;
+                InputSource::Prompt {
+                    question: question.clone().into_owned(),
+                    secret: false,
+                }
+            }
+            Some(Token::Word("secret")) if word_is(tokens.get(cursor + 1), "prompt") => {
+                cursor += 2;
+                let Some(Token::String(question)) = tokens.get(cursor) else {
+                    bail!("`from secret prompt` must be followed by a quoted question");
+                };
+                cursor += 1;
+                InputSource::Prompt {
+                    question: question.clone().into_owned(),
+                    secret: true,
+                }
+            }
+            Some(Token::Word("flag")) => {
+                cursor += 1;
+                let (name, alias) = parse_flag_spelling(tokens, &mut cursor)?;
+                InputSource::Flag { name, alias }
+            }
+            Some(Token::Word("option")) => {
+                cursor += 1;
+                let (name, alias) = parse_flag_spelling(tokens, &mut cursor)?;
+                InputSource::Option { name, alias }
+            }
             _ => bail!(
-                "input source must be environment, argument, arguments, program directory, or program path"
+                "input source must be environment, argument, arguments, program directory, program path, prompt, flag, or option"
             ),
         };
         if matches!(
@@ -1126,6 +1181,15 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         ) && kind != InputType::Text
         {
             bail!("program location inputs must be text");
+        }
+        if let InputSource::Prompt { question, secret } = &source {
+            if question.is_empty() || question.contains(' ') {
+                bail!("the prompt question must be nonempty and contain no NUL bytes");
+            }
+            // A choice error would quote the answer, so a secret answer has no choices.
+            if *secret && (kind != InputType::Text || choices.is_some()) {
+                bail!("a secret prompt must be a text input without `one of`");
+            }
         }
         Some(source)
     } else {

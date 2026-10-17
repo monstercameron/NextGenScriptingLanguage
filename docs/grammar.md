@@ -29,6 +29,7 @@ option      = "with" "default" value | "described" "as" TEXT
 choices     = "[" TEXT { "," TEXT } "]"
 source      = "environment" TEXT | "arguments" | "argument" INTEGER
             | "program" ( "directory" | "path" )
+            | [ "secret" ] "prompt" TEXT
 TYPE        = "text" | "integer" | "boolean" | "list" "of" "text" | "json"
 ```
 
@@ -268,9 +269,10 @@ one in full.
 
 - `run FILE --what-if` prints the plan and its fingerprint, and runs nothing.
 - `run FILE --confirm FINGERPRINT` runs only when the current fingerprint matches. It
-  covers the plan, the resolved inputs (environment values as digests), the working
-  directory, the capability and data-flow policy file contents, the manifest files,
-  and the program's version. See the language reference for the exact list.
+  covers the plan, the resolved inputs (an environment value as an HMAC under a per-user
+  key, never the value), the working directory, the capability and data-flow policy
+  file contents, the manifest files, and the program's version. See the language
+  reference for the exact list.
 - `run FILE --single-instance LOCK` refuses to start while another run holds LOCK.
 - `run FILE --control` hosts the run on a live control endpoint, and `attach` reads or
   controls that endpoint.

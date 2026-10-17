@@ -283,11 +283,47 @@ fn input_signature(program: &Program, values: &BTreeMap<String, Value>) -> Resul
     if program.inputs.is_empty() {
         return Ok(None);
     }
+    // A secret prompt's answer is a candidate password, so the journal records it only
+    // under the per-user key. An unkeyed hash could be guessed offline from the journal.
+    let secret_key = if program.inputs.iter().any(|d| {
+        matches!(
+            d.source,
+            Some(crate::ast::InputSource::Prompt { secret: true, .. })
+        )
+    }) {
+        Some(crate::agent::what_if_key::load_or_create().context(
+            "a secret prompt input needs the private key before its checkpoint can be written",
+        )?)
+    } else {
+        None
+    };
     let signature = program
         .inputs
         .iter()
-        .map(|d| (&d.name, (d.kind, values.get(&d.name))))
-        .collect::<BTreeMap<_, _>>();
+        .map(|d| {
+            let value = values.get(&d.name);
+            let secret = matches!(
+                d.source,
+                Some(crate::ast::InputSource::Prompt { secret: true, .. })
+            );
+            let shown = match (&secret_key, secret, value) {
+                (Some(key), true, Some(value)) => {
+                    let mut message = d.name.as_bytes().to_vec();
+                    message.push(0);
+                    message.extend(serde_json::to_vec(value)?);
+                    serde_json::json!({
+                        "secret_hmac_sha256": crate::agent::what_if_key::hmac_sha256(key, &message)
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect::<String>()
+                    })
+                }
+                (_, _, Some(value)) => serde_json::to_value(value)?,
+                (_, _, None) => serde_json::Value::Null,
+            };
+            Ok((d.name.clone(), (d.kind, shown)))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
     let digest = Sha256::digest(serde_json::to_vec(&signature)?);
     Ok(Some(format!("inputs-v1:{digest:x}")))
 }
@@ -4553,6 +4589,15 @@ fn run_finite_state(
                             step.line
                         );
                     }
+                    // The policy must allow the temporary directory before the scope creates
+                    // anything there, and before its stale sweep can remove anything.
+                    crate::capabilities::authorize_host_path(
+                        registry,
+                        &std::env::temp_dir(),
+                        true,
+                        &cwd,
+                    )
+                    .with_context(|| format!("line {}", step.line))?;
                     let path = temp_scopes
                         .open(index, *kind)
                         .with_context(|| format!("line {}", step.line))?;

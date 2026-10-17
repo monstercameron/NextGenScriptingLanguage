@@ -467,6 +467,24 @@ pub enum InputSource {
     ProgramDirectory,
     /// `from program path`: the canonical path of the program file.
     ProgramPath,
+    /// `from prompt "QUESTION"`: asked on the terminal when no answer is supplied.
+    /// `secret` answers are read with echo off and never shown or recorded.
+    Prompt {
+        question: String,
+        secret: bool,
+    },
+    /// `from flag "--name" [alias "-x"]`: a boolean switch, true when present on the
+    /// command line after `--`.
+    Flag {
+        name: String,
+        alias: Option<String>,
+    },
+    /// `from option "--name" [alias "-x"]`: a value given as `--name VALUE` or
+    /// `--name=VALUE`.
+    Option {
+        name: String,
+        alias: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

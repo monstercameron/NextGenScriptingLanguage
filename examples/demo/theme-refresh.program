@@ -1,0 +1,23 @@
+# Omarchy-style theme refresh: render the templates into a theme directory, point the
+# current-theme link at it, then reload the compositor. The reload is the step that
+# can fail; `execute resume` continues from it after the cause is fixed.
+# See examples/demo/README.md for the inputs and the full walk-through.
+accept theme_name as text
+accept themes_root as text
+accept current_link as text
+accept templates as text
+accept values_json as text
+
+run path.join with parts [themes_root, theme_name] as theme_dir
+run fs.ensure_dir with path theme_dir as made_dir
+run json.parse with text values_json as values
+run fs.glob with pattern templates as template_files
+for each template in template_files
+  run path.basename with path template as file_name
+  run text.strip_suffix with text file_name and suffix ".tpl" as output_name
+  run path.join with parts [theme_dir, output_name] as output_path
+  run text.render with template_path template and values values as rendered
+  run fs.ensure_file with path output_path and content rendered as written
+run fs.ensure_symlink with path current_link and target theme_dir as swap
+run "hyprctl" with arguments ["reload"]
+run "printf" with arguments ["theme %s active\n", theme_name]

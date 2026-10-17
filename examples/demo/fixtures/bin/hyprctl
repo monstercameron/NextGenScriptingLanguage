@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake compositor for the demo. It succeeds only when DEMO_RELOAD_OK=1, which stands in
+# for fixing the compositor after a failed reload. Every call is appended to DEMO_LOG.
+printf 'hyprctl %s\n' "$*" >> "${DEMO_LOG:-/dev/null}"
+if [ "${DEMO_RELOAD_OK:-0}" = "1" ]; then
+  exit 0
+fi
+echo "hyprctl: reload failed (set DEMO_RELOAD_OK=1 once the compositor is fixed)" >&2
+exit 1

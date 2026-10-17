@@ -154,7 +154,7 @@ mod links {
         let text = shown(&output);
         assert!(!output.status.success(), "{text}");
         assert!(
-            text.contains("not allowed by the capability policy"),
+            text.contains("capability policy denies host filesystem access"),
             "{text}"
         );
         assert!(!text.contains(SECRET), "the secret was read: {text}");
@@ -181,7 +181,7 @@ mod links {
         let text = shown(&output);
         assert!(!output.status.success(), "{text}");
         assert!(
-            text.contains("not allowed by the capability policy"),
+            text.contains("capability policy denies host filesystem access"),
             "{text}"
         );
         assert!(!text.contains(SECRET), "the folder's file was read: {text}");
@@ -299,7 +299,7 @@ mod swap_after_use_folder {
 
         let grant = inside.display().to_string();
         let grant_entry = format!(
-            r#"{{"capabilities":["filesystem.read","filesystem.write"],"environment":[],"filesystem":{{"read":["{grant}"],"write":["{grant}"]}},"network":false,"network_origins":[],"sandbox_required":false}}"#
+            r#"{{"capabilities":["filesystem.read","filesystem.write","process.exec"],"environment":[],"filesystem":{{"read":["{grant}"],"write":["{grant}"]}},"network":false,"network_origins":[],"sandbox_required":false}}"#
         );
         fs::write(
             root.path().join("policy.json"),

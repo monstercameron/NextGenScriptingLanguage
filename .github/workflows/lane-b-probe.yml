@@ -1,0 +1,28 @@
+name: lane-b probe
+# Temporary verification workflow for branch lane-b/fix-five only. Delete with the branch.
+on:
+  push:
+    branches: [lane-b/fix-five]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  targeted:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Targeted suites
+        run: cargo test --locked --features full --no-fail-fast --lib --test conditions --test lane_b_redirect --test reusable_programs --test security_fixes -- --test-threads=1

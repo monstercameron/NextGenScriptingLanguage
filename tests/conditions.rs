@@ -193,13 +193,14 @@ fn malformed_blocks_and_excessive_nesting_are_rejected() {
         "if true is true\nrun pwd",
         "otherwise\n  run pwd",
         "if true is true\n  run pwd\notherwise\nrun pwd",
-        "if true is true\n  run pwd\notherwise if true is true\n  run pwd",
         "if true is true\n  run pwd\notherwise\n    run pwd",
         "if true is true\n  accept name as text",
         "if true is true\n  every 1 second\n    run pwd",
     ] {
         assert!(parser::parse(source).is_err(), "{source}");
     }
+    // A chain of `otherwise if` clauses that each have a body is complete at end of file.
+    assert!(parser::parse("if true is true\n  run pwd\notherwise if true is true\n  run pwd").is_ok());
     let mut source = String::new();
     for n in 0..64 {
         source.push_str(&format!("{}if true is true\n", "  ".repeat(n)));

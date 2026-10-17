@@ -114,11 +114,60 @@ when a value must preserve every source decimal digit. Refusals, incomplete outp
 and schema failures are errors; they do not become a low-confidence result or
 trigger a program branch. See the [OpenAI Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).
 
+## Endpoints, local models, and generation controls
+
+`llm.ask` and `llm.extract` accept these optional parameters. Each one is sent
+only when written, so a program that omits them produces the same request as
+before:
+
+| Parameter | Values | Wire effect |
+| --- | --- | --- |
+| `endpoint` | URL | Responses: the full URL, default `https://api.openai.com/v1/responses`. Chat Completions: a base URL; the helper posts to `{base}/chat/completions`, default base `https://api.openai.com/v1`. A trailing slash on the base is removed. |
+| `api` | `responses` (default), `chat_completions` | Selects the OpenAI wire protocol. |
+| `effort` | `none`, `low`, `medium`, `high`, `xhigh`, `max` | Responses: `reasoning.effort`. Chat Completions: `reasoning_effort`. `minimal` and other values are rejected locally. |
+| `temperature` | number from 0 to 2 | Top-level `temperature` in both protocols. Write a JSON number, not text. |
+
+Chat Completions sends `messages` with the instruction as `system` and the
+state as `user`, `stream: false`, and `max_tokens` (512 unless `max_tokens` is
+given). Extraction sends `response_format` with a strict `json_schema`. The
+result reads `choices[0].message.content`, `usage.prompt_tokens`, and
+`usage.completion_tokens`. A `finish_reason` of `length` is `incomplete`;
+`content_filter` or a non-null `message.refusal` is `refusal`. A missing or
+inconsistent `usage`, multiple choices, tool calls, or an unsupported role fail
+as `provider_output`. Local servers must therefore return usage.
+
+Compatible local servers such as llama.cpp, Ollama and vLLM expose Chat
+Completions. Example:
+
+```text
+llm.ask with model "local-model" and instruction "Summarize." and endpoint "http://127.0.0.1:11434/v1" and api "chat_completions" and effort "low" and temperature 0.2 and fixture "fixture.json" as raw
+```
+
+Endpoint rules: HTTPS is required for remote hosts. Plain HTTP is accepted only
+for loopback hosts (`127.0.0.1`, `::1`, `localhost`). Userinfo, query strings,
+and fragments are rejected. Redirects are never followed. Proxy environment
+variables are ignored; the explicit endpoint is the only destination.
+
+Credentials are optional only for loopback endpoints. A loopback request with
+no key sends no `Authorization` header. A remote endpoint without a key fails as
+`credentials_missing` before any connection. Process environment values still
+take precedence over an `env_file`.
+
+`api`, `effort` and `temperature` are OpenAI-only. Jev rejects them, and the
+helper rejects a duplicate of any of these options. Fixtures record `api`,
+`effort`, and `temperature` in the semantic request only when those options are
+used. `endpoint` is transport, so it is never part of the fixture request, which
+lets one fixture serve any loopback port. A fixture that describes
+`chat_completions` must include `"api": "chat_completions"`. Integer temperature
+values are stored as decimals, so write `1.0` in a fixture rather than `1`.
+
 ## Limits, credentials, and offline fixtures
 
 The manifests expose `timeout_ms`, `max_bytes`, and optional `fixture` for each
 operation; Jev operations also accept `minimum` and optional `model`. OpenAI
-operations accept `max_tokens` and require an explicit `model`. `timeout_ms`
+operations accept `max_tokens` and require an explicit `model`. `llm.ask` and
+`llm.extract` also accept `endpoint`, `api`, `effort`, and `temperature`; see
+the next section. `timeout_ms`
 bounds the helper's HTTP request. The runtime's `--command-timeout-ms` bounds the
 whole native pipeline, including helper startup and cleanup. `max_bytes` bounds
 the helper's input and provider request/response; the runtime's

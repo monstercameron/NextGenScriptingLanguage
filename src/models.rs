@@ -25,13 +25,54 @@ const MAX_TIMEOUT_MS: u64 = 300_000;
 const MAX_LIST_ITEMS: usize = 128;
 const MAX_ENV_FILE_BYTES: usize = 64 * 1024;
 const JEV_DEFAULT_MODEL: &str = "jev-latest";
+const MAX_BATCH_QUESTIONS: usize = 32;
+const MAX_NAME_BYTES: usize = 128;
 const JEV_ENDPOINT: &str = "https://api.typesafe.ai/v1/systemone";
 const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1/responses";
+const OPENAI_CHAT_BASE: &str = "https://api.openai.com/v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Provider {
     Jev,
     OpenAi,
+}
+
+/// OpenAI wire protocol. `Responses` is the default; `ChatCompletions` serves
+/// llama.cpp, Ollama, vLLM and other compatible hosts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Api {
+    Responses,
+    ChatCompletions,
+}
+
+/// Jev question type of one batched question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuestionKind {
+    Choice,
+    Noul,
+    Score,
+}
+
+impl QuestionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Choice => "choice",
+            Self::Noul => "noul",
+            Self::Score => "score",
+        }
+    }
+}
+
+/// One named question inside a `jev.ask` batch, validated before any request.
+#[derive(Clone, Debug, PartialEq)]
+struct BatchQuestion {
+    name: String,
+    kind: QuestionKind,
+    question: String,
+    labels: Vec<String>,
+    criteria: Option<BTreeMap<String, String>>,
+    levels: Vec<String>,
+    minimum: u8,
 }
 
 impl Provider {
@@ -48,6 +89,7 @@ enum Kind {
     Classify,
     Judge,
     Score,
+    Ask,
     Generate,
     Extract,
 }
@@ -58,6 +100,7 @@ impl Kind {
             Self::Classify => "classify",
             Self::Judge => "judge",
             Self::Score => "score",
+            Self::Ask => "ask",
             Self::Generate => "generate",
             Self::Extract => "extract",
         }
@@ -68,13 +111,20 @@ impl Kind {
 struct Options {
     kind: Kind,
     provider: Provider,
+    api: Api,
     model: Option<String>,
     question: Option<String>,
     instruction: Option<String>,
+    /// For classify: the allowed labels. With `criteria`, these are its keys.
     labels: Vec<String>,
+    /// Classify label descriptions, mutually exclusive with `--labels`.
+    criteria: Option<BTreeMap<String, String>>,
     levels: Vec<String>,
+    questions: Option<Vec<BatchQuestion>>,
     minimum: u8,
     max_tokens: Option<u32>,
+    effort: Option<String>,
+    temperature: Option<f64>,
     timeout_ms: u64,
     max_bytes: usize,
     env_file: Option<String>,
@@ -178,20 +228,16 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
         std::env::var_os("EXECUTE_MODELS_OFFLINE").is_some(),
         options.fixture.is_some(),
     )?;
+    let endpoint = endpoint_for(&options).map_err(|_| failure(FailureClass::Configuration))?;
+    validate_endpoint(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
+    let parsed = Url::parse(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
+    let loopback = parsed.host().is_some_and(is_loopback);
     let transport = if options.fixture.is_some() {
         "fixture"
+    } else if parsed.scheme() == "https" {
+        "https"
     } else {
-        let endpoint = options
-            .endpoint
-            .as_deref()
-            .unwrap_or_else(|| default_endpoint(options.provider));
-        validate_endpoint(endpoint).map_err(|_| failure(FailureClass::Configuration))?;
-        let parsed = Url::parse(endpoint).map_err(|_| failure(FailureClass::Configuration))?;
-        if parsed.scheme() == "https" {
-            "https"
-        } else {
-            "http_loopback"
-        }
+        "http_loopback"
     };
     let state = read_state(input, options.max_bytes).map_err(|_| failure(FailureClass::Input))?;
     let semantic =
@@ -209,20 +255,17 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
             }
         })?
     } else {
-        let endpoint = options
-            .endpoint
-            .as_deref()
-            .unwrap_or_else(|| default_endpoint(options.provider));
-        let key = credential(options.provider, options.env_file.as_deref()).map_err(|error| {
-            if error.downcast_ref::<ModelFailure>().is_some() {
-                error
-            } else {
-                failure(FailureClass::Configuration)
-            }
-        })?;
+        // Credentials are optional only when the endpoint is loopback, which
+        // covers local model servers. Remote endpoints always need a key.
+        let key = match credential(options.provider, options.env_file.as_deref()) {
+            Ok(key) => Some(key),
+            Err(error) if loopback && is_failure(&error, FailureClass::CredentialsMissing) => None,
+            Err(error) if error.downcast_ref::<ModelFailure>().is_some() => return Err(error),
+            Err(_) => return Err(failure(FailureClass::Configuration)),
+        };
         post_json(
-            endpoint,
-            &key,
+            &endpoint,
+            key.as_deref(),
             &request,
             options.timeout_ms,
             options.max_bytes,
@@ -249,17 +292,20 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
 
 /// Concise stable command synopsis for scripts and `execute-model --help`.
 pub fn help() -> &'static str {
-    "Usage: execute-model <classify|judge|score|generate|extract> [options]\n\
+    "Usage: execute-model <classify|judge|score|ask|generate|extract> [options]\n\
 Reads state/input bytes from stdin and writes one execute.model/1 JSON result.\n\
 Options: --provider jev|openai --model NAME --question TEXT --instruction TEXT\n\
-         --labels LABEL... --levels LEVEL... --schema JSON --minimum 0..100\n\
-         --max-tokens N --timeout-ms N --max-bytes N --env-file PATH\n\
-         --endpoint URL --fixture PATH\n\
+         --labels LABEL... | --criteria JSON --levels LEVEL... --questions JSON\n\
+         --schema JSON --minimum 0..100 --max-tokens N --timeout-ms N\n\
+         --max-bytes N --env-file PATH --endpoint URL --fixture PATH\n\
+         --api responses|chat_completions --effort none|low|medium|high|xhigh|max\n\
+         --temperature 0..2\n\
 Jev defaults to jev-latest. OpenAI requires --model. Fixture mode never reads\n\
 credentials or contacts a network service. OpenAI output is capped at 512\n\
 tokens unless --max-tokens overrides it. Values beginning with -- cannot be\n\
-used as labels or levels. Set EXECUTE_MODELS_OFFLINE to reject live requests.
-No automatic retries are performed."
+used as labels or levels. Set EXECUTE_MODELS_OFFLINE to reject live requests.\n\
+Credentials are optional only for loopback endpoints. No automatic retries are\n\
+performed."
 }
 
 fn parse_args(args: &[String]) -> Result<Options> {
@@ -273,6 +319,7 @@ fn parse_args(args: &[String]) -> Result<Options> {
         "classify" => Kind::Classify,
         "judge" => Kind::Judge,
         "score" => Kind::Score,
+        "ask" => Kind::Ask,
         "generate" => Kind::Generate,
         "extract" => Kind::Extract,
         _ => bail!("invalid operation"),
@@ -280,13 +327,18 @@ fn parse_args(args: &[String]) -> Result<Options> {
     let mut options = Options {
         kind,
         provider: Provider::Jev,
+        api: Api::Responses,
         model: None,
         question: None,
         instruction: None,
         labels: Vec::new(),
+        criteria: None,
         levels: Vec::new(),
+        questions: None,
         minimum: 0,
         max_tokens: None,
+        effort: None,
+        temperature: None,
         timeout_ms: DEFAULT_TIMEOUT_MS,
         max_bytes: DEFAULT_MAX_BYTES,
         env_file: None,
@@ -332,9 +384,20 @@ fn parse_args(args: &[String]) -> Result<Options> {
                     _ => bail!("unsupported provider"),
                 }
             }
+            "--api" => {
+                options.api = match value.as_str() {
+                    "responses" => Api::Responses,
+                    "chat_completions" => Api::ChatCompletions,
+                    _ => bail!("unsupported api"),
+                }
+            }
             "--model" => options.model = Some(nonempty(value, "model")?),
             "--question" => options.question = Some(nonempty(value, "question")?),
             "--instruction" => options.instruction = Some(nonempty(value, "instruction")?),
+            "--criteria" => options.criteria = Some(parse_criteria(value)?),
+            "--questions" => options.questions = Some(parse_questions(value)?),
+            "--effort" => options.effort = Some(parse_effort(value)?),
+            "--temperature" => options.temperature = Some(parse_temperature(value)?),
             "--minimum" => options.minimum = parse_integer(value, 0, 100, "minimum")? as u8,
             "--max-tokens" => {
                 options.max_tokens = Some(parse_integer(value, 1, 65_536, "max-tokens")? as u32)
@@ -364,11 +427,181 @@ fn parse_args(args: &[String]) -> Result<Options> {
         }
         index += 2;
     }
-    validate_options(&options)?;
+    validate_options(&mut options, &seen)?;
     Ok(options)
 }
 
-fn validate_options(options: &Options) -> Result<()> {
+fn parse_effort(value: &str) -> Result<String> {
+    match value {
+        "none" | "low" | "medium" | "high" | "xhigh" | "max" => Ok(value.to_owned()),
+        _ => bail!("effort is not supported"),
+    }
+}
+
+fn parse_temperature(value: &str) -> Result<f64> {
+    let parsed: Value = serde_json::from_str(value).context("invalid temperature")?;
+    let temperature = parsed
+        .as_f64()
+        .filter(|number| number.is_finite() && (0.0..=2.0).contains(number))
+        .ok_or_else(|| anyhow!("temperature is outside its supported range"))?;
+    // Normalize negative zero so the semantic request has one canonical form.
+    Ok(temperature + 0.0)
+}
+
+fn validate_label(label: &str) -> Result<()> {
+    if label.is_empty() || label.starts_with("--") || label.contains('\0') {
+        bail!("labels must be nonempty, must not contain NUL, and must not begin with --");
+    }
+    Ok(())
+}
+
+/// Label-to-description map from a JSON object. Each label is a valid choice
+/// label; each description is nonempty text.
+fn criteria_from_value(value: &Value) -> Result<BTreeMap<String, String>> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("criteria must be an object"))?;
+    if object.len() < 2 || object.len() > MAX_LIST_ITEMS {
+        bail!("criteria needs between two and 128 entries");
+    }
+    let mut criteria = BTreeMap::new();
+    for (label, description) in object {
+        validate_label(label)?;
+        let description = description
+            .as_str()
+            .filter(|text| !text.trim().is_empty() && !text.contains('\0'))
+            .ok_or_else(|| anyhow!("criteria descriptions must be nonempty text"))?;
+        criteria.insert(label.clone(), description.to_owned());
+    }
+    Ok(criteria)
+}
+
+fn parse_criteria(value: &str) -> Result<BTreeMap<String, String>> {
+    let parsed = parse_unique_json(value.as_bytes())?;
+    criteria_from_value(&parsed)
+}
+
+/// A nonempty-element, unique, bounded list of labels or levels.
+fn string_list(value: Option<&Value>, name: &str) -> Result<Vec<String>> {
+    let items = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("{name} must be a list of text"))?;
+    if items.len() < 2 || items.len() > MAX_LIST_ITEMS {
+        bail!("{name} needs between two and 128 entries");
+    }
+    let mut unique = BTreeSet::new();
+    let mut list = Vec::with_capacity(items.len());
+    for item in items {
+        let text = item
+            .as_str()
+            .ok_or_else(|| anyhow!("{name} must be a list of text"))?;
+        validate_label(text)?;
+        if !unique.insert(text) {
+            bail!("{name} entries must be unique");
+        }
+        list.push(text.to_owned());
+    }
+    Ok(list)
+}
+
+fn parse_question(name: &str, spec: &Value) -> Result<BatchQuestion> {
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.contains('\0') {
+        bail!("question names must be nonempty and at most 128 bytes");
+    }
+    let object = spec
+        .as_object()
+        .ok_or_else(|| anyhow!("question must be an object"))?;
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "type" | "question" | "labels" | "criteria" | "levels" | "minimum"
+        )
+    }) {
+        bail!("question contains an unsupported field");
+    }
+    let kind = match object.get("type").and_then(Value::as_str) {
+        Some("choice") => QuestionKind::Choice,
+        Some("noul") => QuestionKind::Noul,
+        Some("score") => QuestionKind::Score,
+        _ => bail!("question type must be choice, noul, or score"),
+    };
+    let question = object
+        .get("question")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty() && !text.contains('\0'))
+        .ok_or_else(|| anyhow!("question text must be nonempty"))?
+        .to_owned();
+    let minimum = match object.get("minimum") {
+        None => 0,
+        Some(value) => value
+            .as_u64()
+            .filter(|number| *number <= 100)
+            .ok_or_else(|| anyhow!("minimum must be an integer from 0 to 100"))?
+            as u8,
+    };
+    let has = |key: &str| object.contains_key(key);
+    let (labels, criteria, levels) = match kind {
+        QuestionKind::Choice => {
+            if has("levels") {
+                bail!("choice questions take labels or criteria, not levels");
+            }
+            match (has("labels"), has("criteria")) {
+                (true, false) => (
+                    string_list(object.get("labels"), "labels")?,
+                    None,
+                    Vec::new(),
+                ),
+                (false, true) => {
+                    let criteria = criteria_from_value(&object["criteria"])?;
+                    let labels = criteria.keys().cloned().collect();
+                    (labels, Some(criteria), Vec::new())
+                }
+                _ => bail!("choice questions need exactly one of labels or criteria"),
+            }
+        }
+        QuestionKind::Noul => {
+            if has("labels") || has("criteria") || has("levels") {
+                bail!("noul questions take no labels, criteria, or levels");
+            }
+            (Vec::new(), None, Vec::new())
+        }
+        QuestionKind::Score => {
+            if has("labels") || has("criteria") {
+                bail!("score questions take levels, not labels or criteria");
+            }
+            (
+                Vec::new(),
+                None,
+                string_list(object.get("levels"), "levels")?,
+            )
+        }
+    };
+    Ok(BatchQuestion {
+        name: name.to_owned(),
+        kind,
+        question,
+        labels,
+        criteria,
+        levels,
+        minimum,
+    })
+}
+
+fn parse_questions(value: &str) -> Result<Vec<BatchQuestion>> {
+    let parsed = parse_unique_json(value.as_bytes())?;
+    let object = parsed
+        .as_object()
+        .ok_or_else(|| anyhow!("questions must be an object"))?;
+    if object.is_empty() || object.len() > MAX_BATCH_QUESTIONS {
+        bail!("ask needs between one and 32 questions");
+    }
+    object
+        .iter()
+        .map(|(name, spec)| parse_question(name, spec))
+        .collect()
+}
+
+fn validate_options(options: &mut Options, seen: &BTreeSet<String>) -> Result<()> {
     if options.labels.len() > MAX_LIST_ITEMS || options.levels.len() > MAX_LIST_ITEMS {
         bail!("too many labels or levels");
     }
@@ -380,10 +613,32 @@ fn validate_options(options: &Options) -> Result<()> {
             }
         }
     }
+    if let Some(criteria) = &options.criteria {
+        if !options.labels.is_empty() {
+            bail!("classify accepts labels or criteria, not both");
+        }
+        options.labels = criteria.keys().cloned().collect();
+    }
+    if options.kind != Kind::Classify && options.criteria.is_some() {
+        bail!("criteria are only supported by classify");
+    }
+    if options.kind != Kind::Ask && options.questions.is_some() {
+        bail!("questions are only supported by ask");
+    }
     let question_mode = matches!(options.kind, Kind::Classify | Kind::Judge | Kind::Score);
     if question_mode {
         if options.question.as_deref().is_none_or(str::is_empty) || options.instruction.is_some() {
             bail!("operation requires --question only");
+        }
+    } else if options.kind == Kind::Ask {
+        if options.question.is_some()
+            || options.instruction.is_some()
+            || !options.labels.is_empty()
+            || !options.levels.is_empty()
+            || seen.contains("--minimum")
+            || options.schema.is_some()
+        {
+            bail!("ask takes only questions, model, and transport options");
         }
     } else if options.instruction.as_deref().is_none_or(str::is_empty) || options.question.is_some()
     {
@@ -391,11 +646,14 @@ fn validate_options(options: &Options) -> Result<()> {
     }
     match (options.provider, options.kind) {
         (Provider::Jev, Kind::Classify) if options.labels.len() >= 2 => {}
-        (Provider::Jev, Kind::Classify) => bail!("classify needs at least two labels"),
+        (Provider::Jev, Kind::Classify) => {
+            bail!("classify needs labels or criteria with at least two entries")
+        }
         (Provider::Jev, Kind::Judge) if options.labels.is_empty() && options.levels.is_empty() => {}
         (Provider::Jev, Kind::Judge) => bail!("judge does not accept labels or levels"),
         (Provider::Jev, Kind::Score) if options.levels.len() >= 2 && options.labels.is_empty() => {}
         (Provider::Jev, Kind::Score) => bail!("score needs at least two levels"),
+        (Provider::Jev, Kind::Ask) if options.questions.is_some() => {}
         (Provider::OpenAi, Kind::Generate)
             if options.labels.is_empty()
                 && options.levels.is_empty()
@@ -409,16 +667,24 @@ fn validate_options(options: &Options) -> Result<()> {
     if options.provider == Provider::OpenAi && options.model.as_deref().is_none_or(str::is_empty) {
         bail!("OpenAI requires an explicit model");
     }
-    if options.provider == Provider::Jev && options.max_tokens.is_some() {
-        bail!("max-tokens is only supported by OpenAI Responses");
+    if options.provider == Provider::Jev {
+        if options.max_tokens.is_some() {
+            bail!("max-tokens is only supported by OpenAI Responses");
+        }
+        if options.schema.is_some() {
+            bail!("schema is only supported by OpenAI extraction");
+        }
+        if seen.contains("--api") {
+            bail!("api is only supported by OpenAI");
+        }
+        if options.effort.is_some() || options.temperature.is_some() {
+            bail!("effort and temperature are only supported by OpenAI");
+        }
     }
-    if options.provider == Provider::Jev && options.schema.is_some() {
-        bail!("schema is only supported by OpenAI extraction");
-    }
-    if !matches!(options.kind, Kind::Classify) && !options.labels.is_empty() {
+    if !matches!(options.kind, Kind::Classify | Kind::Ask) && !options.labels.is_empty() {
         bail!("labels are only supported by classify");
     }
-    if !matches!(options.kind, Kind::Score) && !options.levels.is_empty() {
+    if !matches!(options.kind, Kind::Score | Kind::Ask) && !options.levels.is_empty() {
         bail!("levels are only supported by score");
     }
     Ok(())
@@ -575,11 +841,18 @@ fn semantic_request(options: &Options, state: Value) -> Result<Value> {
     request.insert("model".into(), json!(model));
     request.insert("state".into(), state);
     match options.provider {
+        Provider::Jev if options.kind == Kind::Ask => {
+            request.insert("questions".into(), batch_questions_semantic(options));
+        }
         Provider::Jev => {
             request.insert("question".into(), json!(options.question));
             request.insert("minimum".into(), json!(options.minimum));
             if options.kind == Kind::Classify {
-                request.insert("labels".into(), json!(options.labels));
+                // Keep the semantic key for each form: criteria replaces labels.
+                match &options.criteria {
+                    Some(criteria) => request.insert("criteria".into(), json!(criteria)),
+                    None => request.insert("labels".into(), json!(options.labels)),
+                };
             }
             if options.kind == Kind::Score {
                 request.insert("levels".into(), json!(options.levels));
@@ -593,9 +866,79 @@ fn semantic_request(options: &Options, state: Value) -> Result<Value> {
             if let Some(max_tokens) = options.max_tokens {
                 request.insert("max_tokens".into(), json!(max_tokens));
             }
+            // Transport-only fields stay out of the request. `api` changes the
+            // response shape a fixture must describe, so it is semantic.
+            if options.api == Api::ChatCompletions {
+                request.insert("api".into(), json!("chat_completions"));
+            }
+            if let Some(effort) = &options.effort {
+                request.insert("effort".into(), json!(effort));
+            }
+            if let Some(temperature) = options.temperature {
+                request.insert("temperature".into(), json!(temperature));
+            }
         }
     }
     Ok(Value::Object(request))
+}
+
+/// Canonical batch question map used by fixtures. Every question carries its
+/// type, text and minimum; choice questions carry either labels or criteria.
+fn batch_questions_semantic(options: &Options) -> Value {
+    let questions = options.questions.as_deref().unwrap_or_default();
+    let map = questions
+        .iter()
+        .map(|question| {
+            let mut spec = Map::new();
+            spec.insert("type".into(), json!(question.kind.as_str()));
+            spec.insert("question".into(), json!(question.question));
+            spec.insert("minimum".into(), json!(question.minimum));
+            match question.kind {
+                QuestionKind::Choice => match &question.criteria {
+                    Some(criteria) => spec.insert("criteria".into(), json!(criteria)),
+                    None => spec.insert("labels".into(), json!(question.labels)),
+                },
+                QuestionKind::Noul => None,
+                QuestionKind::Score => spec.insert("levels".into(), json!(question.levels)),
+            };
+            (question.name.clone(), Value::Object(spec))
+        })
+        .collect::<Map<_, _>>();
+    Value::Object(map)
+}
+
+/// The Jev question object for one decision. A choice's criteria map gives each
+/// label its description; without criteria, each label is its own criterion.
+fn jev_question(
+    kind: QuestionKind,
+    instructions: &str,
+    labels: &[String],
+    criteria: Option<&BTreeMap<String, String>>,
+    levels: &[String],
+) -> Value {
+    let mut question = Map::new();
+    question.insert("type".into(), json!(kind.as_str()));
+    question.insert("instructions".into(), json!(instructions));
+    match kind {
+        QuestionKind::Choice => {
+            let map = match criteria {
+                Some(criteria) => criteria
+                    .iter()
+                    .map(|(label, text)| (label.clone(), Value::String(text.clone())))
+                    .collect::<Map<_, _>>(),
+                None => labels
+                    .iter()
+                    .map(|label| (label.clone(), Value::String(label.clone())))
+                    .collect::<Map<_, _>>(),
+            };
+            question.insert("criteria".into(), Value::Object(map));
+        }
+        QuestionKind::Noul => {}
+        QuestionKind::Score => {
+            question.insert("criteria".into(), json!(levels));
+        }
+    }
+    Value::Object(question)
 }
 
 fn provider_request(options: &Options, state: Option<&Value>) -> Result<Value> {
@@ -603,33 +946,48 @@ fn provider_request(options: &Options, state: Option<&Value>) -> Result<Value> {
     let model = semantic["model"].clone();
     match options.provider {
         Provider::Jev => {
-            let mut question = Map::new();
-            match options.kind {
-                Kind::Classify => {
-                    let criteria = options
-                        .labels
-                        .iter()
-                        .map(|label| (label.clone(), Value::String(label.clone())))
-                        .collect::<Map<_, _>>();
-                    question.insert("type".into(), json!("choice"));
-                    question.insert("instructions".into(), json!(options.question));
-                    question.insert("criteria".into(), Value::Object(criteria));
-                }
-                Kind::Judge => {
-                    question.insert("type".into(), json!("noul"));
-                    question.insert("instructions".into(), json!(options.question));
-                }
-                Kind::Score => {
-                    question.insert("type".into(), json!("score"));
-                    question.insert("instructions".into(), json!(options.question));
-                    question.insert("criteria".into(), json!(options.levels));
-                }
-                _ => bail!("unsupported Jev operation"),
+            if options.kind == Kind::Ask {
+                let questions = options
+                    .questions
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("missing batch questions"))?
+                    .iter()
+                    .map(|question| {
+                        (
+                            question.name.clone(),
+                            jev_question(
+                                question.kind,
+                                &question.question,
+                                &question.labels,
+                                question.criteria.as_ref(),
+                                &question.levels,
+                            ),
+                        )
+                    })
+                    .collect::<Map<_, _>>();
+                return Ok(json!({
+                    "model": model,
+                    "state": semantic["state"],
+                    "questions": Value::Object(questions)
+                }));
             }
+            let text = options.question.as_deref().unwrap_or_default();
+            let question = match options.kind {
+                Kind::Classify => jev_question(
+                    QuestionKind::Choice,
+                    text,
+                    &options.labels,
+                    options.criteria.as_ref(),
+                    &[],
+                ),
+                Kind::Judge => jev_question(QuestionKind::Noul, text, &[], None, &[]),
+                Kind::Score => jev_question(QuestionKind::Score, text, &[], None, &options.levels),
+                _ => bail!("unsupported Jev operation"),
+            };
             Ok(json!({
                 "model": model,
                 "state": semantic["state"],
-                "questions": { "decision": Value::Object(question) }
+                "questions": { "decision": question }
             }))
         }
         Provider::OpenAi => {
@@ -640,23 +998,57 @@ fn provider_request(options: &Options, state: Option<&Value>) -> Result<Value> {
                 Value::String(text) => text.clone(),
                 value => serde_json::to_string(value).context("encoding model state")?,
             };
-            let mut request = json!({
-                "model": model,
-                "store": false,
-                "instructions": options.instruction,
-                "input": input
-            });
-            request["max_output_tokens"] =
-                json!(options.max_tokens.unwrap_or(DEFAULT_OPENAI_MAX_TOKENS));
+            let max_tokens = options.max_tokens.unwrap_or(DEFAULT_OPENAI_MAX_TOKENS);
+            let mut request = match options.api {
+                Api::Responses => json!({
+                    "model": model,
+                    "store": false,
+                    "instructions": options.instruction,
+                    "input": input,
+                    "max_output_tokens": max_tokens
+                }),
+                Api::ChatCompletions => json!({
+                    "model": model,
+                    "stream": false,
+                    "messages": [
+                        { "role": "system", "content": options.instruction },
+                        { "role": "user", "content": input }
+                    ],
+                    "max_tokens": max_tokens
+                }),
+            };
             if let Some(schema) = &options.schema {
-                request["text"] = json!({
-                    "format": {
-                        "type": "json_schema",
-                        "name": "execute_model_extract",
-                        "strict": true,
-                        "schema": schema
+                match options.api {
+                    Api::Responses => {
+                        request["text"] = json!({
+                            "format": {
+                                "type": "json_schema",
+                                "name": "execute_model_extract",
+                                "strict": true,
+                                "schema": schema
+                            }
+                        });
                     }
-                });
+                    Api::ChatCompletions => {
+                        request["response_format"] = json!({
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "execute_model_extract",
+                                "strict": true,
+                                "schema": schema
+                            }
+                        });
+                    }
+                }
+            }
+            if let Some(effort) = &options.effort {
+                match options.api {
+                    Api::Responses => request["reasoning"] = json!({ "effort": effort }),
+                    Api::ChatCompletions => request["reasoning_effort"] = json!(effort),
+                }
+            }
+            if let Some(temperature) = options.temperature {
+                request["temperature"] = json!(temperature);
             }
             Ok(request)
         }
@@ -693,10 +1085,28 @@ fn read_fixture(path: &str, expected: &Value, limit: usize) -> Result<Value> {
     Ok(response)
 }
 
-fn default_endpoint(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Jev => JEV_ENDPOINT,
-        Provider::OpenAi => OPENAI_ENDPOINT,
+fn is_failure(error: &anyhow::Error, class: FailureClass) -> bool {
+    error
+        .downcast_ref::<ModelFailure>()
+        .is_some_and(|failure| std::mem::discriminant(&failure.0) == std::mem::discriminant(&class))
+}
+
+/// The URL that receives the provider request. Responses uses `endpoint` as the
+/// full URL; Chat Completions treats it as the base and appends `/chat/completions`.
+fn endpoint_for(options: &Options) -> Result<String> {
+    match (options.provider, options.api) {
+        (Provider::Jev, _) => Ok(options
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| JEV_ENDPOINT.to_owned())),
+        (Provider::OpenAi, Api::Responses) => Ok(options
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| OPENAI_ENDPOINT.to_owned())),
+        (Provider::OpenAi, Api::ChatCompletions) => {
+            let base = options.endpoint.as_deref().unwrap_or(OPENAI_CHAT_BASE);
+            Ok(format!("{}/chat/completions", base.trim_end_matches('/')))
+        }
     }
 }
 
@@ -857,7 +1267,7 @@ fn parse_env_value(raw: &str) -> Result<String> {
 
 fn post_json(
     endpoint: &str,
-    key: &str,
+    key: Option<&str>,
     body: &[u8],
     timeout_ms: u64,
     max_bytes: usize,
@@ -876,16 +1286,18 @@ fn post_json(
     );
     let config = config.build();
     let agent: ureq::Agent = config.into();
-    let mut response = agent
+    let request = agent
         .post(endpoint)
-        .header("Authorization", &format!("Bearer {key}"))
         .header("Accept", "application/json")
-        .content_type("application/json")
-        .send(body)
-        .map_err(|error| match error {
-            ureq::Error::StatusCode(status) => failure(FailureClass::HttpStatus(status)),
-            _ => failure(FailureClass::Transport),
-        })?;
+        .content_type("application/json");
+    let request = match key {
+        Some(key) => request.header("Authorization", &format!("Bearer {key}")),
+        None => request,
+    };
+    let mut response = request.send(body).map_err(|error| match error {
+        ureq::Error::StatusCode(status) => failure(FailureClass::HttpStatus(status)),
+        _ => failure(FailureClass::Transport),
+    })?;
     if !response.status().is_success() {
         return Err(failure(FailureClass::HttpStatus(
             response.status().as_u16(),
@@ -907,9 +1319,10 @@ fn normalize_response(
     transport: &str,
 ) -> Result<Value> {
     let model = required_string(raw, "model")?;
-    let usage = match options.provider {
-        Provider::Jev => normalize_jev_usage(raw.get("usage"))?,
-        Provider::OpenAi => normalize_openai_usage(raw.get("usage"))?,
+    let usage = match (options.provider, options.api) {
+        (Provider::Jev, _) => normalize_jev_usage(raw.get("usage"))?,
+        (Provider::OpenAi, Api::Responses) => normalize_openai_usage(raw.get("usage"))?,
+        (Provider::OpenAi, Api::ChatCompletions) => normalize_chat_usage(raw.get("usage"))?,
     };
     let mut normalized = Map::new();
     normalized.insert("protocol".into(), json!("execute.model/1"));
@@ -982,6 +1395,33 @@ fn normalize_jev_answer(
     out: &mut Map<String, Value>,
 ) -> Result<()> {
     let answers = required_object(raw, "answers")?;
+    if options.kind == Kind::Ask {
+        let questions = options.questions.as_deref().unwrap_or_default();
+        let expected = questions
+            .iter()
+            .map(|question| question.name.clone())
+            .collect::<BTreeSet<_>>();
+        if answers.keys().cloned().collect::<BTreeSet<_>>() != expected {
+            bail!("provider answers do not match the requested questions");
+        }
+        let mut normalized = Map::new();
+        for question in questions {
+            let answer = answers
+                .get(&question.name)
+                .and_then(Value::as_object)
+                .ok_or_else(|| anyhow!("provider answer is malformed"))?;
+            let fields = jev_answer_fields(
+                question.kind,
+                answer,
+                &question.labels,
+                &question.levels,
+                question.minimum,
+            )?;
+            normalized.insert(question.name.clone(), Value::Object(fields));
+        }
+        out.insert("answers".into(), Value::Object(normalized));
+        return Ok(());
+    }
     if answers.len() != 1 {
         bail!("provider returned an unexpected answer set");
     }
@@ -989,21 +1429,42 @@ fn normalize_jev_answer(
         .get("decision")
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("provider answer is malformed"))?;
-    let expected_type = match options.kind {
-        Kind::Classify => "choice",
-        Kind::Judge => "noul",
-        Kind::Score => "score",
+    let kind = match options.kind {
+        Kind::Classify => QuestionKind::Choice,
+        Kind::Judge => QuestionKind::Noul,
+        Kind::Score => QuestionKind::Score,
         _ => bail!("unsupported Jev operation"),
     };
-    if answer.get("type").and_then(Value::as_str) != Some(expected_type) {
+    let fields = jev_answer_fields(
+        kind,
+        answer,
+        &options.labels,
+        &options.levels,
+        options.minimum,
+    )?;
+    out.extend(fields);
+    Ok(())
+}
+
+/// Validate one Jev answer against the request that produced it and return its
+/// normalized fields. `accepted` compares the integer confidence with `minimum`.
+fn jev_answer_fields(
+    kind: QuestionKind,
+    answer: &Map<String, Value>,
+    labels: &[String],
+    levels: &[String],
+    minimum: u8,
+) -> Result<Map<String, Value>> {
+    if answer.get("type").and_then(Value::as_str) != Some(kind.as_str()) {
         bail!("provider answer type does not match request");
     }
-    match options.kind {
-        Kind::Classify => {
+    let mut out = Map::new();
+    match kind {
+        QuestionKind::Choice => {
             let label = answer
                 .get("choice")
                 .and_then(Value::as_str)
-                .filter(|label| options.labels.iter().any(|candidate| candidate == label))
+                .filter(|label| labels.iter().any(|candidate| candidate == label))
                 .ok_or_else(|| anyhow!("provider returned an unknown choice"))?;
             let confidence = finite_probability(answer.get("confidence"))?;
             let probabilities = answer
@@ -1012,40 +1473,31 @@ fn normalize_jev_answer(
                 .ok_or_else(|| anyhow!("provider probabilities are malformed"))?;
             validate_probabilities(
                 probabilities,
-                &options.labels.iter().cloned().collect::<BTreeSet<_>>(),
+                &labels.iter().cloned().collect::<BTreeSet<_>>(),
             )?;
             let confidence_percent = confidence_percent(confidence);
             out.insert("label".into(), json!(label));
             out.insert("confidence_percent".into(), json!(confidence_percent));
-            out.insert(
-                "accepted".into(),
-                json!(confidence_percent >= options.minimum),
-            );
+            out.insert("accepted".into(), json!(confidence_percent >= minimum));
         }
-        Kind::Judge => {
+        QuestionKind::Noul => {
             let p_yes = finite_probability(answer.get("noul"))?;
             let confidence = p_yes.max(1.0 - p_yes);
             let confidence_percent = confidence_percent(confidence);
             out.insert("decision".into(), json!(p_yes >= 0.5));
             out.insert("confidence_percent".into(), json!(confidence_percent));
-            out.insert(
-                "accepted".into(),
-                json!(confidence_percent >= options.minimum),
-            );
+            out.insert("accepted".into(), json!(confidence_percent >= minimum));
         }
-        Kind::Score => {
+        QuestionKind::Score => {
             let score = answer
                 .get("score")
                 .and_then(Value::as_f64)
                 .filter(|score| {
-                    score.is_finite()
-                        && *score >= 0.0
-                        && *score <= (options.levels.len() - 1) as f64
+                    score.is_finite() && *score >= 0.0 && *score <= (levels.len() - 1) as f64
                 })
                 .ok_or_else(|| anyhow!("provider score is outside the requested rubric"))?;
             let confidence = finite_probability(answer.get("confidence"))?;
-            let expected_legend = options
-                .levels
+            let expected_legend = levels
                 .iter()
                 .enumerate()
                 .map(|(index, label)| (index.to_string(), Value::String(label.clone())))
@@ -1053,7 +1505,7 @@ fn normalize_jev_answer(
             if answer.get("legend").and_then(Value::as_object) != Some(&expected_legend) {
                 bail!("provider score legend differs from requested rubric");
             }
-            let expected_keys = (0..options.levels.len()).map(|i| i.to_string()).collect();
+            let expected_keys = (0..levels.len()).map(|i| i.to_string()).collect();
             let probabilities = answer
                 .get("probabilities")
                 .and_then(Value::as_object)
@@ -1062,14 +1514,10 @@ fn normalize_jev_answer(
             let confidence_percent = confidence_percent(confidence);
             out.insert("score".into(), json!(score));
             out.insert("confidence_percent".into(), json!(confidence_percent));
-            out.insert(
-                "accepted".into(),
-                json!(confidence_percent >= options.minimum),
-            );
+            out.insert("accepted".into(), json!(confidence_percent >= minimum));
         }
-        _ => bail!("unsupported Jev operation"),
     }
-    Ok(())
+    Ok(out)
 }
 
 fn validate_probabilities(
@@ -1107,6 +1555,9 @@ fn normalize_openai_answer(
     raw: &Value,
     out: &mut Map<String, Value>,
 ) -> Result<()> {
+    if options.api == Api::ChatCompletions {
+        return normalize_chat_answer(options, raw, out);
+    }
     if raw.get("status").and_then(Value::as_str) != Some("completed")
         || raw.get("error").is_some_and(|error| !error.is_null())
         || raw
@@ -1151,13 +1602,68 @@ fn normalize_openai_answer(
     if texts.len() != 1 || texts[0].trim().is_empty() {
         bail!("provider did not return exactly one nonempty text result");
     }
+    normalize_text_answer(options, texts[0], out)
+}
+
+/// Chat Completions: one choice whose message content is the model text.
+/// A refusal, a truncated answer or tool calls fail closed.
+fn normalize_chat_answer(
+    options: &Options,
+    raw: &Value,
+    out: &mut Map<String, Value>,
+) -> Result<()> {
+    let choices = raw
+        .get("choices")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("provider response choices are malformed"))?;
+    let [choice] = choices.as_slice() else {
+        bail!("provider did not return exactly one choice");
+    };
+    let message = choice
+        .get("message")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("provider message is malformed"))?;
+    if message
+        .get("refusal")
+        .is_some_and(|refusal| !refusal.is_null())
+    {
+        return Err(failure(FailureClass::Refusal));
+    }
+    match choice.get("finish_reason").and_then(Value::as_str) {
+        Some("stop") => {}
+        Some("length") => return Err(failure(FailureClass::Incomplete)),
+        Some("content_filter") => return Err(failure(FailureClass::Refusal)),
+        _ => bail!("provider finish reason is unsupported"),
+    }
+    if message.get("role").is_some_and(|role| role != "assistant") {
+        bail!("provider message role is unsupported");
+    }
+    if message
+        .get("tool_calls")
+        .is_some_and(|calls| !calls.is_null())
+    {
+        bail!("provider returned tool calls, which are not supported");
+    }
+    let text = message
+        .get("content")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| anyhow!("provider did not return a nonempty text result"))?;
+    normalize_text_answer(options, text, out)
+}
+
+fn normalize_text_answer(
+    options: &Options,
+    text: &str,
+    out: &mut Map<String, Value>,
+) -> Result<()> {
     match options.kind {
         Kind::Generate => {
-            out.insert("text".into(), json!(texts[0]));
+            out.insert("text".into(), json!(text));
         }
         Kind::Extract => {
-            let value = parse_unique_json(texts[0].as_bytes())
-                .map_err(|_| failure(FailureClass::Schema))?;
+            let value =
+                parse_unique_json(text.as_bytes()).map_err(|_| failure(FailureClass::Schema))?;
             let schema = options
                 .schema
                 .as_ref()
@@ -1168,6 +1674,24 @@ fn normalize_openai_answer(
         _ => bail!("unsupported OpenAI operation"),
     }
     Ok(())
+}
+
+fn normalize_chat_usage(value: Option<&Value>) -> Result<Value> {
+    let usage = value
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("provider response usage is malformed"))?;
+    let input = nonnegative_integer(usage.get("prompt_tokens"))?;
+    let output = nonnegative_integer(usage.get("completion_tokens"))?;
+    let total = match usage.get("total_tokens") {
+        Some(value) => nonnegative_integer(Some(value))?,
+        None => input
+            .checked_add(output)
+            .ok_or_else(|| anyhow!("provider token counts overflow"))?,
+    };
+    if input.checked_add(output) != Some(total) {
+        bail!("provider token counts are inconsistent");
+    }
+    Ok(json!({ "input_tokens": input, "output_tokens": output, "total_tokens": total }))
 }
 
 fn validate_schema_definition(schema: &Value) -> Result<()> {

@@ -30,6 +30,8 @@ struct Args {
     /// leading `--help` is data for the program rather than a help request.
     program_arguments_literal: bool,
     json: bool,
+    /// Categories approved with `explain --json --allow`. Empty means no gate.
+    allow: Vec<String>,
     github: bool,
     command: String,
     file: PathBuf,
@@ -802,11 +804,26 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             // Validate with the same inputs as `check` before describing effects.
             runtime::validate_with_arguments(&program, &registry, &inputs)?;
             let path = args.file.to_string_lossy().into_owned();
-            write_json(&flow::agent::explain::explain_json(
-                &program, &registry, &path,
-            )?)
+            let plan = flow::agent::explain::explain_json(&program, &registry, &path)?;
+            if args.allow.is_empty() {
+                write_json(&plan)
+            } else {
+                // Gate mode: report violations, and exit nonzero unless all are approved.
+                let allowed: std::collections::BTreeSet<String> =
+                    args.allow.iter().cloned().collect();
+                let verdict = flow::agent::gate::verdict(&plan, &allowed);
+                let passed = verdict["allowed"] == true;
+                write_json(&verdict)?;
+                if !passed {
+                    std::process::exit(1);
+                }
+                Ok(())
+            }
         }
         "explain" => {
+            if !args.allow.is_empty() {
+                bail!("--allow requires --json");
+            }
             writeln!(
                 io::stdout(),
                 "{}",
@@ -939,6 +956,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
 
     let mut file = None;
     let mut json = false;
+    let mut allow = Vec::new();
     let mut github = false;
     let mut inputs = BTreeMap::new();
     let mut program_arguments = Vec::new();
@@ -994,6 +1012,10 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     bail!("--json may be specified only once");
                 }
                 json = true;
+            }
+            "--allow" if command == "explain" => {
+                let category = take_option_value(&arguments, &mut index, "--allow", "a category")?;
+                allow.push(flow::agent::gate::parse_category(&category)?.to_owned());
             }
             "--format" if command == "check" => {
                 let format = take_option_value(&arguments, &mut index, "--format", "github|json")?;
@@ -1251,6 +1273,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         program_arguments,
         program_arguments_literal,
         json,
+        allow,
         github,
         command,
         file,

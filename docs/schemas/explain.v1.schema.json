@@ -18,7 +18,7 @@
           "line", "kind", "scope", "direct", "applet", "binary", "argv", "effects",
           "capabilities", "writes", "network", "reads", "cwd_change",
           "modifies_next_invocation", "environment_sensitive", "environment_tainted",
-          "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared"
+          "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared", "privileged"
         ],
         "properties": {
           "line": { "type": "integer", "minimum": 1 },
@@ -50,7 +50,8 @@
           "path_is_runtime": { "type": "boolean" },
           "escapes_cwd": { "type": "boolean" },
           "resolved": { "type": ["boolean", "null"] },
-          "undeclared": { "type": "boolean" }
+          "undeclared": { "type": "boolean" },
+          "privileged": { "type": "boolean" }
         }
       }
     },
@@ -61,7 +62,7 @@
         "invocations", "executables", "writes", "write_effects", "write_paths",
         "runtime_write_paths", "escaping_write_paths", "network", "reads", "cwd_changes",
         "modifies_next_invocation", "environment_tainted_invocations",
-        "undeclared_invocations", "effects_declared", "privileged"
+        "undeclared_invocations", "effects_declared", "privileged", "privileged_invocations"
       ],
       "properties": {
         "invocations": { "type": "integer", "minimum": 0 },
@@ -78,7 +79,8 @@
         "environment_tainted_invocations": { "type": "integer", "minimum": 0 },
         "undeclared_invocations": { "type": "integer", "minimum": 0 },
         "effects_declared": { "type": "boolean" },
-        "privileged": { "type": "string" }
+        "privileged": { "type": "boolean" },
+        "privileged_invocations": { "type": "integer", "minimum": 0 }
       }
     }
   }

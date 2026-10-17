@@ -167,7 +167,8 @@ fn summary_lists_executables_writes_network_and_undeclared_count() {
         1,
         "both manifests share one helper binary: {executables:?}"
     );
-    assert_eq!(summary["privileged"], "not_classified_see_policy_marking");
+    assert_eq!(summary["privileged"], false);
+    assert_eq!(summary["privileged_invocations"], 0);
 }
 
 #[test]
@@ -774,4 +775,19 @@ fn a_home_folder_makes_later_relative_writes_runtime() {
         "a home folder must not be joined: {object}"
     );
     assert_eq!(save[0]["path_is_runtime"], true);
+}
+
+#[test]
+fn a_privileged_invocation_is_marked_in_the_row_and_the_summary() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run \"sudo\" with arguments [\"-n\", \"true\"]\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let rows = object["steps"].as_array().unwrap();
+    let invocation = rows
+        .iter()
+        .find(|row| row["binary"] == "sudo")
+        .expect("sudo row");
+    assert_eq!(invocation["privileged"], true, "{object}");
+    assert_eq!(object["summary"]["privileged"], true);
+    assert_eq!(object["summary"]["privileged_invocations"], 1);
 }

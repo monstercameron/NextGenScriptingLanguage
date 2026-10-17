@@ -28,6 +28,7 @@ use crate::ast::{
     Value,
 };
 use crate::manifest::{Builtin, Registry};
+use crate::privilege::is_privileged_invocation;
 use anyhow::Result;
 use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -125,6 +126,7 @@ impl Row {
             "escapes_cwd": self.escapes_cwd,
             "resolved": self.resolved,
             "undeclared": self.undeclared,
+            "privileged": row_privileged(self),
         })
     }
 }
@@ -589,6 +591,13 @@ fn is_write_effect(effect: &str) -> bool {
     effect.starts_with("fs.write") || effect.starts_with("file.write") || effect.contains(".write")
 }
 
+/// Whether a row is a privileged step: an elevator, or a wrapper that can run
+/// another program. An invocation whose binary is unknown is privileged, so an
+/// unclassified step cannot pass as harmless.
+fn row_privileged(row: &Row) -> bool {
+    row.invocation && row.binary.as_deref().map_or(true, is_privileged_invocation)
+}
+
 fn summary_object(program_path: &str, rows: &[Row]) -> Json {
     let mut executables = BTreeSet::new();
     let mut write_effects = BTreeSet::new();
@@ -597,6 +606,7 @@ fn summary_object(program_path: &str, rows: &[Row]) -> Json {
     let mut escaping_write_paths = 0usize;
     let mut invocations = 0usize;
     let mut undeclared = 0usize;
+    let mut privileged_invocations = 0usize;
     let mut tainted = 0usize;
     let mut writes = false;
     let mut network = false;
@@ -609,6 +619,9 @@ fn summary_object(program_path: &str, rows: &[Row]) -> Json {
         }
         if let (true, Some(binary)) = (row.invocation, &row.binary) {
             executables.insert(binary.clone());
+        }
+        if row_privileged(row) {
+            privileged_invocations += 1;
         }
         if row.undeclared {
             undeclared += 1;
@@ -667,7 +680,8 @@ fn summary_object(program_path: &str, rows: &[Row]) -> Json {
             "environment_tainted_invocations": tainted,
             "undeclared_invocations": undeclared,
             "effects_declared": undeclared == 0,
-            "privileged": "not_classified_see_policy_marking"
+            "privileged": privileged_invocations > 0,
+            "privileged_invocations": privileged_invocations
         }
     })
 }

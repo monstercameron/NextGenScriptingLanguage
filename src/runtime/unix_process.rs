@@ -549,3 +549,8 @@ mod supervisor_tests {
         assert_eq!(supervised_exit_code(15), 128 + 15);
     }
 }
+
+/// Exit status for a run ended by an interrupt (128 plus the signal number).
+pub fn interrupt_exit_code() -> Option<i32> {
+    crate::platform::cancel_exit_code()
+}

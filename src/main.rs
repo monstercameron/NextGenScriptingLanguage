@@ -71,6 +71,10 @@ fn register_cancellation_signal(
 fn main() {
     if let Err(error) = execute() {
         runtime::write_diagnostic(format!("execute: {error:#}\n").as_bytes());
+        // The run has already cleaned up its children before returning this error.
+        if let Some(code) = runtime::interrupt_exit_code() {
+            std::process::exit(code);
+        }
         let status = error
             .downcast_ref::<runtime::CommandFailed>()
             .map(|failure| {

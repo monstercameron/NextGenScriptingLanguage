@@ -530,3 +530,8 @@ pub fn model_cli(arguments: &[String]) -> Result<i32> {
     let _ = child.wait();
     result
 }
+
+/// Exit status for a run ended by an interrupt (128 plus the signal number).
+pub fn interrupt_exit_code() -> Option<i32> {
+    crate::platform::cancel_exit_code()
+}

@@ -29,6 +29,7 @@ pub(crate) fn signals(cancel: Arc<AtomicBool>) -> Result<()> {
     FLAGS.get_or_init(|| Mutex::new(Vec::new()));
     let installed = INSTALLED.get_or_init(|| {
         ctrlc::set_handler(|| {
+            super::record_cancel_signal(2);
             if let Some(flags) = FLAGS.get() {
                 let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
                 flags.retain(|weak| {

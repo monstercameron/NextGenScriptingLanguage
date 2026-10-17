@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -58,11 +58,9 @@ fn load_default_registry() -> Result<Registry> {
             )
         });
     }
-    let local = PathBuf::from("manifests");
-    if local.is_dir() {
-        return Registry::load_optional(&local)
-            .with_context(|| format!("could not load manifests from {}", local.display()));
-    }
+    // The working directory is never searched, matching the CLI: a workspace
+    // could otherwise shadow bundled applets. EXECUTE_MANIFEST_DIR selects
+    // other manifests explicitly.
     if let Ok(executable) = env::current_exe() {
         let executable = fs::canonicalize(&executable).unwrap_or(executable);
         if let Some(parent) = executable.parent() {

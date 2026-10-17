@@ -1700,11 +1700,9 @@ fn install_workflow_policy_state(
 }
 
 fn default_manifest_dir() -> PathBuf {
-    let local = PathBuf::from("manifests");
-    if local.is_dir() {
-        return local;
-    }
-
+    // The working directory is never searched: any directory a script runs in
+    // could otherwise shadow bundled applets. Use --manifest-dir or
+    // --manifest-catalog to select other manifests explicitly.
     if let Ok(executable) = env::current_exe() {
         // macOS may report the launch symlink rather than its bundle target.
         let executable = fs::canonicalize(&executable).unwrap_or(executable);

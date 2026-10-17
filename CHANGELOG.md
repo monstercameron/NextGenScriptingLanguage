@@ -7,6 +7,11 @@ original version labels.
 
 ## Unreleased
 
+- `parallel for each <name> in <list> at most N as <result>` runs one named
+  applet or quoted executable per list element with bounded concurrency and
+  returns one record per element plus success/failure counts. Element failures
+  do not stop siblings; cancellation and deadlines cancel and reap running
+  elements. See [parallel for each](docs/language.md#parallel-for-each-current-source).
 - Finite programs and calls can own named background native pipelines with
   `spawn`, `inspect`, idempotent `await`, and isolated `cancel`. Handles and
   captured output share run-wide budgets; unresolved jobs are canceled and

@@ -895,6 +895,7 @@ fn validate_range(
                     limit,
                     binding: name,
                     tasks,
+                    each,
                     ..
                 } => {
                     if *limit == 0 {
@@ -904,7 +905,37 @@ fn validate_range(
                         bail!("task group requires at least one task");
                     }
                     let mut task_names = BTreeSet::new();
-                    for task in tasks {
+                    if let Some(each) = each {
+                        let [template] = tasks.as_slice() else {
+                            bail!("parallel for each requires exactly one command");
+                        };
+                        if flow.names.contains(&each.binding) {
+                            bail!("iteration binding {:?} is already defined", each.binding);
+                        }
+                        check_value(&each.values, &flow.names)?;
+                        let item_type = loops::element_type(&each.values, &flow.types)?;
+                        if template.binding.is_some()
+                            || template.discard_stderr
+                            || template.cache
+                            || template.status_binding.is_some()
+                            || template.result_binding.is_some()
+                        {
+                            bail!("the parallel for each command cannot bind output, status or result, discard stderr, or use `and cache`");
+                        }
+                        let manifest = registry.resolve_call(template)?;
+                        if manifest.builtin.is_some() {
+                            bail!("task groups cannot invoke interpreter builtins");
+                        }
+                        let mut types = flow.types.clone();
+                        types.insert(each.binding.clone(), item_type);
+                        manifest.validate_with_types(template, &types)?;
+                        let mut names = flow.names.clone();
+                        names.insert(each.binding.clone());
+                        for value in template.parameters.values() {
+                            check_value(value, &names)?;
+                        }
+                    }
+                    for task in tasks.iter().filter(|_| each.is_none()) {
                         if task.direct
                             || task.discard_stderr
                             || task.cache
@@ -1460,10 +1491,28 @@ pub fn explain_with_inputs(
                 format!("encode {source:?} as compact JSON; bounded finite output")
             }
             StepKind::TaskGroup {
+                limit,
+                binding,
+                tasks,
+                each: Some(each),
+                ..
+            } => format!(
+                "parallel for each {} in {:?} (limit {limit}): {} {:?} as {binding}",
+                each.binding,
+                each.values,
+                if tasks[0].direct {
+                    "run executable"
+                } else {
+                    "run applet"
+                },
+                tasks[0].operation
+            ),
+            StepKind::TaskGroup {
                 mode,
                 limit,
                 binding,
                 tasks,
+                each: None,
             } => format!(
                 "{mode:?} task group (limit {limit}) with {} applets as {binding}",
                 tasks.len()

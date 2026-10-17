@@ -356,6 +356,41 @@ current source; published 0.9.0-rc.4 and historical 0.8.0 binaries do not includ
 [Regression controls](../benchmarks/loop-regression-2026-10-14.json) retain paired
 release measurements for existing non-loop workloads.
 
+### Parallel for each (current source)
+
+```text
+accept urls as list of text
+parallel for each url in urls at most 8 as results
+  run "curl" with arguments ["-sf", "--max-time", "10", url]
+take integer at "/succeeded" from results as succeeded
+take integer at "/failed" from results as failed
+```
+
+`parallel for each <name> in <text list or JSON array> at most <1-64> as
+<result>` runs exactly one indented `run` command per element, with at most
+the given number in flight. The command can be a named applet or a quoted
+direct executable; it cannot use `as`, `and cache`, `and discard stderr` or
+status/result capture, because each element's status and output are already
+in its record. The element name is visible only inside that command, follows
+the same typing as a `for each` binding and cannot shadow an existing name.
+
+All element calls are resolved, validated and capability-checked before any
+element starts. A non-success outcome or launch failure is recorded for that
+element and does not stop its siblings. The result binding is JSON with `mode`
+`"for_each"`, `items` in list order and the counts `succeeded`, `failed`,
+`cancelled` and `not_started`. Each item has `index`, `item`, `state`,
+`status`, `outcome`, `outcome_kind`, `uncertain`, `launched_processes`, the
+captured `output`/`stderr` bytes, `output_text`/`stderr_text` copies when the
+bytes are valid UTF-8, and `value` for typed applet results. The encoded record
+also becomes the pipeline value.
+
+Interpreter cancellation, the total timeout or exceeding `--max-output-bytes`
+stops new elements, cancels and reaps running ones and fails the group; running
+elements are marked `cancelled` and the rest `not_started`. Each element's
+captured output shares the byte limit evenly. Lists hold at most 10,000
+elements. The group is a single checkpoint node, so a failed group retries as a
+whole. Like `parallel` and `race`, it is unsupported in the browser host.
+
 ### Transfers and cleanup
 
 `break` and `continue` are valid only inside a loop. `return` is valid only in

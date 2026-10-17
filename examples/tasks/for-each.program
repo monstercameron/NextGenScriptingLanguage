@@ -1,0 +1,4 @@
+accept divisors as json with default [6, 0, 3]
+parallel for each divisor in divisors at most 2 as results
+  run number.divide with left 12 and right divisor
+then encode results as json

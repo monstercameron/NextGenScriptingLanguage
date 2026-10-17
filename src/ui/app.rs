@@ -149,12 +149,19 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                         references(value, &mut needed);
                     }
                 }
-                crate::ast::StepKind::TaskGroup { tasks, .. } => {
+                crate::ast::StepKind::TaskGroup { tasks, each, .. } => {
+                    let mut task_needed = BTreeSet::new();
                     for task in tasks {
                         for value in task.parameters.values() {
-                            references(value, &mut needed);
+                            references(value, &mut task_needed);
                         }
                     }
+                    if let Some(each) = each {
+                        // The iteration binding is local to the group.
+                        task_needed.remove(&each.binding);
+                        references(&each.values, &mut needed);
+                    }
+                    needed.extend(task_needed);
                 }
                 crate::ast::StepKind::SpawnJob { stages, .. } => {
                     for stage in stages {

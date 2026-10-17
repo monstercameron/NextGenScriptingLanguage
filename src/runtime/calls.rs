@@ -312,8 +312,27 @@ pub(super) fn preflight(
                     types.insert(name, InputType::Text);
                 }
             }
-            StepKind::TaskGroup { binding, tasks, .. } => {
-                for task in tasks {
+            StepKind::TaskGroup {
+                binding,
+                tasks,
+                each,
+                ..
+            } => {
+                if let Some(each) = each {
+                    // Element values are only known at runtime; check the
+                    // template with the element typed like a loop binding.
+                    let mut item_values = values.clone().into_owned();
+                    item_values.remove(&each.binding);
+                    let mut item_types = types.clone();
+                    item_types.insert(
+                        each.binding.clone(),
+                        loops::element_type(&each.values, &types)?,
+                    );
+                    for task in tasks {
+                        native(task, step.line, registry, &item_values, &item_types)?;
+                    }
+                }
+                for task in tasks.iter().filter(|_| each.is_none()) {
                     native(task, step.line, registry, &values, &types)?;
                 }
                 forget(&mut values, binding);

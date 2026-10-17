@@ -3088,12 +3088,30 @@ pub(crate) fn invoke_applet_with_context(
     cancelled: Arc<AtomicBool>,
     context: AppletInvocationContext,
 ) -> Result<AppletInvocationResult> {
+    invoke_call_with_context(
+        registry, name, false, parameters, input, options, cancelled, context,
+    )
+}
+
+/// [`invoke_applet_with_context`] for either a named applet or, when `direct`
+/// is set, a quoted executable resolved through the direct-call binding.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn invoke_call_with_context(
+    registry: &Registry,
+    name: &str,
+    direct: bool,
+    parameters: BTreeMap<String, Value>,
+    input: Vec<u8>,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    context: AppletInvocationContext,
+) -> Result<AppletInvocationResult> {
     let module_session = Arc::clone(&context.module_session);
     let mut invocation_options = options.clone();
     invocation_options.working_directory = fs::canonicalize(&options.working_directory)?;
     let call = Invocation {
         operation: name.to_owned(),
-        direct: false,
+        direct,
         discard_stderr: false,
         parameters,
         binding: None,
@@ -3761,20 +3779,34 @@ fn run_finite_state(
                     limit,
                     binding,
                     tasks,
+                    each,
                 } => {
-                    let group = tasks::run_group(
-                        tasks::TaskGroupConfig {
-                            mode: *mode,
-                            limit: *limit,
-                            outer_deadline: signals.deadline,
-                        },
-                        tasks,
-                        registry,
-                        &bindings,
-                        options,
-                        Arc::clone(&signals.cancelled),
-                        AppletInvocationContext::from_signals(signals)?,
-                    );
+                    let config = tasks::TaskGroupConfig {
+                        mode: *mode,
+                        limit: *limit,
+                        outer_deadline: signals.deadline,
+                    };
+                    let group = match each {
+                        Some(each) => tasks::run_each(
+                            config,
+                            each,
+                            &tasks[0],
+                            registry,
+                            &bindings,
+                            options,
+                            Arc::clone(&signals.cancelled),
+                            AppletInvocationContext::from_signals(signals)?,
+                        ),
+                        None => tasks::run_group(
+                            config,
+                            tasks,
+                            registry,
+                            &bindings,
+                            options,
+                            Arc::clone(&signals.cancelled),
+                            AppletInvocationContext::from_signals(signals)?,
+                        ),
+                    };
                     let group = match group {
                         Ok(group) => group,
                         Err(error) => {

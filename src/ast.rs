@@ -90,6 +90,14 @@ pub enum TaskGroupMode {
     Race,
 }
 
+/// `parallel for each <binding> in <values>`: the group's single template task
+/// runs once per element, with the element bound to `binding`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskEach {
+    pub binding: String,
+    pub values: Value,
+}
+
 /// One native command in a named background pipeline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JobStage {
@@ -105,6 +113,9 @@ pub enum StepKind {
         limit: usize,
         binding: String,
         tasks: Vec<Invocation>,
+        /// Present for `parallel for each`; `tasks` then holds one template.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        each: Option<TaskEach>,
     },
     /// Start one owned native pipeline and retain its handle in the current
     /// finite or reusable-program scope.

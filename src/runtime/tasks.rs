@@ -1,13 +1,13 @@
 //! Bounded applet task groups used by finite `.program` workflows.
 
 use super::{AppletInvocationContext, AppletInvocationResult, RunOptions};
-use crate::ast::{Invocation, TaskGroupMode, Value};
+use crate::ast::{Invocation, TaskEach, TaskGroupMode, Value};
 use crate::contracts::{Outcome, OutcomeKind};
 use crate::manifest::{AppletBackend, Registry};
 use crate::modules::ProgramModuleSession;
 use crate::tasks::{TaskHandle, TaskScope};
 use anyhow::{anyhow, bail, Context, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +18,9 @@ use std::time::{Duration, Instant};
 
 const MAX_TASKS: usize = 256;
 const MAX_PARALLEL: usize = 64;
+/// Element bound for `parallel for each`; matches the scale of a worker pool
+/// over a file of inputs while keeping preflight and result records bounded.
+const MAX_EACH_ITEMS: usize = 10_000;
 
 #[derive(Clone)]
 struct PreparedTask {
@@ -586,6 +589,351 @@ pub(super) fn run_group(
         value,
         launched_processes: launched_processes(&records),
     })
+}
+
+/// Run one template call per list element with bounded concurrency.
+///
+/// Every element yields a record: non-success outcomes and launch errors do
+/// not stop sibling elements, which is the worker-pool contract. All element
+/// calls are resolved, validated and capability-checked before the first one
+/// starts. Cancellation, the workflow deadline or the aggregate output limit
+/// stop new launches, cancel and reap running elements, and fail the group
+/// with the partial records.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn run_each(
+    config: TaskGroupConfig,
+    each: &TaskEach,
+    template: &Invocation,
+    registry: &Registry,
+    bindings: &BTreeMap<String, Value>,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    context: AppletInvocationContext,
+) -> Result<TaskGroupResult> {
+    let TaskGroupConfig {
+        limit,
+        outer_deadline,
+        ..
+    } = config;
+    if cancelled.load(Ordering::Acquire) {
+        bail!("parallel for each was cancelled before preflight")
+    }
+    if !(1..=MAX_PARALLEL).contains(&limit) {
+        bail!("task group limit must be between 1 and {MAX_PARALLEL}")
+    }
+    if bindings.contains_key(&each.binding) {
+        bail!("iteration binding {:?} is already defined", each.binding)
+    }
+    let Value::List(items) = super::resolve(&each.values, bindings)? else {
+        bail!("parallel for each requires a JSON array or list of text")
+    };
+    if items.len() > MAX_EACH_ITEMS {
+        bail!(
+            "parallel for each accepts at most {MAX_EACH_ITEMS} elements, got {}",
+            items.len()
+        )
+    }
+
+    let mut scoped = bindings.clone();
+    let mut prepared = Vec::with_capacity(items.len());
+    let mut calls = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        scoped.insert(each.binding.clone(), item.clone());
+        let parameters = template
+            .parameters
+            .iter()
+            .map(|(name, value)| Ok((name.clone(), super::resolve(value, &scoped)?)))
+            .collect::<Result<BTreeMap<_, _>>>()
+            .with_context(|| format!("element {index}"))?;
+        let call = Invocation {
+            operation: template.operation.clone(),
+            direct: template.direct,
+            discard_stderr: false,
+            parameters,
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+        };
+        let manifest = registry
+            .resolve_call(&call)
+            .with_context(|| format!("element {index}"))?;
+        manifest
+            .validate(&call)
+            .with_context(|| format!("element {index}"))?;
+        if manifest.builtin.is_some() {
+            bail!("runtime directory builtins cannot run as independent tasks")
+        }
+        if manifest.execution_backend() == AppletBackend::JsonLinesWorker
+            && !super::worker_backend::WorkerPool::supported()
+        {
+            bail!("json_lines_worker backend is unsupported on this platform")
+        }
+        prepared.push(PreparedTask {
+            id: index.to_string(),
+            applet: call.operation.clone(),
+            parameters: call.parameters.clone(),
+            uncertain_on_error: manifest.uncertain_on_failure,
+        });
+        calls.push(call);
+    }
+    crate::capabilities::preflight_invocations(calls.iter(), registry, &options.working_directory)
+        .context("preflighting parallel for each capabilities")?;
+    for (scope, invocation) in context.module_session.scoped_body_invocations() {
+        crate::capabilities::preflight_invocations(
+            std::iter::once(invocation),
+            scope,
+            &options.working_directory,
+        )
+        .with_context(|| format!("preflighting module body call {:?}", invocation.operation))?;
+    }
+    drop(calls);
+
+    let secret_redactor = crate::security::secret_redactor(registry);
+    let mut records = prepared.iter().map(TaskRecord::pending).collect::<Vec<_>>();
+    if prepared.is_empty() {
+        return Ok(TaskGroupResult {
+            value: each_value(&records, &items, &secret_redactor),
+            launched_processes: 0,
+        });
+    }
+    let max_output_bytes = options.max_output_bytes;
+    let per_task_output_limit = max_output_bytes / prepared.len();
+    if per_task_output_limit == 0 {
+        bail!(
+            "output limit of {max_output_bytes} bytes is too small for {} elements",
+            prepared.len()
+        );
+    }
+    let direct = template.direct;
+    let limit = limit.min(prepared.len());
+    let group_cancelled = Arc::new(AtomicBool::new(false));
+    let _bridge = CancellationBridge::new(Arc::clone(&cancelled), Arc::clone(&group_cancelled))?;
+    let mut scope =
+        TaskScope::new_with_cancellation(limit, outer_deadline, Arc::clone(&group_cancelled))?;
+    let (sender, receiver) = mpsc::channel();
+    let mut handles: Vec<Option<TaskHandle<()>>> = (0..prepared.len()).map(|_| None).collect();
+    let mut total_output_bytes = 0usize;
+    let mut next = 0usize;
+    let mut active = 0usize;
+    let mut stopped: Option<(usize, String)> = None;
+
+    while next < prepared.len() || active > 0 {
+        while active < limit && next < prepared.len() {
+            if scope.is_cancelled() {
+                stopped.get_or_insert_with(|| (next, "parallel for each was cancelled".into()));
+                break;
+            }
+            let index = next;
+            let task = prepared[index].clone();
+            let registry = registry.clone();
+            let context = context.clone();
+            let parent_cancelled = Arc::clone(&cancelled);
+            let mut task_options = options.clone();
+            task_options.max_output_bytes =
+                task_options.max_output_bytes.min(per_task_output_limit);
+            if let Some(deadline) = outer_deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                task_options.total_timeout = Some(
+                    task_options
+                        .total_timeout
+                        .map_or(remaining, |duration| duration.min(remaining)),
+                );
+            }
+            let sender = sender.clone();
+            let spawned = scope.spawn(move |token| {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    token.check()?;
+                    if parent_cancelled.load(Ordering::Acquire) {
+                        bail!("parallel for each was cancelled before element launch")
+                    }
+                    super::invoke_call_with_context(
+                        &registry,
+                        &task.applet,
+                        direct,
+                        task.parameters,
+                        Vec::new(),
+                        &task_options,
+                        token.cancellation_flag(),
+                        context,
+                    )
+                }))
+                .unwrap_or_else(|payload| Err(task_panic(payload)));
+                let launched_processes = result
+                    .as_ref()
+                    .map(|result| result.launched_processes)
+                    .unwrap_or_else(|error| {
+                        error
+                            .downcast_ref::<super::AppletInvocationError>()
+                            .map_or(0, super::AppletInvocationError::launched_processes)
+                    });
+                let cancelled = token.is_cancelled();
+                sender
+                    .send(Completion {
+                        index,
+                        result,
+                        cancelled,
+                        launched_processes,
+                    })
+                    .map_err(|_| anyhow!("parallel for each completion channel closed"))?;
+                Ok(())
+            });
+            match spawned {
+                Ok(handle) => {
+                    records[index].state = TaskState::Running;
+                    handles[index] = Some(handle);
+                    active += 1;
+                }
+                Err(error) if scope.is_cancelled() => {
+                    stopped.get_or_insert_with(|| (index, format!("{error:#}")));
+                    break;
+                }
+                Err(error) => {
+                    records[index].state = TaskState::Failed;
+                    records[index].error = Some(format!("could not start element: {error:#}"));
+                }
+            }
+            next += 1;
+        }
+        if stopped.is_some() || active == 0 {
+            break;
+        }
+        let completion = receiver
+            .recv()
+            .context("parallel for each worker ended without reporting a result")?;
+        let index = completion.index;
+        let handle = handles[index]
+            .take()
+            .ok_or_else(|| anyhow!("parallel for each received a duplicate completion"))?;
+        let element_cancelled = completion.cancelled;
+        if let Err(error) = scope.join(handle) {
+            records[index].state = TaskState::Failed;
+            records[index].error = Some(format!("could not reap element worker: {error:#}"));
+        }
+        active = active.saturating_sub(1);
+        update_record(
+            index,
+            completion.result,
+            completion.cancelled,
+            completion.launched_processes,
+            &mut records,
+            &prepared,
+            &mut total_output_bytes,
+        );
+        if total_output_bytes > max_output_bytes {
+            stopped = Some((
+                index,
+                format!("parallel for each output exceeded {max_output_bytes} bytes"),
+            ));
+            break;
+        }
+        if element_cancelled || scope.is_cancelled() {
+            stopped.get_or_insert_with(|| (index, "parallel for each was cancelled".into()));
+            break;
+        }
+    }
+
+    if let Some((index, message)) = stopped {
+        scope.cancel_and_join()?;
+        for (slot, handle) in handles.iter_mut().enumerate() {
+            if let Some(handle) = handle.take() {
+                if let Err(error) = scope.join(handle) {
+                    records[slot].state = TaskState::Failed;
+                    records[slot].error = Some(format!("could not reap element worker: {error:#}"));
+                }
+            }
+        }
+        for completion in receiver.try_iter() {
+            update_record(
+                completion.index,
+                completion.result,
+                completion.cancelled,
+                completion.launched_processes,
+                &mut records,
+                &prepared,
+                &mut total_output_bytes,
+            );
+        }
+        for (slot, record) in records.iter_mut().enumerate() {
+            match record.state {
+                TaskState::Running => {
+                    record.state = TaskState::Cancelled;
+                    record.uncertain = prepared[slot].uncertain_on_error;
+                }
+                TaskState::Pending => record.state = TaskState::NotStarted,
+                _ => {}
+            }
+        }
+        return Err(task_group_failure(
+            TaskGroupMode::Join,
+            &prepared[index.min(prepared.len() - 1)].id,
+            message,
+            None,
+            false,
+            &records,
+            &secret_redactor,
+        )
+        .into());
+    }
+
+    let value = each_value(&records, &items, &secret_redactor);
+    ensure_encoded_limit(&value, max_output_bytes)?;
+    Ok(TaskGroupResult {
+        value,
+        launched_processes: launched_processes(&records),
+    })
+}
+
+/// `{mode, items, succeeded, failed, cancelled, not_started}`; each element
+/// record extends the task record with its `index`, the bound `item` and,
+/// when the bytes are valid UTF-8, `output_text`/`stderr_text` copies.
+fn each_value(
+    records: &[TaskRecord],
+    items: &[Value],
+    secret_redactor: &crate::security::SecretRedactor,
+) -> Value {
+    let count = |states: &[TaskState]| {
+        Value::Integer(
+            records
+                .iter()
+                .filter(|record| states.contains(&record.state))
+                .count() as i64,
+        )
+    };
+    let elements = records
+        .iter()
+        .zip(items)
+        .enumerate()
+        .map(|(index, (record, item))| {
+            let mut value = task_value(record, secret_redactor);
+            if let Value::Record(fields) = &mut value {
+                fields.remove("id");
+                fields.insert("index".into(), Value::Integer(index as i64));
+                fields.insert("item".into(), item.clone());
+                if let Some(result) = &record.invocation {
+                    if let Ok(text) = std::str::from_utf8(&result.output) {
+                        fields.insert("output_text".into(), Value::String(text.to_owned()));
+                    }
+                    let stderr = secret_redactor.redact_bytes(&result.stderr);
+                    if let Ok(text) = std::str::from_utf8(&stderr) {
+                        fields.insert("stderr_text".into(), Value::String(text.to_owned()));
+                    }
+                }
+            }
+            value
+        })
+        .collect();
+    Value::Record(BTreeMap::from([
+        ("mode".into(), Value::String("for_each".into())),
+        ("items".into(), Value::List(elements)),
+        ("succeeded".into(), count(&[TaskState::Succeeded])),
+        (
+            "failed".into(),
+            count(&[TaskState::NonSuccess, TaskState::Failed]),
+        ),
+        ("cancelled".into(), count(&[TaskState::Cancelled])),
+        ("not_started".into(), count(&[TaskState::NotStarted])),
+    ]))
 }
 
 fn launched_processes(records: &[TaskRecord]) -> usize {

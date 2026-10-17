@@ -165,6 +165,7 @@ fn parallel_program_runs_through_the_cli_frontend_and_keeps_declared_order() {
             limit: 2,
             binding,
             tasks,
+            each: None,
         }) if binding == "results"
             && tasks.iter().map(|task| task.binding.as_deref()).collect::<Vec<_>>()
                 == vec![Some("sum"), Some("product")]
@@ -219,6 +220,158 @@ fn race_program_reports_a_successful_winner_through_the_cli_frontend() {
         .unwrap()
         .iter()
         .any(|task| { task["id"] == result["winner"] && task["state"] == "success" }));
+}
+
+#[test]
+fn parallel_for_each_runs_every_element_and_keeps_failures_as_records() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let example = root.join("examples/tasks/for-each.program");
+    let source = std::fs::read_to_string(&example).unwrap();
+    let program = flow::parser::parse(&source).unwrap();
+    assert!(matches!(
+        program.steps.first().map(|step| &step.kind),
+        Some(flow::ast::StepKind::TaskGroup {
+            limit: 2,
+            binding,
+            tasks,
+            each: Some(each),
+            ..
+        }) if binding == "results" && tasks.len() == 1 && each.binding == "divisor"
+    ));
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("run")
+        .arg(&example)
+        .current_dir(root)
+        .output()
+        .expect("start execute CLI");
+    assert!(
+        output.status.success(),
+        "CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["mode"], "for_each");
+    assert_eq!(result["succeeded"], 2);
+    assert_eq!(result["failed"], 1);
+    assert_eq!(result["cancelled"], 0);
+    assert_eq!(result["not_started"], 0);
+    let items = result["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    for (index, item) in items.iter().enumerate() {
+        assert_eq!(item["index"], index);
+    }
+    assert_eq!(items[0]["item"], 6);
+    assert_eq!(items[0]["state"], "success");
+    assert_eq!(items[0]["value"], 2.0);
+    // Division by zero is that element's outcome; its siblings still ran.
+    assert_eq!(items[1]["item"], 0);
+    assert_eq!(items[1]["state"], "non_success");
+    assert_eq!(items[2]["item"], 3);
+    assert_eq!(items[2]["value"], 4.0);
+}
+
+#[test]
+fn parallel_for_each_of_an_empty_list_returns_empty_records() -> Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = "parallel for each word in [] at most 4 as results\n  run text.concat with parts [word, \"!\"] and separator \"\"\n";
+    let program = flow::parser::parse(source)?;
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    let options = flow::runtime::RunOptions {
+        inputs: Default::default(),
+        working_directory: root.to_path_buf(),
+        cache_directory: None,
+        trace: false,
+        max_output_bytes: 1024 * 1024,
+        command_timeout: Some(Duration::from_secs(8)),
+        total_timeout: None,
+    };
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(value["items"], serde_json::json!([]));
+    assert_eq!(value["succeeded"], 0);
+    assert_eq!(result.launched_processes, 0);
+    Ok(())
+}
+
+#[test]
+fn parallel_for_each_rejects_invalid_shapes_before_execution() -> Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    let header =
+        "accept words as list of text\nparallel for each word in words at most 2 as results\n";
+    for (body, expected) in [
+        (
+            "  run \"echo\" with arguments [word] as out\n",
+            "cannot use `as`",
+        ),
+        (
+            "  run \"echo\" with arguments [word]\n  run \"echo\" with arguments [word]\n",
+            "exactly one `run`",
+        ),
+        (
+            "  then \"echo\" with arguments [word]\n",
+            "one `run` command",
+        ),
+    ] {
+        let error = flow::parser::parse(&format!("{header}{body}")).unwrap_err();
+        assert!(format!("{error:#}").contains(expected), "{error:#}");
+    }
+    let error = flow::parser::parse(
+        "parallel for each word in [\"a\"] at most 65 as results\n  run \"echo\" with arguments [word]\n",
+    )
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("between 1 and 64"),
+        "{error:#}"
+    );
+
+    let undefined = flow::parser::parse(&format!(
+        "{header}  run \"echo\" with arguments [missing]\n"
+    ))?;
+    let error = flow::runtime::validate(&undefined, &registry).unwrap_err();
+    assert!(format!("{error:#}").contains("missing"), "{error:#}");
+
+    let shadowing = flow::parser::parse(
+        "accept word as text\naccept words as list of text\nparallel for each word in words at most 2 as results\n  run \"echo\" with arguments [word]\n",
+    )?;
+    let error = flow::runtime::validate(&shadowing, &registry).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("already defined"),
+        "{error:#}"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn parallel_for_each_bounds_concurrent_direct_executables() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let worker = directory.path().join("worker.sh");
+    // Each element holds a marker while it runs and records how many markers
+    // it observed; the bound holds if no element ever sees more than two.
+    write_executable(
+        &worker,
+        "#!/bin/sh\nmkdir \"active.$1\"\nls -d active.* | wc -l | tr -d ' ' >> seen\nsleep 0.2\nrmdir \"active.$1\"\nprintf 'done %s\\n' \"$1\"\n",
+    )?;
+    let source = format!(
+        "parallel for each n in [\"1\", \"2\", \"3\", \"4\", \"5\", \"6\"] at most 2 as results\n  run {} with arguments [n]\n",
+        quote_path(&worker)?
+    );
+    let result = run_program(&source, directory.path(), directory.path())?;
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(value["succeeded"], 6);
+    assert_eq!(value["items"][3]["output_text"], "done 4\n");
+    assert_eq!(result.launched_processes, 6);
+    let seen = std::fs::read_to_string(directory.path().join("seen"))?;
+    let peak = seen
+        .lines()
+        .map(|line| line.parse::<usize>())
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max();
+    assert!(peak.is_some_and(|peak| peak <= 2), "observed {seen:?}");
+    Ok(())
 }
 
 #[test]

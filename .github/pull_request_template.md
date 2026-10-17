@@ -12,3 +12,11 @@ paired release-build measurements and identify the environment.
 
 Describe platform differences, changed contracts or remaining gaps. Link the issue
 and updated documentation when applicable.
+
+## Security
+
+- [ ] Touches a path, process, terminal, secret, or resource limit: I checked the
+      [security checklist](../CONTRIBUTING.md#security-checklist) and the
+      [threat model](../docs/threat-model.md) vector it affects.
+- [ ] Any new `tests/security_*.rs` case passes, and any hole I found is listed in
+      the threat model with its severity.

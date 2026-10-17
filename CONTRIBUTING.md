@@ -134,6 +134,30 @@ Run `git diff --check` and inspect the staged file list before committing. Do no
 use broad cleanup commands against unknown local files, installed releases or
 ignored directories that may contain a contributor's data.
 
+## Security checklist
+
+Every change that touches a path, a process, the terminal, secret values or a
+resource limit answers the [threat model](docs/threat-model.md) for its vector.
+Before opening a pull request, check the items that apply:
+
+- Data that comes from applet output, environment, inputs, file contents or file
+  names is untrusted. Do not build a path, an argument list or a shell command from it
+  without the existing checks.
+- Path operations do not follow symlinks on the opened file, and checks use the file
+  descriptor that is opened, not a separate earlier lookup. Add a race test when the
+  change adds a check followed by an open.
+- Native commands get literal argument vectors. Do not introduce a shell for an
+  ordinary command, and do not forward environment variables that are not allowlisted.
+- Diagnostics and streamed output that can contain untrusted text escape control
+  bytes (ESC, CSI, OSC and C1) before they reach a terminal.
+- Secret prompt values stay out of traces, checkpoints, records, explain and
+  what-if output, and error text. Add the value to the leak test for the surface.
+- New reads, buffers, queues and recursion have a bound, and the bound is tested
+  with input at and just over the limit.
+- Adversarial tests live in `tests/security_*.rs`. A change that makes one fail
+  is a security regression, not a flaky test: fix the change or document the hole in
+  the threat model with its severity before merging.
+
 ## Rust quality policy and staged checks
 
 Keep syntax, typed values and validation safe and independent of platform effects.

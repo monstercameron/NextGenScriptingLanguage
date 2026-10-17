@@ -247,6 +247,14 @@ mod imp {
         let directory = socket
             .parent()
             .ok_or_else(|| untrusted("the path has no directory".to_owned()))?;
+        // A directory that does not exist means no daemon has ever run here: not running,
+        // which is not an alarm. A directory that exists but is not private is untrusted.
+        if matches!(fs::symlink_metadata(directory), Err(ref error) if error.kind() == ErrorKind::NotFound)
+        {
+            return Err(DaemonError::NotRunning {
+                path: socket.to_owned(),
+            });
+        }
         private_directory(directory, false).map_err(|error| untrusted(format!("{error:#}")))?;
         if !owned_socket(socket) {
             return Err(untrusted(

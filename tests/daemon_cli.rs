@@ -345,7 +345,10 @@ fn warm_round_trip_and_forwarded_run_latency_are_measured() {
     round_trips.sort();
     let p50 = round_trips[round_trips.len() / 2];
     let p95 = round_trips[round_trips.len() * 95 / 100];
-    eprintln!("daemon ping round trip (connect, request, reply): p50 {p50:?}, p95 {p95:?}");
+    let ping_line =
+        format!("daemon ping round trip (connect, request, reply): p50 {p50:?}, p95 {p95:?}");
+    eprintln!("{ping_line}");
+    report_latency(&ping_line);
     assert!(
         p50 < Duration::from_millis(20),
         "ping round trip p50 {p50:?} is far above the target"
@@ -368,11 +371,28 @@ fn warm_round_trip_and_forwarded_run_latency_are_measured() {
     }
     forwarded.sort();
     cold.sort();
-    eprintln!(
+    let run_line = format!(
         "end-to-end run wall time: forwarded p50 {:?}, cold p50 {:?}",
         forwarded[forwarded.len() / 2],
         cold[cold.len() / 2]
     );
+    eprintln!("{run_line}");
+    report_latency(&run_line);
+}
+
+/// Passing tests have their stderr captured, so the figures also go to the CI job summary
+/// when it is available, where they can be read without `--nocapture`.
+fn report_latency(line: &str) {
+    if let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+        use std::io::Write;
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(summary)
+        {
+            let _ = writeln!(file, "- {line}");
+        }
+    }
 }
 
 #[test]

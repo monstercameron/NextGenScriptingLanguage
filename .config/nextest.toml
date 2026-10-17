@@ -1,0 +1,15 @@
+# cargo-nextest settings. The default profile is what developers run locally. The `flaky`
+# profile backs the nightly flake job (.github/workflows/flaky.yml): no retries, every test
+# runs once per invocation, and each invocation writes a JUnit report that keeps the output of
+# failing tests, so a single failure is never hidden by a later pass.
+[profile.default]
+fail-fast = false
+
+[profile.flaky]
+retries = 0
+fail-fast = false
+
+[profile.flaky.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true

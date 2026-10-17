@@ -13,7 +13,22 @@ fn manifests() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
 }
 
-const PROGRAM: &str = "on interrupt\n  run printf with message \"drained\"\n  then save to file \"drained.txt\"\nrun \"sleep\" with arguments [\"1\"]\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
+// `started.txt` is written just before the one-second sleep, so a test can interrupt the run
+// once the sleep has begun instead of after a guessed delay.
+const PROGRAM: &str = "on interrupt\n  run printf with message \"drained\"\n  then save to file \"drained.txt\"\nrun printf with message \"started\"\nthen save to file \"started.txt\"\nrun \"sleep\" with arguments [\"1\"]\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
+
+/// Wait until the program has reached its sleep, as `started.txt` shows.
+fn wait_until_sleeping(directory: &Path) {
+    let marker = directory.join("started.txt");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !marker.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run never reached its sleep"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
 
 fn spawn(directory: &Path) -> Child {
     fs::write(directory.join("drain.program"), PROGRAM).unwrap();
@@ -39,8 +54,7 @@ fn interrupt(child: &Child) {
 fn first_interrupt_drains_then_runs_the_handler() {
     let directory = tempfile::tempdir().unwrap();
     let mut child = spawn(directory.path());
-    // Give the run time to start the one-second sleep before interrupting it.
-    thread::sleep(Duration::from_millis(300));
+    wait_until_sleeping(directory.path());
     interrupt(&child);
     let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(130));
@@ -53,7 +67,7 @@ fn first_interrupt_drains_then_runs_the_handler() {
 fn second_interrupt_cancels_without_running_the_handler() {
     let directory = tempfile::tempdir().unwrap();
     let mut child = spawn(directory.path());
-    thread::sleep(Duration::from_millis(300));
+    wait_until_sleeping(directory.path());
     interrupt(&child);
     thread::sleep(Duration::from_millis(100));
     interrupt(&child);
@@ -80,7 +94,7 @@ fn drain_budget_expires_and_cancels_the_in_flight_work() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    thread::sleep(Duration::from_millis(300));
+    wait_until_sleeping(directory.path());
     let interrupted = std::time::Instant::now();
     interrupt(&child);
     let status = child.wait().unwrap();

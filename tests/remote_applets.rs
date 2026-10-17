@@ -92,11 +92,22 @@ fn local_server(
     (format!("http://{address}"), seen, receiver, thread)
 }
 
-fn idle_response_server(send_headers: bool) -> (String, Arc<AtomicUsize>, JoinHandle<()>) {
+/// An idle server. `ready` becomes true at the point a cancellation should land: once the
+/// request is read when no headers are sent, and once the headers are flushed when they are.
+fn idle_response_server(
+    send_headers: bool,
+) -> (
+    String,
+    Arc<AtomicUsize>,
+    Arc<std::sync::atomic::AtomicBool>,
+    JoinHandle<()>,
+) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = listener.local_addr().unwrap();
     let seen = Arc::new(AtomicUsize::new(0));
     let seen_thread = Arc::clone(&seen);
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ready_thread = Arc::clone(&ready);
     let thread = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let _request = read_request(&mut stream);
@@ -109,13 +120,29 @@ fn idle_response_server(send_headers: bool) -> (String, Arc<AtomicUsize>, JoinHa
                 .unwrap();
             stream.flush().unwrap();
         }
+        ready_thread.store(true, Ordering::SeqCst);
         // Stay idle until cancellation drops the client's socket. This makes
         // both the header wait and response-body wait deterministic without a
         // sleeping fixture thread.
         let mut probe = [0_u8; 1];
         let _ = stream.read(&mut probe);
     });
-    (format!("http://{address}"), seen, thread)
+    (format!("http://{address}"), seen, ready, thread)
+}
+
+/// Set `cancelled` once the idle server reports `ready`. The wait is bounded, so a server
+/// that never gets there still lets the test finish and fail with its own assertion.
+fn cancel_when_ready(
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ready: Arc<std::sync::atomic::AtomicBool>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !ready.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        cancelled.store(true, Ordering::SeqCst);
+    })
 }
 
 fn read_request(stream: &mut TcpStream) -> Request {
@@ -749,14 +776,10 @@ fn cancellation_and_timeouts_are_bounded_and_post_is_never_replayed() {
 fn cancellation_interrupts_idle_response_headers_and_body() {
     let desc = descriptor();
 
-    let (url, seen, server) = idle_response_server(false);
+    let (url, seen, ready, server) = idle_response_server(false);
     let client = RemoteClient::new(remote_config(url)).unwrap();
     let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let cancel_thread = Arc::clone(&cancelled);
-    let setter = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(60));
-        cancel_thread.store(true, Ordering::SeqCst);
-    });
+    let setter = cancel_when_ready(Arc::clone(&cancelled), ready);
     let started = std::time::Instant::now();
     let error = client.discover_cancellable(&cancelled).unwrap_err();
     let elapsed = started.elapsed();
@@ -767,14 +790,10 @@ fn cancellation_interrupts_idle_response_headers_and_body() {
     assert!(elapsed < Duration::from_millis(500), "{elapsed:?}");
     assert_eq!(seen.load(Ordering::SeqCst), 1);
 
-    let (url, seen, server) = idle_response_server(true);
+    let (url, seen, ready, server) = idle_response_server(true);
     let client = cached_client(remote_config(url), desc.clone());
     let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let cancel_thread = Arc::clone(&cancelled);
-    let setter = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(60));
-        cancel_thread.store(true, Ordering::SeqCst);
-    });
+    let setter = cancel_when_ready(Arc::clone(&cancelled), ready);
     let started = std::time::Instant::now();
     let error = client
         .invoke_cancellable(&desc, &RemoteRequest::new("echo"), &cancelled)

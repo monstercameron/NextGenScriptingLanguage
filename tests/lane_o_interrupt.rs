@@ -7,10 +7,20 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
+/// Start a run that writes a marker file just before its 30-second sleep, and return once the
+/// marker exists. Signals sent after this point hit a run that is inside its sleep.
 fn spawn_sleeping_run() -> (tempfile::TempDir, Child) {
     let directory = tempdir().unwrap();
     let program = directory.path().join("sleep.program");
-    fs::write(&program, "run \"sleep\" with arguments [\"30\"]\n").unwrap();
+    let marker = directory.path().join("started.txt");
+    fs::write(
+        &program,
+        format!(
+            "run printf with message \"started\"\nthen save to file {:?}\nrun \"sleep\" with arguments [\"30\"]\n",
+            marker.display().to_string()
+        ),
+    )
+    .unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .arg("run")
         .arg(&program)
@@ -18,6 +28,11 @@ fn spawn_sleeping_run() -> (tempfile::TempDir, Child) {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "the run never reached its sleep");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     (directory, child)
 }
 
@@ -36,7 +51,6 @@ fn wait_for(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
 
 fn interrupt_with(signal: libc::c_int) -> Option<i32> {
     let (_directory, mut child) = spawn_sleeping_run();
-    std::thread::sleep(Duration::from_millis(500));
     // SAFETY: the pid belongs to the child spawned above and is not reaped yet.
     unsafe { libc::kill(child.id() as libc::pid_t, signal) };
     let status = wait_for(&mut child, Duration::from_secs(20))

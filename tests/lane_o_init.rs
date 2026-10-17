@@ -49,11 +49,39 @@ fn init_returns_the_worker_exit_status() {
     assert_eq!(status.code(), Some(5));
 }
 
+/// A program that writes a marker just before its 30-second sleep. The marker lets a test
+/// signal the worker once it is inside the sleep, instead of after a guessed delay.
+fn sleeping_program() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let directory = tempdir().unwrap();
+    let program = directory.path().join("init.program");
+    let marker = directory.path().join("started.txt");
+    fs::write(
+        &program,
+        format!(
+            "run printf with message \"started\"\nthen save to file {:?}\nrun \"sleep\" with arguments [\"30\"]\n",
+            marker.display().to_string()
+        ),
+    )
+    .unwrap();
+    (directory, program, marker)
+}
+
+fn wait_for_marker(marker: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !marker.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the worker never reached its sleep"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn init_forwards_sigterm_to_the_worker_and_exits() {
-    let (_directory, program) = write_program("run \"sleep\" with arguments [\"30\"]\n");
+    let (_directory, program, marker) = sleeping_program();
     let mut child = spawn_init(&program);
-    std::thread::sleep(Duration::from_millis(500));
+    wait_for_marker(&marker);
     // SAFETY: the pid belongs to the child spawned above and is not reaped yet.
     unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
     let status = wait_for(&mut child, Duration::from_secs(20))
@@ -63,9 +91,9 @@ fn init_forwards_sigterm_to_the_worker_and_exits() {
 
 #[test]
 fn init_reports_worker_death_by_sighup_as_129() {
-    let (_directory, program) = write_program("run \"sleep\" with arguments [\"30\"]\n");
+    let (_directory, program, marker) = sleeping_program();
     let mut child = spawn_init(&program);
-    std::thread::sleep(Duration::from_millis(500));
+    wait_for_marker(&marker);
     // SAFETY: as above.
     unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGHUP) };
     let status =

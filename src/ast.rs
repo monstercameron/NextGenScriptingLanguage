@@ -354,6 +354,9 @@ pub struct InputDeclaration {
     /// Human-readable text from `described as "TEXT"`, shown by inspect and help.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Allowed values from `one of [...]` on a text input, in declaration order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

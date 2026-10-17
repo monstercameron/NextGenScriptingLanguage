@@ -10,6 +10,21 @@
     "protocol": { "const": "execute.explain/1" },
     "language_version": { "const": 1 },
     "program": { "type": "string" },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "type", "required", "line"],
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string" },
+          "required": { "type": "boolean" },
+          "line": { "type": "integer", "minimum": 1 },
+          "choices": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+        }
+      }
+    },
     "steps": {
       "type": "array",
       "items": {

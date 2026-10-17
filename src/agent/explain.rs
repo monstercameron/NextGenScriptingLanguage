@@ -146,7 +146,23 @@ pub fn explain_json(program: &Program, registry: &Registry, program_path: &str) 
         group_tainted: false,
     };
     walker.steps(&program.steps, None);
-    Ok(summary_object(program_path, &walker.rows))
+    let mut plan = summary_object(program_path, &walker.rows);
+    plan["inputs"] = program.inputs.iter().map(input_summary).collect();
+    Ok(plan)
+}
+
+/// One declared program input, with its allowed values when `one of` is used.
+fn input_summary(input: &crate::ast::InputDeclaration) -> Json {
+    let mut spec = json!({
+        "name": input.name,
+        "type": input.kind.to_string(),
+        "required": input.default.is_none(),
+        "line": input.line,
+    });
+    if let Some(choices) = &input.choices {
+        spec["choices"] = choices.clone().into();
+    }
+    spec
 }
 
 struct Walker<'a> {

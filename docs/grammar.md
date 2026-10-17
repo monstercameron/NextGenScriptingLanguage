@@ -24,8 +24,9 @@ test. Blocks marked `text` are grammar fragments and are not parsed.
 ```text
 program     = [ version ] { declaration } { statement }
 version     = "execute" INTEGER
-declaration = "accept" NAME "as" TYPE [ "from" source ] { option }
+declaration = "accept" NAME "as" TYPE [ "one" "of" choices ] [ "from" source ] { option }
 option      = "with" "default" value | "described" "as" TEXT
+choices     = "[" TEXT { "," TEXT } "]"
 source      = "environment" TEXT | "arguments" | "argument" INTEGER
 TYPE        = "text" | "integer" | "boolean" | "list" "of" "text" | "json"
 ```
@@ -51,7 +52,11 @@ accept count as integer with default 3
 accept arguments as list of text from arguments
 accept greeting as text described as "Who to greet"
 accept repeats as integer described as "Repeat count" with default 3
+accept mode as text one of ["light", "dark"] with default "light" described as "Theme"
 ```
+
+`one of` applies only to `text` inputs. Its choices are nonempty, unique, NUL-free
+quoted text, at most 256 of them. A default must be one of the choices.
 
 A leading comment block may hold one policy header, `# execute-policy: allow
 CATEGORY...`. It is an ordinary comment, so it is not part of the grammar. See the

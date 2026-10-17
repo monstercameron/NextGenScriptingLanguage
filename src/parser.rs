@@ -900,6 +900,15 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         }
         _ => bail!("input type must be text, integer, boolean, list of text, or json"),
     };
+    let choices = if word_is(tokens.get(cursor), "one") && word_is(tokens.get(cursor + 1), "of") {
+        if kind != InputType::Text {
+            bail!("`one of` applies only to text inputs");
+        }
+        cursor += 2;
+        Some(parse_choices(tokens, &mut cursor)?)
+    } else {
+        None
+    };
     let source = if word_is(tokens.get(cursor), "from") {
         cursor += 1;
         let source = match tokens.get(cursor) {
@@ -958,6 +967,14 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         }
     }
     ensure_end(tokens, cursor)?;
+    if let (Some(choices), Some(Value::String(value))) = (&choices, &default) {
+        if !choices.contains(value) {
+            bail!(
+                "input {name:?} default {value:?} is not one of the allowed values {}",
+                quoted_list(choices)
+            );
+        }
+    }
     Ok(InputDeclaration {
         name,
         kind,
@@ -965,7 +982,45 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         source,
         line,
         description,
+        choices,
     })
+}
+
+/// Parse the literal list after `one of`: `["a", "b"]`. Values are non-empty, unique,
+/// NUL-free text, and at most 256 of them.
+fn parse_choices(tokens: &[Token<'_>], cursor: &mut usize) -> Result<Vec<String>> {
+    let Value::List(items) = parse_value(tokens, cursor).context("`one of` choices")? else {
+        bail!("`one of` must be followed by a list of quoted text, such as [\"light\", \"dark\"]");
+    };
+    if items.is_empty() {
+        bail!("`one of` needs at least one choice");
+    }
+    if items.len() > 256 {
+        bail!("`one of` allows at most 256 choices");
+    }
+    let mut choices: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        let Value::String(text) = item else {
+            bail!("`one of` choices must be quoted text");
+        };
+        if text.is_empty() || text.contains('\0') {
+            bail!("`one of` choices must be nonempty and contain no NUL bytes");
+        }
+        if choices.contains(&text) {
+            bail!("`one of` lists the choice {text:?} more than once");
+        }
+        choices.push(text);
+    }
+    Ok(choices)
+}
+
+/// The allowed values, quoted and comma-separated, for an error message.
+pub(crate) fn quoted_list(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|value| format!("{value:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn is_trigger_setup(kind: &StepKind) -> bool {

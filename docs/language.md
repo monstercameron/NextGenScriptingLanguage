@@ -916,6 +916,24 @@ reported by `execute inspect` and does not change how the input is read or check
 accept name as text described as "Who to greet" with default "you"
 ```
 
+### Allowed values
+
+`one of [...]` after a `text` input limits it to a fixed list of choices:
+
+```program
+accept mode as text one of ["light", "dark"] with default "light" described as "Theme"
+```
+
+The choices must be nonempty, unique, NUL-free quoted text, at most 256 of them, and
+a `with default` value must be one of them. These rules are checked when the program
+is read. A supplied value is checked the same way from the command line and from
+environment or argument sources, before any step runs. A value outside the list is refused with an error that names the allowed
+values, for example `input "mode" must be one of "light", "dark"; got "blue"`.
+`execute inspect` lists each input's `choices`, and `execute explain --json` lists the
+program's inputs under `inputs` with the same field. `described as` works with
+`one of` in either position relative to `with default`. `one of` is not allowed on
+`integer`, `boolean`, `list of text`, or `json` inputs.
+
 ### Agent interface discovery
 
 Use `execute inspect FILE [--input NAME=VALUE]`.

@@ -39,6 +39,17 @@ impl InputDeclaration {
                 }
             );
         }
+        // Checked for every value path (CLI, runtime and live edits), before any effect.
+        if let (Some(choices), Value::String(text)) = (&self.choices, value) {
+            if !choices.contains(text) {
+                bail!(
+                    "line {}: input {:?} must be one of {}; got {text:?}",
+                    self.line,
+                    self.name,
+                    crate::parser::quoted_list(choices)
+                );
+            }
+        }
         Ok(())
     }
 
@@ -351,6 +362,9 @@ pub fn describe(
         }
         if let Some(text) = &input.description {
             spec["description"] = text.clone().into();
+        }
+        if let Some(choices) = &input.choices {
+            spec["choices"] = choices.clone().into();
         }
         if let Some(value) = known.get(&input.name) {
             spec["value"] = literal_json(value)?;

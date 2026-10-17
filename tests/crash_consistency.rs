@@ -291,8 +291,11 @@ fn fail_writes(mode: Mode) {
     for point in POINTS {
         for nth in 1..=FAILED_CALLS {
             let fixture = fixture(mode);
+            // checkpointed_run discards stderr for the other tests; this one needs the
+            // injected error text, so stderr is piped back after that setting.
             let output = checkpointed_run(&fixture)
                 .env("EXECUTE_FAILPOINT", format!("{point}:{nth}"))
+                .stderr(Stdio::piped())
                 .output()
                 .unwrap();
             let context = format!("{} {point} write {nth}", mode.name());

@@ -65,6 +65,7 @@ fn the_walk_through_fails_at_the_reload_and_resumes_after_the_fix() {
     let root = TempDir::new().unwrap();
     let bin = fake_tools(root.path());
     let state = root.path().join("state").display().to_string();
+    fs::create_dir_all(root.path().join("current")).unwrap();
 
     let check = execute(root.path(), &bin, "check", &[], &[]);
     assert!(
@@ -94,7 +95,12 @@ fn the_walk_through_fails_at_the_reload_and_resumes_after_the_fix() {
         !failed.status.success(),
         "the reload should fail until the fake is fixed"
     );
-    assert!(String::from_utf8_lossy(&failed.stderr).contains("reload failed"));
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("reload failed"),
+        "stderr: {}\nstdout: {}",
+        String::from_utf8_lossy(&failed.stderr),
+        String::from_utf8_lossy(&failed.stdout)
+    );
     assert_eq!(
         fs::read_link(root.path().join("current/theme")).unwrap(),
         root.path().join("themes/dark")

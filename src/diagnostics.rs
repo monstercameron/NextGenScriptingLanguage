@@ -679,9 +679,9 @@ fn value_matches_schema(value: &Value, schema: &JsonValue) -> bool {
         ("number", Value::Integer(_) | Value::Number(_)) => true,
         ("boolean", Value::Bool(_)) => true,
         ("array", Value::List(values)) => schema.get("items").is_none_or(|item_schema| {
-            values
-                .iter()
-                .all(|item| value_matches_schema(item, item_schema))
+            values.iter().all(|item| {
+                matches!(item, Value::Reference(_)) || value_matches_schema(item, item_schema)
+            })
         }),
         ("object", Value::Record(values)) => schema
             .get("properties")

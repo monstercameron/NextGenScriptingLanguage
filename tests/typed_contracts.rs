@@ -405,8 +405,10 @@ fn helper_command_and_in_process_backends_have_identical_typed_stdout() {
         .output()
         .unwrap();
     assert!(external.status.success());
-    assert_eq!(in_process_result.output, external.stdout);
-    assert_eq!(in_process_result.output, b"\"north/star\"\n");
+    // In-process text results cross the boundary as raw UTF-8; the helper declares JSON.
+    let helper_value: String = serde_json::from_slice(&external.stdout).unwrap();
+    assert_eq!(in_process_result.output, helper_value.as_bytes());
+    assert_eq!(in_process_result.output, b"north/star");
     assert_eq!(
         in_process_result.value,
         Some(Value::String("north/star".into()))

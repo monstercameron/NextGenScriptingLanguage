@@ -128,9 +128,14 @@ mod pty {
             wait_until(&output, b"mid"),
             "workflow never reached the next command"
         );
-        // SAFETY: tcgetpgrp reads the terminal's foreground group only.
-        let foreground = unsafe { libc::tcgetpgrp(slave.as_raw_fd()) };
-        assert_eq!(foreground, child.id() as libc::pid_t);
+        // The test process has no controlling terminal, so tcgetpgrp cannot see this pty.
+        // ps reports the foreground group of the workflow's own controlling terminal.
+        let ps = std::process::Command::new("ps")
+            .args(["-o", "tpgid=", "-p", &child.id().to_string()])
+            .output()
+            .unwrap();
+        let foreground: i32 = String::from_utf8_lossy(&ps.stdout).trim().parse().unwrap();
+        assert_eq!(foreground, child.id() as i32);
 
         let deadline = Instant::now() + Duration::from_secs(30);
         let status = loop {

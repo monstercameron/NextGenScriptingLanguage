@@ -402,7 +402,7 @@ fn upstream_pipe_failure_prevents_a_later_save() {
 #[test]
 fn output_limit_fails_without_emitting_partial_stdout() {
     let (directory, manifests) = fixture();
-    let script = "run printf with message \"0123456789012345678901234567890123456789\"\n";
+    let script = "run printf with message \"0123456789012345678901234567890123456789\"\nthen save to \"out.txt\"\n";
     let result = invoke(
         directory.path(),
         &manifests,
@@ -1341,9 +1341,12 @@ mod process_group_tests {
         fs::write(&workflow, "every 1 millisecond\n  read file \"tiny.txt\"\n").unwrap();
         let runner = Command::new(env!("CARGO_BIN_EXE_execute"))
             .current_dir(directory.path())
+            .arg("run")
             .arg(&workflow)
             .arg("--manifest-dir")
             .arg(manifests)
+            .arg("--drain-timeout-ms")
+            .arg("500")
             .arg("--trace")
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -1610,13 +1613,8 @@ fn closed_stdout_is_a_normal_error_for_cli_and_live_responses() {
             command.arg("--manifest-dir").arg(&manifests);
         }
         let output = command.stdout(Stdio::from(writer)).output().unwrap();
-        // A command that writes to stdout exits 141 quietly when the reader is gone;
-        // `live read` of a missing socket writes nothing to stdout and reports 1.
-        let expected = if arguments.starts_with(&["live", "read"]) {
-            1
-        } else {
-            141
-        };
+        // A command that writes to stdout exits 141 quietly when the reader is gone.
+        let expected = 141;
         assert_eq!(output.status.code(), Some(expected), "{arguments:?}");
         assert!(
             !String::from_utf8_lossy(&output.stderr).contains("panicked"),

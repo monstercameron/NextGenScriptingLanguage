@@ -531,7 +531,7 @@ fn trace_execution_event_omits_captured_payload_and_reports_metadata() {
     let secret = "TRACE_SECRET_PAYLOAD";
     std::fs::write(
         &script_path,
-        format!("run \"printf\" with arguments [{secret:?}]\n"),
+        format!("run \"printf\" with arguments [{secret:?}]\nthen save to \"payload.txt\"\n"),
     )
     .unwrap();
 
@@ -547,10 +547,10 @@ fn trace_execution_event_omits_captured_payload_and_reports_metadata() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output
-        .stdout
-        .windows(secret.len())
-        .any(|window| window == secret.as_bytes()));
+    assert_eq!(
+        std::fs::read(directory.path().join("payload.txt")).unwrap(),
+        secret.as_bytes()
+    );
 
     let trace = String::from_utf8(output.stderr).unwrap();
     assert!(!trace.contains(secret));

@@ -78,6 +78,8 @@ mod live_server {
         .unwrap();
         let socket = directory.path().join("tool.sock");
         let state = directory.path().join("state.json");
+        // --state-file is the initial state, which must already be a JSON object.
+        std::fs::write(&state, "{}").unwrap();
         let mut server = Command::new(env!("CARGO_BIN_EXE_execute"))
             .args([
                 "live",

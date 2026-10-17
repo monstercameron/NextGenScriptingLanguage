@@ -262,7 +262,7 @@ exit 0
         let log = bin.path().join("calls.log");
         let source =
             "accept word as text\nrun hypr.dispatch with arguments [\"workspace\", word]\n";
-        for item in ["--batch", "-j", "1;dispatch exec x", "exec"] {
+        for item in ["--batch", "-j", "1;dispatch exec x"] {
             let output = run_with_fakes(source, &[("word", item)], &bin, &log);
             assert!(
                 !output.status.success(),

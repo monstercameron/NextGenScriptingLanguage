@@ -455,7 +455,7 @@ fn completed_checkpoint_resumes_without_repeating_output_and_fresh_run_wont_repl
         "{}",
         String::from_utf8_lossy(&resumed.stderr)
     );
-    assert_eq!(resumed.stdout, b"one time\n");
+    assert!(resumed.stdout.is_empty(), "{:?}", resumed.stdout);
     assert!(
         !String::from_utf8_lossy(&resumed.stderr).contains("\"event\":\"spawn\""),
         "completed resume launched a child process: {}",
@@ -525,7 +525,11 @@ fn resume_refuses_a_corrupted_checkpoint_blob() {
     let (directory, manifests) = fixture();
     let workflow = directory.path().join("workflow.program");
     let checkpoint = directory.path().join("checkpoint");
-    fs::write(&workflow, "run printf with message \"durable bytes\"\n").unwrap();
+    fs::write(
+        &workflow,
+        "run printf with message \"durable bytes\"\nthen save to \"out.txt\"\n",
+    )
+    .unwrap();
     let fresh = invoke(
         directory.path(),
         &manifests,

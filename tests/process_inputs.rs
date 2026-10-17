@@ -166,11 +166,11 @@ fn executable_program_shebang_forwards_options_as_program_arguments() {
     let output = success(
         Command::new(file)
             .env("PATH", path)
-            .arg("--help")
+            .arg("--verbose")
             .output()
             .unwrap(),
     );
-    assert_eq!(output.stdout, b"--help");
+    assert_eq!(output.stdout, b"--verbose");
 }
 #[test]
 fn process_input_headers_reject_ambiguous_or_invalid_sources() {
@@ -225,5 +225,5 @@ fn checkpoint_environment_values_are_frozen_and_changed_values_do_not_replay_com
             .output()
             .unwrap(),
     );
-    assert_eq!(output.stdout, b"first");
+    assert!(output.stdout.is_empty(), "{:?}", output.stdout);
 }

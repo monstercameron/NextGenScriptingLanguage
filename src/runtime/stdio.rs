@@ -112,47 +112,58 @@ fn poll_timeout_ms(deadline: Instant, now: Instant) -> libc::c_int {
     milliseconds.min(MAX_WAIT_MS) as libc::c_int
 }
 
-/// Final diagnostics, written as the process exits. The whole message is written: partial
-/// writes are retried, and a full or nonblocking descriptor is waited on rather than
-/// abandoned, so a slow reader cannot cut the message short or drop it. The write does not
-/// change the descriptor's flags, which another worker may rely on. The exit status is
-/// already non-zero, so a failed write leaves nothing else to report.
+/// Final diagnostics, written as the process exits. The whole message is written while the
+/// reader keeps taking output: a full descriptor is waited on, and a reader that takes
+/// nothing for DIAGNOSTIC_IDLE_WAIT is treated as gone, so a cancelled or terminated process
+/// still exits. Writes go out in PIPE_BUF chunks that poll has reported room for. The write
+/// does not change the descriptor's flags, which another worker may rely on. The exit status
+/// is already non-zero, so a failed write leaves nothing else to report.
 pub fn write_diagnostic(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
     let _write_lock = WRITES.lock().unwrap_or_else(|error| error.into_inner());
     let mut offset = 0;
+    let mut idle_since = Instant::now();
     while offset < bytes.len() {
-        // SAFETY: offset < bytes.len(), so the pointer is in bounds, and the length passed is
-        // exactly the bytes left from offset. STDERR_FILENO is this process's fd 2. If it is
-        // closed or invalid, write fails with an errno that the branches below handle.
-        let count = unsafe {
-            libc::write(
-                libc::STDERR_FILENO,
-                bytes[offset..].as_ptr().cast(),
-                bytes.len() - offset,
-            )
+        let Some(idle) = DIAGNOSTIC_IDLE_WAIT.checked_sub(idle_since.elapsed()) else {
+            return;
         };
+        if !wait_until_writable(libc::STDERR_FILENO, idle) {
+            return;
+        }
+        // poll reported room for a write of up to PIPE_BUF bytes, so this chunk does not block.
+        let chunk = (bytes.len() - offset).min(libc::PIPE_BUF);
+        let pending = &bytes[offset..offset + chunk];
+        // SAFETY: pending is a live slice, so the pointer and length describe valid memory.
+        // STDERR_FILENO is this process's fd 2. If it is closed or invalid, write fails with an
+        // errno that the branches below handle.
+        let count = unsafe { libc::write(libc::STDERR_FILENO, pending.as_ptr().cast(), chunk) };
         if count < 0 {
             match io::Error::last_os_error().kind() {
-                io::ErrorKind::Interrupted => {}
-                io::ErrorKind::WouldBlock => wait_until_writable(libc::STDERR_FILENO),
+                io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock => {}
                 _ => return,
             }
         } else if count == 0 {
             return;
         } else {
             offset += count as usize;
+            idle_since = Instant::now();
         }
     }
 }
 
-/// Blocks until `fd` can accept output.
-fn wait_until_writable(fd: RawFd) {
-    // A -1 timeout blocks until fd is ready or poll fails. The result is ignored, and the
-    // caller's write loop retries the write afterwards.
-    let _ = crate::platform::unix_ffi::poll_one(fd, libc::POLLOUT, -1);
+/// How long a final diagnostic waits with no progress on a full stderr pipe.
+const DIAGNOSTIC_IDLE_WAIT: Duration = Duration::from_secs(2);
+
+/// Waits up to `wait` for `fd` to accept output. False on timeout or a failed poll. An
+/// interrupted poll reports true, so the caller retries the write.
+fn wait_until_writable(fd: RawFd, wait: Duration) -> bool {
+    let milliseconds = wait.as_millis().min(libc::c_int::MAX as u128) as libc::c_int;
+    match crate::platform::unix_ffi::poll_one(fd, libc::POLLOUT, milliseconds) {
+        Ok((ready, _)) => ready != 0,
+        Err(error) => error.kind() == io::ErrorKind::Interrupted,
+    }
 }
 
 /// Read inherited stdin without changing its shared open-file-description flags.

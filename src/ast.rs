@@ -273,6 +273,9 @@ pub enum StepKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         unset: Vec<String>,
     },
+    /// `interactively`: the next command takes the terminal for its run (terminal
+    /// handoff). It must immediately precede one fresh, unpiped native command.
+    Interactive,
     /// Routes the next command's stderr or stdout. It must immediately precede
     /// one `Invoke` that starts a fresh, unpiped command.
     Redirect {

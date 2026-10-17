@@ -217,6 +217,7 @@ impl BrowserSession {
                 StepKind::Append { .. }
                 | StepKind::Redirect { .. }
                 | StepKind::Environment { .. } => Some("file redirection and append"),
+                StepKind::Interactive => Some("terminal handoff (interactively)"),
                 StepKind::Exit { .. } | StepKind::Fail { .. } => {
                     Some("exit with status and fail with message")
                 }
@@ -327,6 +328,7 @@ impl BrowserSession {
                     | StepKind::Append { .. }
                     | StepKind::Redirect { .. }
                     | StepKind::Environment { .. }
+                    | StepKind::Interactive
                     | StepKind::TakeJsonDynamic { .. } => {
                         bail!("control flow feature was not validated for browser execution");
                     }

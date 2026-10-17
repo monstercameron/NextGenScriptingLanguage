@@ -1305,7 +1305,38 @@ fn environment_suffix(
     Ok(None)
 }
 
+/// `run <command> ... interactively`: one fresh native command with a terminal
+/// handoff. Redirection, stdin and environment suffixes are rejected here, so the
+/// marker always sits directly before its command.
+fn parse_interactive_run(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
+    if !word_is(tokens.first(), "run") || word_is(tokens.get(1), "program") {
+        bail!("`interactively` applies to a single native `run` command");
+    }
+    for index in 0..tokens.len() {
+        if redirect_suffix(tokens, index).is_some() || environment_suffix(tokens, index)?.is_some()
+        {
+            bail!(
+                "`interactively` cannot be combined with redirection, stdin from, or environment"
+            );
+        }
+    }
+    let StepKind::Invoke { call, connection } = parse_invocation(tokens)? else {
+        bail!("`interactively` applies to a single native `run` command");
+    };
+    if connection != Connection::Start {
+        bail!("`interactively` applies to a fresh command, not `then` or `pipe to`");
+    }
+    Ok(vec![
+        StepKind::Interactive,
+        StepKind::Invoke { call, connection },
+    ])
+}
+
 fn parse_simple_statement(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
+    // `interactively` is a trailing word on one top-level native `run`.
+    if let Some(Token::Word("interactively")) = tokens.last() {
+        return parse_interactive_run(&tokens[..tokens.len() - 1]);
+    }
     let mut kept = Vec::with_capacity(tokens.len());
     let mut stdin = None;
     let mut output = None;

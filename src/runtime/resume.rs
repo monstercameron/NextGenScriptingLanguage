@@ -48,7 +48,10 @@ pub(super) fn node_end(program: &Program, start: usize) -> usize {
     // A redirect is one node with the command it routes, which validation keeps
     // as the single following invocation. Splitting them would let resume run the
     // command without its routing state.
-    if matches!(program.steps[start].kind, StepKind::Redirect { .. }) {
+    if matches!(
+        program.steps[start].kind,
+        StepKind::Redirect { .. } | StepKind::Interactive
+    ) {
         return start + 2;
     }
     // An environment step is one node with the redirect and command it applies to.
@@ -369,6 +372,16 @@ pub(super) fn uncertain_on_failure(
     Ok(false)
 }
 pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registry) -> Result<()> {
+    if let Some(step) = program
+        .steps
+        .iter()
+        .find(|step| matches!(step.kind, StepKind::Interactive))
+    {
+        bail!(
+            "line {}: checkpointed and resumed programs do not support interactively",
+            step.line
+        );
+    }
     if super::has_job_operations(program) {
         bail!(
             "checkpointed and resumed programs do not support non-serializable background job handles"

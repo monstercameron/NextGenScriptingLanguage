@@ -3420,7 +3420,8 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::Save { .. }
             | StepKind::Append { .. }
             | StepKind::Redirect { .. }
-            | StepKind::Environment { .. } => {}
+            | StepKind::Environment { .. }
+            | StepKind::Interactive => {}
         }
     }
     if let Some(crate::ast::Trigger::Listen {
@@ -4550,6 +4551,14 @@ fn run_finite_state(
                     // Like save, the appended value remains the pipeline value.
                     data = Input::Bytes(bytes);
                 }
+                StepKind::Interactive => {
+                    // Terminal handoff is validated but not yet executed. Fail
+                    // closed rather than running the command non-interactively.
+                    bail!(
+                        "line {}: terminal handoff (interactively) is not implemented yet",
+                        step.line
+                    );
+                }
                 StepKind::Environment { set, unset } => {
                     let mut overlay = crate::capabilities::CommandEnvOverlay {
                         set: BTreeMap::new(),
@@ -5272,6 +5281,17 @@ pub fn run_with_context(
 ) -> Result<RunResult> {
     if program.trigger.is_some() {
         bail!("triggered programs require run_service");
+    }
+    // TUI handlers run through this entry point and cannot hand over the terminal.
+    if let Some(step) = program
+        .steps
+        .iter()
+        .find(|step| matches!(step.kind, StepKind::Interactive))
+    {
+        bail!(
+            "line {}: interactively is not supported in TUI handlers",
+            step.line
+        );
     }
     validate_discard_stderr_usage(program)?;
     let cwd = fs::canonicalize(&options.working_directory)?;

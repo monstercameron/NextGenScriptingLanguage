@@ -166,6 +166,7 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                     path: Some(path), ..
                 } => references(path, &mut needed),
                 crate::ast::StepKind::Redirect { path: None, .. } => {}
+                crate::ast::StepKind::Interactive => {}
                 crate::ast::StepKind::Environment { set, .. } => {
                     for value in set.values() {
                         references(value, &mut needed);

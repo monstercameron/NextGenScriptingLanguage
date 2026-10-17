@@ -103,6 +103,69 @@ pub(crate) fn preflight_executables(
     Ok(())
 }
 
+/// `interactively` (terminal handoff) is valid only for one fresh native command
+/// at the top level of a finite run. Loops, try blocks, and reusable-program bodies
+/// nest it, so they are rejected here, before any effect.
+fn validate_terminal_handoffs(program: &Program, registry: &Registry) -> Result<()> {
+    let mut nesting = 0usize;
+    for (index, step) in program.steps.iter().enumerate() {
+        match &step.kind {
+            StepKind::Loop { .. } | StepKind::Try { .. } | StepKind::CallProgram { .. } => {
+                nesting += 1;
+            }
+            StepKind::EndLoop { .. } | StepKind::EndTry | StepKind::EndCall => {
+                nesting = nesting.saturating_sub(1);
+            }
+            StepKind::Interactive => {
+                if nesting > 0 {
+                    bail!(
+                        "line {}: interactively is valid only at the top level of a finite run, not inside a loop, try block, or reusable program",
+                        step.line
+                    );
+                }
+                let Some(crate::ast::Step {
+                    kind: StepKind::Invoke { call, connection },
+                    ..
+                }) = program.steps.get(index + 1)
+                else {
+                    bail!(
+                        "line {}: interactively must precede one native command",
+                        step.line
+                    );
+                };
+                if *connection != Connection::Start || pipe_in_steps(&program.steps, index + 2) {
+                    bail!(
+                        "line {}: interactively applies to a single fresh command",
+                        step.line
+                    );
+                }
+                let manifest = registry.resolve_call(call)?;
+                if manifest.builtin.is_some()
+                    || manifest.execution_backend() != crate::contracts::AppletBackend::Command
+                {
+                    bail!(
+                        "line {}: interactively applies to a native command, not a builtin or in-process applet",
+                        step.line
+                    );
+                }
+                if call.cache
+                    || call.binding.is_some()
+                    || call.status_binding.is_some()
+                    || call.result_binding.is_some()
+                    || call.discard_stderr
+                {
+                    bail!(
+                        "line {}: interactively cannot be combined with cache, as, keep status, keep result, or discard stderr",
+                        step.line
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// A command condition is an ordinary applet or executable call. It is type
 /// checked like any call; builtins change shell state and are not conditions.
 fn validate_command_condition(
@@ -258,6 +321,16 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
             bail!("native background jobs are supported only in finite programs; services and listeners have separate lifetimes");
         }
         let (setup, body) = service::split_program(program);
+        if let Some(step) = body
+            .steps
+            .iter()
+            .find(|step| matches!(step.kind, StepKind::Interactive))
+        {
+            bail!(
+                "line {}: interactively is not supported in service or listener handlers",
+                step.line
+            );
+        }
         // A handler failure is recoverable per record, and exit would end the
         // whole service. Keep those lifetimes separate: fail the program here.
         if let Some(step) = body
@@ -482,6 +555,16 @@ pub(crate) fn validate_live(
     names: BTreeSet<String>,
     has_data: bool,
 ) -> Result<()> {
+    if let Some(step) = program
+        .steps
+        .iter()
+        .find(|step| matches!(step.kind, StepKind::Interactive))
+    {
+        bail!(
+            "line {}: live programs do not support interactively",
+            step.line
+        );
+    }
     if has_job_operations(program) {
         bail!("live programs do not support finite-scope background job handles");
     }
@@ -565,6 +648,7 @@ fn validate_inputs(
         allow_rebinding,
         false,
     )?;
+    validate_terminal_handoffs(program, registry)?;
     if !flow.unresolved_jobs.is_empty() {
         let names = flow
             .unresolved_jobs
@@ -1000,6 +1084,7 @@ fn validate_range(
                 }
             }
             match &step.kind {
+                StepKind::Interactive => {}
                 StepKind::Loop { .. }
                 | StepKind::EndLoop { .. }
                 | StepKind::If { .. }
@@ -1901,6 +1986,7 @@ pub fn explain_with_inputs(
                 "save finite output to {:?}",
                 resolve(path, &known).unwrap_or_else(|_| path.clone())
             ),
+            StepKind::Interactive => "interactive (terminal handoff)".into(),
             StepKind::Environment { set, unset } => {
                 let mut parts = Vec::new();
                 if !set.is_empty() {

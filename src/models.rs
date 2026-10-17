@@ -303,7 +303,8 @@ Reads state/input bytes from stdin and writes one execute.model/1 JSON result.\n
 Options: --provider jev|openai --model NAME --question TEXT --instruction TEXT\n\
          --labels LABEL... | --criteria JSON --levels LEVEL... --questions JSON\n\
          --schema JSON --minimum 0..100 --max-tokens N --timeout-ms N\n\
-         --max-bytes N --env-file PATH --endpoint URL --api-key-env NAME\n\
+         --max-bytes N --env-file PATH --endpoint URL\n\
+         --api-key-env EXECUTE_MODEL_KEY_NAME\n\
          --fixture PATH\n\
          --api responses|chat_completions --effort none|low|medium|high|xhigh|max\n\
          --temperature 0..2\n\
@@ -423,8 +424,10 @@ fn parse_args(args: &[String]) -> Result<Options> {
             "--endpoint" => options.endpoint = Some(nonempty(value, "endpoint")?),
             "--api-key-env" => {
                 let name = nonempty(value, "api-key-env")?;
-                if !valid_env_name(&name) || is_default_credential_name(&name) {
-                    bail!("api-key-env must name a non-default environment variable");
+                if !valid_api_key_env(&name) {
+                    bail!(
+                        "api-key-env must be EXECUTE_MODEL_KEY_ followed by a name, for example EXECUTE_MODEL_KEY_LOCAL"
+                    );
                 }
                 options.api_key_env = Some(name);
             }
@@ -1165,6 +1168,17 @@ const DEFAULT_CREDENTIAL_NAMES: [&str; 5] = [
     "jev",
 ];
 
+/// The only prefix an `api_key_env` variable may carry. The match is
+/// case-sensitive, so `execute_model_key_local` and `GITHUB_TOKEN` are rejected.
+const API_KEY_ENV_PREFIX: &str = "EXECUTE_MODEL_KEY_";
+
+fn valid_api_key_env(name: &str) -> bool {
+    name.strip_prefix(API_KEY_ENV_PREFIX)
+        .is_some_and(|suffix| !suffix.is_empty())
+        && valid_env_name(name)
+        && !is_default_credential_name(name)
+}
+
 fn is_default_credential_name(name: &str) -> bool {
     DEFAULT_CREDENTIAL_NAMES
         .iter()
@@ -1218,6 +1232,9 @@ fn select_credential(
     process: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Option<String>> {
     if let Some(name) = api_key_env {
+        if !valid_api_key_env(name) {
+            return Err(failure(FailureClass::Configuration));
+        }
         let wanted = [name];
         let file_values = match env_file {
             Some(path) => parse_env_file(path, &wanted)?,
@@ -2865,7 +2882,7 @@ mod credential_policy_tests {
     #[test]
     fn api_key_env_names_its_variable_for_any_endpoint() {
         let keys = process(&[
-            ("LOCAL_MODEL_KEY", "local-test-key"),
+            ("EXECUTE_MODEL_KEY_LOCAL", "local-test-key"),
             ("OPENAI_API_KEY", "default-test-key"),
         ]);
         for endpoint in [
@@ -2876,7 +2893,7 @@ mod credential_policy_tests {
             let key = select_credential(
                 Provider::OpenAi,
                 &url(endpoint),
-                Some("LOCAL_MODEL_KEY"),
+                Some("EXECUTE_MODEL_KEY_LOCAL"),
                 None,
                 &keys,
             )
@@ -2890,22 +2907,22 @@ mod credential_policy_tests {
         let directory = tempfile::tempdir().unwrap();
         let file = env_file(
             &directory,
-            "LOCAL_MODEL_KEY=file-local-key\nUNRELATED=ignored\n",
+            "EXECUTE_MODEL_KEY_LOCAL=file-local-key\nUNRELATED=ignored\n",
         );
         let from_file = select_credential(
             Provider::OpenAi,
             &url("http://127.0.0.1:9/v1"),
-            Some("LOCAL_MODEL_KEY"),
+            Some("EXECUTE_MODEL_KEY_LOCAL"),
             Some(&file),
             &none,
         )
         .unwrap();
         assert_eq!(from_file.as_deref(), Some("file-local-key"));
-        let process_first = process(&[("LOCAL_MODEL_KEY", "process-local-key")]);
+        let process_first = process(&[("EXECUTE_MODEL_KEY_LOCAL", "process-local-key")]);
         let both = select_credential(
             Provider::OpenAi,
             &url("http://127.0.0.1:9/v1"),
-            Some("LOCAL_MODEL_KEY"),
+            Some("EXECUTE_MODEL_KEY_LOCAL"),
             Some(&file),
             &process_first,
         )
@@ -2918,7 +2935,7 @@ mod credential_policy_tests {
         let error = select_credential(
             Provider::OpenAi,
             &url("http://127.0.0.1:9/v1"),
-            Some("LOCAL_MODEL_KEY"),
+            Some("EXECUTE_MODEL_KEY_LOCAL"),
             None,
             &none,
         )
@@ -2977,6 +2994,14 @@ mod credential_policy_tests {
             "TYPESAFE_API_KEY",
             "jev",
             "Typesafe_Api_Key",
+            "GITHUB_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "PATH",
+            "execute_model_key_local",
+            "Execute_Model_Key_Local",
+            "EXECUTE_MODEL_KEY_",
+            "EXECUTE_MODEL_KEYLOCAL",
+            "EXECUTE_MODEL_KEY_LOCAL=x",
             "",
             "1BAD",
             "BAD-NAME",
@@ -2987,7 +3012,11 @@ mod credential_policy_tests {
                 "accepted api-key-env {name:?}"
             );
         }
-        for name in ["LOCAL_MODEL_KEY", "_LOCAL", "lowercase_key"] {
+        for name in [
+            "EXECUTE_MODEL_KEY_LOCAL",
+            "EXECUTE_MODEL_KEY_OPENROUTER",
+            "EXECUTE_MODEL_KEY_X1",
+        ] {
             let options = parse_args(&base(name))
                 .unwrap_or_else(|error| panic!("rejected {name:?}: {error}"));
             assert_eq!(options.api_key_env.as_deref(), Some(name));

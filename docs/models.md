@@ -123,7 +123,7 @@ before:
 | Parameter | Values | Wire effect |
 | --- | --- | --- |
 | `endpoint` | URL | Responses: the full URL, default `https://api.openai.com/v1/responses`. Chat Completions: a base URL; the helper posts to `{base}/chat/completions`, default base `https://api.openai.com/v1`. A trailing slash on the base is removed. |
-| `api_key_env` | environment variable name | The only key a custom endpoint can receive. Must not be a default key name. See the credential rule below. |
+| `api_key_env` | `EXECUTE_MODEL_KEY_` followed by a name, such as `EXECUTE_MODEL_KEY_LOCAL` | The only key a custom endpoint can receive. The prefix is required and case-sensitive. See the credential rule below. |
 | `api` | `responses` (default), `chat_completions` | Selects the OpenAI wire protocol. |
 | `effort` | `none`, `low`, `medium`, `high`, `xhigh`, `max` | Responses: `reasoning.effort`. Chat Completions: `reasoning_effort`. `minimal` and other values are rejected locally. |
 | `temperature` | number from 0 to 2 | Top-level `temperature` in both protocols. Write a JSON number, not text. |
@@ -157,10 +157,16 @@ Credential rule, which is the security boundary for provider keys:
   That is true whether the key comes from the process environment or an
   `env_file`. A lookalike host such as `api.openai.com.example.test` does not
   qualify.
-- `api_key_env NAME` names one explicit variable. The helper reads it from the
-  process environment, or from the explicit `env_file` if the process has no
-  value. It may be sent to any endpoint, and it must not be a default name
-  (case-insensitively), so `api_key_env "OPENAI_API_KEY"` is rejected.
+- `api_key_env NAME` names one explicit variable. `NAME` must start with the
+  dedicated prefix `EXECUTE_MODEL_KEY_` followed by at least one character, for
+  example `EXECUTE_MODEL_KEY_LOCAL` or `EXECUTE_MODEL_KEY_OPENROUTER`. The check
+  is case-sensitive and happens at parse time, so `GITHUB_TOKEN`,
+  `AWS_SECRET_ACCESS_KEY`, `execute_model_key_local`, and `OPENAI_API_KEY` are all
+  rejected before any file read or connection. The helper reads the variable
+  from the process environment, or from the explicit `env_file` if the process has
+  no value. The `env_file` lookup follows the same prefix rule, so a file can
+  supply only prefixed names through this parameter. The named key may be sent to
+  any endpoint, so put only the key intended for that endpoint under the prefix.
 - A custom endpoint without `api_key_env` gets no `Authorization` header. This
   covers loopback servers and remote hosts. A remote custom host therefore
   proceeds without a key, which is correct for open hosts. It never receives the
@@ -170,8 +176,8 @@ Credential rule, which is the security boundary for provider keys:
   unset variable also fails as `credentials_missing` before connecting.
 
 Process environment values take precedence over an `env_file` for the same name.
-Use `env_file` for the default keys on the default host, and `api_key_env` for
-any other key.
+Use `env_file` for the default keys on the default host, and `api_key_env` with an
+`EXECUTE_MODEL_KEY_` name for any other key.
 
 `api`, `effort` and `temperature` are OpenAI-only. Jev rejects them, and the
 helper rejects a duplicate of any of these options. Fixtures record `api`,

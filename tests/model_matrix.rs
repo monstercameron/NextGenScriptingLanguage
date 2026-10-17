@@ -1179,7 +1179,7 @@ fn default_provider_keys_are_never_sent_to_a_custom_loopback_server() {
 fn api_key_env_names_the_only_key_a_custom_endpoint_receives() {
     let directory = tempfile::tempdir().unwrap();
     let env_file = directory.path().join("local-keys.env");
-    std::fs::write(&env_file, "SYNTHETIC_FILE_KEY=file-local-key\n").unwrap();
+    std::fs::write(&env_file, "EXECUTE_MODEL_KEY_FILE=file-local-key\n").unwrap();
     let env_file_text = env_file.to_string_lossy().into_owned();
 
     let (base, server) = serve(vec![reply(200, &chat_completion(json!("process")))]);
@@ -1189,7 +1189,7 @@ fn api_key_env_names_the_only_key_a_custom_endpoint_receives() {
         "--endpoint",
         &chat_base(&base),
         "--api-key-env",
-        "SYNTHETIC_PROCESS_KEY",
+        "EXECUTE_MODEL_KEY_PROCESS",
     ]);
     json_output(&run(
         directory.path(),
@@ -1197,7 +1197,7 @@ fn api_key_env_names_the_only_key_a_custom_endpoint_receives() {
         b"s",
         false,
         &[
-            ("SYNTHETIC_PROCESS_KEY", "process-local-key"),
+            ("EXECUTE_MODEL_KEY_PROCESS", "process-local-key"),
             ("OPENAI_API_KEY", "default-must-not-be-sent"),
         ],
     ));
@@ -1215,7 +1215,7 @@ fn api_key_env_names_the_only_key_a_custom_endpoint_receives() {
         "--endpoint",
         &chat_base(&base),
         "--api-key-env",
-        "SYNTHETIC_FILE_KEY",
+        "EXECUTE_MODEL_KEY_FILE",
         "--env-file",
         &env_file_text,
     ]);
@@ -1244,6 +1244,13 @@ fn api_key_env_naming_a_default_variable_is_rejected_before_any_request() {
         "TYPESAFE_API_KEY",
         "jev",
         "Openai_Api_Key",
+        "GITHUB_TOKEN",
+        "AWS_SECRET_ACCESS_KEY",
+        "PATH",
+        "execute_model_key_local",
+        "Execute_Model_Key_Local",
+        "EXECUTE_MODEL_KEY_",
+        "EXECUTE_MODEL_KEYLOCAL",
     ] {
         let args = generate(&["--api-key-env", name, "--endpoint", "http://127.0.0.1:9/v1"]);
         let output = run(
@@ -1269,7 +1276,7 @@ fn api_key_env_with_no_value_fails_before_connecting() {
         "--endpoint",
         &chat_base(&base),
         "--api-key-env",
-        "SYNTHETIC_UNSET_KEY",
+        "EXECUTE_MODEL_KEY_UNSET",
     ]);
     assert_failure_class(
         &run(directory.path(), &args, b"s", false, &[]),
@@ -2069,4 +2076,229 @@ fn batched_ask_branches_a_program_on_two_answers() {
         serde_json::from_slice(&std::fs::read(directory.path().join("billing.json")).unwrap())
             .unwrap();
     assert_eq!(saved["answers"]["route"]["label"], "billing");
+}
+
+// ---------------------------------------------------------------------------
+// 7. Typed results: a v1 contract makes `as NAME` bind a decoded JSON record,
+//    so a program can read fields with `take` and skip `parse json`. The
+//    pipeline still carries the raw bytes, so a later `parse json` still works.
+// ---------------------------------------------------------------------------
+
+fn judge_expected() -> Value {
+    json!({
+        "provider": "jev", "kind": "judge", "model": "jev-latest",
+        "state": "", "question": "Is it true?", "minimum": 80
+    })
+}
+
+fn judge_response() -> Value {
+    json!({
+        "model": "jev-latest",
+        "answers": {"decision": {"type": "noul", "noul": 0.1}},
+        "usage": {"input_tokens": 4, "output_tokens": 1}
+    })
+}
+
+#[test]
+fn typed_binding_reads_fields_without_parse_json() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = r#"jev.judge with question "Is it true?" and minimum 80 and fixture FIXTURE as verdict
+take boolean at "/accepted" from verdict as accepted
+take boolean at "/decision" from verdict as decision
+if accepted is true
+  if decision is false
+    then save to "typed-ok.txt"
+"#;
+    let output = run_program(directory.path(), source, judge_expected(), judge_response());
+    assert!(
+        output.status.success(),
+        "typed binding failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        directory.path().join("typed-ok.txt").exists(),
+        "typed branch not taken"
+    );
+}
+
+#[test]
+fn parse_json_after_a_typed_binding_still_reads_the_raw_pipeline() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = r#"jev.judge with question "Is it true?" and minimum 80 and fixture FIXTURE as verdict
+then parse json as result
+take boolean at "/accepted" from result as accepted
+if accepted is true
+  then save to "pipeline-ok.txt"
+"#;
+    let output = run_program(directory.path(), source, judge_expected(), judge_response());
+    assert!(
+        output.status.success(),
+        "pipeline parse failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        directory.path().join("pipeline-ok.txt").exists(),
+        "pipeline branch not taken"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8. Breadth: checkpoint resume, limits, and extraction through the real CLI.
+//    The checkpoint test uses an owned loopback server that accepts exactly one
+//    request. A second request could not connect, so a resume that re-requested
+//    the model would fail as a transport error instead of the expected step.
+// ---------------------------------------------------------------------------
+
+fn checkpoint_program(endpoint: &str) -> String {
+    format!(
+        "llm.ask with model \"gpt-6-luna\" and instruction \"Draft one line\" and endpoint {} and api \"chat_completions\" as raw\n\
+then parse json as result\n\
+take text at \"/text\" from result as answer\n\
+take text at \"/missing\" from result as bad\n",
+        serde_json::to_string(endpoint).unwrap()
+    )
+}
+
+fn run_execute(directory: &Path, args: &[&str]) -> Output {
+    let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+    command
+        .args(args)
+        .arg("--manifest-dir")
+        .arg(&manifests)
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for name in CREDENTIAL_VARS.iter().chain(PROXY_VARS.iter()) {
+        command.env_remove(name);
+    }
+    command.env_remove("EXECUTE_MODELS_OFFLINE");
+    command.output().expect("start execute")
+}
+
+#[test]
+fn completed_model_call_is_not_requested_again_when_a_checkpoint_resumes() {
+    let directory = tempfile::tempdir().unwrap();
+    let (base, server) = serve(vec![reply(200, &chat_completion(json!("draft")))]);
+    let program = directory.path().join("checkpoint.program");
+    std::fs::write(&program, checkpoint_program(&format!("{base}/v1"))).unwrap();
+    let checkpoint = directory.path().join("checkpoint");
+    let program_text = program.to_string_lossy().into_owned();
+    let checkpoint_text = checkpoint.to_string_lossy().into_owned();
+
+    // First run: the model call completes and is checkpointed, then a later
+    // step fails. The single queued reply is consumed here.
+    let first = run_execute(
+        directory.path(),
+        &[&program_text, "--checkpoint", &checkpoint_text],
+    );
+    assert!(!first.status.success());
+    assert!(
+        String::from_utf8_lossy(&first.stderr).contains("JSON pointer"),
+        "first run did not reach the failing step: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(
+        server.join().unwrap().len(),
+        1,
+        "first run made one request"
+    );
+
+    // The listener is closed now. Any re-request would fail as a transport error.
+    for _ in 0..2 {
+        let resumed = run_execute(
+            directory.path(),
+            &["resume", &program_text, "--checkpoint", &checkpoint_text],
+        );
+        let stderr = String::from_utf8_lossy(&resumed.stderr).into_owned();
+        assert!(!resumed.status.success());
+        assert!(
+            stderr.contains("JSON pointer"),
+            "resume re-requested the model or changed failure: {stderr}"
+        );
+        assert!(
+            !stderr.contains("transport"),
+            "resume re-requested the model: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn input_limit_rejects_oversized_state_before_any_model_call() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = write_fixture(
+        directory.path(),
+        "limit.json",
+        generate_semantic("abcdefgh"),
+        responses_text("unused"),
+    );
+    let args = generate(&["--max-bytes", "4", "--fixture", &fixture]);
+    let output = run(directory.path(), &args, b"abcdefgh", false, &[]);
+    assert_failure_class(&output, "input", "oversized state");
+}
+
+#[test]
+fn output_limit_rejects_an_oversized_jev_response_on_the_wire() {
+    let directory = tempfile::tempdir().unwrap();
+    let big = json!({
+        "model": "jev-latest",
+        "answers": {"decision": {"type": "noul", "noul": 0.5}},
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+        "padding": "x".repeat(4096)
+    });
+    let (base, server) = serve(vec![reply(200, &big)]);
+    let args = argv(&[
+        "judge",
+        "--question",
+        "Ok?",
+        "--endpoint",
+        &format!("{base}/v1/systemone"),
+        "--max-bytes",
+        "512",
+    ]);
+    let output = run(directory.path(), &args, b"s", false, &[]);
+    assert_failure_class(&output, "output_limit", "oversized jev response");
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[test]
+fn extracted_fields_feed_take_and_branch_through_the_cli() {
+    let directory = tempfile::tempdir().unwrap();
+    let schema: Value = serde_json::from_str(COUNT_SCHEMA).unwrap();
+    let fixture = write_fixture(
+        directory.path(),
+        "extract.json",
+        json!({
+            "provider": "openai", "kind": "extract", "model": "gpt-6-luna",
+            "state": "", "instruction": "Extract the count", "schema": schema
+        }),
+        responses_text(r#"{"count":2}"#),
+    );
+    // Joined lines keep the indentation that the `if` block requires.
+    let source = [
+        format!(
+            "llm.extract with model \"gpt-6-luna\" and instruction \"Extract the count\" and schema {} and fixture {} as raw",
+            serde_json::to_string(COUNT_SCHEMA).unwrap(),
+            serde_json::to_string(&fixture).unwrap()
+        ),
+        "then parse json as result".to_owned(),
+        "take integer at \"/value/count\" from result as count".to_owned(),
+        "if count is 2".to_owned(),
+        "  then save to \"two.txt\"".to_owned(),
+    ]
+    .join("\n")
+        + "\n";
+    let program = directory.path().join("extract.program");
+    std::fs::write(&program, source).unwrap();
+    let output = run_execute(directory.path(), &[&program.to_string_lossy()]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        directory.path().join("two.txt").exists(),
+        "extracted branch not taken"
+    );
 }

@@ -323,13 +323,13 @@ fn explicit_dotenv_secret_is_not_echoed_when_owned_server_rejects_request() {
         http_response("401 Unauthorized", error_body.as_bytes(), ""),
     );
     let env_file = directory.path().join("synthetic-provider-credentials");
-    std::fs::write(&env_file, format!("SYNTHETIC_DOTENV_KEY={secret}\n")).unwrap();
+    std::fs::write(&env_file, format!("EXECUTE_MODEL_KEY_DOTENV={secret}\n")).unwrap();
     let mut args = openai_args(&endpoint(&listener, "/v1/responses"));
     args.extend([
         "--env-file".into(),
         env_file.to_string_lossy().into_owned(),
         "--api-key-env".into(),
-        "SYNTHETIC_DOTENV_KEY".into(),
+        "EXECUTE_MODEL_KEY_DOTENV".into(),
     ]);
 
     let output = run_helper(&args, b"source text", &[]);
@@ -374,7 +374,7 @@ fn custom_key_env_is_read_from_the_file_and_default_keys_are_not_sent() {
     let env_file = directory.path().join("synthetic-credentials");
     std::fs::write(
         &env_file,
-        "SYNTHETIC_FILE_KEY=synthetic-file-key\nUNRELATED_SETTING=ignored\n",
+        "EXECUTE_MODEL_KEY_FILE=synthetic-file-key\nUNRELATED_SETTING=ignored\n",
     )
     .unwrap();
     let mut args = openai_args(&endpoint);
@@ -382,7 +382,7 @@ fn custom_key_env_is_read_from_the_file_and_default_keys_are_not_sent() {
         "--env-file".into(),
         env_file.to_string_lossy().into_owned(),
         "--api-key-env".into(),
-        "SYNTHETIC_FILE_KEY".into(),
+        "EXECUTE_MODEL_KEY_FILE".into(),
     ]);
     let output = run_helper(&args, b"source", &[("OPENAI_API_KEY", "")]);
     assert!(

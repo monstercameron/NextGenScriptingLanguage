@@ -174,7 +174,9 @@ mod links {
         let root = tempfile::tempdir().unwrap();
         layout(root.path());
         policy(root.path());
-        let output = run(root.path(), "use folder \"inside/dir-link\"\n");
+        // An absolute path, so the policy can check the link's target before the run starts.
+        let link = root.path().join("inside/dir-link");
+        let output = run(root.path(), &format!("use folder \"{}\"\n", link.display()));
         let text = shown(&output);
         assert!(!output.status.success(), "{text}");
         assert!(

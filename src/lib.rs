@@ -33,6 +33,7 @@ pub mod security;
 pub mod service_deployment;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stream;
+pub mod privilege;
 pub mod suggest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod record;
@@ -40,6 +41,8 @@ pub mod record;
 pub mod replay;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod repair;
 mod structured;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tasks;

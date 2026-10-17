@@ -22,6 +22,81 @@ pub enum DiagnosticSeverity {
     Hint,
 }
 
+/// One diagnostic code that `execute check --json` can emit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodeInfo {
+    /// The stable code. Published codes never change text or meaning.
+    pub code: &'static str,
+    /// The stage that finds the problem: parse, resolve, type, policy or validate.
+    pub family: &'static str,
+    pub meaning: &'static str,
+}
+
+/// Every code `execute check --json` can emit. A code is never renamed. A new
+/// meaning gets a new code, and the family is documented per code.
+pub const CODES: &[CodeInfo] = &[
+    CodeInfo {
+        code: "parse.lexical",
+        family: "parse",
+        meaning: "a line has an unterminated or invalid quoted or bracketed token",
+    },
+    CodeInfo {
+        code: "parse.syntax",
+        family: "parse",
+        meaning: "a statement does not match the grammar",
+    },
+    CodeInfo {
+        code: "parse.indentation",
+        family: "parse",
+        meaning: "a line is indented with tabs, or its indentation does not nest",
+    },
+    CodeInfo {
+        code: "parse.control",
+        family: "parse",
+        meaning: "a control construct is unsupported or nested beyond the supported depth",
+    },
+    CodeInfo {
+        code: "applet.unknown",
+        family: "resolve",
+        meaning: "the operation names no declared applet and is not a quoted executable",
+    },
+    CodeInfo {
+        code: "applet.parameter.unknown",
+        family: "resolve",
+        meaning: "the applet declares no parameter with this name",
+    },
+    CodeInfo {
+        code: "applet.parameter.type",
+        family: "type",
+        meaning: "a literal value does not match the parameter's declared type",
+    },
+    CodeInfo {
+        code: "applet.parameter.required",
+        family: "validate",
+        meaning: "a required parameter is missing from the call",
+    },
+    CodeInfo {
+        code: "applet.pipeline.incompatible",
+        family: "type",
+        meaning: "a pipeline stage's declared output does not satisfy the next stage's input",
+    },
+    CodeInfo {
+        code: "data_flow_policy_not_configured",
+        family: "policy",
+        meaning: "a capability policy is set without a data-flow policy, so remote egress and persistence are unprotected",
+    },
+    CodeInfo {
+        code: "check_failed",
+        family: "validate",
+        meaning: "validation failed without a static diagnostic; the causes list explains why",
+    },
+];
+
+/// The registry entry for a code, if the code is published.
+pub fn code_info(code: &str) -> Option<&'static CodeInfo> {
+    CODES.iter().find(|info| info.code == code)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SpanPrecision {

@@ -2057,8 +2057,16 @@ pub fn explain_with_inputs(
                         " [stderr discarded]"
                     } else {
                         ""
+                    },
+                ) + match crate::privilege::classify(manifest.binary_for(call)) {
+                    crate::privilege::Privilege::Elevator => {
+                        " [privileged: elevator]"
                     }
-                )
+                    crate::privilege::Privilege::Wrapper => {
+                        " [wrapper: may run another program]"
+                    }
+                    crate::privilege::Privilege::Standard => "",
+                }
             }
         };
         rows.push(format!("line {}: {description}", step.line));

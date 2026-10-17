@@ -36,6 +36,72 @@ pub struct CapabilityPolicy {
     pub version: u8,
     #[serde(default)]
     pub applets: BTreeMap<String, AppletGrant>,
+    /// Refuse privileged steps before any effect: every privilege elevator, and every
+    /// wrapper or shell that is not named in `allow_wrappers`. See `privilege`.
+    #[serde(default)]
+    pub deny_privileged: bool,
+    /// Wrapper and shell names (for example `env`) that may run under
+    /// `deny_privileged`. Elevators cannot be allowed.
+    #[serde(default)]
+    pub allow_wrappers: BTreeSet<String>,
+}
+
+/// Refuse a command launch that the policy's `deny_privileged` forbids. Called before
+/// any process starts, at every launch path. The executable is checked by the name
+/// written in the program and by the canonical path it would actually run, so a link
+/// to an elevator is still an elevator. Fails closed: a name that cannot be resolved
+/// is still classified by its name.
+pub fn check_privileged_launch(registry: &Registry, binary: &str, cwd: &Path) -> Result<()> {
+    let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    let Some(policy) = configured.as_ref() else {
+        return Ok(());
+    };
+    if !policy.deny_privileged {
+        return Ok(());
+    }
+    let mut names = vec![binary.to_owned()];
+    if let Ok(path) = crate::runtime::binary_path(binary, cwd) {
+        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+        names.push(canonical.display().to_string());
+    }
+    for name in &names {
+        match crate::privilege::classify_names([name.as_str()]) {
+            crate::privilege::Privilege::Elevator => {
+                record_policy_decision(
+                    registry,
+                    binary,
+                    "privilege.elevate",
+                    None,
+                    PolicyRisk::High,
+                    PolicyDecisionOutcome::Denied,
+                    PolicyDecisionReason::MissingGrant,
+                );
+                bail!(
+                    "capability policy denies privileged steps: {binary:?} runs through the privilege elevator {name:?}"
+                );
+            }
+            crate::privilege::Privilege::Wrapper => {
+                let allowed = crate::privilege::normalized_name(name)
+                    .is_some_and(|normalized| policy.allow_wrappers.contains(&normalized));
+                if !allowed {
+                    record_policy_decision(
+                        registry,
+                        binary,
+                        "privilege.wrapper",
+                        None,
+                        PolicyRisk::High,
+                        PolicyDecisionOutcome::Denied,
+                        PolicyDecisionReason::MissingGrant,
+                    );
+                    bail!(
+                        "capability policy denies privileged steps: {binary:?} is a command launcher that can run another program ({name:?}); list it in allow_wrappers to permit it"
+                    );
+                }
+            }
+            crate::privilege::Privilege::Standard => {}
+        }
+    }
+    Ok(())
 }
 
 /// Per-applet permissions. Child filesystem/network access is OS-enforced only
@@ -159,6 +225,15 @@ impl CapabilityPolicy {
             {
                 validate_policy_path(path)
                     .with_context(|| format!("applet {name:?} filesystem grant"))?;
+            }
+        }
+        for name in &self.allow_wrappers {
+            // Only a listed wrapper or shell can be allowed, by its plain name.
+            let plain = crate::privilege::normalized_name(name).as_deref() == Some(name.as_str());
+            if !plain || crate::privilege::classify(name) != crate::privilege::Privilege::Wrapper {
+                bail!(
+                    "allow_wrappers names {name:?}, which is not a known command launcher; elevators cannot be allowed"
+                );
             }
         }
         Ok(())
@@ -749,6 +824,13 @@ fn preflight_invocations_with_policy<'a>(
     dynamic_cwd: bool,
     policy: &CapabilityPolicy,
 ) -> Result<()> {
+    // Privilege is checked for every call before any grant is, so a privileged step is
+    // reported as such wherever it sits in the program.
+    let calls: Vec<&crate::ast::Invocation> = calls.into_iter().collect();
+    for call in &calls {
+        let manifest = registry.resolve_call(call)?;
+        check_privileged_launch(registry, manifest.binary_for(call), cwd)?;
+    }
     for call in calls {
         if call.direct {
             record_policy_decision(

@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 mod github_annotations;
 mod record_cli;
+mod repair_cli;
 mod repl_cli;
 mod run_parts;
 mod test_runner;
@@ -186,6 +187,9 @@ fn execute() -> Result<()> {
     }
     if arguments.first().is_some_and(|a| a == "repl") {
         return repl_cli::repl(&arguments[1..]);
+    }
+    if arguments.first().is_some_and(|a| a == "repair") {
+        return repair_cli::repair(&arguments[1..]);
     }
     if arguments.first().is_some_and(|a| a == "lsp") {
         if arguments.len() != 1 && !(arguments.len() == 2 && arguments[1] == "--stdio") {

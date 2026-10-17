@@ -54,6 +54,25 @@ type mismatches, and pipeline connections whose declared output and stdin
 schemas disagree. A pipeline is checked only when both sides declare the
 relevant semantic schemas.
 
+### Diagnostic codes
+
+Every diagnostic carries a code. A published code is never renamed, and a changed
+meaning gets a new code. The family names the stage that finds the problem.
+
+| Code | Family | Meaning |
+| --- | --- | --- |
+| `parse.lexical` | parse | a line has an unterminated or invalid quoted or bracketed token |
+| `parse.syntax` | parse | a statement does not match the grammar |
+| `parse.indentation` | parse | a line is indented with tabs, or its indentation does not nest |
+| `parse.control` | parse | a control construct is unsupported or nested beyond the supported depth |
+| `applet.unknown` | resolve | the operation names no declared applet and is not a quoted executable |
+| `applet.parameter.unknown` | resolve | the applet declares no parameter with this name |
+| `applet.parameter.type` | type | a literal value does not match the parameter's declared type |
+| `applet.parameter.required` | validate | a required parameter is missing from the call |
+| `applet.pipeline.incompatible` | type | a pipeline stage's declared output does not satisfy the next stage's input |
+| `data_flow_policy_not_configured` | policy | a capability policy is set without a data-flow policy, so remote egress and persistence are unprotected |
+| `check_failed` | validate | validation failed without a static diagnostic; the `causes` list explains why |
+
 ## Installed command inventory
 
 `execute applets discover` lists executable files found in PATH directories.

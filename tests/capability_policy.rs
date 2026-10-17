@@ -109,6 +109,8 @@ fn remote_endpoint_policy_matches_exact_canonical_origin() {
         .insert("https://api.example.test".into());
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("remote.lookup".into(), remote)]),
     }));
     authorize_network_endpoint(
@@ -141,6 +143,8 @@ fn grants_require_canonical_allowlist_and_exact_contract_capabilities() {
     fs::write(&binary, b"reviewed fixture").unwrap();
     let policy = CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), grant(&["filesystem.read"]))]),
     };
     let capabilities = vec!["filesystem.read".to_owned()];
@@ -197,6 +201,8 @@ fn process_backends_require_a_separate_process_exec_grant() {
     let program = parser::parse("run fixture.command\n").unwrap();
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.command".into(), grant(&[]))]),
     }));
     let error = preflight(&program, &registry, directory.path()).unwrap_err();
@@ -206,6 +212,8 @@ fn process_backends_require_a_separate_process_exec_grant() {
 
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.command".into(), grant(&["process.exec"]))]),
     }));
     preflight(&program, &registry, directory.path()).unwrap();
@@ -217,6 +225,8 @@ fn strict_policy_allows_shipped_pure_json_transformations() {
     let registry = Registry::from_sources(&[manifest]).unwrap();
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("json.parse".into(), grant(&["json.convert"]))]),
     }));
     let program = flow::parser::parse("run json.parse with text \"{}\"\n").unwrap();
@@ -234,6 +244,8 @@ fn binary_pin_is_checked_and_policy_identity_changes_with_grants() {
     pinned.binary_sha256 = Some(digest);
     let policy = CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), pinned)]),
     };
     let capabilities = Vec::new();
@@ -264,6 +276,8 @@ fn binary_pin_is_checked_and_policy_identity_changes_with_grants() {
     changed.environment.insert("PATH".into());
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), changed)]),
     }));
     let second = policy_fingerprint(&registry, "fixture.read").unwrap();
@@ -283,6 +297,8 @@ fn environment_is_cleared_to_the_applet_allowlist() {
     let registry = registry_with_applet("fixture.read", &binary);
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), configured)]),
     }));
     let filtered = filter_environment(
@@ -329,6 +345,8 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
     applet_grant.environment.insert(canary.into());
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.env".into(), applet_grant)]),
     }));
 
@@ -367,6 +385,8 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
     let denied_registry = Registry::from_sources(&[denied.to_string()]).unwrap();
     denied_registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.denied".into(), grant(&[]))]),
     }));
     let error = effective_environment(&denied_registry, "fixture.denied").unwrap_err();
@@ -394,6 +414,8 @@ fn decisions_record_approvals_and_denials_without_paths_or_environment_names() {
     configured.filesystem.read.push(allowed_root);
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), configured)]),
     }));
 
@@ -431,6 +453,8 @@ fn host_path_grants_are_canonical_and_directional() {
     let registry = registry_with_applet("fixture.read", directory.path());
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), configured)]),
     }));
     let cwd = directory.path();
@@ -489,6 +513,8 @@ fn applet_file_reads_cannot_borrow_another_applets_path_grant() {
     remote.network = true;
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([
             ("allowed.reader".into(), reader),
             ("remote.lookup".into(), remote),
@@ -530,6 +556,8 @@ fn cache_directory_requires_applet_scoped_read_and_write_grants() {
         .push(directory.path().to_path_buf());
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.cache".into(), allowed.clone())]),
     }));
     preflight_with_cache_directory(
@@ -543,6 +571,8 @@ fn cache_directory_requires_applet_scoped_read_and_write_grants() {
     allowed.filesystem.write.clear();
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.cache".into(), allowed)]),
     }));
     assert!(preflight_with_cache_directory(
@@ -585,6 +615,8 @@ fn whole_program_preflight_denies_later_applet_before_prior_spawn() {
     let registry = Registry::from_sources(&sources).unwrap();
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("allowed.first".into(), grant(&["process.exec"]))]),
     }));
     let program = parser::parse("run allowed.first\nrun denied.later\n").unwrap();
@@ -639,6 +671,8 @@ fn policy_preflight_rejects_later_unlisted_applet_before_prior_save() {
         .push(directory.path().to_path_buf());
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("allowed.first".into(), allowed)]),
     }));
     let program =
@@ -705,6 +739,8 @@ fn strict_policy_rejects_effectful_in_process_alias_before_prior_spawn() {
         .push(directory.path().to_path_buf());
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([
             ("allowed.first".into(), grant(&["process.exec"])),
             ("fs.read".into(), read_grant),
@@ -748,6 +784,8 @@ fn required_sandbox_rejects_in_process_backend_during_preflight() {
     required.sandbox_required = true;
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("fixture.in_process".into(), required)]),
     }));
     let program = parser::parse("run fixture.in_process\n").unwrap();

@@ -430,6 +430,8 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
     };
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::from([("desktop.quickshell".to_owned(), grant)]),
     }));
     let cwd = std::env::current_dir().unwrap();
@@ -454,6 +456,8 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
     .unwrap();
     denied_registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
+        deny_privileged: false,
+        allow_wrappers: Default::default(),
         applets: BTreeMap::new(),
     }));
     assert!(flow::capabilities::command_for(

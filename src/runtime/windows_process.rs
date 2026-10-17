@@ -147,6 +147,11 @@ fn execute_group_with_sink(
     signals: &Signals,
     mut sink: Option<&mut streaming::LineSink<'_>>,
 ) -> Result<GroupOutput> {
+    // Every command launch passes through here, so the privilege policy is enforced
+    // before any process is created, whatever path reached it.
+    for (call, manifest, _) in calls {
+        crate::capabilities::check_privileged_launch(registry, manifest.binary_for(call), cwd)?;
+    }
     let mut children = Children(
         Vec::with_capacity(calls.len()),
         signals.job_diagnostic_truncation.clone(),

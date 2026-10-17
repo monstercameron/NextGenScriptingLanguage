@@ -916,6 +916,41 @@ fn validate_mode(mode: &str) -> Result<()> {
     Ok(())
 }
 
+/// What a structured repair needs from a checkpoint's verified journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepairState {
+    /// `failed`, `interrupted`, `running`, `completed` or `idle`.
+    pub status: &'static str,
+    /// The program file the checkpoint was started from.
+    pub program_path: PathBuf,
+    /// Top-level steps covered by completed nodes. Steps from this index on are the
+    /// failed or unexecuted suffix that a repair may change.
+    pub completed_steps: usize,
+}
+
+/// Read a checkpoint's journal, verifying its checksum, for `execute repair`. The
+/// journal is only read; repairs never modify it.
+pub fn read_repair_state(directory: &Path) -> Result<RepairState> {
+    let data = read_journal(&directory.join("journal.json"))?;
+    let status = match data.status {
+        Status::Running => "running",
+        Status::Failed => "failed",
+        Status::Interrupted => "interrupted",
+        Status::Completed => "completed",
+        Status::Idle => "idle",
+    };
+    Ok(RepairState {
+        status,
+        program_path: data.identity.program_path.to_path(),
+        completed_steps: data
+            .completed
+            .iter()
+            .map(|node| node.end)
+            .max()
+            .unwrap_or(0),
+    })
+}
+
 fn read_journal(path: &Path) -> Result<JournalData> {
     let file = open_regular(path, "checkpoint journal", false)?;
     restrict_file(&file)?;

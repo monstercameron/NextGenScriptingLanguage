@@ -1030,9 +1030,9 @@ impl Manifest {
             {
                 parameter_names.next();
             }
-            if !parameter_names
+            if parameter_names
                 .peek()
-                .is_some_and(|parameter| parameter.as_str() == name.as_str())
+                .is_none_or(|parameter| parameter.as_str() != name.as_str())
             {
                 bail!("applet {:?} has no parameter {name:?}", self.name);
             }
@@ -1227,8 +1227,8 @@ fn validate_value(
         let item_type = spec.item_type.expect("list schema validated");
         let mut contains_nul = false;
         for item in items {
-            if !is_scalar_type(item, item_type)
-                && !(allow_reference_items
+            if !(is_scalar_type(item, item_type)
+                || allow_reference_items
                     && matches!(
                         item_type,
                         ParameterType::String

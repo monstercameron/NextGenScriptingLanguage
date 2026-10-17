@@ -1677,48 +1677,36 @@ fn validate_policy_path(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty() || path.as_os_str().as_encoded_bytes().contains(&0) {
         bail!("path must be nonempty and contain no NUL byte");
     }
+    // A drive prefix must be followed by the root, so `C:data` is refused.
     if let Some(Component::Prefix(prefix)) = path.components().next() {
-        match prefix.kind() {
-            Prefix::Disk(_) | Prefix::VerbatimDisk(_) => {
-                if !matches!(path.components().nth(1), Some(Component::RootDir)) {
-                    bail!("drive-relative paths are not supported; use an absolute drive path");
-                }
-            }
-            Prefix::UNC(..) | Prefix::VerbatimUNC(..) => {
-                bail!("network (UNC) paths are not supported in capability grants");
-            }
-            Prefix::DeviceNS(_) | Prefix::Verbatim(_) => {
-                bail!("device and verbatim paths are not supported in capability grants");
-            }
+        if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+            && !matches!(path.components().nth(1), Some(Component::RootDir))
+        {
+            bail!("drive-relative paths are not supported; use an absolute drive path");
         }
     }
     Ok(())
 }
 
-/// Whether `target` lies at or under the canonical grant `root`. Windows paths
-/// compare case-insensitively, `/` equals `\`, and a verbatim `\\?\C:` prefix
-/// names the same drive as `C:`. Other platforms compare components exactly.
-fn grant_contains(root: &Path, target: &Path) -> bool {
-    if target == root || target.starts_with(root) {
-        return true;
-    }
-    windows_grant_contains(root, target)
-}
-
+/// Whether `target` lies at or under the canonical grant `root`. Matching is
+/// exact: components compare case-sensitively, so a directory whose on-disk
+/// name differs from the grant is a different directory. The only folding is
+/// the verbatim `\\?\` prefix, the drive letter, and `/` versus `\`.
 #[cfg(windows)]
-fn windows_grant_contains(root: &Path, target: &Path) -> bool {
+fn grant_contains(root: &Path, target: &Path) -> bool {
     let root = windows_grant_key(root);
     let target = windows_grant_key(target);
-    if !target.starts_with(&root) {
-        return false;
+    if target == root {
+        return true;
     }
     let separator = u16::from(b'\\');
-    root.last() == Some(&separator) || target.len() == root.len() || target[root.len()] == separator
+    target.starts_with(&root)
+        && (root.last() == Some(&separator) || target[root.len()] == separator)
 }
 
 #[cfg(not(windows))]
-fn windows_grant_contains(_root: &Path, _target: &Path) -> bool {
-    false
+fn grant_contains(root: &Path, target: &Path) -> bool {
+    target == root || target.starts_with(root)
 }
 
 #[cfg(windows)]
@@ -1727,21 +1715,21 @@ fn windows_grant_key(path: &Path) -> Vec<u16> {
     let separator = u16::from(b'\\');
     let mut units = path.as_os_str().encode_wide().collect::<Vec<u16>>();
     // `\\?\C:` is the verbatim spelling of `C:`; canonicalize returns the former.
-    let verbatim = [
-        u16::from(b'\\'),
-        u16::from(b'\\'),
-        u16::from(b'?'),
-        u16::from(b'\\'),
-    ];
+    let verbatim = [separator, separator, u16::from(b'?'), separator];
     if units.len() >= 6 && units[..4] == verbatim && units[5] == u16::from(b':') {
         units.drain(..4);
     }
     for unit in &mut units {
-        *unit = match *unit {
-            0x2F => separator,
-            0x41..=0x5A => *unit + 0x20,
-            other => other,
-        };
+        if *unit == u16::from(b'/') {
+            *unit = separator;
+        }
+    }
+    // Only the drive letter folds; every other component keeps its exact spelling.
+    if units.len() >= 2
+        && units[1] == u16::from(b':')
+        && (u16::from(b'a')..=u16::from(b'z')).contains(&units[0])
+    {
+        units[0] -= u16::from(b'a' - b'A');
     }
     units
 }
@@ -1880,29 +1868,60 @@ mod windows_grant_path_tests {
     use super::*;
 
     #[test]
-    fn drive_and_verbatim_grants_are_accepted_and_unc_or_device_paths_are_rejected() {
+    fn drive_grants_are_accepted_and_drive_relative_paths_are_refused() {
         assert!(validate_policy_path(Path::new(r"C:\data")).is_ok());
         assert!(validate_policy_path(Path::new(r"\\?\C:\data")).is_ok());
         assert!(validate_policy_path(Path::new(r"C:data")).is_err());
-        assert!(validate_policy_path(Path::new(r"\\server\share\data")).is_err());
-        assert!(validate_policy_path(Path::new(r"\\?\UNC\server\share\data")).is_err());
-        assert!(validate_policy_path(Path::new(r"\\.\C:\data")).is_err());
     }
 
     #[test]
-    fn grants_match_case_insensitively_and_on_component_boundaries() {
-        assert!(grant_contains(
+    fn a_drive_grant_allows_its_tree_in_verbatim_and_plain_spelling() {
+        let grant = Path::new(r"C:\Data");
+        assert!(grant_contains(grant, Path::new(r"C:\Data\x")));
+        assert!(grant_contains(grant, Path::new(r"\\?\C:\Data\x")));
+        assert!(grant_contains(grant, Path::new(r"C:\Data")));
+    }
+
+    #[test]
+    fn a_drive_grant_refuses_siblings_that_share_a_prefix_or_differ() {
+        let grant = Path::new(r"C:\Data");
+        assert!(!grant_contains(grant, Path::new(r"C:\DataX")));
+        assert!(!grant_contains(grant, Path::new(r"C:\Other")));
+        assert!(!grant_contains(grant, Path::new(r"\\?\C:\DataX\x")));
+    }
+
+    #[test]
+    fn components_match_exactly_but_the_drive_letter_and_separators_do_not() {
+        // A different-case component is a different directory unless canonicalize produced it.
+        assert!(!grant_contains(
             Path::new(r"C:\Data"),
-            Path::new(r"c:\data\file.txt")
+            Path::new(r"C:\data\x")
         ));
         assert!(grant_contains(
-            Path::new(r"\\?\C:\Data"),
-            Path::new(r"C:/DATA/file.txt")
+            Path::new(r"c:\Data"),
+            Path::new(r"C:\Data\x")
+        ));
+        assert!(grant_contains(
+            Path::new(r"C:/Data"),
+            Path::new(r"C:\Data\x")
+        ));
+        assert!(grant_contains(Path::new(r"C:\"), Path::new(r"C:\anything")));
+    }
+
+    #[test]
+    fn unc_and_device_targets_need_an_exact_unc_or_device_grant() {
+        assert!(validate_policy_path(Path::new(r"\\server\share\data")).is_ok());
+        assert!(grant_contains(
+            Path::new(r"\\server\share\Data"),
+            Path::new(r"\\server\share\Data\x")
         ));
         assert!(!grant_contains(
             Path::new(r"C:\Data"),
-            Path::new(r"C:\Database\file.txt")
+            Path::new(r"\\server\share\Data\x")
         ));
-        assert!(grant_contains(Path::new(r"C:\"), Path::new(r"c:\anything")));
+        assert!(!grant_contains(
+            Path::new(r"\\server\share\Data"),
+            Path::new(r"\\server\share\data\x")
+        ));
     }
 }

@@ -111,7 +111,7 @@ fn windows_statuses(
                 let implicit_success = code.is_some_and(|code| {
                     calls[index].1.outcome_for(code).kind == crate::contracts::OutcomeKind::Success
                 });
-                if !implicit_success && !(calls[index].0.status_binding.is_some() && code.is_some())
+                if !(implicit_success || calls[index].0.status_binding.is_some() && code.is_some())
                 {
                     drain_diagnostic(managed)?;
                     return Err(CommandFailed {

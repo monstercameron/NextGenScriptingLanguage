@@ -2365,8 +2365,15 @@ fn execute_in_process(
     );
     match result {
         Ok(value) => {
-            let mut bytes = serde_json::to_vec(&value)?;
-            bytes.push(b'\n');
+            // Text and path results are raw UTF-8; records and lists stay JSON.
+            let bytes = match value.as_str() {
+                Some(text) if manifest.in_process_text_output() => text.as_bytes().to_vec(),
+                _ => {
+                    let mut json = serde_json::to_vec(&value)?;
+                    json.push(b'\n');
+                    json
+                }
+            };
             let outcome = manifest.outcome_for(0);
             let stage = execution_result::StageResult::exited(
                 line,

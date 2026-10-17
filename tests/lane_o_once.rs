@@ -36,7 +36,7 @@ fn once_flushes_output_before_exiting_with_status() {
         "on schedule \"30 9 * * 1-5\"\n  run text.trim_final_lf with text \"done\"\n  exit with status 3\n",
     );
     assert_eq!(output.status.code(), Some(3));
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "\"done\"");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "done");
 }
 
 #[cfg(target_os = "linux")]

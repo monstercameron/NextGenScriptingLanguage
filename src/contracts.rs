@@ -1081,6 +1081,13 @@ impl OutputSchema {
         }
     }
 
+    fn decode_raw_text_value(&self, bytes: &[u8]) -> Result<AppletOutput> {
+        let value = std::str::from_utf8(bytes)
+            .context("decoding in-process text output as UTF-8")?
+            .to_owned();
+        self.decode_string_value(value)
+    }
+
     fn decode_string_value(&self, value: String) -> Result<AppletOutput> {
         if self.kind == OutputType::Path {
             if value.is_empty() {
@@ -1883,11 +1890,29 @@ impl AppletContract {
     }
 
     pub fn decode_output(&self, bytes: &[u8], status: i32) -> Result<AppletOutput> {
+        // In-process text and path results cross runtime boundaries as raw UTF-8.
+        let raw_text = self.in_process_text_output();
         self.decode_output_with(
             status,
-            |schema| schema.decode(bytes),
+            |schema| {
+                if raw_text {
+                    schema.decode_raw_text_value(bytes)
+                } else {
+                    schema.decode(bytes)
+                }
+            },
             || Ok(AppletOutput::Bytes(bytes.to_vec())),
         )
+    }
+
+    /// Whether this in-process applet returns text or a path. Such results are
+    /// raw UTF-8 bytes at the pipe, `then`, save and terminal boundaries.
+    pub(crate) fn in_process_text_output(&self) -> bool {
+        self.backend == AppletBackend::InProcess
+            && self
+                .output
+                .as_ref()
+                .is_some_and(|schema| matches!(schema.kind, OutputType::Text | OutputType::Path))
     }
 
     #[cfg(any(not(target_arch = "wasm32"), test))]

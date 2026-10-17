@@ -69,13 +69,13 @@ BENCHMARKS = [
 ]
 
 
-def measure(binary, source, checkpointed, runs, warmup, directory, name):
+def measure(binary, manifests, source, checkpointed, runs, warmup, directory, name):
     program = Path(directory) / f"{name}.program"
     program.write_text(source, encoding="utf-8")
     checkpoints = []
 
     def arguments():
-        base = [str(binary), "run", str(program)]
+        base = [str(binary), "run", str(program), "--manifest-dir", str(manifests)]
         if not checkpointed:
             return base
         fresh = Path(directory) / f"ck-{len(checkpoints)}"
@@ -104,6 +104,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("binary", type=Path)
     parser.add_argument("budget", type=Path)
+    parser.add_argument("--manifest-dir", type=Path, default=Path("manifests"))
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=1)
     args = parser.parse_args(argv)
@@ -120,7 +121,16 @@ def main(argv=None):
                 print(f"{name}: {description}: skipped, needs a POSIX tool")
                 continue
             try:
-                result = measure(args.binary, source, checkpointed, args.runs, args.warmup, directory, name)
+                result = measure(
+                    args.binary,
+                    args.manifest_dir,
+                    source,
+                    checkpointed,
+                    args.runs,
+                    args.warmup,
+                    directory,
+                    name,
+                )
             except RuntimeError as error:
                 print(f"{name}: {description}: failed: {error}")
                 failures.append(f"{name} failed to run")

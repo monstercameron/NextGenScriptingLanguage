@@ -486,13 +486,15 @@ impl Journal {
             if journal.data.identity.mode == "finite" || journal.has_pending() {
                 journal.preloaded_state = Some(restored);
             }
-            if migrate_legacy {
-                if migrate_inline {
-                    // The log is written before the journal that counts its lines, so a
-                    // crash in between leaves the inline journal valid.
-                    let (lines, _) = encode_completed_log(&journal.data.completed)?;
-                    atomic_write(&journal.directory, COMPLETED_LOG, "", &lines)?;
-                }
+            if migrate_legacy && migrate_inline {
+                // The log is written before the journal that counts its lines, so a
+                // crash in between leaves the inline journal valid.
+                let (lines, _) = encode_completed_log(&journal.data.completed)?;
+                atomic_write(&journal.directory, COMPLETED_LOG, "", &lines)?;
+            }
+            // A legacy match replaces the stored digest with the keyed one, so the upgrade
+            // is written even when the version is already current.
+            if migrate_legacy || legacy_match {
                 journal.persist()?;
             }
             // Element progress is authoritative only for the in-flight node, so the

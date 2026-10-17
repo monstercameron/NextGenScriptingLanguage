@@ -57,9 +57,9 @@ jobs:
             curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.99.1
             . "$HOME/.cargo/env"
             RUSTFLAGS="-C target-feature=+crt-static" \
-              cargo build --locked --profile dist --features full --bin execute
-            file target/dist/execute | grep -q "static" || { echo "not a static binary"; exit 1; }
-            target/dist/execute --version
+              cargo build --locked --profile dist --features full --bin execute --target x86_64-unknown-linux-musl
+            file target/x86_64-unknown-linux-musl/dist/execute | grep -q "static" || { echo "not a static binary"; exit 1; }
+            target/x86_64-unknown-linux-musl/dist/execute --version
             cd /tmp && printf "%s\n" "run printf with message \"alpine\"" > smoke.program
-            /src/target/dist/execute run smoke.program --manifest-dir /src/manifests
+            /src/target/x86_64-unknown-linux-musl/dist/execute run smoke.program --manifest-dir /src/manifests
           '

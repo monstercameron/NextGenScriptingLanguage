@@ -101,7 +101,11 @@ fn write_count_applet(manifests: &Path, log: &Path) {
             "output": {"type": "text", "encoding": "raw", "trim_final_lf": true},
             "outcomes": [{"status": 0, "name": "success", "kind": "success"}],
             "capabilities": [],
-            "effects": []
+            "effects": [],
+            "ports": {
+                "inputs": {"text": {"schema": {"type": "text"}, "delivery": "single"}},
+                "outputs": {"value": {"schema": {"type": "text"}, "delivery": "single"}}
+            }
         }
     });
     fs::write(manifests.join("ctrl.count.json"), manifest.to_string()).unwrap();
@@ -297,7 +301,7 @@ fn fail_writes(mode: Mode) {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(
                     stderr.contains("injected failure"),
-                    "{context}: failed for another reason: {stderr}"
+                    "{context}: failed for another reason, status and output: {output:?}"
                 );
             }
             check_resume(&fixture, &expected, &context);

@@ -19,6 +19,7 @@ MAINTAINED = [
     "CONTRIBUTING.md",
     "CHANGELOG.md",
     "SECURITY.md",
+    "docs/threat-model.md",
     "DESIGN.md",
     "docs/README.md",
     "docs/guide.md",

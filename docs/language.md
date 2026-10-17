@@ -208,10 +208,31 @@ truncation flags.
 This finite feature has no detach/disown, `fg`/`bg`, stopped or continued
 states, controlling-terminal handoff, or durable service lifetime. Job
 operations are rejected inside loops and `try`/`catch`/`finally`, in services,
-live programs, TUI handlers, browser execution and checkpointed/resumed runs.
-A finite module called by one of those contexts cannot introduce job operations
-indirectly; the enclosing preflight rejects the imported source before effects.
-Those contexts do not yet provide a matching job-handle lifecycle.
+live programs, TUI handlers and browser execution. A finite module called by one
+of those contexts cannot introduce job operations indirectly; the enclosing
+preflight rejects the imported source before effects. Those contexts do not yet
+provide a matching job-handle lifecycle. Checkpointed runs accept jobs under the
+rules in the next section.
+
+### Job checkpoints
+
+A checkpointed or resumed finite run (`--checkpoint`) accepts named jobs with
+these rules:
+
+- A `spawn` and the statement that awaits or cancels its job form one checkpoint
+  node. Statements between them belong to that node: they run together and are
+  recorded only when the whole node completes. A job handle is never serialized
+  and never crosses a checkpoint.
+- Each `spawn` must be awaited or cancelled in the same top-level statement,
+  including inside nested blocks of that statement. Any other placement is
+  refused before the run starts, so no effect runs.
+- Jobs inside reusable program definitions and in imported program modules are
+  refused under checkpoints, before any effect runs.
+- A job node is retry-safe only when every stage is builtin or cacheable, like
+  an ordinary invocation. If a run is interrupted while a job node is in flight,
+  `resume` refuses the uncertain node unless `--retry-uncertain` is passed. With
+  that flag the whole node runs again from its `spawn`, so a native stage may
+  repeat its effects.
 
 <a id="conditional-commands-pending-source-candidate"></a>
 

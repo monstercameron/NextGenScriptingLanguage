@@ -64,6 +64,8 @@ struct Args {
     max_record_bytes: usize,
     max_record_bytes_set: bool,
     record_dir: Option<PathBuf>,
+    /// `run --control`: host the finite program under a live control endpoint.
+    control: bool,
 }
 
 struct FiniteCheckSnapshot {
@@ -736,6 +738,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     }
     let inputs =
         flow::inputs::parse_cli_arguments(&program.inputs, &args.inputs, &args.program_arguments)?;
+    if args.control {
+        return run_with_control(&args, program.trigger.is_some());
+    }
     let schedule_options = schedule_options(&args)?;
     if program.trigger.is_none() && schedule_options.is_some() {
         bail!(
@@ -1037,6 +1042,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut total_timeout = None;
     let mut max_record_bytes = 65_536;
     let mut max_record_bytes_seen = false;
+    let mut control = false;
     let mut index = first_argument;
     while index < arguments.len() {
         let argument = &arguments[index];
@@ -1343,6 +1349,12 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     parse_positive_usize(&arguments, &mut index, "--max-record-bytes")?;
                 max_record_bytes_seen = true;
             }
+            "--control" if command == "run" => {
+                if control {
+                    bail!("--control may be specified only once");
+                }
+                control = true;
+            }
             value if value.starts_with('-') => bail!("unknown or unsupported option `{value}`"),
             _ => {
                 if file.replace(workflow_path(argument)?).is_some() {
@@ -1390,6 +1402,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         max_record_bytes,
         max_record_bytes_set: max_record_bytes_seen,
         record_dir,
+        control,
     }))
 }
 
@@ -1526,7 +1539,60 @@ fn reject_finite_only_options(args: &Args, program_kind: &str) -> Result<()> {
     if args.policy_header {
         bail!("--policy-header applies only to finite programs, not {program_kind} programs");
     }
+    if args.control {
+        bail!("--control applies only to finite programs, not {program_kind} programs");
+    }
     Ok(())
+}
+
+/// `run --control`: host a finite program under the live control endpoint. Options
+/// the live host cannot honour are refused by name, not ignored.
+fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
+    let refused = [
+        (args.checkpoint_dir.is_some(), "--checkpoint"),
+        (args.once, "--once"),
+        (args.trace, "--trace"),
+        (args.headless, "--headless"),
+        (args.max_runs.is_some(), "--max-runs"),
+        (args.missed_ticks.is_some(), "--missed-ticks"),
+        (args.max_catch_up.is_some(), "--max-catch-up"),
+        (args.calendar_dedup.is_some(), "--calendar-dedup"),
+        (args.total_timeout.is_some(), "--total-timeout-ms"),
+        (args.retry_uncertain, "--retry-uncertain"),
+        (args.max_record_bytes_set, "--max-record-bytes"),
+        (args.record_dir.is_some(), "--record"),
+        (!args.allow.is_empty(), "--allow"),
+        (args.what_if, "--what-if"),
+        (args.confirm.is_some(), "--confirm"),
+        (args.policy_header, "--policy-header"),
+        (
+            !args.program_arguments.is_empty(),
+            "positional program arguments (pass named inputs as --input NAME=VALUE)",
+        ),
+        (triggered, "a triggered program"),
+    ];
+    let names: Vec<&str> = refused
+        .iter()
+        .filter(|(set, _)| *set)
+        .map(|(_, name)| *name)
+        .collect();
+    if !names.is_empty() {
+        bail!("--control cannot be combined with {}", names.join(", "));
+    }
+    let run = flow::live::HostRun {
+        file: args.file.clone(),
+        inputs: args.inputs.clone(),
+        manifest_dir: args.manifest_dir.clone(),
+        manifest_catalog: args.manifest_catalog.clone(),
+        capability_policy: args.capability_policy.clone(),
+        data_flow_policy: args.data_flow_policy.clone(),
+        cache_dir: args.cache_dir.clone(),
+        command_timeout_ms: args
+            .command_timeout
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
+        max_output_bytes: args.max_output_bytes,
+    };
+    flow::live::host_run(&run, default_manifest_dir(), workflow_path)
 }
 
 fn take_option_value(

@@ -37,7 +37,7 @@ pub fn cli(
     default_manifests: PathBuf,
     path: fn(&str) -> Result<PathBuf>,
 ) -> Result<()> {
-    match dispatch(arguments, default_manifests, path) {
+    match dispatch(arguments, default_manifests, path, Mode::Serve) {
         Ok(value) => {
             writeln!(
                 std::io::stdout().lock(),
@@ -52,6 +52,78 @@ pub fn cli(
         }
     }
 }
+/// The options a finite `execute run --control` passes to the live host.
+/// `inputs` are the named `--NAME=VALUE` bindings, as text.
+pub struct HostRun {
+    pub file: PathBuf,
+    pub inputs: BTreeMap<String, String>,
+    pub manifest_dir: Option<PathBuf>,
+    pub manifest_catalog: Option<PathBuf>,
+    pub capability_policy: Option<PathBuf>,
+    pub data_flow_policy: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
+    pub command_timeout_ms: Option<u64>,
+    pub max_output_bytes: usize,
+}
+
+/// Host a finite program under the live control endpoint for one run. It uses the
+/// same setup and serve loop as `live serve`, with the run-mode rules in `serve`.
+/// The endpoint is a fresh path that is never reused. It is removed on exit.
+/// `max_output_bytes` is capped at the live message limit (1 MiB), which bounds the
+/// captured output of each native command.
+pub fn host_run(
+    run: &HostRun,
+    default_manifests: PathBuf,
+    path: fn(&str) -> Result<PathBuf>,
+) -> Result<()> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let socket = std::env::temp_dir().join(format!(
+        "execute-control-{}-{nanos}.sock",
+        std::process::id()
+    ));
+    let mut args = vec![
+        "serve".to_owned(),
+        run.file.to_string_lossy().into_owned(),
+        "--socket".to_owned(),
+        socket.to_string_lossy().into_owned(),
+        "--max-output-bytes".to_owned(),
+        run.max_output_bytes.min(MAX_MESSAGE).to_string(),
+    ];
+    if let Some(dir) = &run.cache_dir {
+        args.push("--cache-dir".to_owned());
+        args.push(dir.to_string_lossy().into_owned());
+    }
+    if !run.inputs.is_empty() {
+        args.push("--bindings".to_owned());
+        args.push(serde_json::to_string(&run.inputs)?);
+    }
+    if let Some(dir) = &run.manifest_dir {
+        args.push("--manifest-dir".to_owned());
+        args.push(dir.to_string_lossy().into_owned());
+    }
+    if let Some(catalog) = &run.manifest_catalog {
+        args.push("--manifest-catalog".to_owned());
+        args.push(catalog.to_string_lossy().into_owned());
+    }
+    if let Some(policy) = &run.capability_policy {
+        args.push("--capability-policy".to_owned());
+        args.push(policy.to_string_lossy().into_owned());
+    }
+    if let Some(policy) = &run.data_flow_policy {
+        args.push("--data-flow-policy".to_owned());
+        args.push(policy.to_string_lossy().into_owned());
+    }
+    if let Some(timeout) = run.command_timeout_ms {
+        args.push("--command-timeout-ms".to_owned());
+        args.push(timeout.to_string());
+    }
+    dispatch(&args, default_manifests, path, Mode::Run)?;
+    Ok(())
+}
+
 fn error_response(error: &anyhow::Error) -> Json {
     let code = error
         .downcast_ref::<ApiError>()
@@ -227,10 +299,20 @@ fn only(opts: &Options, names: &[&str], allow_paused: bool) -> Result<()> {
     }
     Ok(())
 }
+/// How the server ends. `Serve` stays up until stopped. `Run` belongs to a finite
+/// `execute run --control`: it shuts down when the program completes or fails, and
+/// it fails when a control stop cancels the run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Serve,
+    Run,
+}
+
 fn dispatch(
     args: &[String],
     default_manifests: PathBuf,
     path: fn(&str) -> Result<PathBuf>,
+    mode: Mode,
 ) -> Result<Json> {
     let Some(command) = args.first().map(String::as_str) else {
         return Ok(schema());
@@ -467,7 +549,7 @@ fn dispatch(
             command_timeout: timeout,
             total_timeout: None,
         };
-        return serve(&socket, shared, options);
+        return serve(&socket, shared, options, mode);
     }
     only(
         &opts,
@@ -625,7 +707,7 @@ impl Drop for SignalGuard {
         }
     }
 }
-fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions) -> Result<Json> {
+fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) -> Result<Json> {
     let listener = UnixListener::bind(socket)
         .context("could not bind socket; an existing path is never replaced")?;
     #[cfg(unix)]
@@ -642,18 +724,38 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions) -> Result<Json
     listener.set_nonblocking(true)?;
     let mut signals = SignalGuard(Vec::new());
     signals.0 = crate::platform::signals(shared.stop.clone())?;
-    writeln!(
-        std::io::stdout(),
-        "{}",
-        json!({"ok":true,"event":"ready","protocol":"execute.live/1","socket":socket,"pid":std::process::id()})
-    )?;
-    std::io::stdout().flush()?;
+    match mode {
+        Mode::Serve => {
+            writeln!(
+                std::io::stdout(),
+                "{}",
+                json!({"ok":true,"event":"ready","protocol":"execute.live/1","socket":socket,"pid":std::process::id()})
+            )?;
+            std::io::stdout().flush()?;
+        }
+        // In run mode, stdout is reserved for the program's output.
+        Mode::Run => {
+            writeln!(
+                std::io::stderr(),
+                "execute: control endpoint {}",
+                socket.display()
+            )?;
+        }
+    }
+    let mut run_done: Option<Result<(), String>> = None;
     let control = shared.clone();
     let worker = thread::spawn(move || worker::run(control, options));
     let active = Arc::new(AtomicUsize::new(0));
     let mut clients = Vec::new();
     let result = (|| -> Result<()> {
         while !shared.stop.load(Ordering::Relaxed) {
+            if mode == Mode::Run && run_done.is_none() {
+                if let Some(done) = run_outcome(&shared) {
+                    run_done = Some(done);
+                    shared.stop.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
             #[cfg(unix)]
             {
                 let mut poll = libc::pollfd {
@@ -714,7 +816,40 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions) -> Result<Json
     }
     joined.map_err(|_| anyhow::anyhow!("live worker panicked"))?;
     result?;
-    Ok(json!({"ok":true,"event":"stopped"}))
+    if mode == Mode::Serve {
+        return Ok(json!({"ok":true,"event":"stopped"}));
+    }
+    match run_done {
+        Some(Ok(())) => {
+            // Live capture keeps the output of the last native command. Plain run
+            // streams every command, so earlier command output is not replayed here.
+            let output = shared.state.lock().unwrap().last_output.clone();
+            let mut stdout = std::io::stdout().lock();
+            match output {
+                Data::Text { text } => stdout.write_all(text.as_bytes())?,
+                Data::Bytes { bytes } => stdout.write_all(&bytes)?,
+            }
+            stdout.flush()?;
+            Ok(Json::Null)
+        }
+        Some(Err(message)) => bail!("{message}"),
+        None => bail!(
+            "run stopped before it completed; the run was cancelled by control stop or a signal"
+        ),
+    }
+}
+
+/// The outcome of a finite run once it reaches a terminal status.
+fn run_outcome(shared: &Shared) -> Option<Result<(), String>> {
+    let state = shared.state.lock().unwrap();
+    match state.status.as_str() {
+        "completed" => Some(Ok(())),
+        "failed" => Some(Err(state
+            .error
+            .clone()
+            .unwrap_or_else(|| "run failed".to_owned()))),
+        _ => None,
+    }
 }
 fn peer_is_owner(stream: &UnixStream) -> bool {
     #[cfg(unix)]

@@ -180,6 +180,20 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
         *cursor += 1;
         return Ok(());
     }
+    parse_if_block(line_at, cursor, indent, steps, depth, scope, &line)
+}
+
+/// Parse one `if` block whose header is `line`, starting at `*cursor`. An
+/// `otherwise if` clause calls this again for the rest of its chain.
+fn parse_if_block<'arena, 'source: 'arena>(
+    line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
+    cursor: &mut usize,
+    indent: usize,
+    steps: &mut Vec<Step>,
+    depth: usize,
+    scope: StatementScope,
+    line: &BlockLine<'arena, 'source>,
+) -> Result<()> {
     if depth >= MAX_CONTROL_DEPTH {
         bail!(
             "line {}: conditional nesting exceeds {MAX_CONTROL_DEPTH} levels",
@@ -226,22 +240,37 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
     if let Some(otherwise) = line_at(*cursor)
         .filter(|child| child.indent == indent && word_is(child.tokens.first(), "otherwise"))
     {
-        ensure_end(otherwise.tokens, 1)
-            .map_err(|error| anyhow!("line {}: {error}", otherwise.number))?;
         alternative = Some(steps.len());
-        steps.push(Step {
-            line: otherwise.number,
-            kind: StepKind::Otherwise { end: 0 },
-        });
-        *cursor += 1;
-        if !line_at(*cursor).is_some_and(|child| child.indent > indent) {
-            bail!(
-                "line {}: otherwise body must contain an indented statement",
-                otherwise.number
-            );
-        }
-        while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-            parse_statement_in_scope(line_at, cursor, body_indent, steps, depth + 1, scope)?;
+        if word_is(otherwise.tokens.get(1), "if") {
+            // `otherwise if` puts the rest of the chain in the else branch. The
+            // nested block consumes this line and its own EndIf.
+            steps.push(Step {
+                line: otherwise.number,
+                kind: StepKind::Otherwise { end: 0 },
+            });
+            let nested = BlockLine {
+                number: otherwise.number,
+                indent: otherwise.indent,
+                tokens: &otherwise.tokens[1..],
+            };
+            parse_if_block(line_at, cursor, indent, steps, depth + 1, scope, &nested)?;
+        } else {
+            ensure_end(otherwise.tokens, 1)
+                .map_err(|error| anyhow!("line {}: {error}", otherwise.number))?;
+            steps.push(Step {
+                line: otherwise.number,
+                kind: StepKind::Otherwise { end: 0 },
+            });
+            *cursor += 1;
+            if !line_at(*cursor).is_some_and(|child| child.indent > indent) {
+                bail!(
+                    "line {}: otherwise body must contain an indented statement",
+                    otherwise.number
+                );
+            }
+            while line_at(*cursor).is_some_and(|child| child.indent > indent) {
+                parse_statement_in_scope(line_at, cursor, body_indent, steps, depth + 1, scope)?;
+            }
         }
     }
     steps.push(Step {

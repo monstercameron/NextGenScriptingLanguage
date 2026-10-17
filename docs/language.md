@@ -221,7 +221,10 @@ otherwise
 The grammar supports `if <value> is [not] <value>`, `if <value> contains
 <value>`, and `if <value> does not contain <value>`, followed by an indented
 command body and optionally `otherwise` at the same indentation with another
-body. Dedenting ends a block;
+body. `otherwise if <condition>` adds a clause with its own indented body; a
+chain runs at most one body, in order, and may end without a final `otherwise`.
+Each clause nests in the previous else branch, so the chain counts toward the
+64-level nesting limit. Dedenting ends a block;
 there is no written end marker. Both bodies use the same space indentation.
 Nested conditionals are allowed to 64 levels; use a nested `if` within
 `otherwise` for another case. Scalar equality is exact text, integer or boolean

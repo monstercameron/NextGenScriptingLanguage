@@ -178,6 +178,33 @@ mod imp {
     /// How long a run has after its client disconnects before it is killed.
     const KILL_GRACE: Duration = Duration::from_secs(15);
 
+    /// Stage trace for `EXECUTE_DAEMON_TRACE=1`: one stderr line per stage, stamped with the
+    /// monotonic clock. The client, the daemon and the forked run share that clock on one
+    /// machine, so the stamps subtract across processes. Unset, this is one cached branch.
+    fn trace_stage(stage: &str) {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let enabled = *ENABLED.get_or_init(|| {
+            std::env::var_os("EXECUTE_DAEMON_TRACE").is_some_and(|value| value == "1")
+        });
+        if !enabled {
+            return;
+        }
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: now is a valid out-pointer for clock_gettime.
+        unsafe {
+            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+        }
+        let nanos = now.tv_sec as i128 * 1_000_000_000 + now.tv_nsec as i128;
+        let _ = writeln!(
+            io::stderr(),
+            "daemon-trace pid={} {stage} ns={nanos}",
+            std::process::id()
+        );
+    }
+
     /// Why a request to the daemon did not complete. Nothing is sent to a path that fails
     /// the trust checks, so `Untrusted` means the request never left this process.
     #[derive(Debug)]
@@ -574,6 +601,7 @@ mod imp {
         /// Answer one connection. A connection from another user, or one that does not send
         /// a valid request, is refused and does not stop the daemon.
         fn handle(&mut self, mut stream: UnixStream) -> Flow {
+            trace_stage("daemon-accept");
             if stream.set_nonblocking(false).is_err()
                 || stream.set_read_timeout(Some(IO_TIMEOUT)).is_err()
                 || stream.set_write_timeout(Some(IO_TIMEOUT)).is_err()
@@ -594,6 +622,7 @@ mod imp {
                     return Flow::Continue;
                 }
             };
+            trace_stage("daemon-request-read");
             if request["protocol"] != PROTOCOL {
                 let _ = write_line(
                     &mut stream,
@@ -686,6 +715,7 @@ mod imp {
                 registry: self.registry.clone(),
                 request: run,
             };
+            trace_stage("daemon-fork-begin");
             // SAFETY: the parent is single-threaded, so the child is a copy of one thread
             // and inherits no lock held elsewhere. The child never returns from run_child.
             let pid = unsafe { libc::fork() };
@@ -700,6 +730,7 @@ mod imp {
             if pid == 0 {
                 run_child(setup);
             }
+            trace_stage("daemon-fork-end");
             // Parent: the descriptors belong to the child now, so close the parent's copies.
             drop(setup.descriptors);
             let mut connection = setup.connection;
@@ -729,6 +760,7 @@ mod imp {
                     Waited::Running => index += 1,
                     Waited::Exited(status) => {
                         let mut finished = self.children.swap_remove(index);
+                        trace_stage("daemon-exit-reaped");
                         let _ = write_line(
                             &mut finished.connection,
                             &json!({"event": "exit", "status": status}),
@@ -897,6 +929,7 @@ mod imp {
 
     /// The child of a fork. It becomes the run and exits with the run's status.
     fn run_child(setup: ChildSetup) -> ! {
+        trace_stage("child-start");
         let ChildSetup {
             listener_fd,
             held,
@@ -959,7 +992,9 @@ mod imp {
             context.decline(&reason);
             std::process::exit(0);
         }
+        trace_stage("child-run-begin");
         let status = (run)(&request.argv, &mut context);
+        trace_stage("child-run-end");
         let _ = io::stdout().flush();
         let _ = io::stderr().flush();
         std::process::exit(status)
@@ -1265,6 +1300,7 @@ mod imp {
 
     /// Send a `run` request and relay the daemon's events until the run ends.
     pub(super) fn forward(arguments: &[String], socket: &Path) -> Forwarding {
+        trace_stage("client-begin");
         let environment = match environment_for_daemon() {
             Ok(environment) => environment,
             Err(note) => return Forwarding::Cold { note: Some(note) },
@@ -1294,6 +1330,7 @@ mod imp {
                 }
             }
         };
+        trace_stage("client-connected");
         let forwarded = match register_forwarded_signals() {
             Ok(forwarded) => forwarded,
             Err(error) => {
@@ -1330,8 +1367,10 @@ mod imp {
                 )),
             };
         }
+        trace_stage("client-sent");
         let outcome = relay(&mut stream, &forwarded);
         unregister_forwarded(&forwarded);
+        trace_stage("client-done");
         outcome
     }
 
@@ -1390,7 +1429,10 @@ mod imp {
             }
             while let Some(line) = take_line(&mut pending) {
                 match parse_event(&line) {
-                    Some(Event::Started(pid)) => child = Some(pid),
+                    Some(Event::Started(pid)) => {
+                        trace_stage("client-started");
+                        child = Some(pid);
+                    }
                     Some(Event::Declined(reason)) => {
                         return Forwarding::Cold {
                             note: Some(format!(
@@ -1398,7 +1440,10 @@ mod imp {
                             )),
                         }
                     }
-                    Some(Event::Exited(status)) => return Forwarding::Ran(status),
+                    Some(Event::Exited(status)) => {
+                        trace_stage("client-exit-received");
+                        return Forwarding::Ran(status);
+                    }
                     None => {}
                 }
             }

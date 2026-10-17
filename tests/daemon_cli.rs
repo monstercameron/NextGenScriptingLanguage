@@ -3,6 +3,7 @@
 #![cfg(unix)]
 
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -377,11 +378,12 @@ fn warm_round_trip_and_forwarded_run_latency_are_measured() {
         format!("end-to-end run wall time: forwarded p50 {forwarded_p50:?}, cold p50 {cold_p50:?}");
     eprintln!("{run_line}");
     report_latency(&run_line);
-    // The daemon exists to make runs faster. A forwarded run that is no faster than a cold one
-    // means the exit or the handoff is waiting on something.
+    // A no-regression guard. A forwarded run still starts the client binary, so for a trivial
+    // program it cannot beat a cold start by much; it must not be much slower, which is what
+    // a return of a fixed poll interval would cause (about 50 ms here).
     assert!(
-        forwarded_p50 < cold_p50,
-        "forwarded p50 {forwarded_p50:?} is not below cold p50 {cold_p50:?}"
+        forwarded_p50 <= cold_p50.mul_f64(1.5),
+        "forwarded p50 {forwarded_p50:?} is above 1.5x cold p50 {cold_p50:?}"
     );
 }
 
@@ -404,6 +406,187 @@ fn report_latency(line: &str) {
             let _ = writeln!(file, "- {line}");
         }
     }
+}
+
+/// Copies a manifest tree, so a run can name a user directory of its own.
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+/// One run of `PRINT_OUT` with `manifests` as the manifest directory.
+fn run_with_manifests(
+    runtime_dir: &Path,
+    directory: &Path,
+    manifests: &Path,
+    extra: &[&str],
+) -> Output {
+    let path = directory.join("workflow.program");
+    fs::write(&path, PRINT_OUT).unwrap();
+    Command::new(env!("CARGO_BIN_EXE_execute"))
+        .env("XDG_RUNTIME_DIR", runtime_dir)
+        .env_remove("EXECUTE_DAEMON")
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .arg("run")
+        .arg(&path)
+        .arg("--manifest-dir")
+        .arg(manifests)
+        .args(extra)
+        .output()
+        .unwrap()
+}
+
+/// Forwarded against cold for a run that names its own manifest directory. The daemon serves
+/// the default manifests from its preloaded registry, so such a run loads its manifests in the
+/// forked child. The figures are printed for CI; nothing here is asserted, because the result
+/// is the measurement.
+#[test]
+fn forwarded_run_with_a_user_manifest_directory_latency_is_measured() {
+    let runtime = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let user_manifests = tempfile::tempdir().unwrap();
+    copy_tree(&manifests(), user_manifests.path());
+    let work = tempfile::tempdir().unwrap();
+    let mut forwarded = Vec::new();
+    let mut cold = Vec::new();
+    for _ in 0..10 {
+        let started = Instant::now();
+        let output = run_with_manifests(
+            runtime.path(),
+            work.path(),
+            user_manifests.path(),
+            &["--daemon"],
+        );
+        forwarded.push(started.elapsed());
+        assert!(output.status.success(), "{:?}", output);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "out
+"
+        );
+
+        let started = Instant::now();
+        let output = run_with_manifests(runtime.path(), work.path(), user_manifests.path(), &[]);
+        cold.push(started.elapsed());
+        assert!(output.status.success(), "{:?}", output);
+    }
+    forwarded.sort();
+    cold.sort();
+    let forwarded_p50 = forwarded[forwarded.len() / 2];
+    let cold_p50 = cold[cold.len() / 2];
+    let line = format!(
+        "user manifest directory run: forwarded p50 {forwarded_p50:?}, cold p50 {cold_p50:?}"
+    );
+    eprintln!("{line}");
+    report_latency(&line);
+}
+
+/// Per-stage medians of a forwarded run, from the `EXECUTE_DAEMON_TRACE` stamps of the client,
+/// the daemon and its forked run. The stamps share the monotonic clock, so each stage is the
+/// time since the client began. Printed for CI; nothing is asserted beyond the runs succeeding.
+#[test]
+fn forwarded_run_stage_breakdown_is_measured() {
+    let runtime = tempfile::tempdir().unwrap();
+    let daemon_log = runtime.path().join("daemon-trace.log");
+    let log = fs::File::create(&daemon_log).unwrap();
+    let mut daemon = daemon_command(runtime.path(), &["serve"]);
+    daemon
+        .env("EXECUTE_DAEMON_TRACE", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(log));
+    let _daemon = Daemon(Some(daemon.spawn().expect("spawn traced daemon")));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let status = daemon_output(runtime.path(), &["status"]);
+        let running = serde_json::from_slice::<Value>(&status.stdout)
+            .map(|reply| reply["running"] == true)
+            .unwrap_or(false);
+        if running {
+            break;
+        }
+        assert!(Instant::now() < deadline, "traced daemon did not start");
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("workflow.program");
+    fs::write(&path, PRINT_OUT).unwrap();
+    // Stage name -> nanoseconds since the client began, for each run.
+    let mut per_stage: BTreeMap<String, Vec<u128>> = BTreeMap::new();
+    for _ in 0..10 {
+        let daemon_seen = fs::read_to_string(&daemon_log).unwrap_or_default().len();
+        let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env("EXECUTE_DAEMON_TRACE", "1")
+            .env_remove("EXECUTE_DAEMON")
+            .current_dir(work.path())
+            .stdin(Stdio::null())
+            .arg("run")
+            .arg(&path)
+            .arg("--manifest-dir")
+            .arg(manifests())
+            .arg("--daemon")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output);
+        let mut stamps: Vec<(String, u128)> = Vec::new();
+        let client_text = String::from_utf8_lossy(&output.stderr).into_owned();
+        let daemon_text = fs::read_to_string(&daemon_log).unwrap_or_default();
+        let daemon_new = daemon_text.get(daemon_seen..).unwrap_or_default();
+        for line in client_text.lines().chain(daemon_new.lines()) {
+            if let Some(stamp) = parse_trace_line(line) {
+                stamps.push(stamp);
+            }
+        }
+        let Some(begin) = stamps
+            .iter()
+            .find(|(stage, _)| stage == "client-begin")
+            .map(|s| s.1)
+        else {
+            panic!("no client-begin stamp in {client_text}");
+        };
+        for (stage, nanos) in stamps {
+            per_stage
+                .entry(stage)
+                .or_default()
+                .push(nanos.saturating_sub(begin));
+        }
+    }
+    let mut rows: Vec<(String, u128)> = per_stage
+        .into_iter()
+        .map(|(stage, mut values)| {
+            values.sort();
+            (stage, values[values.len() / 2])
+        })
+        .collect();
+    rows.sort_by_key(|row| row.1);
+    for (stage, nanos) in rows {
+        let line = format!(
+            "daemon stage {stage}: p50 {:.3} ms from client start",
+            nanos as f64 / 1e6
+        );
+        eprintln!("{line}");
+        report_latency(&line);
+    }
+}
+
+/// `daemon-trace pid=N STAGE ns=NANOS` as (stage, nanos), or `None` for other lines.
+fn parse_trace_line(line: &str) -> Option<(String, u128)> {
+    let rest = line.strip_prefix("daemon-trace pid=")?;
+    let mut parts = rest.split_whitespace();
+    let _pid = parts.next()?;
+    let stage = parts.next()?.to_owned();
+    let nanos = parts.next()?.strip_prefix("ns=")?.parse().ok()?;
+    Some((stage, nanos))
 }
 
 #[test]

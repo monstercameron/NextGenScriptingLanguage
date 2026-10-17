@@ -100,34 +100,39 @@ fn main() {
             // The reader went away; stop quietly without a diagnostic.
             std::process::exit(STDOUT_CLOSED_EXIT);
         }
-        runtime::write_diagnostic(format!("execute: {error:#}\n").as_bytes());
         // The run has already cleaned up its children before returning this error.
-        if let Some(code) = runtime::interrupt_exit_code() {
-            std::process::exit(code);
+        // An interrupt keeps its status; otherwise the failing command decides.
+        let interrupted = runtime::interrupt_exit_code();
+        let status = interrupted.unwrap_or_else(|| {
+            error
+                .downcast_ref::<runtime::CommandFailed>()
+                .map(|failure| {
+                    failure
+                        .status
+                        .code()
+                        .unwrap_or_else(|| signal_status(&failure.status))
+                })
+                .filter(|status| {
+                    if cfg!(windows) {
+                        *status != 0
+                    } else {
+                        (1..=255).contains(status)
+                    }
+                })
+                .unwrap_or(1)
+        });
+        if flow::agent::errors::enabled() {
+            flow::agent::errors::write_stderr(&error, interrupted.is_some(), status);
+        } else {
+            runtime::write_diagnostic(format!("execute: {error:#}\n").as_bytes());
         }
-        let status = error
-            .downcast_ref::<runtime::CommandFailed>()
-            .map(|failure| {
-                failure
-                    .status
-                    .code()
-                    .unwrap_or_else(|| signal_status(&failure.status))
-            })
-            .filter(|status| {
-                if cfg!(windows) {
-                    *status != 0
-                } else {
-                    (1..=255).contains(status)
-                }
-            })
-            .unwrap_or(1);
         std::process::exit(status);
     }
 }
 
 fn execute() -> Result<()> {
-    let arguments = env::args_os()
-        .skip(1)
+    let arguments = flow::agent::errors::strip_flag(env::args_os().skip(1))
+        .into_iter()
         .enumerate()
         .map(|(index, argument)| {
             argument.into_string().map_err(|_| {

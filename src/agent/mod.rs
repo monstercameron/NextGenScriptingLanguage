@@ -1,0 +1,5 @@
+//! Machine interfaces for tools and agents. These modules add output formats
+//! and CLI modes; they do not change the `.program` grammar or runtime semantics.
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod errors;

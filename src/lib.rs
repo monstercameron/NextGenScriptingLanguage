@@ -1,4 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
+pub mod agent;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod applets;
 pub mod ast;
 #[cfg(not(target_arch = "wasm32"))]

@@ -3,6 +3,10 @@
 
 #[cfg(windows)]
 use super::execute_group_with_sink;
+// The Unix supervision path (pidfd and epoll, process groups, stdin prefill) uses many
+// runtime-private helpers; it reads them from the parent module rather than listing each.
+#[cfg(unix)]
+use super::*;
 use super::{
     execution_result, invocation_io, terminal, Children, CommandFailed, Input, RunOptions, Signals,
     FORCE_STDERR_CAPTURE, INHERIT_TERMINAL_STDOUT,

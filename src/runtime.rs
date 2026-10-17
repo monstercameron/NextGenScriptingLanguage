@@ -43,9 +43,13 @@ mod spawn;
 #[cfg(unix)]
 use spawn::execute_group_with_sink;
 use spawn::{
-    captured_stage_stderr, check_native_abort, collect_native_stages, execute_group,
-    native_output_limit_failure, native_spawn_failure, redact_command_failure, resolved_call_stdio,
+    captured_stage_stderr, collect_native_stages, execute_group, redact_command_failure,
     GroupOutput,
+};
+// Used by the Windows process path (windows_process.rs) through this module.
+#[cfg(windows)]
+use spawn::{
+    check_native_abort, native_output_limit_failure, native_spawn_failure, resolved_call_stdio,
 };
 pub(crate) mod statement_hook;
 mod temp;
@@ -1314,8 +1318,8 @@ fn scan_child_statuses(
                 let implicit_success = code.is_some_and(|code| {
                     calls[index].1.outcome_for(code).kind == crate::contracts::OutcomeKind::Success
                 });
-                if !implicit_success && !(calls[index].0.status_binding.is_some() && code.is_some())
-                {
+                let status_kept = calls[index].0.status_binding.is_some() && code.is_some();
+                if !(implicit_success || status_kept) {
                     drain_diagnostic(managed)?;
                     return Err(CommandFailed {
                         line: calls[index].2,

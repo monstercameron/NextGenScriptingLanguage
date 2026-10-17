@@ -19,12 +19,15 @@
 //!
 //! Effects come only from applet contracts that declare them. A row whose effects
 //! cannot be stated has `effects: null` and `undeclared: true`.
+//!
+//! Paths, `escapes_cwd`, and folder tracking are advisory static analysis. They
+//! are not containment guarantees. Enforcement is the capability policy.
 
 use crate::ast::{
     Connection, Invocation, LoopKind, Program, RedirectTarget, ReusableProgram, Step, StepKind,
     Value,
 };
-use crate::manifest::Registry;
+use crate::manifest::{Builtin, Registry};
 use anyhow::Result;
 use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -136,6 +139,8 @@ pub fn explain_json(program: &Program, registry: &Registry, program_path: &str) 
         stack: Vec::new(),
         cwd: Cwd::Known(Vec::new()),
         environment_tainted_next: false,
+        depth: 0,
+        cwd_poisoned: false,
         group_tainted: false,
     };
     walker.steps(&program.steps, None);
@@ -153,6 +158,10 @@ struct Walker<'a> {
     environment_tainted_next: bool,
     /// Taint for the current pipeline group. Every stage of the group shares it.
     group_tainted: bool,
+    /// Nesting depth of branch, loop, try, and called bodies.
+    depth: usize,
+    /// Set by a folder change nested in a body. The folder stays unknown after it.
+    cwd_poisoned: bool,
 }
 
 impl Walker<'_> {
@@ -185,6 +194,17 @@ impl Walker<'_> {
 
     /// Classify one step. Every variant is named; there is no catch-all arm.
     fn step(&mut self, line: usize, kind: &StepKind, scope: Option<&str>) {
+        // Branch, loop, and try blocks nest; their closers end the nesting.
+        match kind {
+            StepKind::If { .. }
+            | StepKind::IfCommand { .. }
+            | StepKind::Loop { .. }
+            | StepKind::Try { .. } => self.depth += 1,
+            StepKind::EndIf | StepKind::EndLoop { .. } | StepKind::EndTry => {
+                self.depth = self.depth.saturating_sub(1);
+            }
+            _ => {}
+        }
         match kind {
             StepKind::TaskGroup { tasks, .. } => {
                 for call in tasks {
@@ -319,18 +339,24 @@ impl Walker<'_> {
             row.path_is_runtime = true;
             return;
         };
-        if is_absolute(text) {
-            // An absolute destination leaves the program's folder by definition.
+        // Lexical checks are advisory. A `..` component or an absolute path is
+        // always flagged, whether or not it would normalise inside the folder.
+        if is_absolute(text) || has_parent_component(text) {
             row.path = Some(text.clone());
             row.escapes_cwd = true;
+            return;
+        }
+        // A nested folder change stays in effect even after a called body restores
+        // the caller's folder, so the destination is runtime from here on.
+        if self.cwd_poisoned {
+            row.path_is_runtime = true;
             return;
         }
         match &self.cwd {
             Cwd::Unknown => row.path_is_runtime = true,
             Cwd::Known(base) => {
-                let (normalised, escapes) = join_relative(base, text);
+                let (normalised, _) = join_relative(base, text);
                 row.path = Some(normalised);
-                row.escapes_cwd = escapes;
             }
         }
     }
@@ -338,35 +364,35 @@ impl Walker<'_> {
     /// Apply a folder change: a literal relative folder moves the known position,
     /// while an absolute or runtime folder makes relative paths unknown.
     fn change_folder(&mut self, row: &mut Row, path: &Value) {
+        // A folder change inside a branch, loop, try block, or called body may not
+        // happen on every path. The folder is unknown from here to the end of the
+        // walk, and this does not recover.
+        if self.depth > 0 {
+            self.cwd_poisoned = true;
+        }
         let Value::String(text) = path else {
             row.path_is_runtime = true;
             self.cwd = Cwd::Unknown;
             return;
         };
         row.path = Some(text.clone());
-        if is_absolute(text) {
-            row.escapes_cwd = true;
+        let lexical_escape = is_absolute(text) || has_parent_component(text);
+        row.escapes_cwd = lexical_escape;
+        if self.cwd_poisoned || lexical_escape {
             self.cwd = Cwd::Unknown;
             return;
         }
-        match &self.cwd {
-            Cwd::Unknown => {}
-            Cwd::Known(base) => {
-                let (normalised, escapes) = join_relative(base, text);
-                row.escapes_cwd = escapes;
-                self.cwd = if escapes {
-                    Cwd::Unknown
-                } else {
-                    Cwd::Known(
-                        normalised
-                            .split('/')
-                            .filter(|s| !s.is_empty())
-                            .map(str::to_owned)
-                            .collect(),
-                    )
-                };
-            }
-        }
+        let normalised = match &self.cwd {
+            Cwd::Known(base) => join_relative(base, text).0,
+            Cwd::Unknown => return,
+        };
+        self.cwd = Cwd::Known(
+            normalised
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        );
     }
 
     fn invocation(
@@ -419,7 +445,9 @@ impl Walker<'_> {
             manifest.build_arguments(&call.parameters).ok()
         };
         // The builtin `cd` changes the working directory for later steps.
-        if manifest.name_for(call) == "cd" {
+        // Detect the builtin the way the runtime does: by its manifest field, not
+        // by name. A destination that is not a literal leaves the folder unknown.
+        if manifest.builtin == Some(Builtin::Cd) {
             row.cwd_change = Some(true);
             if let Some(path) = call.parameters.get("path") {
                 let path = path.clone();
@@ -480,7 +508,10 @@ impl Walker<'_> {
         self.rows.push(row);
         let saved_cwd = self.cwd.clone();
         self.stack.push(name.clone());
+        // A called body may run on some paths only, so its folder changes are nested.
+        self.depth += 1;
         self.steps(&definition.steps, Some(&name));
+        self.depth = self.depth.saturating_sub(1);
         self.stack.pop();
         self.cwd = saved_cwd;
     }
@@ -519,6 +550,11 @@ fn is_absolute(text: &str) -> bool {
     text.starts_with('/')
         || text.starts_with('\\')
         || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
+/// True when any component of a path is `..`, whichever separator is used.
+fn has_parent_component(text: &str) -> bool {
+    text.split(['/', '\\']).any(|segment| segment == "..")
 }
 
 /// Join a relative path to a base, normalising `.` and `..`. The boolean is true

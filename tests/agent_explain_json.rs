@@ -530,10 +530,10 @@ fn the_builtin_cd_moves_the_known_folder_and_a_called_program_restores_it() {
     let source = "define a program named deep\n  use folder \"deep\"\nrun program deep\nrun plain.helper\nthen save to \"out.txt\"\n";
     let object = plan(&explain(directory.path(), source, &["--json"]));
     let save = rows_of_kind(&object, "save");
-    assert_eq!(
-        save[0]["path"], "out.txt",
-        "a call must restore the caller's folder: {object}"
-    );
+    // A folder change inside a called body may not happen on every path, so it
+    // stays unknown after the call returns. The caller's folder is not restored.
+    assert!(save[0]["path"].is_null(), "{object}");
+    assert_eq!(save[0]["path_is_runtime"], true, "{object}");
 }
 
 // ---------------------------------------------------------------------------
@@ -613,4 +613,134 @@ fn a_clean_pipeline_keeps_every_stage_declared() {
     assert_eq!(stage[0]["network"], true, "{object}");
     assert_eq!(stage[0]["undeclared"], false, "{object}");
     assert_eq!(object["summary"]["environment_tainted_invocations"], 0);
+}
+
+// ---------------------------------------------------------------------------
+// Advisory folder tracking: nesting, builtin detection, and lexical escapes.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_folder_change_nested_in_a_branch_makes_later_relative_writes_runtime() {
+    let directory = tempfile::tempdir().unwrap();
+    let source =
+        "if true is true\n  use folder \"sub\"\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert!(save[0]["path"].is_null(), "{object}");
+    assert_eq!(save[0]["path_is_runtime"], true);
+}
+
+#[test]
+fn a_cd_inside_a_called_body_makes_later_relative_writes_runtime() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "define a program named deep\n  run cd with path \"deep\"\nrun program deep\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert!(save[0]["path"].is_null(), "{object}");
+    assert_eq!(save[0]["path_is_runtime"], true);
+}
+
+#[test]
+fn a_nested_folder_change_is_not_undone_by_a_later_top_level_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "if true is true\n  use folder \"sub\"\nuse folder \"other\"\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert!(
+        save[0]["path"].is_null(),
+        "the folder stays unknown to the end: {object}"
+    );
+    assert_eq!(save[0]["path_is_runtime"], true);
+}
+
+#[test]
+fn a_builtin_cd_with_a_runtime_destination_makes_the_folder_unknown() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "accept folder as text\nrun cd with path folder\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert!(save[0]["path"].is_null(), "{object}");
+    assert_eq!(save[0]["path_is_runtime"], true);
+}
+
+#[test]
+fn cd_is_detected_by_the_builtin_field_not_by_its_name() {
+    // A native command named `cd` with no builtin field must not move the folder.
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = directory.path().join("manifests");
+    std::fs::create_dir_all(&manifests).unwrap();
+    let native_cd = serde_json::json!({
+        "name": "cd",
+        "binary": HELPER,
+        "accepts_stdin": false,
+        "parameters": { "path": { "type": "string", "required": true } },
+        "arguments": [{ "literal": "--version" }]
+    });
+    std::fs::write(manifests.join("cd.json"), native_cd.to_string()).unwrap();
+    let plain = serde_json::json!({
+        "name": "plain.helper",
+        "binary": HELPER,
+        "accepts_stdin": false,
+        "parameters": {},
+        "arguments": [{ "literal": "--version" }]
+    });
+    std::fs::write(manifests.join("plain.helper.json"), plain.to_string()).unwrap();
+    std::fs::write(
+        directory.path().join("plan.program"),
+        "run cd with path \"sub\"\nrun plain.helper\nthen save to \"out.txt\"\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("explain")
+        .arg("plan.program")
+        .arg("--json")
+        .arg("--manifest-dir")
+        .arg(&manifests)
+        .current_dir(directory.path())
+        .env_remove("EXECUTE_MODELS_OFFLINE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let object = plan(&output);
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(
+        save[0]["path"], "out.txt",
+        "a non-builtin `cd` must not move the folder: {object}"
+    );
+    assert_eq!(save[0]["path_is_runtime"], false);
+}
+
+#[test]
+fn a_parent_component_is_flagged_even_when_it_normalises_inside_the_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "use folder \"sub\"\nrun plain.helper\nthen save to \"sub/../out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(save[0]["escapes_cwd"], true, "{object}");
+    assert_eq!(
+        save[0]["path"], "sub/../out.txt",
+        "the path is reported as written: {object}"
+    );
+    assert_eq!(object["summary"]["escaping_write_paths"], 1);
+}
+
+#[test]
+fn a_plain_relative_write_is_not_flagged() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run plain.helper\nthen save to \"./out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(save[0]["escapes_cwd"], false, "{object}");
+    assert_eq!(save[0]["path"], "out.txt");
+}
+
+#[test]
+fn a_folder_change_that_climbs_out_makes_the_folder_unknown() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "use folder \"../up\"\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let folder = rows_of_kind(&object, "use_folder");
+    assert_eq!(folder[0]["escapes_cwd"], true, "{object}");
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(save[0]["path_is_runtime"], true, "{object}");
 }

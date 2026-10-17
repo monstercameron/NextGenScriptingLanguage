@@ -343,6 +343,20 @@ pub(super) fn validate_condition(
     }
     Ok(())
 }
+/// Kind name used in equality diagnostics. `null` is compared with any value.
+fn equality_kind(value: &Value) -> &'static str {
+    match value {
+        Value::String(_) => "text",
+        Value::Integer(_) => "integer",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::List(_) => "list",
+        Value::Record(_) => "record",
+        Value::Null => "null",
+        Value::Reference(_) => "reference",
+    }
+}
+
 pub(super) fn evaluate(condition: &Condition, bindings: &BTreeMap<String, Value>) -> Result<bool> {
     let left = super::resolve(&condition.left, bindings)?;
     let right = super::resolve(&condition.right, bindings)?;
@@ -357,6 +371,14 @@ pub(super) fn evaluate(condition: &Condition, bindings: &BTreeMap<String, Value>
                 scalar_kind(&left, &no_declarations)?,
                 scalar_kind(&right, &no_declarations)?,
             )?;
+            // JSON-typed bindings skip static checks because they may be null.
+            // A non-null value of another kind is a type error, not false.
+            let (left_kind, right_kind) = (equality_kind(&left), equality_kind(&right));
+            if left_kind != right_kind && left_kind != "null" && right_kind != "null" {
+                bail!(
+                    "condition compares {left_kind} with {right_kind}; values must have the same type, and implicit conversion is unsupported"
+                );
+            }
             left == right
         }
         crate::ast::ConditionOperator::Contains => match (&left, &right) {
@@ -566,6 +588,28 @@ mod structured_condition_tests {
 
         assert!(evaluate(&equal_record, &bindings).unwrap());
         assert!(!evaluate(&null_check, &bindings).unwrap());
+    }
+
+    #[test]
+    fn json_typed_operand_of_another_kind_is_an_error_not_false() {
+        let record = Value::Record(BTreeMap::from([("ok".into(), Value::Bool(true))]));
+        let bindings = BTreeMap::from([("verdict".into(), record)]);
+        let against_bool = Condition {
+            left: Value::Reference("verdict".into()),
+            right: Value::Bool(true),
+            negated: false,
+            operator: crate::ast::ConditionOperator::Equals,
+        };
+        let error = evaluate(&against_bool, &bindings).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("condition compares record with boolean"),
+            "{error:#}"
+        );
+        let against_null = Condition {
+            right: Value::Null,
+            ..against_bool.clone()
+        };
+        assert!(!evaluate(&against_null, &bindings).unwrap());
     }
 
     #[test]

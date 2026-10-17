@@ -227,7 +227,9 @@ Nested conditionals are allowed to 64 levels; use a nested `if` within
 `otherwise` for another case. Scalar equality is exact text, integer or boolean
 equality, including text newlines. JSON arrays and objects use deep equality,
 and `null` can be compared directly. There is no truthiness or implicit
-conversion. `contains` checks a substring in text, a value in an array, or a
+conversion. A JSON-typed binding can be null, so its kind is checked when the
+condition runs: a non-null record, list, or other value compared with a different
+kind, such as `verdict is true`, is a type error, not false. `contains` checks a substring in text, a value in an array, or a
 key in an object. List ordering, arithmetic operators and boolean expression
 combinators are not implemented. These operators are contextual; use quoted
 strings for literal words.
@@ -761,7 +763,9 @@ holds inside the body, so a block boundary never streams. Native commands inheri
 the terminal stdout. Other applets write their captured bytes after success. A
 failing step has already written any inherited output; its error goes to stderr.
 
-Only the CLI's top-level finite run streams. Library runs, program modules, TUI
+Data-flow policy governs remote and persistence sinks, not the terminal, so
+streamed bytes reach the caller's stdout without a policy check. Only the CLI's
+top-level finite run streams. Library runs, program modules, TUI
 handlers, services, and listeners keep capture. Streamed output is not bounded by
 `--max-output-bytes`, because it is not captured. A checkpointed run streams the
 same way, but resume does not replay streamed output: a completed run whose final

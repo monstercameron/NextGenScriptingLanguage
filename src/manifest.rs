@@ -983,10 +983,11 @@ impl Manifest {
 
     /// Validate resolved values and produce the exact argv vector for the child.
     pub fn build_arguments(&self, values: &BTreeMap<String, Value>) -> Result<Vec<String>> {
-        self.validate_argument_values(values)?;
+        let values = self.home_expanded_values(values)?;
+        self.validate_argument_values(&values)?;
         let mut argv = Vec::with_capacity(self.arguments.len());
         for node in &self.arguments {
-            append_arguments(node, values, &mut argv)?;
+            append_arguments(node, &values, &mut argv)?;
         }
         Ok(argv)
     }
@@ -997,11 +998,52 @@ impl Manifest {
         &self,
         values: &BTreeMap<String, Value>,
     ) -> Result<serde_json::Map<String, serde_json::Value>> {
-        self.validate_argument_values(values)?;
+        let values = self.home_expanded_values(values)?;
+        self.validate_argument_values(&values)?;
         values
             .iter()
             .map(|(name, value)| Ok((name.clone(), crate::structured::to_json(value)?)))
             .collect()
+    }
+
+    /// Whether the manifest declares this parameter with the `path` type. Only such
+    /// parameters have a leading `~/` expanded to the home directory; string and
+    /// list parameters, and literal argv text, keep `~` as written.
+    pub fn is_path_parameter(&self, name: &str) -> bool {
+        self.parameters
+            .get(name)
+            .is_some_and(|spec| spec.kind == ParameterType::Path)
+    }
+
+    /// The supplied values with a leading `~` expanded in path-typed parameters.
+    /// Borrowed when nothing needs expanding, so ordinary calls allocate nothing.
+    fn home_expanded_values<'a>(
+        &self,
+        values: &'a BTreeMap<String, Value>,
+    ) -> Result<Cow<'a, BTreeMap<String, Value>>> {
+        let needs_home = |name: &str, value: &Value| {
+            self.is_path_parameter(name)
+                && matches!(value, Value::String(text) if starts_with_home(text))
+        };
+        if !values.iter().any(|(name, value)| needs_home(name, value)) {
+            return Ok(Cow::Borrowed(values));
+        }
+        let mut owned = values.clone();
+        for (name, value) in owned.iter_mut() {
+            if !self.is_path_parameter(name) {
+                continue;
+            }
+            if let Value::String(text) = value {
+                if starts_with_home(text) {
+                    let expanded = crate::capabilities::expand_home_path(text)
+                        .with_context(|| format!("parameter {name:?}"))?;
+                    *text = expanded.into_os_string().into_string().map_err(|_| {
+                        anyhow!("parameter {name:?}: the home directory is not UTF-8")
+                    })?;
+                }
+            }
+        }
+        Ok(Cow::Owned(owned))
     }
 
     /// Build argv for immediate Command construction without cloning borrowed text.
@@ -1010,6 +1052,17 @@ impl Manifest {
         &'a self,
         values: &'a BTreeMap<String, Value>,
     ) -> Result<Vec<Cow<'a, str>>> {
+        let values = match self.home_expanded_values(values)? {
+            Cow::Borrowed(values) => values,
+            // An expanded path is an owned string, so the owned builder is used.
+            Cow::Owned(owned) => {
+                return Ok(self
+                    .build_arguments(&owned)?
+                    .into_iter()
+                    .map(Cow::Owned)
+                    .collect());
+            }
+        };
         self.validate_argument_values(values)?;
         let mut argv = Vec::with_capacity(self.arguments.len());
         for node in &self.arguments {
@@ -1540,6 +1593,12 @@ fn check_prefixed_path(parameter: &str, path: &str) -> Result<()> {
         bail!("parameter {parameter:?} must not contain .. components");
     }
     Ok(())
+}
+
+/// Whether a path value begins with the home shorthand: `~`, `~/`, or `~\` on Windows.
+/// `~user` is not a home shorthand and is never expanded.
+fn starts_with_home(text: &str) -> bool {
+    text == "~" || text.starts_with("~/") || (cfg!(windows) && text.starts_with("~\\"))
 }
 
 fn append_arguments(
@@ -2507,6 +2566,34 @@ impl std::fmt::Display for ParameterType {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn the_borrowed_builder_expands_a_home_path_into_owned_argv() {
+        let registry = Registry::from_sources(&[serde_json::json!({
+            "name": "reader.path",
+            "binary": "reader",
+            "accepts_stdin": false,
+            "cacheable": false,
+            "parameters": { "file": { "type": "path", "required": true } },
+            "arguments": [{ "parameter": "file" }]
+        })
+        .to_string()])
+        .unwrap();
+        let manifest = registry.resolve("reader.path").unwrap();
+        let supplied = BTreeMap::from([("file".to_owned(), Value::String("~/a.txt".to_owned()))]);
+        let borrowed = manifest.build_arguments_borrowed(&supplied).unwrap();
+        let expected = crate::capabilities::expand_home_path("~/a.txt")
+            .unwrap()
+            .into_os_string()
+            .into_string()
+            .unwrap();
+        assert_eq!(borrowed.len(), 1);
+        assert_eq!(borrowed[0], expected.as_str());
+        assert!(
+            matches!(borrowed[0], Cow::Owned(_)),
+            "an expanded path is owned"
+        );
+    }
 
     fn write_manifest(dir: &Path, name: &str, json: &str) -> std::path::PathBuf {
         let path = dir.join(name);

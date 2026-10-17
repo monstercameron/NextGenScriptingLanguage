@@ -117,7 +117,7 @@ errors during catalog validation.
 | --- | --- |
 | `bytes` | Raw bytes only. It has no typed binding. |
 | `text` | UTF-8 text, either raw bytes or a JSON string. Empty text is valid. |
-| `path` | A contract-only semantic string. Raw form must be UTF-8; JSON form must be a JSON string. It must be nonempty and contain no NUL. A path parameter accepts a string literal or text result reference and emits exactly one argv item. Path output uses the existing text binding type. |
+| `path` | A contract-only semantic string. Raw form must be UTF-8; JSON form must be a JSON string. It must be nonempty and contain no NUL. A path parameter accepts a string literal or text result reference and emits exactly one argv item. Path output uses the existing text binding type. A leading `~/` (or `~` alone) in a path parameter's value expands to the home directory before the applet sees it, for command applets and in-process `fs.*` applets alike; `~user` is not expanded. Argv text that is not a path parameter, and every string parameter, stay literal. |
 | `integer` | JSON signed 64-bit integer. |
 | `number` | Any finite JSON number, including integers and fractional values. |
 | `boolean` | JSON boolean. |

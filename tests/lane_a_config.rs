@@ -1,8 +1,13 @@
 //! Strict YAML, TOML and INI subsets: parse to JSON and stringify from JSON.
 //! Portable: no process is spawned and no file is read.
 
-use flow::applets::{execute, AppletError};
+use flow::applets::{
+    execute, execute_with_context, AppletError, AppletErrorKind, ExecutionBudgetExceeded,
+    ExecutionContext,
+};
 use serde_json::{json, Map, Value};
+use std::cell::Cell;
+use std::time::Instant;
 
 fn args(value: Value) -> Map<String, Value> {
     value.as_object().cloned().unwrap_or_default()
@@ -393,4 +398,177 @@ fn stdin_is_used_when_text_is_absent() {
     assert_eq!(value, json!({"a": 1}));
     let value = execute("ini.parse", &Map::new(), b"a = 1\n").unwrap();
     assert_eq!(value, json!({"a": "1"}));
+}
+
+// Resource limits: nesting, dotted-key components, value counts, input size,
+// line-linear error reporting and cooperative cancellation.
+
+fn parse_timed(operation: &str, text: &str) -> (Result<Value, AppletError>, std::time::Duration) {
+    let started = Instant::now();
+    let result = parse(operation, text);
+    (result, started.elapsed())
+}
+
+#[test]
+fn toml_dotted_keys_and_headers_are_bounded_by_the_nesting_limit() {
+    let sixty_four = vec!["a"; 64].join(".");
+    assert!(toml(&format!("{sixty_four} = 1\n")).is_ok());
+    let sixty_five = vec!["a"; 65].join(".");
+    assert!(toml(&format!("{sixty_five} = 1\n")).is_err());
+
+    let huge_key = vec!["a"; 10_000].join(".");
+    let (result, elapsed) = parse_timed("toml.parse", &format!("{huge_key} = 1\n"));
+    let error = result.unwrap_err();
+    assert!(error.message.contains("exceeds"), "{}", error.message);
+    assert!(elapsed.as_secs_f64() < 5.0, "dotted key took {elapsed:?}");
+
+    let (result, elapsed) = parse_timed("toml.parse", &format!("[{huge_key}]\nx = 1\n"));
+    assert!(result.unwrap_err().message.contains("exceeds"));
+    assert!(elapsed.as_secs_f64() < 5.0, "deep header took {elapsed:?}");
+}
+
+#[test]
+fn toml_inline_table_dotted_keys_share_the_nesting_budget() {
+    let deep_inline = format!("x = {{ {} = 1 }}\n", vec!["a"; 64].join("."));
+    assert!(toml(&deep_inline).is_err());
+    let at_limit = format!("x = {{ {} = 1 }}\n", vec!["a"; 63].join("."));
+    assert!(toml(&at_limit).is_ok());
+}
+
+#[test]
+fn oversized_inputs_fail_before_parsing_in_every_format() {
+    let big = "a = 1\n".repeat(3_000_000);
+    assert!(big.len() > 16 * 1024 * 1024);
+    for operation in ["toml.parse", "yaml.parse", "ini.parse"] {
+        let (result, elapsed) = parse_timed(operation, &big);
+        let error = result.unwrap_err();
+        assert!(
+            error.message.contains("byte limit"),
+            "{operation}: {}",
+            error.message
+        );
+        assert!(elapsed.as_secs_f64() < 2.0, "{operation} took {elapsed:?}");
+    }
+}
+
+#[test]
+fn toml_line_numbers_are_correct_without_quadratic_rescans() {
+    let mut document = String::new();
+    for index in 0..50_000 {
+        document.push_str(&format!("k{index} = 1\n"));
+    }
+    document.push_str("bad line\n");
+    let (result, elapsed) = parse_timed("toml.parse", &document);
+    assert!(result.unwrap_err().message.contains("toml line 50001"));
+    assert!(
+        elapsed.as_secs_f64() < 5.0,
+        "line-numbered error took {elapsed:?}"
+    );
+}
+
+#[test]
+fn toml_large_flat_array_parses_in_linear_time() {
+    let mut document = String::from("a = [");
+    for _ in 0..400_000 {
+        document.push_str("1,");
+    }
+    document.push_str("1]\n");
+    assert!(document.len() > 800_000 && document.len() < 1_100_000);
+    let (result, elapsed) = parse_timed("toml.parse", &document);
+    let value = result.unwrap();
+    assert_eq!(value["a"].as_array().unwrap().len(), 400_001);
+    assert!(elapsed.as_secs_f64() < 10.0, "1 MB array took {elapsed:?}");
+}
+
+#[test]
+fn value_cap_applies_to_toml_arrays_and_yaml_flow_collections() {
+    let mut toml_document = String::from("a = [");
+    for _ in 0..1_100_000 {
+        toml_document.push_str("1,");
+    }
+    toml_document.push_str("1]\n");
+    let error = toml(&toml_document).unwrap_err();
+    assert!(error.message.contains("value limit"), "{}", error.message);
+
+    let flow = format!("[{}1]", "1,".repeat(1_100_000));
+    let error = yaml(&flow).unwrap_err();
+    assert!(error.message.contains("value limit"), "{}", error.message);
+}
+
+#[test]
+fn deep_yaml_flow_nesting_is_bounded() {
+    let deep = format!("{}{}", "[".repeat(100), "]".repeat(100));
+    let error = yaml(&deep).unwrap_err();
+    assert!(error.message.contains("nesting"), "{}", error.message);
+    let deep_map = format!("{}1{}", "{a: ".repeat(100), "}".repeat(100));
+    assert!(yaml(&deep_map).is_err());
+}
+
+#[test]
+fn ini_value_cap_bounds_many_distinct_keys() {
+    let mut document = String::new();
+    for index in 0..1_100_000 {
+        document.push_str(&format!("k{index}=1\n"));
+    }
+    assert!(document.len() < 16 * 1024 * 1024);
+    let error = ini(&document).unwrap_err();
+    assert!(error.message.contains("value limit"), "{}", error.message);
+}
+
+/// A context that reports cancellation after a few checkpoints. Checkpoints run
+/// every 256 parser steps, so reaching cancellation proves the parse was
+/// interrupted in the middle of the input rather than only at entry.
+fn cancel_after(checks: usize) -> impl Fn() -> Result<(), ExecutionBudgetExceeded> {
+    let calls = Cell::new(0usize);
+    move || {
+        let next = calls.get() + 1;
+        calls.set(next);
+        if next > checks {
+            Err(ExecutionBudgetExceeded::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn run_with_checkpoint(
+    operation: &str,
+    text: &str,
+    checkpoint: &dyn Fn() -> Result<(), ExecutionBudgetExceeded>,
+) -> Result<Value, AppletError> {
+    let context = ExecutionContext::new(checkpoint);
+    let arguments = json!({ "text": text });
+    let arguments = arguments.as_object().cloned().unwrap_or_default();
+    execute_with_context(
+        operation,
+        &arguments,
+        &[],
+        std::path::Path::new("."),
+        &context,
+    )
+}
+
+#[test]
+fn cancelled_context_stops_long_toml_yaml_and_ini_parses() {
+    let mut toml_document = String::from("a = [");
+    for _ in 0..400_000 {
+        toml_document.push_str("1,");
+    }
+    toml_document.push_str("1]\n");
+    let checkpoint = cancel_after(3);
+    let error = run_with_checkpoint("toml.parse", &toml_document, &checkpoint).unwrap_err();
+    assert_eq!(error.kind, AppletErrorKind::Cancelled);
+
+    let yaml_flow = format!("[{}1]", "1,".repeat(400_000));
+    let checkpoint = cancel_after(3);
+    let error = run_with_checkpoint("yaml.parse", &yaml_flow, &checkpoint).unwrap_err();
+    assert_eq!(error.kind, AppletErrorKind::Cancelled);
+
+    let mut ini_document = String::new();
+    for index in 0..100_000 {
+        ini_document.push_str(&format!("k{index}=1\n"));
+    }
+    let checkpoint = cancel_after(3);
+    let error = run_with_checkpoint("ini.parse", &ini_document, &checkpoint).unwrap_err();
+    assert_eq!(error.kind, AppletErrorKind::Cancelled);
 }

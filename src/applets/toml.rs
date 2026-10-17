@@ -13,10 +13,13 @@
 //! Stringify writes scalars and arrays first, then sub-tables and arrays of
 //! tables. Null fails because TOML has no null value.
 
-use super::config::{check_depth, count_value, insert_unique, integer_in_range, syntax};
+use super::config::{
+    check_depth, count_value, insert_unique, integer_in_range, syntax, MAX_CONFIG_DEPTH,
+};
 use super::text::{check_text_size, text_input};
 use super::{checkpoint_work, invalid, AppletError, ExecutionContext};
 use serde_json::{Map, Value};
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::fmt::Display;
 
@@ -34,7 +37,9 @@ pub(super) fn parse(
         text,
         bytes: text.as_bytes(),
         pos: 0,
+        line_cache: Cell::new((0, 1)),
         context,
+        ticks: 0,
         statements: 0,
         values: 0,
         root: Map::new(),
@@ -51,7 +56,10 @@ struct Parser<'a, 'c, 'x> {
     text: &'a str,
     bytes: &'a [u8],
     pos: usize,
+    /// Last (byte offset, line number) computed, so line lookups stay linear.
+    line_cache: Cell<(usize, usize)>,
     context: &'c ExecutionContext<'x>,
+    ticks: usize,
     statements: usize,
     values: usize,
     root: Map<String, Value>,
@@ -69,13 +77,21 @@ impl Parser<'_, '_, '_> {
         syntax(FORMAT, self.line(), message)
     }
 
+    /// One-based line of the cursor. The position only moves forward, so each
+    /// lookup scans only the bytes since the previous lookup.
     fn line(&self) -> usize {
         let end = self.pos.min(self.bytes.len());
-        self.bytes[..end]
+        let (mut cached_at, mut line) = self.line_cache.get();
+        if end < cached_at {
+            cached_at = 0;
+            line = 1;
+        }
+        line += self.bytes[cached_at..end]
             .iter()
             .filter(|byte| **byte == b'\n')
-            .count()
-            + 1
+            .count();
+        self.line_cache.set((end, line));
+        line
     }
 
     fn peek(&self) -> Option<u8> {
@@ -162,18 +178,25 @@ impl Parser<'_, '_, '_> {
         }
     }
 
+    /// Parse a dotted key. Each component counts toward the value cap, and the
+    /// path is rejected as soon as it would exceed the nesting limit, so a
+    /// 10,000-component key fails after 65 components rather than building the
+    /// whole vector.
     fn key_path(&mut self) -> Result<Vec<String>, AppletError> {
-        let mut keys = vec![self.key()?];
+        let mut keys = Vec::new();
         loop {
+            if keys.len() == MAX_CONFIG_DEPTH {
+                return Err(self.error(format!("dotted key exceeds {MAX_CONFIG_DEPTH} components")));
+            }
+            count_value(&mut self.values)?;
+            keys.push(self.key()?);
             self.skip_spaces();
             if self.peek() != Some(b'.') {
-                break;
+                return Ok(keys);
             }
             self.pos += 1;
             self.skip_spaces();
-            keys.push(self.key()?);
         }
-        Ok(keys)
     }
 
     fn key(&mut self) -> Result<String, AppletError> {
@@ -320,10 +343,19 @@ impl Parser<'_, '_, '_> {
         let line = self.line();
         let table = navigate_mut(&mut self.root, &current)
             .map_err(|_| syntax(FORMAT, line, "current table is not a table"))?;
-        insert_path(table, &keys, value, FORMAT, line)
+        insert_path(table, &keys, value, FORMAT, line, current.len())
+    }
+
+    /// Cooperative cancellation point, checked every 256 steps so a long flat
+    /// array or inline table can be interrupted by a timeout or cancellation.
+    fn tick(&mut self) -> Result<(), AppletError> {
+        checkpoint_work(self.context, self.ticks)?;
+        self.ticks += 1;
+        Ok(())
     }
 
     fn value(&mut self, depth: usize) -> Result<Value, AppletError> {
+        self.tick()?;
         check_depth(depth, FORMAT, self.line())?;
         count_value(&mut self.values)?;
         match self.peek() {
@@ -356,6 +388,7 @@ impl Parser<'_, '_, '_> {
         self.pos += 1;
         let mut items = Vec::new();
         loop {
+            self.tick()?;
             self.skip_blank();
             if self.peek() == Some(b']') {
                 self.pos += 1;
@@ -384,6 +417,7 @@ impl Parser<'_, '_, '_> {
             return Ok(Value::Object(map));
         }
         loop {
+            self.tick()?;
             self.skip_spaces();
             let keys = self.key_path()?;
             self.skip_spaces();
@@ -394,7 +428,16 @@ impl Parser<'_, '_, '_> {
             self.skip_spaces();
             let value = self.value(depth + 1)?;
             let line = self.line();
-            insert_path(&mut map, &keys, value, FORMAT, line)?;
+            // The inline table sits one level below its enclosing table, and
+            // `depth` counts the array and inline-table nesting around it.
+            insert_path(
+                &mut map,
+                &keys,
+                value,
+                FORMAT,
+                line,
+                self.current.len() + 1 + depth,
+            )?;
             self.skip_spaces();
             match self.peek() {
                 Some(b',') => self.pos += 1,
@@ -608,13 +651,24 @@ fn navigate_mut<'m>(
     Ok(table)
 }
 
+/// Insert a value at a dotted path below `map`. `base_depth` is the nesting
+/// already consumed by the table that owns `map`, so the total cannot exceed the
+/// shared limit.
 fn insert_path(
     map: &mut Map<String, Value>,
     keys: &[String],
     value: Value,
     format: &str,
     line: usize,
+    base_depth: usize,
 ) -> Result<(), AppletError> {
+    if base_depth.saturating_add(keys.len()) > MAX_CONFIG_DEPTH {
+        return Err(syntax(
+            format,
+            line,
+            format!("key nesting exceeds {MAX_CONFIG_DEPTH} levels"),
+        ));
+    }
     let (last, prefix) = keys.split_last().expect("key paths are nonempty");
     let mut table = map;
     for key in prefix {

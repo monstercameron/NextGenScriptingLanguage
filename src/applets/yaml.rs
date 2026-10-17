@@ -34,9 +34,11 @@ pub(super) fn parse(
     let mut parser = Parser {
         lines,
         pos: 0,
-        context,
-        ticks: 0,
-        values: 0,
+        budget: Budget {
+            context,
+            ticks: 0,
+            values: 0,
+        },
     };
     parser.document()
 }
@@ -80,19 +82,36 @@ enum Chomp {
     Keep,
 }
 
-struct Parser<'c, 'x> {
-    lines: Vec<Line>,
-    pos: usize,
+/// Shared per-parse limits: a count of values and a cooperative cancellation
+/// checkpoint. Block lines, flow items and scalars all draw from it, so one long
+/// flow collection on a single line is bounded and cancellable too.
+struct Budget<'c, 'x> {
     context: &'c ExecutionContext<'x>,
     ticks: usize,
     values: usize,
 }
 
-impl Parser<'_, '_> {
+impl Budget<'_, '_> {
     fn tick(&mut self) -> Result<(), AppletError> {
         checkpoint_work(self.context, self.ticks)?;
         self.ticks += 1;
         Ok(())
+    }
+
+    fn count(&mut self) -> Result<(), AppletError> {
+        count_value(&mut self.values)
+    }
+}
+
+struct Parser<'c, 'x> {
+    lines: Vec<Line>,
+    pos: usize,
+    budget: Budget<'c, 'x>,
+}
+
+impl Parser<'_, '_> {
+    fn tick(&mut self) -> Result<(), AppletError> {
+        self.budget.tick()
     }
 
     /// Skip blank lines and comment-only lines between structural lines.
@@ -159,7 +178,7 @@ impl Parser<'_, '_> {
         if text.starts_with('|') || text.starts_with('>') {
             return self.block_scalar(&text, number, None);
         }
-        parse_inline(&text, number, depth)
+        parse_inline(&text, number, depth, &mut self.budget)
     }
 
     fn mapping(&mut self, indent: usize, depth: usize) -> Result<Value, AppletError> {
@@ -201,7 +220,7 @@ impl Parser<'_, '_> {
             };
             self.pos += 1;
             let value = self.entry_value(&rest, indent, number, depth)?;
-            count_value(&mut self.values)?;
+            self.budget.count()?;
             insert_unique(&mut map, key, value, FORMAT, number)?;
         }
         Ok(Value::Object(map))
@@ -233,7 +252,7 @@ impl Parser<'_, '_> {
         if rest.starts_with('|') || rest.starts_with('>') {
             return self.block_scalar(rest, number, Some(parent));
         }
-        parse_inline(rest, number, depth)
+        parse_inline(rest, number, depth, &mut self.budget)
     }
 
     fn sequence(&mut self, indent: usize, depth: usize) -> Result<Value, AppletError> {
@@ -287,9 +306,9 @@ impl Parser<'_, '_> {
                 items.push(self.block(child, depth + 1)?);
             } else {
                 self.pos += 1;
-                items.push(parse_inline(&content, number, depth)?);
+                items.push(parse_inline(&content, number, depth, &mut self.budget)?);
             }
-            count_value(&mut self.values)?;
+            self.budget.count()?;
         }
         Ok(Value::Array(items))
     }
@@ -439,7 +458,12 @@ fn split_key(text: &str, number: usize) -> Result<Option<(String, String)>, Appl
 }
 
 /// Parse a scalar or one-line flow collection that is not a block structure.
-fn parse_inline(text: &str, number: usize, depth: usize) -> Result<Value, AppletError> {
+fn parse_inline(
+    text: &str,
+    number: usize,
+    depth: usize,
+    budget: &mut Budget<'_, '_>,
+) -> Result<Value, AppletError> {
     let text = text.trim();
     let chars: Vec<char> = text.chars().collect();
     match chars.first() {
@@ -456,6 +480,7 @@ fn parse_inline(text: &str, number: usize, depth: usize) -> Result<Value, Applet
                 chars: &chars,
                 pos: 0,
                 number,
+                budget,
             };
             let value = flow.collection(depth)?;
             let rest: String = chars[flow.pos..].iter().collect();
@@ -678,13 +703,14 @@ fn is_float(text: &str) -> bool {
 }
 
 /// A one-line flow collection, such as `[a, "b"]` or `{key: value}`.
-struct Flow<'a> {
+struct Flow<'a, 'c, 'x> {
     chars: &'a [char],
     pos: usize,
     number: usize,
+    budget: &'a mut Budget<'c, 'x>,
 }
 
-impl Flow<'_> {
+impl Flow<'_, '_, '_> {
     fn fail(&self, message: &str) -> AppletError {
         syntax(FORMAT, self.number, message)
     }
@@ -702,6 +728,7 @@ impl Flow<'_> {
         if open == Some('[') {
             let mut items = Vec::new();
             loop {
+                self.budget.tick()?;
                 self.skip_spaces();
                 match self.chars.get(self.pos) {
                     Some(']') => {
@@ -727,6 +754,7 @@ impl Flow<'_> {
         } else {
             let mut map = Map::new();
             loop {
+                self.budget.tick()?;
                 self.skip_spaces();
                 match self.chars.get(self.pos) {
                     Some('}') => {
@@ -760,6 +788,7 @@ impl Flow<'_> {
     }
 
     fn value(&mut self, depth: usize) -> Result<Value, AppletError> {
+        self.budget.count()?;
         self.skip_spaces();
         match self.chars.get(self.pos) {
             Some('[') | Some('{') => self.collection(depth),

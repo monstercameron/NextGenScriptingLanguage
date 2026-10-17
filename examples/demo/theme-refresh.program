@@ -1,12 +1,13 @@
+# execute-policy: allow writes process
 # Omarchy-style theme refresh: render the templates into a theme directory, point the
 # current-theme link at it, then reload the compositor. The reload is the step that
-# can fail; `execute resume` continues from it after the cause is fixed.
+# can fail; `execute repair` fixes its arguments and `execute resume` continues from it.
 # See examples/demo/README.md for the inputs and the full walk-through.
-accept theme_name as text
-accept themes_root as text
-accept current_link as text
-accept templates as text
-accept values_json as text
+accept theme_name as text described as "Directory name for the theme, for example dark"
+accept themes_root as text described as "Directory that holds the theme directories"
+accept current_link as text described as "Path of the current-theme symbolic link"
+accept templates as text described as "Glob of templates to render"
+accept values_json as text described as "JSON object of template values"
 
 run path.join with parts [themes_root, theme_name] as theme_dir
 run fs.ensure_dir with path theme_dir as made_dir

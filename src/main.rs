@@ -215,6 +215,9 @@ fn execute() -> Result<()> {
     if arguments.first().is_some_and(|a| a == "checkpoint") {
         std::process::exit(flow::agent::checkpoint::cli(&arguments[1..])?);
     }
+    if arguments.first().is_some_and(|a| a == "help") {
+        std::process::exit(flow::agent::help::cli(&arguments[1..])?);
+    }
     let args = match parse_args(arguments)? {
         Some(args) => args,
         None => return Ok(()),

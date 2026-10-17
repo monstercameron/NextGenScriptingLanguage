@@ -174,10 +174,7 @@ mod links {
         let root = tempfile::tempdir().unwrap();
         layout(root.path());
         policy(root.path());
-        let output = run(
-            root.path(),
-            "use folder \"inside/dir-link\"\n",
-        );
+        let output = run(root.path(), "use folder \"inside/dir-link\"\n");
         let text = shown(&output);
         assert!(!output.status.success(), "{text}");
         assert!(

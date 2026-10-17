@@ -174,6 +174,11 @@ fn prefill_stdin_pipe(data: Vec<u8>) -> Result<(std::io::PipeReader, Option<Stdi
 struct ChildObserver {
     #[cfg(target_os = "macos")]
     queue: OwnedFd,
+    #[cfg(target_os = "linux")]
+    epoll: OwnedFd,
+    // Linux pidfds stay open while registered: closing one removes it from the set.
+    #[cfg(target_os = "linux")]
+    pidfds: Mutex<Vec<OwnedFd>>,
 }
 impl ChildObserver {
     #[cfg(target_os = "macos")]
@@ -189,7 +194,7 @@ impl ChildObserver {
         Some(Self { queue })
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     fn new() -> Option<Self> {
         None
     }
@@ -199,11 +204,12 @@ impl ChildObserver {
         self.queue.as_raw_fd()
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     fn raw_fd(&self) -> libc::c_int {
         -1
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn observe(&self, pid: u32) -> std::io::Result<()> {
         #[cfg(target_os = "macos")]
         {
@@ -238,6 +244,7 @@ impl ChildObserver {
         Ok(())
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn drain(&self) -> std::io::Result<()> {
         #[cfg(target_os = "macos")]
         {
@@ -273,5 +280,139 @@ impl ChildObserver {
         }
         #[cfg(not(target_os = "macos"))]
         Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ChildObserver {
+    // An epoll set of pidfds: the set becomes readable as soon as any observed
+    // child exits, so the wait loop wakes on the exit itself, not on a timer.
+    fn new() -> Option<Self> {
+        let fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+        if fd == -1 {
+            return None;
+        }
+        Some(Self {
+            epoll: unsafe { OwnedFd::from_raw_fd(fd) },
+            pidfds: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn raw_fd(&self) -> libc::c_int {
+        self.epoll.as_raw_fd()
+    }
+
+    fn observe(&self, pid: u32) -> std::io::Result<()> {
+        // pidfd_open needs Linux 5.3. Older kernels fail with ENOSYS and the
+        // caller falls back to timed polling; ESRCH means the child is gone.
+        let raw =
+            unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0 as libc::c_uint) };
+        if raw == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let pidfd = unsafe { OwnedFd::from_raw_fd(raw as libc::c_int) };
+        let mut event = libc::epoll_event {
+            events: libc::EPOLLIN as u32,
+            u64: raw as u64,
+        };
+        let added = unsafe {
+            libc::epoll_ctl(
+                self.epoll.as_raw_fd(),
+                libc::EPOLL_CTL_ADD,
+                pidfd.as_raw_fd(),
+                &mut event,
+            )
+        };
+        if added == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        self.pidfds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(pidfd);
+        Ok(())
+    }
+
+    fn drain(&self) -> std::io::Result<()> {
+        let mut events: [libc::epoll_event; 16] = unsafe { std::mem::zeroed() };
+        loop {
+            let ready = unsafe {
+                libc::epoll_wait(
+                    self.epoll.as_raw_fd(),
+                    events.as_mut_ptr(),
+                    events.len() as libc::c_int,
+                    0,
+                )
+            };
+            if ready == -1 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    return Ok(());
+                }
+                return Err(error);
+            }
+            if ready == 0 {
+                return Ok(());
+            }
+            let mut pidfds = self
+                .pidfds
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for event in &events[..ready as usize] {
+                // Each registration stores its pidfd number in `u64`.
+                let fd = event.u64 as libc::c_int;
+                unsafe {
+                    libc::epoll_ctl(
+                        self.epoll.as_raw_fd(),
+                        libc::EPOLL_CTL_DEL,
+                        fd,
+                        std::ptr::null_mut(),
+                    );
+                }
+                pidfds.retain(|pidfd| pidfd.as_raw_fd() != fd);
+            }
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod pidfd_observer_tests {
+    use super::*;
+
+    #[test]
+    fn exited_child_wakes_observer_before_it_is_reaped() {
+        let observer = ChildObserver::new().expect("creating epoll set");
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawning child");
+        match observer.observe(child.id()) {
+            Ok(()) => {}
+            Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => {
+                // Kernels before 5.3 have no pidfd_open; timed polling covers them.
+                child.wait().expect("waiting for child");
+                return;
+            }
+            Err(error) => panic!("observing child: {error}"),
+        }
+        // The child is a zombie until waited on, so its pidfd is already readable.
+        let mut descriptor = libc::pollfd {
+            fd: observer.raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 10_000) }, 1);
+        observer.drain().expect("draining exit notification");
+        let mut quiet = libc::pollfd {
+            fd: observer.raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert_eq!(
+            unsafe { libc::poll(&mut quiet, 1, 0) },
+            0,
+            "a drained observer must not stay readable"
+        );
+        assert!(child.wait().expect("waiting for child").success());
     }
 }

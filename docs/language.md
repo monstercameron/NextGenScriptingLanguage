@@ -552,6 +552,12 @@ can be selected as `integer`; there is no numeric coercion or arithmetic.
 JSON null, nested objects/arrays and escaped NUL can be retained with `json` and
 encoded again. Selecting `text` or `list of text` rejects NUL at that boundary.
 
+`use value <value>` sets the pipeline input to a text literal or text binding's
+UTF-8 bytes, so a following `pipe to` or `then` native stage reads it. It launches
+no process; `explain` shows it as launching no process. Only text is accepted.
+Structured values are rejected before effects; encode them first with
+`then encode value as json`.
+
 `accept data as json` accepts a complete JSON value through `--input`, for example
 `--input 'data={"count":7}'`. Inspection and live state expose ordinary JSON
 objects and arrays. Object, null and numeric literals are also available in

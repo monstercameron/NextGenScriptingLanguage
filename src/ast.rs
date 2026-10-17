@@ -225,6 +225,10 @@ pub enum StepKind {
     UseFolder {
         path: Value,
     },
+    /// Sets the pipeline input to a text value's UTF-8 bytes; launches no process.
+    UseValue {
+        source: Value,
+    },
     Read {
         path: Value,
         binding: Option<String>,

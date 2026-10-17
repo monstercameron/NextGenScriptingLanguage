@@ -3481,6 +3481,7 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::Finally
             | StepKind::EndTry
             | StepKind::UseFolder { .. }
+            | StepKind::UseValue { .. }
             | StepKind::Read { .. }
             | StepKind::ReadStdin { .. }
             | StepKind::InspectJob { .. }
@@ -4311,6 +4312,9 @@ fn run_finite_state(
                     if !cwd.is_dir() {
                         bail!("line {}: use folder requires a directory", step.line);
                     }
+                }
+                StepKind::UseValue { source } => {
+                    data = Input::Bytes(text_value_bytes(source, &bindings, step.line)?);
                 }
                 StepKind::Read { binding, .. }
                 | StepKind::ReadStdin { binding }

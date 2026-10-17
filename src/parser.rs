@@ -1105,8 +1105,17 @@ pub(crate) fn is_input_header(line: &str) -> bool {
 }
 
 fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
+    if word_is(tokens.get(1), "value") {
+        if tokens.len() == 2 {
+            bail!("expected `use value <value>`");
+        }
+        let mut cursor = 2;
+        let source = parse_value(tokens, &mut cursor)?;
+        ensure_end(tokens, cursor)?;
+        return Ok(StepKind::UseValue { source });
+    }
     if !word_is(tokens.get(1), "folder") {
-        bail!("expected `use folder <value>`");
+        bail!("expected `use folder <value>` or `use value <value>`");
     }
     let mut cursor = 2;
     let path = parse_value(tokens, &mut cursor)?;

@@ -52,6 +52,9 @@
       "include": "#folder"
     },
     {
+      "include": "#use-value"
+    },
+    {
       "include": "#save"
     },
     {
@@ -669,6 +672,21 @@
       "beginCaptures": {
         "1": {
           "name": "keyword.control.cwd.execute"
+        }
+      }
+    },
+    "use-value": {
+      "name": "meta.use-value.execute",
+      "begin": "^[ \\t]*(use[ \\t]+value)(?=[ \\t]|$)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#values"
+        }
+      ],
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.io.execute"
         }
       }
     },

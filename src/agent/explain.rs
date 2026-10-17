@@ -256,6 +256,7 @@ impl Walker<'_> {
                 self.change_folder(&mut row, path);
                 self.rows.push(row);
             }
+            StepKind::UseValue { .. } => self.push_plain(line, "use_value", scope),
             StepKind::Read { path, .. } => {
                 let mut row = Row::plain(line, "read", scope);
                 row.reads = Some(true);

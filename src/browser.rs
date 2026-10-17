@@ -369,6 +369,9 @@ impl BrowserSession {
                     StepKind::ReadCallInput { binding } => {
                         bind_text(binding.as_deref(), &data, &mut bindings)?
                     }
+                    StepKind::UseValue { source } => {
+                        data = text_value_bytes(source, &bindings, step.line)?;
+                    }
                     StepKind::UseFolder { path } => {
                         let next = path_value(path, &bindings, &cwd)?;
                         let next = absolute(&next.to_string_lossy(), &cwd.to_string_lossy())?;

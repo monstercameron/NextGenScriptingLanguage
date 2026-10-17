@@ -1138,6 +1138,12 @@ fn validate_range(
                     }
                     check_path(path, &flow.names)?;
                 }
+                StepKind::UseValue { source } => {
+                    validate_text_operand(source, flow, "use value")?;
+                    flow.has_data = true;
+                    flow.stdout_unavailable = false;
+                    flow.started = true;
+                }
                 StepKind::Read { binding: name, .. }
                 | StepKind::ReadStdin { binding: name }
                 | StepKind::ReadCallInput { binding: name } => {
@@ -1552,6 +1558,7 @@ fn validate_range(
                                 StepKind::Read { .. }
                                     | StepKind::ReadStdin { .. }
                                     | StepKind::ReadCallInput { .. }
+                                    | StepKind::UseValue { .. }
                                     | StepKind::Invoke { .. }
                                     | StepKind::EncodeJson { .. }
                             )
@@ -1907,6 +1914,9 @@ pub fn explain_with_inputs(
                 "use folder {:?}",
                 resolve(path, &known).unwrap_or_else(|_| path.clone())
             ),
+            StepKind::UseValue { source } => {
+                format!("use value {source:?} as pipeline input; launches no process")
+            }
             StepKind::Read { path, .. } => format!(
                 "read {:?}",
                 resolve(path, &known).unwrap_or_else(|_| path.clone())
@@ -2103,6 +2113,21 @@ fn contains_reference(value: &Value) -> bool {
         _ => false,
     }
 }
+
+/// UTF-8 bytes of a text value for `use value`; structured values must be encoded first.
+fn text_value_bytes(
+    value: &Value,
+    bindings: &BTreeMap<String, Value>,
+    line: usize,
+) -> Result<Vec<u8>> {
+    match structured_source(value, bindings)?.as_ref() {
+        Value::String(text) => Ok(text.as_bytes().to_vec()),
+        _ => bail!(
+            "line {line}: use value requires text; encode structured values first with `then encode ... as json`"
+        ),
+    }
+}
+
 fn structured_source<'a>(
     value: &'a Value,
     bindings: &'a BTreeMap<String, Value>,

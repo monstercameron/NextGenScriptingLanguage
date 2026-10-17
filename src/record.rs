@@ -21,7 +21,7 @@
 
 use crate::manifest::Registry;
 use crate::runtime::observe::{Observer, StepRequest, StepResult};
-use crate::security::{self, SecretRedactor};
+use crate::security::{self, PersistenceKind, SecretRedactor, SensitivitySet};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
@@ -77,6 +77,8 @@ pub struct RecordStart<'a> {
 pub struct Recorder {
     directory: PathBuf,
     redactor: Arc<SecretRedactor>,
+    /// Consulted for the data-flow persistence policy before any output is kept.
+    registry: Registry,
     started: Instant,
     started_unix_ms: u128,
     plan_sha256: String,
@@ -91,8 +93,42 @@ struct RecorderState {
     blob_bytes: usize,
     truncated: bool,
     trace: File,
-    /// Redacted streamed stdout, in order, bounded by `MAX_BLOB_BYTES`.
+    /// Raw streamed stdout, in order, bounded by `MAX_BLOB_BYTES`. It is redacted
+    /// as a whole when the record is finished, so a secret split across two
+    /// streamed writes is still found.
     terminal: Vec<u8>,
+    /// Union of the sensitivity labels of every observed step.
+    labels: SensitivitySet,
+    /// Whether any observed applet received declared secret environment.
+    secret_environment: bool,
+}
+
+/// The plan as it is stored: redacted in full, then truncated, and hashed after
+/// redaction. Redacting before truncation keeps a secret that straddles the limit
+/// from surviving as a fragment, and hashing the redacted plan means the hash cannot
+/// confirm a guess at a secret.
+fn prepare_plan(redactor: &SecretRedactor, plan: &str) -> (String, String) {
+    let redacted = redactor.redact_text(plan);
+    let sha256 = sha256_hex(redacted.as_bytes());
+    (truncate_text(&redacted, MAX_PLAN_BYTES), sha256)
+}
+
+/// Whether the data-flow persistence policy lets output with these labels be kept
+/// in a record. Output of an applet that receives declared secret environment is
+/// never kept, whatever the policy says.
+fn persistence_allowed(
+    registry: &Registry,
+    labels: &SensitivitySet,
+    secret_environment: bool,
+) -> bool {
+    !secret_environment
+        && security::authorize_persistence_set(
+            registry,
+            "workflow.record",
+            PersistenceKind::Record,
+            labels,
+        )
+        .is_ok()
 }
 
 impl Recorder {
@@ -110,14 +146,15 @@ impl Recorder {
         let environment = std::env::vars_os().collect::<Vec<_>>();
         security::register_declared_environment_secrets(start.registry, &environment)
             .map_err(|error| anyhow!("registering declared secrets: {error}"))?;
-        let plan_text = truncate_text(start.plan, MAX_PLAN_BYTES);
         let redactor = security::secret_redactor(start.registry);
+        let (plan_text, plan_sha256) = prepare_plan(&redactor, start.plan);
         Ok(Self {
             directory: start.directory.to_path_buf(),
+            registry: start.registry.clone(),
             started: Instant::now(),
             started_unix_ms: unix_ms(),
-            plan_sha256: sha256_hex(start.plan.as_bytes()),
-            plan_text: redactor.redact_text(&plan_text),
+            plan_sha256,
+            plan_text,
             inputs: redact_json(&redactor, &start.inputs),
             declared_secret_names: security::declared_secret_environment_names(start.registry),
             redactor,
@@ -127,6 +164,8 @@ impl Recorder {
                 truncated: false,
                 trace,
                 terminal: Vec::new(),
+                labels: SensitivitySet::empty(),
+                secret_environment: false,
             }),
         })
     }
@@ -135,12 +174,15 @@ impl Recorder {
     pub fn finish(&self, summary: &RunSummary) -> Result<()> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.trace.flush()?;
-        let output = self.blob(&mut state, &self.redactor.redact_bytes(&summary.output))?;
         // The terminal stream is the streamed output followed by the final value,
-        // which the CLI prints after the run.
-        let mut terminal = state.terminal.clone();
-        terminal.extend_from_slice(&self.redactor.redact_bytes(&summary.output));
-        let terminal = self.blob(&mut state, &terminal)?;
+        // which the CLI prints after the run. Both are redacted as whole buffers.
+        let mut raw_terminal = state.terminal.clone();
+        raw_terminal.extend_from_slice(&summary.output);
+        let terminal = self.redactor.redact_bytes(&raw_terminal);
+        let output_bytes = self.redactor.redact_bytes(&summary.output);
+        let persist = persistence_allowed(&self.registry, &state.labels, state.secret_environment);
+        let output = self.blob(&mut state, &output_bytes, persist)?;
+        let terminal = self.blob(&mut state, &terminal, persist)?;
         let error = summary
             .error
             .as_ref()
@@ -180,9 +222,20 @@ impl Recorder {
         write_private(&self.directory.join(RUN_FILE), text.as_bytes())
     }
 
-    /// Store bytes as a content-addressed blob and describe them. Past the budget,
-    /// the description keeps the hash and count but names no blob.
-    fn blob(&self, state: &mut RecorderState, bytes: &[u8]) -> Result<Json> {
+    /// Store bytes as a content-addressed blob and describe them. `bytes` must
+    /// already be redacted, so the hash is of the stored content. When persistence is
+    /// not allowed, only the count is kept: no bytes and no hash, since a hash of
+    /// withheld content would confirm guesses about it. Past the budget, the
+    /// description keeps the hash and count but names no blob.
+    fn blob(&self, state: &mut RecorderState, bytes: &[u8], persist: bool) -> Result<Json> {
+        if !persist {
+            return Ok(json!({
+                "bytes": bytes.len(),
+                "blob": null,
+                "withheld": "policy",
+                "truncated": false,
+            }));
+        }
         let hash = sha256_hex(bytes);
         let within_budget = state.blob_bytes.saturating_add(bytes.len()) <= MAX_BLOB_BYTES;
         if !within_budget {
@@ -218,6 +271,7 @@ impl Observer for Recorder {
     }
 
     fn finished(&self, request: &StepRequest, wall: Duration, result: &StepResult) -> Result<()> {
+        // Redact each buffer in full before it is hashed, tailed or stored.
         let stdout = self.redactor.redact_bytes(&result.stdout);
         let stderr = self.redactor.redact_bytes(&result.stderr);
         let argv = request
@@ -232,9 +286,20 @@ impl Observer for Recorder {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let index = state.steps;
         state.steps += 1;
-        let stdout = self.blob(&mut state, &stdout)?;
-        let stderr_tail = tail(&stderr, STDERR_TAIL_BYTES);
-        let stderr = self.blob(&mut state, &stderr)?;
+        state.labels.extend(&result.sensitivity);
+        state.secret_environment |= result.secret_environment;
+        let persist = persistence_allowed(
+            &self.registry,
+            &result.sensitivity,
+            result.secret_environment,
+        );
+        let stdout = self.blob(&mut state, &stdout, persist)?;
+        let stderr_tail = if persist {
+            String::from_utf8_lossy(&tail(&stderr, STDERR_TAIL_BYTES)).into_owned()
+        } else {
+            String::new()
+        };
+        let stderr = self.blob(&mut state, &stderr, persist)?;
         let outcome = match &result.outcome {
             Some(outcome) => json!({
                 "name": outcome.name,
@@ -261,7 +326,8 @@ impl Observer for Recorder {
                 "sha256": stderr["sha256"],
                 "blob": stderr["blob"],
                 "truncated": stderr["truncated"],
-                "tail": String::from_utf8_lossy(&stderr_tail).into_owned(),
+                "withheld": stderr.get("withheld").cloned().unwrap_or(Json::Null),
+                "tail": stderr_tail,
             },
         });
         writeln!(state.trace, "{entry}")?;
@@ -273,10 +339,10 @@ impl Observer for Recorder {
     }
 
     fn terminal_output(&self, bytes: &[u8]) {
-        let redacted = self.redactor.redact_bytes(bytes);
+        // Kept raw here and redacted as a whole in `finish`.
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.terminal.len().saturating_add(redacted.len()) <= MAX_BLOB_BYTES {
-            state.terminal.extend_from_slice(&redacted);
+        if state.terminal.len().saturating_add(bytes.len()) <= MAX_BLOB_BYTES {
+            state.terminal.extend_from_slice(bytes);
         } else {
             state.truncated = true;
         }
@@ -353,6 +419,11 @@ impl StoredRecord {
     /// Read a stored blob and check its hash. A missing or truncated blob is an error.
     pub fn blob(&self, description: &Json) -> Result<Vec<u8>> {
         let Some(name) = description["blob"].as_str() else {
+            if description["withheld"] == "policy" {
+                bail!(
+                    "this output was withheld from the record by the data-flow persistence policy"
+                );
+            }
             bail!("the record kept no bytes for this output (the record was truncated)");
         };
         let expected = description["sha256"].as_str().unwrap_or_default();
@@ -604,5 +675,54 @@ mod tests {
         let redacted = redact_json(&redactor, &value);
         let text = redacted.to_string();
         assert!(!text.contains("hunter2"), "{text}");
+    }
+
+    #[test]
+    fn a_secret_straddling_the_plan_limit_never_survives_truncation() {
+        let redactor = SecretRedactor::default();
+        let secret = "SECRET-straddle-value-9731";
+        redactor.register(secret.as_bytes()).unwrap();
+        // Truncating first would keep "SECRET-str" as an unredactable fragment.
+        let plan = format!("{}{secret}tail", "x".repeat(MAX_PLAN_BYTES - 10));
+        let (stored, _) = prepare_plan(&redactor, &plan);
+        assert!(stored.len() <= MAX_PLAN_BYTES);
+        assert!(
+            !stored.contains("SECRET"),
+            "a fragment of the secret survived"
+        );
+        assert!(
+            !stored.contains("straddle"),
+            "a fragment of the secret survived"
+        );
+    }
+
+    #[test]
+    fn the_plan_hash_is_over_the_redacted_plan_not_the_raw_plan() {
+        let redactor = SecretRedactor::default();
+        let secret = "SECRET-confirmation-value-5521";
+        redactor.register(secret.as_bytes()).unwrap();
+        let plan = format!("run printf with message \"{secret}\"\n");
+        let (stored, sha256) = prepare_plan(&redactor, &plan);
+        assert_ne!(
+            sha256,
+            sha256_hex(plan.as_bytes()),
+            "the raw plan's hash leaks a guess"
+        );
+        assert_eq!(sha256, sha256_hex(stored.as_bytes()));
+    }
+
+    #[test]
+    fn persistence_policy_withholds_unknown_labels_and_secret_environment() {
+        let registry = Registry::default();
+        let _ = registry
+            .set_host_state(security::DataFlowPolicy::from_json(br#"{"version":1}"#).unwrap());
+        let public = SensitivitySet::from_label(crate::contracts::Sensitivity::Public);
+        let unknown = SensitivitySet::from_label(crate::contracts::Sensitivity::Unknown);
+        assert!(persistence_allowed(&registry, &public, false));
+        assert!(!persistence_allowed(&registry, &unknown, false));
+        assert!(
+            !persistence_allowed(&registry, &public, true),
+            "declared secret environment is never persisted"
+        );
     }
 }

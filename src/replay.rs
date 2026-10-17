@@ -167,6 +167,9 @@ impl Observer for Replayer {
             stderr,
             outcome: stored_outcome(recorded),
             failed: recorded.failed,
+            // Replay runs no group and persists nothing, so there are no live labels.
+            sensitivity: security::SensitivitySet::empty(),
+            secret_environment: false,
         }))
     }
 

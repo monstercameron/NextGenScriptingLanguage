@@ -35,6 +35,12 @@ pub struct StepResult {
     /// Whether the group ended as a typed failure (`CommandFailed`), which stops
     /// the program unless it is caught.
     pub failed: bool,
+    /// Sensitivity labels the runtime tracks for the workflow when the group ran.
+    /// Persisting this output is subject to the data-flow persistence policy.
+    pub sensitivity: crate::security::SensitivitySet,
+    /// Whether an applet in the group receives declared secret environment, whose
+    /// output is never persisted.
+    pub secret_environment: bool,
 }
 
 pub trait Observer: Send + Sync {
@@ -193,6 +199,8 @@ pub(super) fn execute_call_group(
                         .unwrap_or_else(|| failure.diagnostic.clone().into_bytes()),
                     outcome: failure.outcome.clone(),
                     failed: true,
+                    sensitivity: signals.sensitivity_floor(),
+                    secret_environment: secret_environment(registry, calls),
                 };
                 observer.finished(&request, started.elapsed(), &result)?;
             }
@@ -210,9 +218,18 @@ pub(super) fn execute_call_group(
         stderr: output.diagnostic.clone(),
         outcome,
         failed: false,
+        sensitivity: signals.sensitivity_floor(),
+        secret_environment: secret_environment(registry, calls),
     };
     observer.finished(&request, started.elapsed(), &result)?;
     Ok(output)
+}
+
+/// Whether any applet in the group declares secret environment.
+fn secret_environment(registry: &Registry, calls: &[(&Invocation, &Manifest, usize)]) -> bool {
+    calls.iter().any(|(call, manifest, _)| {
+        crate::security::applet_has_declared_secret_environment(registry, manifest.name_for(call))
+    })
 }
 
 /// Build the group output for a recorded result. A recorded failure is returned as

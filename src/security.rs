@@ -136,6 +136,8 @@ pub enum PersistenceKind {
     Cache,
     Checkpoint,
     Save,
+    /// Captured output kept by `execute run --record`.
+    Record,
 }
 
 impl PersistenceKind {
@@ -144,6 +146,7 @@ impl PersistenceKind {
             Self::Cache => "cache.persist",
             Self::Checkpoint => "checkpoint.persist",
             Self::Save => "filesystem.persist",
+            Self::Record => "record.persist",
         }
     }
 }
@@ -244,7 +247,7 @@ impl DataFlowPolicy {
             serde_json::from_slice(bytes).map_err(|_| PolicyError::InvalidPolicy)?;
         if document.version != 1
             || document.remote_sinks.0.len() > MAX_ORIGINS
-            || document.persistence.0.len() > 3
+            || document.persistence.0.len() > 4
             || document.cache_purity.trusted_applets.len() > MAX_TRUSTED_CACHE_APPLETS
             || document.secrets.environment.0.len() > MAX_DECLARED_SECRET_ENVIRONMENTS
         {
@@ -269,6 +272,7 @@ impl DataFlowPolicy {
                 "cache" => PersistenceKind::Cache,
                 "checkpoint" => PersistenceKind::Checkpoint,
                 "save" => PersistenceKind::Save,
+                "record" => PersistenceKind::Record,
                 _ => return Err(PolicyError::InvalidPolicy),
             };
             let labels = labels.into_iter().collect::<BTreeSet<_>>();

@@ -301,4 +301,21 @@ fn declared_secret_environment_values_never_appear_in_the_record() {
         document["redaction"]["declared_secret_names"][0],
         "RECORD_SENTINEL"
     );
+
+    // The output of the secret-environment applet is withheld: no bytes, no hash, and
+    // a marker naming the policy.
+    let trace = fs::read_to_string(record.join("trace.jsonl")).unwrap();
+    let secret_step: Value = trace
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|step| step["applets"][0] == "secret.echo")
+        .expect("the secret applet step");
+    assert!(secret_step["stdout"]["blob"].is_null(), "{secret_step}");
+    assert_eq!(secret_step["stdout"]["withheld"], "policy");
+    assert!(
+        secret_step["stdout"]["sha256"].is_null(),
+        "a withheld output has no hash"
+    );
+    assert_eq!(secret_step["stderr"]["tail"], "");
+    assert_eq!(document["terminal"]["withheld"], "policy");
 }

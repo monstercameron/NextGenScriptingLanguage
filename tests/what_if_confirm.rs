@@ -196,6 +196,72 @@ then save to target
     );
 }
 
+#[test]
+fn a_secret_prompt_answer_is_keyed_and_never_printed() {
+    // A secret prompt answer supplied with --input is as sensitive as an environment
+    // value: the report shows only its HMAC, and a changed answer changes the fingerprint.
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        "job.program",
+        "accept target as text from secret prompt \"Target?\"\nuse value \"payload\"\nthen save to target\n",
+    );
+    manifests(root.path(), "--version");
+    let state = root.path().join("state");
+    let run_review = |answer: &str, args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_execute"))
+            .args(args)
+            .arg("--manifest-dir")
+            .arg("manifests")
+            .arg("--input")
+            .arg(format!("target={answer}"))
+            .env("XDG_STATE_HOME", &state)
+            .env("LOCALAPPDATA", &state)
+            .current_dir(root.path())
+            .output()
+            .unwrap()
+    };
+
+    let reviewed = run_review(
+        "reviewed-secret-answer.txt",
+        &["run", "job.program", "--what-if"],
+    );
+    assert!(
+        reviewed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reviewed.stderr)
+    );
+    let shown = String::from_utf8_lossy(&reviewed.stdout).into_owned();
+    assert!(!shown.contains("reviewed-secret-answer"), "{shown}");
+    let report: Value = serde_json::from_str(&shown).unwrap();
+    let input = &report["settings"]["inputs"][0];
+    assert_eq!(input["source"], "secret_prompt");
+    assert_eq!(input["value"]["sensitive"], true);
+    assert_eq!(input["value"]["hmac_sha256"].as_str().unwrap().len(), 64);
+    let fingerprint = report["fingerprint"].as_str().unwrap().to_owned();
+
+    let same = run_review(
+        "reviewed-secret-answer.txt",
+        &["run", "job.program", "--confirm", &fingerprint],
+    );
+    assert!(
+        same.status.success(),
+        "{}",
+        String::from_utf8_lossy(&same.stderr)
+    );
+
+    let changed = run_review(
+        "other-secret-answer.txt",
+        &["run", "job.program", "--confirm", &fingerprint],
+    );
+    assert!(
+        refused(&changed),
+        "{}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    assert!(!root.path().join("other-secret-answer.txt").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn an_environment_input_refuses_the_review_when_the_key_is_readable_by_others() {

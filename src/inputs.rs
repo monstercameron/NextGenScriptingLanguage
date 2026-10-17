@@ -209,16 +209,13 @@ fn validate_schema<'a>(
     Ok(())
 }
 
-/// The values with every secret prompt answer removed, for display.
+/// The values with every sensitive input removed, for display.
 pub(crate) fn without_secret_answers(
     declarations: &[InputDeclaration],
     mut values: BTreeMap<String, Value>,
 ) -> BTreeMap<String, Value> {
     for declaration in declarations {
-        if matches!(
-            declaration.source,
-            Some(InputSource::Prompt { secret: true, .. })
-        ) {
+        if crate::ast::is_sensitive(declaration) {
             values.remove(&declaration.name);
         }
     }
@@ -625,8 +622,8 @@ pub fn describe(
         if let Some(choices) = &input.choices {
             spec["choices"] = choices.clone().into();
         }
-        // A secret answer is never printed, so its value is withheld, not shown.
-        let secret = matches!(input.source, Some(InputSource::Prompt { secret: true, .. }));
+        // A sensitive input's value is never printed, so it is withheld, not shown.
+        let secret = crate::ast::is_sensitive(input);
         if let Some(value) = known.get(&input.name) {
             if secret {
                 spec["value_withheld"] = true.into();

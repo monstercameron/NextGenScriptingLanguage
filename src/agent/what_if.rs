@@ -5,9 +5,10 @@
 //! The fingerprint covers everything that decides what the run does: the explain
 //! plan; the resolved input names, types, and values; the working directory; the
 //! capability and data-flow policy file contents; the manifest files; and the
-//! program's version. A value from an environment input is a candidate secret. The
-//! review shows it as an HMAC-SHA256 under a per-user key (see `what_if_key`), so a
-//! changed secret still changes the fingerprint, and an offline guess needs the key.
+//! program's version. A sensitive input (an environment value or a secret prompt
+//! answer, see `ast::is_sensitive`) is a candidate secret. The review shows it as an
+//! HMAC-SHA256 under a per-user key (see `what_if_key`), so a changed secret still
+//! changes the fingerprint, and an offline guess needs the key.
 
 use crate::agent::what_if_key::{self, hmac_sha256};
 use crate::ast::{InputDeclaration, InputSource, Value as ProgramValue};
@@ -84,17 +85,14 @@ fn manifest_digests(context: &RunSettings<'_>) -> Result<Value> {
     Ok(Value::Array(files))
 }
 
-/// The resolved input values. A value from an environment input is shown as an
-/// HMAC under the per-user key, bound to the input's name. Without the key, the
-/// digest cannot be checked against a guess. With a sensitive input present and no
-/// usable key, the review fails rather than falling back to an unkeyed value.
+/// The resolved input values. A sensitive input (an environment value or a secret
+/// prompt answer; see `ast::is_sensitive`) is shown as an HMAC under the per-user
+/// key, bound to the input's name. Without the key, the digest cannot be checked
+/// against a guess. With a sensitive input present and no usable key, the review
+/// fails rather than falling back to an unkeyed value.
 fn input_covered(context: &RunSettings<'_>) -> Result<Value> {
     let values = crate::inputs::resolve(context.declarations, context.inputs, false)?;
-    let key = if context
-        .declarations
-        .iter()
-        .any(|declaration| matches!(declaration.source, Some(InputSource::Environment(_))))
-    {
+    let key = if context.declarations.iter().any(crate::ast::is_sensitive) {
         Some(what_if_key::load_or_create().context(
             "an environment input is sensitive, so the what-if review needs its private key",
         )?)
@@ -107,7 +105,7 @@ fn input_covered(context: &RunSettings<'_>) -> Result<Value> {
             .get(&declaration.name)
             .context("a declared input has no resolved value")?;
         let literal = crate::inputs::literal_json(value)?;
-        let sensitive = matches!(declaration.source, Some(InputSource::Environment(_)));
+        let sensitive = crate::ast::is_sensitive(declaration);
         let shown = match (&key, sensitive) {
             (Some(key), true) => {
                 let mut message = declaration.name.as_bytes().to_vec();
@@ -117,10 +115,15 @@ fn input_covered(context: &RunSettings<'_>) -> Result<Value> {
             }
             _ => literal,
         };
+        let source = match &declaration.source {
+            Some(InputSource::Environment(_)) => "environment",
+            Some(InputSource::Prompt { secret: true, .. }) => "secret_prompt",
+            _ => "other",
+        };
         inputs.push(json!({
             "name": declaration.name,
             "type": declaration.kind.to_string(),
-            "source": if sensitive { "environment" } else { "other" },
+            "source": source,
             "value": shown,
         }));
     }

@@ -285,6 +285,7 @@ fn input_signature(program: &Program, values: &BTreeMap<String, Value>) -> Resul
     }
     // A secret prompt's answer is a candidate password, so the journal records it only
     // under the per-user key. An unkeyed hash could be guessed offline from the journal.
+    // Environment inputs keep their checkpoint behaviour; the persistence gate governs them.
     let secret_key = if program.inputs.iter().any(|d| {
         matches!(
             d.source,

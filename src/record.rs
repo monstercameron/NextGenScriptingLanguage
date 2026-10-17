@@ -562,20 +562,16 @@ fn redact_json(redactor: &SecretRedactor, value: &Json) -> Json {
     }
 }
 
-/// Input values for a record. A secret prompt's answer is withheld: the record keeps a
-/// marker in its place, so the answer is never written to disk.
+/// Input values for a record. A sensitive input (an environment value or a secret
+/// prompt answer) is withheld: the record keeps a marker in its place, so the value is
+/// never written to disk.
 pub fn inputs_json_for(
     inputs: &BTreeMap<String, crate::ast::Value>,
     declarations: &[crate::ast::InputDeclaration],
 ) -> Json {
     let secret: std::collections::BTreeSet<&str> = declarations
         .iter()
-        .filter(|d| {
-            matches!(
-                d.source,
-                Some(crate::ast::InputSource::Prompt { secret: true, .. })
-            )
-        })
+        .filter(|d| crate::ast::is_sensitive(d))
         .map(|d| d.name.as_str())
         .collect();
     let mut json = inputs_json(inputs);

@@ -1300,15 +1300,16 @@ names, types, and values; the working directory; the contents of the
 `--capability-policy` and `--data-flow-policy` files; the contents of each `.json`
 manifest in the `--manifest-dir` directory, or of the `--manifest-catalog` file; and
 the program's version. The bundled manifests are covered by that version only. A
-value from an environment input is a candidate secret. The report shows it as
+sensitive input (an environment value or a secret prompt answer) is a candidate secret.
+The report shows it as
 `{"sensitive": true, "hmac_sha256": ...}`, an HMAC-SHA256 under a per-user key, and the
 fingerprint covers that HMAC. A changed secret therefore needs a new review, and an
 offline guess at a short secret cannot be checked without the key. The key is 32
 random bytes, created on first use at `$XDG_STATE_HOME/execute/what-if.key` (or
 `~/.local/state/execute/what-if.key`), or `%LOCALAPPDATA%\execute\what-if.key` on
 Windows. On Unix it must be a regular file with no group or other permission bits and
-exactly 32 bytes. A key that fails these checks is refused, and a review with an
-environment input then fails rather than falling back to an unkeyed value. On Windows
+exactly 32 bytes. A key that fails these checks is refused, and a review with a
+sensitive input then fails rather than falling back to an unkeyed value. On Windows
 the file takes the user profile's owner-only ACL, which this release does not verify.
 A policy file appears as its path and digest. Changing any other covered setting
 requires a new `--what-if` review. Both options apply to finite programs and to `run`

@@ -569,12 +569,7 @@ impl State {
             .program
             .inputs
             .iter()
-            .filter(|input| {
-                matches!(
-                    input.source,
-                    Some(crate::ast::InputSource::Prompt { secret: true, .. })
-                )
-            })
+            .filter(|input| crate::ast::is_sensitive(input))
             .map(|input| input.name.clone())
             .collect()
     }

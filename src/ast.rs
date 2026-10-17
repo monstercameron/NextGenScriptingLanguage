@@ -487,6 +487,16 @@ pub enum InputSource {
     },
 }
 
+/// Whether an input's value is a candidate secret, and so is withheld from reviews,
+/// records, live state, journals and checkpoint signatures unless keyed. Every
+/// sensitivity decision goes through this function, so the sources cannot drift apart.
+pub fn is_sensitive(declaration: &InputDeclaration) -> bool {
+    matches!(
+        declaration.source,
+        Some(InputSource::Environment(_)) | Some(InputSource::Prompt { secret: true, .. })
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Trigger {
     Every {

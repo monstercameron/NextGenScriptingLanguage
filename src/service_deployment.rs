@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceFormat {
     Systemd,
+    SystemdTimer,
     Launchd,
 }
 
@@ -20,8 +21,9 @@ impl ServiceFormat {
     pub fn parse(value: &str) -> Result<Self> {
         match value {
             "systemd" => Ok(Self::Systemd),
+            "systemd-timer" => Ok(Self::SystemdTimer),
             "launchd" => Ok(Self::Launchd),
-            _ => bail!("service format must be `systemd` or `launchd`"),
+            _ => bail!("service format must be `systemd`, `systemd-timer`, or `launchd`"),
         }
     }
 }
@@ -41,6 +43,8 @@ pub struct WorkflowServiceRequest<'a> {
     pub label: Option<&'a str>,
     pub inputs: &'a BTreeMap<String, String>,
     pub program_arguments: &'a [String],
+    /// systemd-timer only: `Persistent=true` runs activations missed while the host was off.
+    pub persistent: bool,
 }
 
 /// Render a service definition without installing or activating it.
@@ -126,7 +130,24 @@ fn render_for_workflow_with_launchd_home_and_catalog(
     )?;
     validate_service_inputs(&program.inputs, &supplied, request.program_arguments.len())?;
 
+    if request.persistent && request.format != ServiceFormat::SystemdTimer {
+        bail!("persistent catch-up applies only to the systemd-timer format");
+    }
+    // A timer activation runs the handler once. `run --once` executes the body
+    // immediately instead of waiting for the next calendar tick.
+    let calendar = match request.format {
+        ServiceFormat::SystemdTimer => match trigger {
+            Trigger::Cron { expression, .. } => calendar_specs(expression)?,
+            _ => bail!(
+                "systemd-timer requires a workflow scheduled with `on schedule \"<cron expression>\"`"
+            ),
+        },
+        ServiceFormat::Systemd | ServiceFormat::Launchd => Vec::new(),
+    };
     let mut argv = vec![utf8_path(&executable, "execute binary")?, "run".into()];
+    if request.format == ServiceFormat::SystemdTimer {
+        argv.push("--once".into());
+    }
     if let Some(path) = manifest_directory {
         argv.extend([
             "--manifest-dir".into(),
@@ -164,6 +185,13 @@ fn render_for_workflow_with_launchd_home_and_catalog(
 
     match request.format {
         ServiceFormat::Systemd => render_systemd(&label, &working_directory, &argv),
+        ServiceFormat::SystemdTimer => render_systemd_timer(
+            &label,
+            &working_directory,
+            &argv,
+            &calendar,
+            request.persistent,
+        ),
         ServiceFormat::Launchd => render_launchd(&label, &working_directory, &argv, launchd_home),
     }
 }
@@ -326,6 +354,175 @@ WantedBy=default.target\n"
     ))
 }
 
+/// One `OnCalendar=` value. `None` selects every value of that component.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CalendarSpec {
+    weekdays: Option<Vec<u32>>,
+    days: Option<Vec<u32>>,
+    months: Option<Vec<u32>>,
+    hours: Option<Vec<u32>>,
+    minutes: Option<Vec<u32>>,
+}
+
+const WEEKDAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+impl CalendarSpec {
+    fn render(&self) -> String {
+        let mut text = String::new();
+        if let Some(weekdays) = &self.weekdays {
+            let names = weekdays
+                .iter()
+                .map(|day| WEEKDAY_NAMES[*day as usize])
+                .collect::<Vec<_>>();
+            text.push_str(&names.join(","));
+            text.push(' ');
+        }
+        text.push_str(&format!(
+            "*-{}-{} {}:{}:00",
+            calendar_component(&self.months),
+            calendar_component(&self.days),
+            calendar_component(&self.hours),
+            calendar_component(&self.minutes),
+        ));
+        text
+    }
+}
+
+fn calendar_component(values: &Option<Vec<u32>>) -> String {
+    match values {
+        None => "*".into(),
+        Some(values) => values
+            .iter()
+            .map(|value| format!("{value:02}"))
+            .collect::<Vec<_>>()
+            .join(","),
+    }
+}
+
+/// Expand a validated five-field cron expression into systemd calendar specs.
+///
+/// Cron ANDs day-of-month and weekday when either field is a bare or stepped
+/// `*`, and ORs them otherwise. Two specs express the OR case, because systemd
+/// fires on the union of its `OnCalendar=` values.
+fn calendar_specs(expression: &str) -> Result<Vec<CalendarSpec>> {
+    crate::schedule::CronSchedule::parse(expression)
+        .context("service generation needs a valid cron expression")?;
+    let fields = expression.split_ascii_whitespace().collect::<Vec<_>>();
+    let [minute, hour, day_of_month, month, day_of_week] = fields.as_slice() else {
+        bail!("cron expression must contain exactly five fields");
+    };
+    let (minutes, _) = cron_values(minute, 0, 59, false)?;
+    let (hours, _) = cron_values(hour, 0, 23, false)?;
+    let (days, days_wildcard) = cron_values(day_of_month, 1, 31, false)?;
+    let (months, _) = cron_values(month, 1, 12, false)?;
+    let (weekdays, weekdays_wildcard) = cron_values(day_of_week, 0, 7, true)?;
+
+    let minutes = keep_unless_full(minutes, 0, 59);
+    let hours = keep_unless_full(hours, 0, 23);
+    let months = keep_unless_full(months, 1, 12);
+    let days = keep_unless_full(days, 1, 31);
+    let weekdays = keep_unless_full(weekdays, 0, 6);
+    let spec = |weekdays: Option<Vec<u32>>, days: Option<Vec<u32>>| CalendarSpec {
+        weekdays,
+        days,
+        months: months.clone(),
+        hours: hours.clone(),
+        minutes: minutes.clone(),
+    };
+    if days_wildcard || weekdays_wildcard {
+        Ok(vec![spec(weekdays, days)])
+    } else {
+        Ok(vec![spec(None, days), spec(weekdays, None)])
+    }
+}
+
+fn keep_unless_full(bits: u64, min: u32, max: u32) -> Option<Vec<u32>> {
+    let values = (min..=max)
+        .filter(|value| bits & (1u64 << value) != 0)
+        .collect::<Vec<_>>();
+    (values.len() != (max - min + 1) as usize).then_some(values)
+}
+
+/// Mirrors the field grammar of `schedule::CronSchedule`, returning the
+/// selected values as a bit set plus whether the field begins with `*`.
+/// Weekday 7 is folded into Sunday (bit 0).
+fn cron_values(raw: &str, min: u32, max: u32, sunday_alias: bool) -> Result<(u64, bool)> {
+    let wildcard = raw.starts_with('*');
+    let mut values = 0u64;
+    for item in raw.split(',') {
+        let mut parts = item.split('/');
+        let base = parts.next().unwrap_or_default();
+        let step = match parts.next() {
+            Some(step) => step.parse::<u32>().context("cron step")?,
+            None => 1,
+        };
+        let (start, end) = if base == "*" {
+            (min, max)
+        } else if let Some((from, to)) = base.split_once('-') {
+            (from.parse::<u32>()?, to.parse::<u32>()?)
+        } else {
+            let value = base.parse::<u32>()?;
+            (value, if item.contains('/') { max } else { value })
+        };
+        let mut value = start;
+        while value <= end {
+            let selected = if sunday_alias && value == 7 { 0 } else { value };
+            values |= 1u64 << selected;
+            value = match value.checked_add(step) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+    }
+    Ok((values, wildcard))
+}
+
+fn render_systemd_timer(
+    label: &str,
+    working_directory: &Path,
+    argv: &[String],
+    calendar: &[CalendarSpec],
+    persistent: bool,
+) -> Result<String> {
+    let description = unit_value(&format!("Execute workflow {label}"))?;
+    let working_directory = unit_value(&utf8_path(working_directory, "working directory")?)?;
+    let command = argv
+        .iter()
+        .map(|argument| exec_argument(argument))
+        .collect::<Result<Vec<_>>>()?
+        .join(" ");
+    let mut timer = format!(
+        "# ---- timer unit: save as {label}.timer. Generated for review; nothing is installed.\n\
+[Unit]\n\
+Description={description}\n\
+\n\
+[Timer]\n"
+    );
+    for spec in calendar {
+        timer.push_str(&format!("OnCalendar={}\n", spec.render()));
+    }
+    timer.push_str(&format!(
+        "Persistent={}\n\
+Unit={label}.service\n\
+\n\
+[Install]\n\
+WantedBy=timers.target\n",
+        if persistent { "true" } else { "false" }
+    ));
+    Ok(format!(
+        "{timer}\n# ---- service unit: save as {label}.service\n\
+[Unit]\n\
+Description={description}\n\
+\n\
+[Service]\n\
+Type=oneshot\n\
+WorkingDirectory={working_directory}\n\
+ExecStart={command}\n\
+StandardOutput=journal\n\
+StandardError=journal\n"
+    ))
+}
+
 fn render_launchd(
     label: &str,
     working_directory: &Path,
@@ -458,6 +655,7 @@ mod tests {
             label: Some("com.example.daily-task"),
             inputs: &inputs,
             program_arguments: &arguments,
+            persistent: false,
         })
         .unwrap();
         assert!(rendered.contains("KillMode=control-group"));
@@ -491,6 +689,7 @@ mod tests {
             label: Some("com.example.catalog-service"),
             inputs: &inputs,
             program_arguments: &arguments,
+            persistent: false,
         };
 
         let rendered = render_for_workflow_with_manifest_catalog(&request, &catalog).unwrap();
@@ -525,6 +724,7 @@ mod tests {
                 label: Some("com.example.scheduled"),
                 inputs: &inputs,
                 program_arguments: &arguments,
+                persistent: false,
             },
             Some(directory.path()),
         )
@@ -566,6 +766,7 @@ mod tests {
             label: None,
             inputs: &inputs,
             program_arguments: &arguments,
+            persistent: false,
         };
         assert!(render_for_workflow(&request)
             .unwrap_err()
@@ -595,5 +796,157 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("needs input"));
+    }
+
+    #[test]
+    fn calendar_expansion_matches_common_cron_shapes() {
+        let rendered = |expression: &str| {
+            calendar_specs(expression)
+                .unwrap()
+                .iter()
+                .map(CalendarSpec::render)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rendered("30 9 * * 1-5"),
+            ["Mon,Tue,Wed,Thu,Fri *-*-* 09:30:00"]
+        );
+        assert_eq!(rendered("*/15 * * * *"), ["*-*-* *:00,15,30,45:00"]);
+        assert_eq!(rendered("0 0 1,15 6 *"), ["*-06-01,15 00:00:00"]);
+        assert_eq!(
+            rendered("0 12 1 * 1"),
+            ["*-*-01 12:00:00", "Mon *-*-* 12:00:00"]
+        );
+        assert_eq!(rendered("0 0 * * 7"), ["Sun *-*-* 00:00:00"]);
+        assert_eq!(rendered("0 9 * * *"), ["*-*-* 09:00:00"]);
+    }
+
+    fn spec_selects(spec: &CalendarSpec, when: &chrono::DateTime<chrono::Local>) -> bool {
+        use chrono::{Datelike, Timelike};
+        let selected = |values: &Option<Vec<u32>>, value: u32| {
+            values.as_ref().is_none_or(|values| values.contains(&value))
+        };
+        selected(&spec.weekdays, when.weekday().num_days_from_sunday())
+            && selected(&spec.days, when.day())
+            && selected(&spec.months, when.month())
+            && selected(&spec.hours, when.hour())
+            && selected(&spec.minutes, when.minute())
+    }
+
+    #[test]
+    fn calendar_specs_select_exactly_the_minutes_cron_selects() {
+        use chrono::{Local, TimeZone};
+        let expressions = [
+            "30 9 * * 1-5",
+            "*/15 * * * *",
+            "0 12 1 * 1",
+            "0 0 1,15 6 *",
+            "5 4 */2 * 0,6",
+            "10 8 1-7 * 1",
+            "0 0 31 * *",
+            "59 23 * 2 7",
+            "0,30 9-17/2 1-31/2 1,3,12 0,7",
+        ];
+        let start = Local
+            .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp();
+        for expression in expressions {
+            let cron = crate::schedule::CronSchedule::parse(expression).unwrap();
+            let specs = calendar_specs(expression).unwrap();
+            let mut checked = 0usize;
+            for minute in 0..(366_i64 * 24 * 60) {
+                let Some(when) = Local.timestamp_opt(start + minute * 60, 0).single() else {
+                    continue;
+                };
+                let from_specs = specs.iter().any(|spec| spec_selects(spec, &when));
+                assert_eq!(from_specs, cron.matches(&when), "{expression} at {when}");
+                checked += 1;
+            }
+            assert!(checked > 500_000, "{expression} checked {checked} minutes");
+        }
+    }
+
+    #[test]
+    fn systemd_timer_renders_timer_and_oneshot_service_for_cron_workflows() {
+        let directory = tempdir().unwrap();
+        let workflow = directory.path().join("nightly.program");
+        fs::write(
+            &workflow,
+            "on schedule \"30 9 * * 1-5\"\n  then encode \"body\" as json\n",
+        )
+        .unwrap();
+        let working_directory = directory.path().join("work");
+        fs::create_dir(&working_directory).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let inputs = BTreeMap::new();
+        let arguments: Vec<String> = Vec::new();
+        let mut request = WorkflowServiceRequest {
+            format: ServiceFormat::SystemdTimer,
+            workflow_path: &workflow,
+            executable: &executable,
+            working_directory: &working_directory,
+            manifest_directory: None,
+            capability_policy: None,
+            data_flow_policy: None,
+            label: Some("com.example.nightly"),
+            inputs: &inputs,
+            program_arguments: &arguments,
+            persistent: false,
+        };
+        let rendered = render_for_workflow(&request).unwrap();
+        assert!(rendered.contains("OnCalendar=Mon,Tue,Wed,Thu,Fri *-*-* 09:30:00\n"));
+        assert!(rendered.contains("Persistent=false\nUnit=com.example.nightly.service\n"));
+        assert!(rendered.contains("WantedBy=timers.target"));
+        assert!(rendered.contains("Type=oneshot"));
+        assert!(!rendered.contains("Restart="));
+        assert!(rendered.contains("\"run\" \"--once\""));
+        assert!(rendered.contains("nothing is installed"));
+
+        request.persistent = true;
+        let persistent = render_for_workflow(&request).unwrap();
+        assert!(persistent.contains("Persistent=true"));
+        request.persistent = false;
+
+        // Catch-up is a timer property: the plain systemd format refuses it.
+        request.format = ServiceFormat::Systemd;
+        request.persistent = true;
+        let error = render_for_workflow(&request).unwrap_err();
+        assert!(format!("{error:#}").contains("persistent"), "{error:#}");
+    }
+
+    #[test]
+    fn systemd_timer_rejects_workflows_without_a_cron_schedule() {
+        let directory = tempdir().unwrap();
+        let workflow = directory.path().join("interval.program");
+        fs::write(
+            &workflow,
+            "every 5 minutes\n  then encode \"body\" as json\n",
+        )
+        .unwrap();
+        let working_directory = directory.path().join("work");
+        fs::create_dir(&working_directory).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let inputs = BTreeMap::new();
+        let arguments: Vec<String> = Vec::new();
+        let error = render_for_workflow(&WorkflowServiceRequest {
+            format: ServiceFormat::SystemdTimer,
+            workflow_path: &workflow,
+            executable: &executable,
+            working_directory: &working_directory,
+            manifest_directory: None,
+            capability_policy: None,
+            data_flow_policy: None,
+            label: Some("com.example.interval"),
+            inputs: &inputs,
+            program_arguments: &arguments,
+            persistent: false,
+        })
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("systemd-timer requires"),
+            "{error:#}"
+        );
     }
 }

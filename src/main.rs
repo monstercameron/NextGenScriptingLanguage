@@ -29,6 +29,7 @@ struct Args {
     cache_dir: Option<PathBuf>,
     checkpoint_dir: Option<PathBuf>,
     retry_uncertain: bool,
+    once: bool,
     trace: bool,
     headless: bool,
     max_output_bytes: usize,
@@ -668,6 +669,22 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 command_timeout: args.command_timeout,
                 total_timeout: args.total_timeout,
             };
+            if args.once {
+                if args.checkpoint_dir.is_some() {
+                    bail!("--once cannot be combined with checkpoints");
+                }
+                if !matches!(program.trigger, Some(Trigger::Cron { .. })) {
+                    bail!("--once applies only to calendar-triggered programs");
+                }
+                // A timer activation runs the handler now; the schedule is not re-armed.
+                let mut body = program.clone();
+                body.trigger = None;
+                let result = runtime::run(&body, &registry, &options)?;
+                io::stdout()
+                    .write_all(&result.output)
+                    .context("could not write workflow output")?;
+                return Ok(());
+            }
             let checkpoint = args
                 .checkpoint_dir
                 .map(|directory| -> Result<CheckpointOptions> {
@@ -753,6 +770,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut cache_dir = None;
     let mut checkpoint_dir = None;
     let mut retry_uncertain = false;
+    let mut once = false;
     let mut trace = false;
     let mut headless = false;
     let mut max_output_bytes = 16 * 1024 * 1024;
@@ -896,6 +914,12 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 }
                 retry_uncertain = true;
             }
+            "--once" if command == "run" => {
+                if once {
+                    bail!("--once may be specified only once");
+                }
+                once = true;
+            }
             "--headless" if command == "run" => {
                 if headless {
                     bail!("--headless may be specified only once");
@@ -1029,6 +1053,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         cache_dir,
         checkpoint_dir,
         retry_uncertain,
+        once,
         trace,
         headless,
         max_output_bytes,
@@ -1457,7 +1482,7 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
 }
 
 fn service_cli(arguments: &[String]) -> Result<()> {
-    const HELP: &str = "Usage: execute service generate <systemd|launchd> FILE [--name ID] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--input NAME=VALUE ...] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
+    const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--input NAME=VALUE ...] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
     if arguments == ["--help"] || arguments == ["-h"] {
         writeln!(io::stdout().lock(), "{HELP}")?;
         return Ok(());
@@ -1472,6 +1497,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     let mut working_directory = None;
     let mut capability_policy = None;
     let mut data_flow_policy = None;
+    let mut persistent = false;
     let mut supplied_inputs = BTreeMap::new();
     let mut program_arguments = Vec::new();
     let mut index = 1;
@@ -1520,6 +1546,12 @@ fn service_cli(arguments: &[String]) -> Result<()> {
                     "--manifest-catalog",
                     "a packed manifest catalog file",
                 )?));
+            }
+            "--persistent" => {
+                if persistent {
+                    bail!("--persistent may be specified once");
+                }
+                persistent = true;
             }
             "--working-dir" => {
                 if working_directory.is_some() {
@@ -1621,6 +1653,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
         label: label.as_deref(),
         inputs: &supplied_inputs,
         program_arguments: &program_arguments,
+        persistent,
     };
     let rendered = match manifest_catalog.as_deref() {
         Some(path) => {
@@ -1726,7 +1759,7 @@ fn default_manifest_dir() -> PathBuf {
 }
 
 fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory or one legacy JSON file containing applet manifests\n  --manifest-catalog FILE Explicit packed catalog; mutually exclusive with --manifest-dir\n  --capability-policy FILE Enforce a strict, versioned applet policy (check/explain/inspect/run/resume/live serve)\n  --data-flow-policy FILE Enforce origin and persistence data-flow grants\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --missed-ticks POLICY   Trigger backlog policy: skip, coalesce, or catch-up (run/resume)\n  --max-catch-up N         Bound catch-up runs to 1..64 (requires catch-up)\n  --calendar-dedup MODE   Calendar fold policy: instant or local (run/resume)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory or one legacy JSON file containing applet manifests\n  --manifest-catalog FILE Explicit packed catalog; mutually exclusive with --manifest-dir\n  --capability-policy FILE Enforce a strict, versioned applet policy (check/explain/inspect/run/resume/live serve)\n  --data-flow-policy FILE Enforce origin and persistence data-flow grants\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --once                  Run one activation of a calendar-triggered handler and exit (run only)\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --missed-ticks POLICY   Trigger backlog policy: skip, coalesce, or catch-up (run/resume)\n  --max-catch-up N         Bound catch-up runs to 1..64 (requires catch-up)\n  --calendar-dedup MODE   Calendar fold policy: instant or local (run/resume)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

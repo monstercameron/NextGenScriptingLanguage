@@ -20,7 +20,11 @@ use std::thread;
 /// The `native-fixture` example, built alongside the tests. Its `write` command prints
 /// its argument unchanged on every platform, which `printf` does not on Windows.
 fn native_fixture() -> String {
-    let name = if cfg!(windows) { "native-fixture.exe" } else { "native-fixture" };
+    let name = if cfg!(windows) {
+        "native-fixture.exe"
+    } else {
+        "native-fixture"
+    };
     let path = std::env::current_exe()
         .unwrap()
         .parent()
@@ -29,7 +33,10 @@ fn native_fixture() -> String {
         .unwrap()
         .join("examples")
         .join(name);
-    assert!(path.is_file(), "build cargo build --example native-fixture before these tests");
+    assert!(
+        path.is_file(),
+        "build cargo build --example native-fixture before these tests"
+    );
     path.to_str().unwrap().to_owned()
 }
 

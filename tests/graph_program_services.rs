@@ -1,12 +1,12 @@
 use anyhow::Result;
 use flow::ast::Value;
+use flow::graph::PortRef;
 use flow::graph::{
     self, GraphContext, GraphExecutor, GraphNode, GraphRunOptions, GraphSession, NodeIo, PortValue,
     RuntimeGraphExecutor,
 };
 #[cfg(unix)]
 use flow::graph::{EdgeSpec, GraphNodeKind};
-use flow::graph::PortRef;
 use flow::manifest::Registry;
 use flow::modules::{load_program_module_package, ProgramModuleSession};
 use flow::runtime::RunOptions;
@@ -30,7 +30,11 @@ const SERVICE_APPLET: &str = "test.snapshot_service";
 /// The `native-fixture` example, built alongside the tests. Its `write` command prints its
 /// argument unchanged on every platform, which `printf` does not on Windows.
 fn native_fixture() -> String {
-    let name = if cfg!(windows) { "native-fixture.exe" } else { "native-fixture" };
+    let name = if cfg!(windows) {
+        "native-fixture.exe"
+    } else {
+        "native-fixture"
+    };
     let path = std::env::current_exe()
         .unwrap()
         .parent()
@@ -39,7 +43,10 @@ fn native_fixture() -> String {
         .unwrap()
         .join("examples")
         .join(name);
-    assert!(path.is_file(), "build cargo build --example native-fixture before these tests");
+    assert!(
+        path.is_file(),
+        "build cargo build --example native-fixture before these tests"
+    );
     path.to_str().unwrap().to_owned()
 }
 

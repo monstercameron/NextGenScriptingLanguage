@@ -490,6 +490,90 @@ fn forwarded_run_with_a_user_manifest_directory_latency_is_measured() {
     report_latency(&line);
 }
 
+/// Forwarded runs with different capability policies never see each other's policy. The daemon
+/// serves the same manifest directory to every run, so a policy installed for one run must not
+/// carry over: a grant then a denial, and a denial then a grant, each run decided by its own
+/// policy and no other.
+#[test]
+fn forwarded_runs_do_not_share_capability_policies() {
+    let runtime = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let root = tempfile::tempdir().unwrap();
+    let manifests = root.path().join("manifests");
+    fs::create_dir(&manifests).unwrap();
+    let gated = serde_json::json!({
+        "name": "gated",
+        "binary": "touch",
+        "parameters": {"path": {"type": "string", "required": true}},
+        "arguments": [{"parameter": "path"}],
+        "contract": {"version": 1}
+    });
+    fs::write(
+        manifests.join("gated.json"),
+        serde_json::to_vec_pretty(&gated).unwrap(),
+    )
+    .unwrap();
+    let grant = root.path().join("grant.json");
+    fs::write(
+        &grant,
+        r#"{"version":1,"applets":{"gated":{"capabilities":["process.exec"]}}}"#,
+    )
+    .unwrap();
+    let deny = root.path().join("deny.json");
+    fs::write(&deny, r#"{"version":1,"applets":{}}"#).unwrap();
+    let program = root.path().join("workflow.program");
+
+    let steps = [
+        (&grant, true),
+        (&deny, false),
+        (&grant, true),
+        (&deny, false),
+    ];
+    for (index, (policy, allowed)) in steps.into_iter().enumerate() {
+        let marker = root.path().join(format!("made-{index}"));
+        fs::write(
+            &program,
+            format!(
+                "run gated with path {:?}
+",
+                marker.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .current_dir(root.path())
+            .stdin(Stdio::null())
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(&manifests)
+            .arg("--capability-policy")
+            .arg(policy)
+            .arg("--daemon")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.success(),
+            allowed,
+            "step {index}: policy decided wrongly: {stderr}"
+        );
+        assert_eq!(
+            marker.exists(),
+            allowed,
+            "step {index}: effect must follow the policy"
+        );
+        if !allowed {
+            assert!(
+                stderr.contains("no allowlist entry"),
+                "step {index}: denial must come from the policy: {stderr}"
+            );
+        }
+    }
+}
+
 /// Per-stage medians of a forwarded run, from the `EXECUTE_DAEMON_TRACE` stamps of the client,
 /// the daemon and its forked run. The stamps share the monotonic clock, so each stage is the
 /// time since the client began. Printed for CI; nothing is asserted beyond the runs succeeding.

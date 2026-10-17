@@ -36,6 +36,10 @@ pub type RunCallback = fn(&[String], &mut RunContext) -> i32;
 /// of it, so its applets are already parsed.
 pub type RegistryPreload = fn() -> Result<Registry>;
 
+/// Runs in the parent before a run is forked, with the run's arguments. Its work is inherited by
+/// the forked run, which is how the parent builds state for a run that it should not build itself.
+pub type PrepareHook = fn(&[String]);
+
 /// The client's connection, held by a forked run.
 pub struct RunContext {
     #[cfg(unix)]
@@ -76,12 +80,17 @@ const USAGE: &str = "usage: execute daemon serve|status|stop [--socket PATH]";
 
 /// `execute daemon ...`. `run` is the callback a forked child calls for each request, and
 /// `preload` builds the registry the daemon serves from; only `serve` calls it.
-pub fn cli(arguments: &[String], run: RunCallback, preload: RegistryPreload) -> Result<i32> {
+pub fn cli(
+    arguments: &[String],
+    run: RunCallback,
+    preload: RegistryPreload,
+    prepare: PrepareHook,
+) -> Result<i32> {
     let (command, rest) = arguments.split_first().ok_or_else(|| anyhow!(USAGE))?;
     let socket = socket_option(rest)?;
     match command.as_str() {
         "serve" => {
-            imp::serve(&socket, run, preload()?)?;
+            imp::serve(&socket, run, preload()?, prepare)?;
             Ok(0)
         }
         "status" => {
@@ -146,8 +155,8 @@ fn not_running(socket: &Path, reason: Option<String>) -> Value {
 #[cfg(unix)]
 mod imp {
     use super::{
-        not_running, Forwarding, Path, PathBuf, Registry, Result, RunCallback, RunContext, Value,
-        PROTOCOL,
+        not_running, Forwarding, Path, PathBuf, PrepareHook, Registry, Result, RunCallback,
+        RunContext, Value, PROTOCOL,
     };
     use crate::ipc::peer::peer_is_owner;
     use crate::ipc::transport::{read_message, write_message};
@@ -371,7 +380,12 @@ mod imp {
     }
 
     /// Run the daemon in the foreground until a `stop` request arrives.
-    pub(super) fn serve(socket: &Path, run: RunCallback, registry: Registry) -> Result<()> {
+    pub(super) fn serve(
+        socket: &Path,
+        run: RunCallback,
+        registry: Registry,
+        prepare: PrepareHook,
+    ) -> Result<()> {
         let directory = socket
             .parent()
             .ok_or_else(|| anyhow!("socket path {} has no directory", socket.display()))?;
@@ -396,6 +410,7 @@ mod imp {
         let _guard = SocketGuard(socket.to_owned());
         let wake = ChildWake::install().context("installing the child-exit wake")?;
         let mut server = Server {
+            prepare,
             listener,
             run,
             registry,
@@ -541,6 +556,7 @@ mod imp {
         started: Instant,
         served: u64,
         wake: ChildWake,
+        prepare: PrepareHook,
     }
 
     impl Server {
@@ -699,6 +715,7 @@ mod imp {
                 );
                 return;
             }
+            (self.prepare)(&run.argv);
             // The child closes these: the other clients' connections and the wake pipe.
             let held: Vec<RawFd> = self
                 .children
@@ -1473,7 +1490,7 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use super::{not_running, Forwarding, Path, Registry, Result, RunCallback, Value};
+    use super::{not_running, Forwarding, Path, PrepareHook, Registry, Result, RunCallback, Value};
     use anyhow::bail;
 
     pub(super) fn euid() -> u32 {
@@ -1488,7 +1505,12 @@ mod imp {
         bail!("the daemon needs Unix sockets; this build has none")
     }
 
-    pub(super) fn serve(_socket: &Path, _run: RunCallback, _registry: Registry) -> Result<()> {
+    pub(super) fn serve(
+        _socket: &Path,
+        _run: RunCallback,
+        _registry: Registry,
+        _prepare: PrepareHook,
+    ) -> Result<()> {
         bail!("the daemon needs Unix sockets; this build has none")
     }
 

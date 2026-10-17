@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 mod cli;
 use cli::{parse_args, take_option_value, workflow_path, Args};
 mod github_annotations;
+mod manifest_cache;
 mod record_cli;
 mod repair_cli;
 mod repl_cli;
@@ -345,6 +346,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             &arguments[1..],
             forwarded_run,
             preload_daemon_registry,
+            warm_forwarded_manifests,
         )?);
     }
     let args = match parse_args(arguments)? {
@@ -1932,13 +1934,53 @@ fn load_registry(
         bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
     }
     match (explicit_path, explicit_catalog) {
-        (Some(path), None) => Registry::load(&path)
-            .with_context(|| format!("could not load manifests from {}", path.display())),
-        (None, Some(path)) => Registry::load_catalog(&path)
-            .with_context(|| format!("could not load packed manifest catalog {}", path.display())),
+        (Some(path), None) => {
+            manifest_cache::load(manifest_cache::Source::Directory(cache_key(&path)), || {
+                Registry::load(&path)
+                    .with_context(|| format!("could not load manifests from {}", path.display()))
+            })
+        }
+        (None, Some(path)) => {
+            manifest_cache::load(manifest_cache::Source::Catalog(cache_key(&path)), || {
+                Registry::load_catalog(&path).with_context(|| {
+                    format!("could not load packed manifest catalog {}", path.display())
+                })
+            })
+        }
         (None, None) => Registry::load_default(&default_manifest_dir()),
         (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
     }
+}
+
+/// The key a manifest source is cached under: its canonical path, or the path itself when it
+/// cannot be canonicalized, in which case the load reports the error.
+fn cache_key(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Runs in the daemon parent before a forwarded run is forked. Loads the run's own manifest
+/// directory or catalog into the cache, so the forked run inherits the parsed registry. A
+/// failure is left for the run to report.
+fn warm_forwarded_manifests(arguments: &[String]) {
+    let Ok(Some(args)) = parse_args(arguments.to_vec()) else {
+        return;
+    };
+    let _ = match (args.manifest_dir, args.manifest_catalog) {
+        (Some(path), None) => {
+            manifest_cache::warm(manifest_cache::Source::Directory(cache_key(&path)), || {
+                Registry::load(&path)
+                    .with_context(|| format!("could not load manifests from {}", path.display()))
+            })
+        }
+        (None, Some(path)) => {
+            manifest_cache::warm(manifest_cache::Source::Catalog(cache_key(&path)), || {
+                Registry::load_catalog(&path).with_context(|| {
+                    format!("could not load packed manifest catalog {}", path.display())
+                })
+            })
+        }
+        _ => Ok(()),
+    };
 }
 
 const MAX_CAPABILITY_POLICY_BYTES: usize = 1024 * 1024;

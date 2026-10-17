@@ -182,6 +182,7 @@ struct RegistryData {
 /// The manifests of one registry, in resolution order. A file load or an extension
 /// keeps them parsed. A bundled registry shares the immutable build-time index and
 /// parses each entry into its own cell on first use, with origin under `root`.
+#[derive(Clone)]
 enum Manifests {
     Parsed(Vec<Manifest>),
     Bundled {
@@ -607,6 +608,21 @@ impl Registry {
     /// catalog, source manifests, origin, and module root.
     pub fn scope_identity(&self) -> Option<&str> {
         self.data.scope_identity.as_deref()
+    }
+
+    /// An independent registry over the same manifests, with a fresh host-state map. The
+    /// manifests are copied, so host state set on the copy (a capability policy, for example)
+    /// is visible neither to this registry nor to any other copy.
+    pub fn detached(&self) -> Self {
+        Self {
+            data: Arc::new(RegistryData {
+                manifests: self.data.manifests.clone(),
+                names: self.data.names.clone(),
+                module_root: self.data.module_root.clone(),
+                scope_identity: self.data.scope_identity.clone(),
+                host_state: Arc::new(Mutex::new(HashMap::new())),
+            }),
+        }
     }
 
     /// Access a host-owned value scoped to this registry and all of its clones.

@@ -237,6 +237,7 @@ impl LoopStack {
         Ok(true)
     }
     /// The element index and item of the `for each` at `header` that is running now.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn current_element(&self, header: usize) -> Option<(usize, &Value)> {
         let frame = self
             .frames
@@ -255,6 +256,7 @@ impl LoopStack {
 
     /// Re-enter a top-level `for each` whose first `consumed` items already ran in a
     /// checkpointed run. The next header check yields item `consumed`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn restore_for_each(
         &mut self,
         header: usize,

@@ -36,6 +36,11 @@ struct Args {
     what_if: bool,
     /// `run --confirm FINGERPRINT`: run only if the plan still has this fingerprint.
     confirm: Option<String>,
+    /// `explain --json --policy-header`: merge the program's `# execute-policy:`
+    /// header into the gate's approved categories.
+    policy_header: bool,
+    /// `run --single-instance LOCK`: refuse to run while another run holds LOCK.
+    single_instance: Option<PathBuf>,
     github: bool,
     command: String,
     file: PathBuf,
@@ -396,6 +401,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 .with_context(|| format!("could not read workflow {}", args.file.display()))?,
             None,
         ),
+    };
+    // Held until this function returns, so a second instance is refused for the
+    // whole run. Graph, screen, and stream runs are covered too.
+    let _single_instance = match args.single_instance.as_deref() {
+        Some(path) => Some(flow::agent::instance::acquire(path)?),
+        None => None,
     };
     if flow::graph::is_graph(&source) {
         reject_finite_only_options(&args, "graph")?;
@@ -833,12 +844,18 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             runtime::validate_with_arguments(&program, &registry, &inputs)?;
             let path = args.file.to_string_lossy().into_owned();
             let plan = flow::agent::explain::explain_json(&program, &registry, &path)?;
-            if args.allow.is_empty() {
+            if args.allow.is_empty() && !args.policy_header {
                 write_json(&plan)
             } else {
                 // Gate mode: report violations, and exit nonzero unless all are approved.
-                let allowed: std::collections::BTreeSet<String> =
+                // Approvals come from --allow and from the program's policy header.
+                let mut allowed: std::collections::BTreeSet<String> =
                     args.allow.iter().cloned().collect();
+                if args.policy_header {
+                    let source = fs::read_to_string(&args.file)
+                        .with_context(|| format!("reading {}", args.file.display()))?;
+                    allowed.extend(flow::agent::policy::header_categories(&source)?);
+                }
                 let verdict = flow::agent::gate::verdict(&plan, &allowed);
                 let passed = verdict["allowed"] == true;
                 write_json(&verdict)?;
@@ -851,6 +868,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         "explain" => {
             if !args.allow.is_empty() {
                 bail!("--allow requires --json");
+            }
+            if args.policy_header {
+                bail!("--policy-header requires --json");
             }
             writeln!(
                 io::stdout(),
@@ -987,6 +1007,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut allow = Vec::new();
     let mut what_if = false;
     let mut confirm = None;
+    let mut policy_header = false;
+    let mut single_instance = None;
     let mut github = false;
     let mut inputs = BTreeMap::new();
     let mut program_arguments = Vec::new();
@@ -1042,6 +1064,23 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     bail!("--json may be specified only once");
                 }
                 json = true;
+            }
+            "--policy-header" if command == "explain" => {
+                if policy_header {
+                    bail!("--policy-header may be specified only once");
+                }
+                policy_header = true;
+            }
+            "--single-instance" if command == "run" => {
+                if single_instance.is_some() {
+                    bail!("--single-instance may be specified only once");
+                }
+                single_instance = Some(PathBuf::from(take_option_value(
+                    &arguments,
+                    &mut index,
+                    "--single-instance",
+                    "a lock file path",
+                )?));
             }
             "--what-if" if command == "run" => {
                 if what_if {
@@ -1323,6 +1362,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         allow,
         what_if,
         confirm,
+        policy_header,
+        single_instance,
         github,
         command,
         file,
@@ -1478,6 +1519,9 @@ fn reject_finite_only_options(args: &Args, program_kind: &str) -> Result<()> {
     }
     if args.what_if || args.confirm.is_some() {
         bail!("--what-if and --confirm apply only to finite programs, not {program_kind} programs");
+    }
+    if args.policy_header {
+        bail!("--policy-header applies only to finite programs, not {program_kind} programs");
     }
     Ok(())
 }

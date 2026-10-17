@@ -12,4 +12,8 @@ pub mod gate;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod help;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod instance;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod policy;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod what_if;

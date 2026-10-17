@@ -4764,19 +4764,21 @@ mod drain_tests {
         skip.insert(0usize, restored);
         let mut recorder = Recorder::default();
         let result = super::tasks::run_each(
-            super::tasks::TaskGroupConfig {
-                mode,
-                limit,
-                outer_deadline: None,
+            super::tasks::TaskGroupRequest {
+                config: super::tasks::TaskGroupConfig {
+                    mode,
+                    limit,
+                    outer_deadline: None,
+                },
+                registry: &registry,
+                bindings: &BTreeMap::new(),
+                options: &options(directory.path()),
+                cancelled: Arc::clone(&signals.cancelled),
+                draining: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+                context: AppletInvocationContext::from_signals(&signals).unwrap(),
             },
             &each,
             &tasks[0],
-            &registry,
-            &BTreeMap::new(),
-            &options(directory.path()),
-            Arc::clone(&signals.cancelled),
-            Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
-            AppletInvocationContext::from_signals(&signals).unwrap(),
             ElementPlan {
                 skip,
                 sink: Some(&mut recorder),
@@ -4825,19 +4827,21 @@ mod drain_tests {
             .expect("a task group step");
         let each = each.expect("a parallel for each");
         let result = super::tasks::run_each(
-            super::tasks::TaskGroupConfig {
-                mode,
-                limit,
-                outer_deadline: None,
+            super::tasks::TaskGroupRequest {
+                config: super::tasks::TaskGroupConfig {
+                    mode,
+                    limit,
+                    outer_deadline: None,
+                },
+                registry: &registry,
+                bindings: &BTreeMap::new(),
+                options: &options(directory.path()),
+                cancelled: Arc::clone(&signals.cancelled),
+                draining: Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED)),
+                context: AppletInvocationContext::from_signals(&signals).unwrap(),
             },
             &each,
             &tasks[0],
-            &registry,
-            &BTreeMap::new(),
-            &options(directory.path()),
-            Arc::clone(&signals.cancelled),
-            Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED)),
-            AppletInvocationContext::from_signals(&signals).unwrap(),
             super::tasks::ElementPlan::none(),
         )
         .expect("a drained group reports its elements, not an error");

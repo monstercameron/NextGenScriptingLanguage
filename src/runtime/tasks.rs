@@ -118,6 +118,18 @@ pub(super) struct TaskGroupConfig {
     pub outer_deadline: Option<Instant>,
 }
 
+/// Everything a task group needs from its step besides the tasks themselves,
+/// shared by `run_group` and `run_each`.
+pub(super) struct TaskGroupRequest<'a> {
+    pub(super) config: TaskGroupConfig,
+    pub(super) registry: &'a Registry,
+    pub(super) bindings: &'a BTreeMap<String, Value>,
+    pub(super) options: &'a RunOptions,
+    pub(super) cancelled: Arc<AtomicBool>,
+    pub(super) draining: Arc<std::sync::atomic::AtomicU8>,
+    pub(super) context: AppletInvocationContext,
+}
+
 /// Receives the begin and the successful result of each parallel element, so the
 /// checkpoint can record them. Called on the thread that runs the group.
 pub(in crate::runtime) trait GroupSink {
@@ -229,17 +241,19 @@ pub(super) fn preflight_group(
 /// Execute a task group after validating every task before any worker starts.
 /// The returned `Value` is a typed record; task outputs are preserved as
 /// explicit `u8_array` fields when the applet has no typed output schema.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn run_group(
-    config: TaskGroupConfig,
+    request: TaskGroupRequest<'_>,
     tasks: &[Invocation],
-    registry: &Registry,
-    bindings: &std::collections::BTreeMap<String, Value>,
-    options: &RunOptions,
-    cancelled: Arc<AtomicBool>,
-    draining: Arc<std::sync::atomic::AtomicU8>,
-    context: AppletInvocationContext,
 ) -> Result<TaskGroupResult> {
+    let TaskGroupRequest {
+        config,
+        registry,
+        bindings,
+        options,
+        cancelled,
+        draining,
+        context,
+    } = request;
     let TaskGroupConfig {
         mode,
         limit,
@@ -638,20 +652,22 @@ pub(super) fn run_group(
 /// starts. Cancellation, the workflow deadline or the aggregate output limit
 /// stop new launches, cancel and reap running elements, and fail the group
 /// with the partial records.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn run_each(
-    config: TaskGroupConfig,
+    request: TaskGroupRequest<'_>,
     each: &TaskEach,
     template: &Invocation,
-    registry: &Registry,
-    bindings: &BTreeMap<String, Value>,
-    options: &RunOptions,
-    cancelled: Arc<AtomicBool>,
-    draining: Arc<std::sync::atomic::AtomicU8>,
-    context: AppletInvocationContext,
     elements: ElementPlan<'_>,
 ) -> Result<TaskGroupResult> {
     let ElementPlan { skip, mut sink } = elements;
+    let TaskGroupRequest {
+        config,
+        registry,
+        bindings,
+        options,
+        cancelled,
+        draining,
+        context,
+    } = request;
     let TaskGroupConfig {
         limit,
         outer_deadline,

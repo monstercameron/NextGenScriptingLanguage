@@ -78,73 +78,80 @@ pub fn write_with_deadline(
     let target = handle(fd)? as usize;
     let data = bytes.to_vec();
     cooperative(cancelled, deadline, move |stop| {
-        let target = target as HANDLE;
-        let mut mode = 0;
-        if unsafe { GetConsoleMode(target, &mut mode) } != 0 {
-            let text = std::str::from_utf8(&data)
-                .context("terminal output is not UTF-8; redirect binary output")?;
-            let wide: Vec<u16> = text.encode_utf16().collect();
-            let mut offset = 0;
-            while offset < wide.len() {
-                if stop.load(Ordering::Relaxed) {
-                    bail!("output cancelled");
-                }
-                let count = (wide.len() - offset).min(16384);
-                let mut written = 0;
-                if unsafe {
-                    WriteConsoleW(
-                        target,
-                        wide[offset..].as_ptr().cast(),
-                        count as u32,
-                        &mut written,
-                        std::ptr::null(),
-                    )
-                } == 0
-                {
-                    return Err(std::io::Error::last_os_error()).context("writing terminal");
-                }
-                if written == 0 {
-                    bail!("writing terminal made no progress");
-                }
-                offset += written as usize;
-            }
-        } else {
-            let mut offset = 0;
-            while offset < data.len() {
-                if stop.load(Ordering::Relaxed) {
-                    bail!("output cancelled");
-                }
-                let count = (data.len() - offset).min(32768);
-                let mut written = 0;
-                if unsafe {
-                    WriteFile(
-                        target,
-                        data[offset..].as_ptr(),
-                        count as u32,
-                        &mut written,
-                        std::ptr::null_mut(),
-                    )
-                } == 0
-                {
-                    return Err(std::io::Error::last_os_error())
-                        .context("writing redirected output");
-                }
-                if written == 0 {
-                    bail!("writing output made no progress");
-                }
-                offset += written as usize;
-            }
-        }
-        Ok(())
+        write_all(target as HANDLE, &data, &stop)
     })
 }
+
+/// Writes every byte to `target`, checking `stop` between chunks and retrying partial
+/// writes until all bytes are out.
+fn write_all(target: HANDLE, data: &[u8], stop: &AtomicBool) -> Result<()> {
+    let mut mode = 0;
+    if unsafe { GetConsoleMode(target, &mut mode) } != 0 {
+        let text = std::str::from_utf8(data)
+            .context("terminal output is not UTF-8; redirect binary output")?;
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let mut offset = 0;
+        while offset < wide.len() {
+            if stop.load(Ordering::Relaxed) {
+                bail!("output cancelled");
+            }
+            let count = (wide.len() - offset).min(16384);
+            let mut written = 0;
+            if unsafe {
+                WriteConsoleW(
+                    target,
+                    wide[offset..].as_ptr().cast(),
+                    count as u32,
+                    &mut written,
+                    std::ptr::null(),
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error()).context("writing terminal");
+            }
+            if written == 0 {
+                bail!("writing terminal made no progress");
+            }
+            offset += written as usize;
+        }
+    } else {
+        let mut offset = 0;
+        while offset < data.len() {
+            if stop.load(Ordering::Relaxed) {
+                bail!("output cancelled");
+            }
+            let count = (data.len() - offset).min(32768);
+            let mut written = 0;
+            if unsafe {
+                WriteFile(
+                    target,
+                    data[offset..].as_ptr(),
+                    count as u32,
+                    &mut written,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error()).context("writing redirected output");
+            }
+            if written == 0 {
+                bail!("writing output made no progress");
+            }
+            offset += written as usize;
+        }
+    }
+    Ok(())
+}
+
+/// Final diagnostics, written as the process exits. This is a plain blocking write to
+/// stderr with no cancel or deadline, so a slow reader cannot cause the message to be
+/// dropped. The exit status is already non-zero, so a failed write has nothing else to
+/// report.
 pub fn write_diagnostic(bytes: &[u8]) {
-    let _ = write_with_deadline(
-        2,
-        bytes,
-        &AtomicBool::new(false),
-        Some(Instant::now() + Duration::from_millis(100)),
-    );
+    let Ok(target) = handle(2) else {
+        return;
+    };
+    let _ = write_all(target, bytes, &AtomicBool::new(false));
 }
 pub(super) fn capture_stdin(
     limit: usize,

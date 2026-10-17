@@ -403,7 +403,8 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         None => return Ok(()),
     };
 
-    if args.json && args.command == "check" {
+    if args.command == "check" {
+        let json = args.json;
         let path = args.file.to_string_lossy().into_owned();
         let path_bytes = args.file.as_os_str().as_encoded_bytes().to_vec();
         let source = fs::read_to_string(&args.file).ok();
@@ -456,6 +457,28 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         let data_flow_warning = args.capability_policy.is_some() && args.data_flow_policy.is_none();
         let github = args.github;
         let result = execute_workflow(args, finite_check_snapshot);
+        if !json {
+            // Plain check and --json share this analysis: the same static errors fail the
+            // check, after the authoritative load's own error.
+            result?;
+            let errors: Vec<String> = static_diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Error
+                })
+                .map(|diagnostic| format!("line {}: {}", diagnostic.span.line, diagnostic.message))
+                .collect();
+            if !errors.is_empty() {
+                bail!(
+                    "{}",
+                    errors.join(
+                        "
+"
+                    )
+                );
+            }
+            return Ok(());
+        }
         let mut diagnostics = static_diagnostics
             .iter()
             .map(serde_json::to_value)

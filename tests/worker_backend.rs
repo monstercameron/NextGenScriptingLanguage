@@ -19,9 +19,13 @@ mod working_dir {
     pub use flow::working_dir::*;
 }
 
+// A `#[path]` inside an inline module resolves under `tests/platform/`, which does not
+// exist, so Linux cannot resolve `..` through it. Declare the file at the crate root.
+#[path = "../src/platform/unix_ffi.rs"]
+pub(crate) mod unix_ffi_source;
+
 mod platform {
-    #[path = "../../src/platform/unix_ffi.rs"]
-    pub(crate) mod unix_ffi;
+    pub(crate) use super::unix_ffi_source as unix_ffi;
 }
 
 // The harness includes the whole FFI module but uses only some of its functions.

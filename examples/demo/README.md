@@ -11,8 +11,10 @@ compositor and needs no network and no models. The fake `hyprctl` lives in
 3. Reloads the compositor with `hyprctl reload`. This is the step that can fail.
 4. Prints the active theme.
 
-Its leading `# execute-policy: allow writes process` header declares the approvals the
-author expects: the program writes files and starts a process. The reload fails until
+Its leading `# execute-policy: allow writes process undeclared` header declares the approvals the
+author expects: the program writes files and starts a process. The direct commands
+`hyprctl` and `printf` state no effects of their own, so the gate counts them as
+`undeclared`, and the header approves that openly. The reload fails until
 the config is fixed, so a run stops there, and the checkpoint lets the run continue.
 
 ## Run the whole loop

@@ -52,9 +52,28 @@ pub fn parse_category(name: &str) -> Result<&'static str> {
     }
 }
 
+/// Shipped effect names that the prefix rules below do not place. Each one is mapped on
+/// purpose: reading host state is `reads`; creating or locking a file is `writes`; an
+/// action that starts or drives another program is `process`.
+const EXPLICIT_EFFECTS: &[(&str, &str)] = &[
+    ("clock.read", "reads"),
+    ("compositor.dispatch", "process"),
+    ("filesystem.lock", "writes"),
+    ("network.loopback", "network"),
+    ("package.install", "process"),
+    ("systemd.control", "process"),
+];
+
+/// Shipped effects that stay `undeclared` on purpose. They change the desktop, and no
+/// category describes them better, so using one needs an explicit approval of
+/// `undeclared`. Test `shipped_manifest_effects_are_all_placed` keeps this list exact.
+pub const DELIBERATELY_UNDECLARED: &[&str] = &["desktop.notify", "desktop.osd", "desktop.render"];
+
 /// The category one declared effect string belongs to.
 pub fn effect_category(effect: &str) -> &'static str {
-    if effect.starts_with("fs.read") {
+    if let Some((_, category)) = EXPLICIT_EFFECTS.iter().find(|(name, _)| *name == effect) {
+        category
+    } else if effect.starts_with("fs.read") {
         "reads"
     } else if effect.starts_with("fs.write")
         || effect.starts_with("file.write")

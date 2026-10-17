@@ -1,4 +1,4 @@
-# execute-policy: allow writes process
+# execute-policy: allow writes process undeclared
 # Omarchy-style theme refresh: render the templates into a theme directory, point the
 # current-theme link at it, then reload the compositor. The reload is the step that
 # can fail; `execute repair` fixes its arguments and `execute resume` continues from it.

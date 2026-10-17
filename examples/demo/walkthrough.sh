@@ -51,7 +51,7 @@ run_execute() {
 echo "== 1. write: the author's program, with its policy header, goes in the work folder"
 cp "$here/theme-refresh.program" "$program"
 mkdir -p "$themes" "$work/current"
-head -n 1 "$program" | grep -q '^# execute-policy: allow writes process$' \
+head -n 1 "$program" | grep -q '^# execute-policy: allow writes process undeclared$' \
   || fail "the program does not declare its approvals"
 
 echo "== 2. validate: static checks, no effects"

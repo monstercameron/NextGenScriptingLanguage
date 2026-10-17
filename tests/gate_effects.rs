@@ -102,3 +102,11 @@ fn the_demo_passes_the_gate_with_its_policy_header() {
         "{verdict}"
     );
 }
+
+#[test]
+fn package_installs_and_service_control_need_the_system_category() {
+    // Approving `process` must not also approve changes to installed packages or services.
+    assert_eq!(effect_category("package.install"), "system");
+    assert_eq!(effect_category("systemd.control"), "system");
+    assert_eq!(effect_category("process.spawn"), "process");
+}

@@ -6,7 +6,8 @@
 //!
 //! Effect mapping. Each declared effect string maps to one category:
 //! `fs.read*` to `reads`; `fs.write*`, `file.write*`, or any name containing
-//! `.write` to `writes`; `network.*` to `network`; `process.spawn` to `process`.
+//! `.write` to `writes`; `network.*` to `network`; `process.spawn` to `process`; package installs and
+//! service control to `system`.
 //! Any other effect is `undeclared`, so an unknown effect needs explicit approval.
 //! An invocation whose effects are not stated (null) is `undeclared` too.
 //!
@@ -29,6 +30,7 @@ pub const CATEGORIES: &[&str] = &[
     "cwd",
     "environment",
     "privileged",
+    "system",
     "undeclared",
 ];
 
@@ -54,14 +56,16 @@ pub fn parse_category(name: &str) -> Result<&'static str> {
 
 /// Shipped effect names that the prefix rules below do not place. Each one is mapped on
 /// purpose: reading host state is `reads`; creating or locking a file is `writes`; an
-/// action that starts or drives another program is `process`.
+/// action that starts or drives another program is `process`. Installing packages and
+/// controlling services change the system, so they are `system`, which approving
+/// `process` does not cover.
 const EXPLICIT_EFFECTS: &[(&str, &str)] = &[
     ("clock.read", "reads"),
     ("compositor.dispatch", "process"),
     ("filesystem.lock", "writes"),
     ("network.loopback", "network"),
-    ("package.install", "process"),
-    ("systemd.control", "process"),
+    ("package.install", "system"),
+    ("systemd.control", "system"),
 ];
 
 /// Shipped effects that stay `undeclared` on purpose. They change the desktop, and no

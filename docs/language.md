@@ -989,7 +989,8 @@ Three options confirm what runs, and they change nothing in the program itself.
 
 **Policy header.** A leading comment block may hold one line
 `# execute-policy: allow CATEGORY...`. The categories are `writes`, `network`,
-`reads`, `process`, `cwd`, `environment`, `privileged` and `undeclared`, and
+`reads`, `process`, `cwd`, `environment`, `privileged`, `system` (package installs
+and service control, which `process` does not cover) and `undeclared`, and
 `allow none` approves nothing. The header must be in the leading comments, there
 may be only one, and an unknown category is an error. `execute explain FILE --json
 --policy-header` merges the approved categories into the effects report. The header

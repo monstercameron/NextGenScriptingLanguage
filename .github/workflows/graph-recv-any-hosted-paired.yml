@@ -119,7 +119,7 @@ jobs:
             rustc --version --verbose >> "$output/tool-versions.txt"
             set +e
             CARGO_TARGET_DIR="$target" CARGO_INCREMENTAL=0 \
-              cargo test --manifest-path "$root/Cargo.toml" --locked --release --lib --no-run \
+              cargo test --manifest-path "$root/Cargo.toml" --locked --release --features full --lib --no-run \
                 --message-format=json > "$output/cargo-stdout.jsonl" 2> "$output/cargo-stderr.log"
             status=$?
             set -e

@@ -45,7 +45,7 @@ jobs:
       - run: cargo fmt --manifest-path browser/Cargo.toml --check
       - run: cargo clippy --locked --target wasm32-unknown-unknown -- -D warnings
         working-directory: browser
-      - run: cargo build --locked --release --bin execute
+      - run: cargo build --locked --release --bin execute --features full
       - run: python3 tools/build_playground.py
       - run: npm test
         working-directory: web

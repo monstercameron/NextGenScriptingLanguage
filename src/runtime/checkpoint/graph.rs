@@ -343,6 +343,8 @@ fn read_log(
 
 /// Append one committed line, first dropping any uncommitted tail beyond the chain.
 fn append_line(directory: &Path, committed_bytes: u64, line: &[u8]) -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    crate::failpoint::hit("checkpoint.append")?;
     let mut file = open_regular(&directory.join(GRAPH_LOG), "graph completed log", true)?;
     restrict_file(&file)?;
     file.set_len(committed_bytes)

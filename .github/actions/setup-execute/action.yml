@@ -5,7 +5,7 @@ runs:
   steps:
     - name: Build execute
       shell: bash
-      run: cargo build --locked --release --bin execute
+      run: cargo build --locked --release --bin execute --features full
     - name: Add execute to PATH
       shell: bash
       run: echo "$GITHUB_WORKSPACE/target/release" >> "$GITHUB_PATH"

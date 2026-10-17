@@ -94,7 +94,19 @@ def expected_assets(value):
             names.add("execute_" + value + "_" + deb + ".deb")
             names.add("execute-" + value + "-1." + rpm + ".rpm")
             names.add(stem + ".flatpak")
+    # CycloneDX SBOM of the locked dependency graph (tools/sbom.py).
+    names.add("execute-" + value + ".cdx.json")
     return names
+
+
+# SHA256SUMS covers the expected assets; its Sigstore bundle signs SHA256SUMS in the
+# publish job. Both are published with the assets and are checked against the same set.
+CHECKSUMS = "SHA256SUMS"
+SIGNATURE = "SHA256SUMS.sigstore.json"
+
+
+def publication_assets(value):
+    return expected_assets(value) | {CHECKSUMS, SIGNATURE}
 
 
 def verify_assets(folder, value):

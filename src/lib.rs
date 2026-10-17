@@ -13,6 +13,8 @@ pub mod desktop;
 pub mod diagnostics;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod discovery;
+#[cfg(feature = "failpoints")]
+pub(crate) mod failpoint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod graph;
 pub mod home;

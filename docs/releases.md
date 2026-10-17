@@ -125,3 +125,20 @@ The native checks use Unix utility suites on Linux/macOS and real PE fixtures
 on Windows. Package validation is also available through GitHub's **Package
 validation** workflow before tagging. Inspect the linked run for the exact
 source commit, platform results, artifacts and any known limitations.
+
+## Verifying a release
+
+Each release publishes `SHA256SUMS`, a Sigstore bundle that signs it
+(`SHA256SUMS.sigstore.json`), a CycloneDX SBOM of the locked dependency graph
+(`execute-<version>.cdx.json`), and GitHub build provenance and SBOM attestations.
+Verify the signature, then the checksums, before installing:
+
+```sh
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \n  --certificate-identity "https://github.com/monstercameron/NextGenScriptingLanguage/.github/workflows/release.yml@refs/tags/vVERSION" \n  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+sha256sum -c SHA256SUMS
+gh attestation verify ./execute-VERSION-linux-x64.tar.gz --repo monstercameron/NextGenScriptingLanguage
+```
+
+Replace `VERSION` with the release version. The release workflow rebuilds the
+x86_64 Linux binaries from a second checkout and fails unless every binary is
+byte-identical.

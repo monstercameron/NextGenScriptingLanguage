@@ -975,6 +975,8 @@ impl Journal {
     /// Append one completed-node line. Bytes past the committed prefix, left by an
     /// earlier failed append, are discarded first.
     fn append_completed_line(&mut self, line: &[u8]) -> Result<()> {
+        #[cfg(feature = "failpoints")]
+        crate::failpoint::hit("checkpoint.append")?;
         let mut file = open_regular(
             &self.directory.join(COMPLETED_LOG),
             "checkpoint completed log",
@@ -1572,6 +1574,8 @@ fn atomic_write_with(
     bytes: &[u8],
     mut write_and_sync: impl FnMut(&mut File, &[u8]) -> io::Result<()>,
 ) -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    crate::failpoint::hit("checkpoint.atomic")?;
     let target = if suffix == "json" {
         directory.join(format!("{stem}.{suffix}"))
     } else {

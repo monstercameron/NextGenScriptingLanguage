@@ -64,7 +64,7 @@ jobs:
         with:
           toolchain: stable
       - name: Build the release probe for this exact checkout
-        run: cargo test --locked --release --test graph_mixed_lifecycle_bench --no-run
+        run: cargo test --locked --release --features full --test graph_mixed_lifecycle_bench --no-run
       - name: Select the freshly built probe binary
         shell: bash
         run: |

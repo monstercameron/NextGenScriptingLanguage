@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 import struct
@@ -99,7 +100,8 @@ class Releases(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
             names = release.expected_assets("0.9.0-rc.1")
-            self.assertEqual(len(names), 12)
+            self.assertEqual(len(names), 13)
+            self.assertIn("execute-0.9.0-rc.1.cdx.json", names)
             self.assertTrue(
                 all(release.re.fullmatch(r"[A-Za-z0-9._-]+", name) for name in names)
             )
@@ -116,7 +118,7 @@ class Releases(unittest.TestCase):
             extra.unlink()
             release.verify_assets(folder, "0.9.0-rc.1")
             lines = (folder / "SHA256SUMS").read_text().splitlines()
-            self.assertEqual(len(lines), 12)
+            self.assertEqual(len(lines), 13)
             self.assertEqual({line.split("  ")[1] for line in lines}, names)
             self.assertTrue(
                 all(
@@ -276,6 +278,8 @@ class Publication(unittest.TestCase):
                 for name in release.expected_assets(value):
                     (folder / name).write_bytes(b"owned artifact fixture" * 20)
                 release.verify_assets(folder, value)
+                # The publish job signs SHA256SUMS after verify-assets writes it.
+                (folder / release.SIGNATURE).write_bytes(b"signature bundle fixture" * 20)
                 with mock.patch.dict(
                     os.environ,
                     {
@@ -382,9 +386,11 @@ class Publication(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "exact version tag"):
                     publish_release.main()
                 api.assert_not_called()
-            next(p for p in folder.iterdir() if p.name != "SHA256SUMS").write_bytes(
-                b"changed"
-            )
+            next(
+                p
+                for p in folder.iterdir()
+                if p.name not in {release.CHECKSUMS, release.SIGNATURE}
+            ).write_bytes(b"changed")
             with mock.patch.object(publish_release.subprocess, "run") as api:
                 with self.assertRaisesRegex(ValueError, "checksums"):
                     publish_release.main()
@@ -529,6 +535,74 @@ class AurPackages(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "not the repository version"):
             aur.render(self.work / "pkgs", "9.9.9")
+
+
+class SbomBuild(unittest.TestCase):
+    """The CycloneDX SBOM is deterministic and hashes only registry packages."""
+
+    def metadata(self):
+        return {
+            "packages": [
+                {"id": "root 0.1.0", "name": "execute", "version": "0.1.0", "license": "MIT"},
+                {"id": "dep 1.2.3", "name": "dep", "version": "1.2.3", "license": "MIT OR Apache-2.0"},
+                {"id": "gitdep 0.1.0", "name": "gitdep", "version": "0.1.0", "license": None},
+            ],
+            "resolve": {
+                "root": "root 0.1.0",
+                "nodes": [
+                    {"id": "root 0.1.0", "dependencies": ["dep 1.2.3", "gitdep 0.1.0"]},
+                    {"id": "dep 1.2.3", "dependencies": []},
+                    {"id": "gitdep 0.1.0", "dependencies": []},
+                ],
+            },
+        }
+
+    def test_sbom_is_deterministic_hashes_registry_packages_and_keeps_edges(self):
+        import sbom
+
+        lock = (
+            '[[package]]\nname = "dep"\nversion = "1.2.3"\nsource = "registry+x"\n'
+            'checksum = "' + "a" * 64 + '"\n\n'
+            '[[package]]\nname = "gitdep"\nversion = "0.1.0"\nsource = "git+x"\n'
+        )
+        first = sbom.build_sbom(self.metadata(), lock, "0.1.0", 1700000000)
+        second = sbom.build_sbom(self.metadata(), lock, "0.1.0", 1700000000)
+        self.assertEqual(first, second)
+        self.assertEqual(first["bomFormat"], "CycloneDX")
+        self.assertEqual(first["specVersion"], "1.5")
+        self.assertEqual(first["metadata"]["timestamp"], "2023-11-14T22:13:20Z")
+        by_name = {c["name"]: c for c in first["components"]}
+        self.assertEqual(set(by_name), {"dep", "gitdep"})
+        self.assertEqual(by_name["dep"]["hashes"], [{"alg": "SHA-256", "content": "a" * 64}])
+        self.assertNotIn("hashes", by_name["gitdep"])
+        root = next(d for d in first["dependencies"] if d["ref"] == "pkg:cargo/execute@0.1.0")
+        self.assertEqual(
+            root["dependsOn"], ["pkg:cargo/dep@1.2.3", "pkg:cargo/gitdep@0.1.0"]
+        )
+        self.assertTrue(first["serialNumber"].startswith("urn:uuid:"))
+
+
+class WorkflowPins(unittest.TestCase):
+    """Every action a workflow runs is pinned to a commit SHA, not a mutable tag."""
+
+    USES = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)", re.MULTILINE)
+    PINNED = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+
+    def test_every_remote_action_is_pinned_by_commit_sha(self):
+        unpinned = []
+        for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            for match in self.USES.finditer(workflow.read_text()):
+                reference = match[1]
+                if reference.startswith("./") or self.PINNED.match(reference):
+                    continue
+                unpinned.append(workflow.name + ": " + reference)
+        self.assertEqual(unpinned, [])
+
+    def test_lint_detects_a_mutable_tag(self):
+        sample = "      - uses: actions/checkout@v4\n"
+        match = self.USES.search(sample)
+        self.assertEqual(match[1], "actions/checkout@v4")
+        self.assertIsNone(self.PINNED.match(match[1]))
 
 
 if __name__ == "__main__":

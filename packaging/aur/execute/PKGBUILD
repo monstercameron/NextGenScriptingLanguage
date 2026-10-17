@@ -23,7 +23,7 @@ prepare() {
 build() {
   cd "$_srcname"
   export CARGO_TARGET_DIR=target
-  cargo build --locked --profile dist --bins
+  cargo build --locked --profile dist --features full --bins
 }
 
 package() {

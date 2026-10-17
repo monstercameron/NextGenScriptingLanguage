@@ -84,12 +84,12 @@ check: rust-check docs-check applet-boundaries-harness-check stress-evidence-har
 rust-check:
 	$(CARGO) fmt --check
 	$(RUSTFMT) --edition 2021 --check src/runtime/shared.rs
-	$(CARGO) clippy --locked --all-targets -- -D warnings
-	$(CARGO) test --locked --release --no-fail-fast -- --test-threads=1
-	$(CARGO) build --locked --release
+	$(CARGO) clippy --locked --features full --all-targets -- -D warnings
+	$(CARGO) test --locked --features full --release --no-fail-fast -- --test-threads=1
+	$(CARGO) build --locked --features full --release
 
 build:
-	$(CARGO) build --locked --release
+	$(CARGO) build --locked --features full --release
 
 # These fixtures use only owned HOME directories and mock desktop/service APIs.
 omarchy-rewrite-check: build

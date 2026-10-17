@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
-from release import expected_assets, version
+from release import CHECKSUMS, SIGNATURE, publication_assets, version
 
 
 def gh(*args, **kwargs):
@@ -52,14 +52,15 @@ def main():
     if os.environ.get("GITHUB_REF") != "refs/tags/" + tag:
         raise ValueError("publication must run for the exact version tag")
     folder = Path("dist")
-    expected = expected_assets(value) | {"SHA256SUMS"}
+    expected = publication_assets(value)
     if {p.name for p in folder.iterdir()} != expected:
         raise ValueError("publication asset set is incomplete")
-    lines = (folder / "SHA256SUMS").read_text().splitlines()
+    lines = (folder / CHECKSUMS).read_text().splitlines()
+    # The checksums cover the payloads; SHA256SUMS and its signature are not payloads.
     actual = {
         p.name: hashlib.sha256(p.read_bytes()).hexdigest()
         for p in folder.iterdir()
-        if p.name != "SHA256SUMS"
+        if p.name not in {CHECKSUMS, SIGNATURE}
     }
     if lines != [actual[n] + "  " + n for n in sorted(actual)]:
         raise ValueError("checksums do not match publication payloads")

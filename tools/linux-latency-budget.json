@@ -1,5 +1,11 @@
 {
+  "version_median_ms": null,
   "one_line_median_ms": null,
   "ten_step_median_ms": null,
-  "note": "Set each budget to about 150% of the median the first Linux CI run prints for it. Until then the step reports the timings without enforcing them."
+  "hot_loop_median_ms": null,
+  "version_max_rss_kb": null,
+  "one_line_max_rss_kb": null,
+  "ten_step_max_rss_kb": null,
+  "hot_loop_max_rss_kb": null,
+  "note": "Set each median budget to about 150% of the median the first Linux CI run prints for it, and each RSS budget to about 110% of the peak it prints. Until then the step reports the timings and memory without enforcing them. The one-line and ten-step programs run native printf, so they measure process creation as well as startup."
 }

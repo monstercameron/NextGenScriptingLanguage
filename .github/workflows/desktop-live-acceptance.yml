@@ -56,7 +56,7 @@ jobs:
         run: |
           rustc --version
           cargo --version
-          cargo build --locked --release --bin execute
+          cargo build --locked --release --bin execute --features full
 
       - name: Run the live Arch guest acceptance
         env:

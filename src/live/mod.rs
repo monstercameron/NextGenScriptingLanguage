@@ -2,7 +2,7 @@
 pub(crate) mod auth;
 mod debug;
 pub(crate) mod state;
-mod transport;
+pub(crate) mod transport;
 #[cfg(windows)]
 mod windows_transport;
 mod worker;
@@ -915,7 +915,7 @@ fn run_outcome(shared: &Shared) -> Option<RunEnd> {
         _ => None,
     }
 }
-fn peer_is_owner(stream: &UnixStream) -> bool {
+pub(crate) fn peer_is_owner(stream: &UnixStream) -> bool {
     #[cfg(unix)]
     {
         peer_has_uid(stream, unsafe { libc::geteuid() })

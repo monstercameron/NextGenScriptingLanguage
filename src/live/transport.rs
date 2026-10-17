@@ -158,7 +158,7 @@ impl Write for DeadlineIo<'_> {
 
 /// Keep the original LF/EOF framing and one extra byte for the caller's
 /// existing size diagnostic. Progress never renews the absolute budget.
-pub(super) fn read_message(
+pub(crate) fn read_message(
     stream: &mut UnixStream,
     limit: usize,
     timeout: Duration,
@@ -171,7 +171,7 @@ pub(super) fn read_message(
     budget.remaining()?;
     Ok(bytes)
 }
-pub(super) fn write_message(
+pub(crate) fn write_message(
     stream: &mut UnixStream,
     bytes: &[u8],
     timeout: Duration,

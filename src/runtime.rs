@@ -4485,15 +4485,15 @@ fn run_finite_state(
                 .as_ref()
                 .and_then(|ids| ids.get(index))
                 .cloned();
-            journal.begin_node_with_step(
-                &fingerprint,
-                index,
+            journal.begin_node_record(checkpoint::NodeBegin {
+                fingerprint: &fingerprint,
+                start: index,
                 end,
-                step.line,
-                &cwd,
-                tracks_elements || resume::retry_safe(program, index, end, registry)?,
+                line: step.line,
+                cwd_before: &cwd,
+                retry_safe: tracks_elements || resume::retry_safe(program, index, end, registry)?,
                 step_id,
-            )?;
+            })?;
         }
         let mut jump_to = None;
         let mut control_rethrow = None;

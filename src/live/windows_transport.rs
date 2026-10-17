@@ -41,7 +41,7 @@ fn name(path: &Path) -> io::Result<Vec<u16>> {
         hash.finalize()
     ))))
 }
-pub(super) struct Stream {
+pub(crate) struct Stream {
     handle: OwnedHandle,
     server: bool,
     read_timeout: AtomicU64,

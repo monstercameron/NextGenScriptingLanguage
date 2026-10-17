@@ -68,6 +68,8 @@ struct Args {
     control: bool,
     /// `run --control --break-at LINE`: pause before these source lines from the start.
     break_at: Vec<usize>,
+    /// `run --daemon` or `EXECUTE_DAEMON=1`: ask for the warm daemon when one is running.
+    acceleration: flow::agent::daemon::Acceleration,
 }
 
 struct FiniteCheckSnapshot {
@@ -246,6 +248,9 @@ fn execute() -> Result<()> {
     if arguments.first().is_some_and(|a| a == "dap") {
         std::process::exit(flow::agent::dap::cli(&arguments[1..])?);
     }
+    if arguments.first().is_some_and(|a| a == "daemon") {
+        std::process::exit(flow::agent::daemon::cli(&arguments[1..])?);
+    }
     let args = match parse_args(arguments)? {
         Some(args) => args,
         None => return Ok(()),
@@ -417,6 +422,13 @@ fn remote_resolve(arguments: &[String]) -> Result<()> {
 }
 
 fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapshot>) -> Result<()> {
+    if args.acceleration == flow::agent::daemon::Acceleration::Daemon
+        && flow::agent::daemon::probe() == flow::agent::daemon::Probe::Running
+    {
+        eprintln!(
+            "note: a daemon is running; this build runs the program cold until daemon forwarding lands"
+        );
+    }
     let capability_policy = args
         .capability_policy
         .as_deref()
@@ -1145,6 +1157,12 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut max_record_bytes_seen = false;
     let mut control = false;
     let mut break_at: Vec<usize> = Vec::new();
+    let mut acceleration =
+        if command == "run" && std::env::var("EXECUTE_DAEMON").is_ok_and(|v| v == "1") {
+            flow::agent::daemon::Acceleration::Daemon
+        } else {
+            flow::agent::daemon::Acceleration::Cold
+        };
     let mut index = first_argument;
     while index < arguments.len() {
         let argument = &arguments[index];
@@ -1464,6 +1482,9 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 }
                 control = true;
             }
+            "--daemon" if command == "run" => {
+                acceleration = flow::agent::daemon::Acceleration::Daemon;
+            }
             "--break-at" if command == "run" => {
                 let line = parse_positive_usize(&arguments, &mut index, "--break-at")?;
                 break_at.push(line);
@@ -1521,6 +1542,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         record_dir,
         control,
         break_at,
+        acceleration,
     }))
 }
 

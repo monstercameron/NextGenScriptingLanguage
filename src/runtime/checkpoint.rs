@@ -181,6 +181,21 @@ struct SnapshotRef {
     bindings: BTreeMap<String, BlobRef>,
 }
 
+/// What a checkpoint node records when it begins.
+pub(super) struct NodeBegin<'a> {
+    pub fingerprint: &'a str,
+    /// Inclusive first step index.
+    pub start: usize,
+    /// Exclusive step index.
+    pub end: usize,
+    /// The first step's source line.
+    pub line: usize,
+    pub cwd_before: &'a Path,
+    pub retry_safe: bool,
+    /// The first step's id, from `ast::step_ids`.
+    pub step_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InFlightNode {
@@ -695,6 +710,8 @@ impl Journal {
 
     /// Begin a node without a step id. Only tests use it; the runtime records ids.
     #[cfg(test)]
+    /// Begin a node without a step id. Only tests use it; the runtime records ids.
+    #[cfg(test)]
     pub fn begin_node(
         &mut self,
         fingerprint: &str,
@@ -704,21 +721,29 @@ impl Journal {
         cwd_before: &Path,
         retry_safe: bool,
     ) -> Result<()> {
-        self.begin_node_with_step(fingerprint, start, end, line, cwd_before, retry_safe, None)
+        self.begin_node_record(NodeBegin {
+            fingerprint,
+            start,
+            end,
+            line,
+            cwd_before,
+            retry_safe,
+            step_id: None,
+        })
     }
 
-    /// Begin a node, recording the id of its first step for resume matching.
-    #[allow(clippy::too_many_arguments)]
-    pub fn begin_node_with_step(
-        &mut self,
-        fingerprint: &str,
-        start: usize,
-        end: usize,
-        line: usize,
-        cwd_before: &Path,
-        retry_safe: bool,
-        step_id: Option<String>,
-    ) -> Result<()> {
+    /// Begin a node: its identity, its span, and the id of its first step, which resume
+    /// uses to match the node to its statement.
+    pub fn begin_node_record(&mut self, node: NodeBegin<'_>) -> Result<()> {
+        let NodeBegin {
+            fingerprint,
+            start,
+            end,
+            line,
+            cwd_before,
+            retry_safe,
+            step_id,
+        } = node;
         if start >= end {
             bail!("checkpoint node must cover at least one step");
         }

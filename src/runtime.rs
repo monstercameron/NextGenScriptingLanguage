@@ -5847,6 +5847,9 @@ fn run_finite_state(
                             failure.stages = stages;
                             return Err(execution_result::ExecutionFailure::new(failure).into());
                         }
+                        // A streamed step's stdout went to the terminal rather than into the
+                        // result, so its execution record reports no captured output.
+                        let reported_stdout_captured = stdout_captured && !streamed;
                         let output_value = if let Some(name) = &output_call.binding {
                             bind_call_output(
                                 name,
@@ -5891,7 +5894,7 @@ fn run_finite_state(
                                 line,
                                 applet,
                                 &outcome,
-                                stdout_captured.then_some(bytes.as_slice()),
+                                reported_stdout_captured.then_some(bytes.as_slice()),
                                 stderr,
                                 &stages,
                             );
@@ -5903,7 +5906,7 @@ fn run_finite_state(
                                         line,
                                         applet,
                                         &outcome,
-                                        stdout_captured.then_some(bytes.as_slice()),
+                                        reported_stdout_captured.then_some(bytes.as_slice()),
                                         stderr,
                                         &stages,
                                     )
@@ -5922,7 +5925,7 @@ fn run_finite_state(
                                 // the source program explicitly asks for them.
                                 let execution = execution_result::ExecutionResult::from_outcome(
                                     outcome,
-                                    stdout_captured.then(|| bytes.clone()),
+                                    reported_stdout_captured.then(|| bytes.clone()),
                                     stderr.map(<[u8]>::to_vec),
                                     output_value,
                                     stages,

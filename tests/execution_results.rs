@@ -703,3 +703,44 @@ fn remote_transport_failure_through_runtime_keeps_unknown_status_and_certainty()
     assert_eq!(stage.get("state"), Some(&Value::String("unknown".into())));
     assert_eq!(stage.get("status"), Some(&Value::Null));
 }
+
+#[cfg(unix)]
+#[test]
+fn streamed_stdout_is_reported_as_not_captured() {
+    let directory = tempfile::tempdir().unwrap();
+    let script_path = directory.path().join("streamed.program");
+    std::fs::write(
+        &script_path,
+        "run \"printf\" with arguments [\"STREAMED_PAYLOAD\"]\n",
+    )
+    .unwrap();
+
+    let output = ProcessCommand::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(directory.path())
+        .arg("run")
+        .arg(&script_path)
+        .arg("--trace")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output
+        .stdout
+        .windows(b"STREAMED_PAYLOAD".len())
+        .any(|window| window == b"STREAMED_PAYLOAD"));
+
+    let trace = String::from_utf8(output.stderr).unwrap();
+    let event = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<JsonValue>(line).ok())
+        .find(|event| event.get("event").and_then(JsonValue::as_str) == Some("execution_result"))
+        .expect("trace should contain an execution_result event");
+    let execution = &event["execution"];
+    // Streamed output went straight to the terminal: it is not captured, on any platform.
+    assert_eq!(execution["stdout_captured"], false);
+    assert_eq!(execution["stdout_bytes"], 0);
+    assert!(execution.get("stdout").is_none());
+}

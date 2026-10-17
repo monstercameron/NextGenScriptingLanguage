@@ -60,6 +60,7 @@ struct Args {
     max_catch_up: Option<usize>,
     calendar_dedup: Option<String>,
     command_timeout: Option<std::time::Duration>,
+    drain_timeout: Option<std::time::Duration>,
     total_timeout: Option<std::time::Duration>,
     max_record_bytes: usize,
     max_record_bytes_set: bool,
@@ -975,7 +976,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         if let Some(checkpoint) = checkpoint.as_ref() {
                             runtime::run_checkpointed(&program, &registry, &options, checkpoint)
                         } else {
-                            runtime::run(&program, &registry, &options)
+                            runtime::run_with_drain_timeout(
+                                &program,
+                                &registry,
+                                &options,
+                                args.drain_timeout.unwrap_or(runtime::DEFAULT_DRAIN_TIMEOUT),
+                            )
                         }
                     })?
                 };
@@ -1044,6 +1050,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut max_catch_up = None;
     let mut calendar_dedup = None;
     let mut command_timeout = None;
+    let mut drain_timeout = None;
     let mut total_timeout = None;
     let mut max_record_bytes = 65_536;
     let mut max_record_bytes_seen = false;
@@ -1287,6 +1294,13 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     .context("command timeout is too large")?;
                 command_timeout = Some(duration);
             }
+            "--drain-timeout-ms" if command == "run" => {
+                if drain_timeout.is_some() {
+                    bail!("--drain-timeout-ms may be specified only once");
+                }
+                let value = parse_positive_usize(&arguments, &mut index, "--drain-timeout-ms")?;
+                drain_timeout = Some(std::time::Duration::from_millis(u64::try_from(value)?));
+            }
             "--total-timeout-ms" if matches!(command.as_str(), "run" | "resume") => {
                 if total_timeout.is_some() {
                     bail!("--total-timeout-ms may be specified only once");
@@ -1411,6 +1425,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         max_catch_up,
         calendar_dedup,
         command_timeout,
+        drain_timeout,
         total_timeout,
         max_record_bytes,
         max_record_bytes_set: max_record_bytes_seen,
@@ -2189,7 +2204,7 @@ fn default_manifest_dir() -> PathBuf {
 }
 
 fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory or one legacy JSON file containing applet manifests\n  --manifest-catalog FILE Explicit packed catalog; mutually exclusive with --manifest-dir\n  --capability-policy FILE Enforce a strict, versioned applet policy (check/explain/inspect/run/resume/live serve)\n  --data-flow-policy FILE Enforce origin and persistence data-flow grants\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --once                  Run one activation of a calendar-triggered handler and exit (run only)\n  --init                  Run as PID 1: supervise the worker, reap orphans, forward SIGINT/SIGTERM/SIGHUP (run only, Unix)\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --missed-ticks POLICY   Trigger backlog policy: skip, coalesce, or catch-up (run/resume)\n  --max-catch-up N         Bound catch-up runs to 1..64 (requires catch-up)\n  --calendar-dedup MODE   Calendar fold policy: instant or local (run/resume)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory or one legacy JSON file containing applet manifests\n  --manifest-catalog FILE Explicit packed catalog; mutually exclusive with --manifest-dir\n  --capability-policy FILE Enforce a strict, versioned applet policy (check/explain/inspect/run/resume/live serve)\n  --data-flow-policy FILE Enforce origin and persistence data-flow grants\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --once                  Run one activation of a calendar-triggered handler and exit (run only)\n  --init                  Run as PID 1: supervise the worker, reap orphans, forward SIGINT/SIGTERM/SIGHUP (run only, Unix)\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --missed-ticks POLICY   Trigger backlog policy: skip, coalesce, or catch-up (run/resume)\n  --max-catch-up N         Bound catch-up runs to 1..64 (requires catch-up)\n  --calendar-dedup MODE   Calendar fold policy: instant or local (run/resume)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --drain-timeout-ms N    Budget for an interrupt drain before it cancels (run only; default 10000)\n  --max-record-bytes N     Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

@@ -333,6 +333,8 @@ pub(crate) struct Signals {
     cancelled: Arc<AtomicBool>,
     /// Interrupt drain state (`platform::DRAIN_*`); shared with cleanup scopes.
     drain: Arc<AtomicU8>,
+    /// Stops this run's drain watchdog when the run's signals are dropped.
+    drain_stop: Option<Arc<AtomicBool>>,
     registrations: Vec<signal_hook::SigId>,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
@@ -427,19 +429,23 @@ impl AppletInvocationContext {
 
 impl Signals {
     pub(crate) fn register_with_deadline(deadline: Option<Instant>) -> Result<Self> {
-        Self::register(deadline, false)
+        Self::register(deadline, None)
     }
 
     /// Like `register_with_deadline`, but the first interrupt drains the run rather
-    /// than cancelling it; a second interrupt cancels.
-    pub(crate) fn register_with_drain(deadline: Option<Instant>) -> Result<Self> {
-        Self::register(deadline, true)
+    /// than cancelling it, for at most `drain_budget`; a second interrupt cancels.
+    pub(crate) fn register_with_drain(
+        deadline: Option<Instant>,
+        drain_budget: Duration,
+    ) -> Result<Self> {
+        Self::register(deadline, Some(drain_budget))
     }
 
-    fn register(deadline: Option<Instant>, drain: bool) -> Result<Self> {
+    fn register(deadline: Option<Instant>, drain: Option<Duration>) -> Result<Self> {
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+            drain_stop: None,
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
             deadline,
@@ -462,7 +468,20 @@ impl Signals {
             #[cfg(test)]
             job_panic_before_ack: None,
         };
-        let armed = drain.then(|| Arc::clone(&guard.drain));
+        let armed = match drain {
+            Some(budget) => {
+                let stop = Arc::new(AtomicBool::new(false));
+                spawn_drain_watchdog(
+                    Arc::clone(&guard.drain),
+                    Arc::clone(&guard.cancelled),
+                    budget,
+                    Arc::clone(&stop),
+                )?;
+                guard.drain_stop = Some(stop);
+                Some(Arc::clone(&guard.drain))
+            }
+            None => None,
+        };
         guard.registrations = crate::platform::signals(guard.cancelled.clone(), armed)?;
         Ok(guard)
     }
@@ -489,6 +508,7 @@ impl Signals {
         Ok(Self {
             cancelled,
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+            drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics,
             deadline,
@@ -520,6 +540,7 @@ impl Signals {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             drain: Arc::clone(&self.drain),
+            drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
             deadline,
@@ -850,7 +871,76 @@ impl Drop for Signals {
         for registration in &self.registrations {
             signal_hook::low_level::unregister(*registration);
         }
+        if let Some(stop) = &self.drain_stop {
+            stop.store(true, Ordering::SeqCst);
+        }
     }
+}
+
+/// The budget an interrupt drain gets before it cancels, unless the caller sets one.
+pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Decides when a drain has lasted its budget. The state is polled, so the clock
+/// starts at the first poll that sees a requested drain.
+struct DrainClock {
+    budget: Duration,
+    since: Option<Instant>,
+}
+
+impl DrainClock {
+    fn new(budget: Duration) -> Self {
+        Self {
+            budget,
+            since: None,
+        }
+    }
+
+    /// True once a requested or started drain has lasted more than the budget.
+    /// Idle and cancelled states never expire, and they reset the clock.
+    fn expired(&mut self, state: u8, now: Instant) -> bool {
+        match state {
+            crate::platform::DRAIN_REQUESTED | crate::platform::DRAIN_STARTED => {
+                let since = *self.since.get_or_insert(now);
+                now.saturating_duration_since(since) >= self.budget
+            }
+            _ => {
+                self.since = None;
+                false
+            }
+        }
+    }
+}
+
+/// Polls a run's drain state and turns an expired drain into a cancel: the same
+/// state change and flag a second interrupt makes. It exits once the run cancels
+/// or its signals are dropped.
+fn spawn_drain_watchdog(
+    drain: Arc<AtomicU8>,
+    cancelled: Arc<AtomicBool>,
+    budget: Duration,
+    stop: Arc<AtomicBool>,
+) -> Result<()> {
+    std::thread::Builder::new()
+        .name("execute-drain-watchdog".into())
+        .spawn(move || {
+            let mut clock = DrainClock::new(budget);
+            while !stop.load(Ordering::SeqCst) {
+                let state = drain.load(Ordering::SeqCst);
+                if state == crate::platform::DRAIN_CANCELLED {
+                    return;
+                }
+                if clock.expired(state, Instant::now()) {
+                    drain.store(crate::platform::DRAIN_CANCELLED, Ordering::SeqCst);
+                    cancelled.store(true, Ordering::SeqCst);
+                    return;
+                }
+                // 50 ms keeps an idle run with an `on interrupt` body to 20 wakeups a second;
+                // a 10 s default budget needs no finer resolution.
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        })
+        .context("starting the interrupt drain watchdog")?;
+    Ok(())
 }
 pub(crate) fn binary_path(binary: &str, cwd: &Path) -> Result<PathBuf> {
     if binary == "@execute-model" {
@@ -2391,9 +2481,20 @@ fn has_interrupt_handler(program: &Program) -> bool {
 }
 
 pub fn run(program: &Program, registry: &Registry, options: &RunOptions) -> Result<RunResult> {
+    run_with_drain_timeout(program, registry, options, DEFAULT_DRAIN_TIMEOUT)
+}
+
+/// `run` with an explicit interrupt drain budget. The budget applies only to programs
+/// with an `on interrupt` body.
+pub fn run_with_drain_timeout(
+    program: &Program,
+    registry: &Registry,
+    options: &RunOptions,
+    drain_timeout: Duration,
+) -> Result<RunResult> {
     let deadline = deadline_after(options.total_timeout, "total timeout")?;
     let signals = if has_interrupt_handler(program) {
-        Signals::register_with_drain(deadline)?
+        Signals::register_with_drain(deadline, drain_timeout)?
     } else {
         Signals::register_with_deadline(deadline)?
     };
@@ -6818,5 +6919,66 @@ mod drain_tests {
         let value = crate::structured::to_json(&result.value).unwrap();
         assert_eq!(result.launched_processes, 0);
         assert_eq!(value["not_started"], 3, "{value}");
+    }
+
+    #[test]
+    fn drain_clock_expires_only_after_its_budget_and_restarts_with_a_new_drain() {
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        let mut clock = DrainClock::new(ms(100));
+        assert!(!clock.expired(crate::platform::DRAIN_IDLE, start));
+        assert!(!clock.expired(crate::platform::DRAIN_REQUESTED, start));
+        assert!(!clock.expired(crate::platform::DRAIN_REQUESTED, start + ms(99)));
+        assert!(clock.expired(crate::platform::DRAIN_STARTED, start + ms(100)));
+        // A cancelled or idle state resets the clock, so the next drain gets a full budget.
+        assert!(!clock.expired(crate::platform::DRAIN_CANCELLED, start + ms(500)));
+        assert!(!clock.expired(crate::platform::DRAIN_REQUESTED, start + ms(500)));
+        assert!(!clock.expired(crate::platform::DRAIN_REQUESTED, start + ms(599)));
+        assert!(clock.expired(crate::platform::DRAIN_REQUESTED, start + ms(600)));
+    }
+
+    #[test]
+    fn watchdog_turns_an_expired_drain_into_a_cancel() {
+        let drain = Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        spawn_drain_watchdog(
+            Arc::clone(&drain),
+            Arc::clone(&cancelled),
+            Duration::from_millis(50),
+            Arc::clone(&stop),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !cancelled.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            cancelled.load(Ordering::SeqCst),
+            "the drain never cancelled"
+        );
+        assert_eq!(
+            drain.load(Ordering::SeqCst),
+            crate::platform::DRAIN_CANCELLED
+        );
+        stop.store(true, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn watchdog_leaves_an_idle_run_alone() {
+        let drain = Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        spawn_drain_watchdog(
+            Arc::clone(&drain),
+            Arc::clone(&cancelled),
+            Duration::from_millis(10),
+            Arc::clone(&stop),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!cancelled.load(Ordering::SeqCst));
+        assert_eq!(drain.load(Ordering::SeqCst), crate::platform::DRAIN_IDLE);
+        stop.store(true, Ordering::SeqCst);
     }
 }

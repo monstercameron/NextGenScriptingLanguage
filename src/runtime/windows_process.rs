@@ -161,6 +161,7 @@ fn execute_group_with_sink(
     let bounded = Signals {
         cancelled: signals.cancelled.clone(),
         drain: Arc::clone(&signals.drain),
+        drain_stop: None,
         registrations: Vec::new(),
         capture_diagnostics: signals.capture_diagnostics,
         graph_service_cancellation: signals.graph_service_cancellation,

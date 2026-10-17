@@ -62,3 +62,36 @@ fn second_interrupt_cancels_without_running_the_handler() {
     assert!(!directory.path().join("drained.txt").exists());
     assert!(!directory.path().join("main.txt").exists());
 }
+
+#[test]
+fn drain_budget_expires_and_cancels_the_in_flight_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = PROGRAM.replace("[\"1\"]", "[\"5\"]");
+    fs::write(directory.path().join("long.program"), source).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(directory.path())
+        .arg("run")
+        .arg("long.program")
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .arg("--drain-timeout-ms")
+        .arg("300")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    thread::sleep(Duration::from_millis(300));
+    let interrupted = std::time::Instant::now();
+    interrupt(&child);
+    let status = child.wait().unwrap();
+    // The budget cancels the five-second sleep; the run does not wait for it.
+    assert!(
+        interrupted.elapsed() < Duration::from_secs(4),
+        "the drain waited past its budget: {:?}",
+        interrupted.elapsed()
+    );
+    assert_eq!(status.code(), Some(130));
+    // A budget expiry is a cancel: the handler body is skipped.
+    assert!(!directory.path().join("drained.txt").exists());
+    assert!(!directory.path().join("main.txt").exists());
+}

@@ -599,8 +599,10 @@ fn logical_lines(source: &str) -> Result<Vec<LogicalLine>> {
         let mut text = take_piece(first.trim_start_matches(' '), number, &physical, &mut index)?;
         // Most statements have no bracket, so skip the second tokenize for them.
         while (text.contains('[') || text.contains('{')) && bracket_depth(&text, number)? > 0 {
+            // At end of file the statement goes to its own parser unchanged, which
+            // names the unclosed bracket with the cause for that statement.
             let Some(next) = physical.get(index) else {
-                bail!("line {number}: statement ends inside an open bracket or brace");
+                break;
             };
             index += 1;
             let next = strip_comment(next);

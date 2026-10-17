@@ -26,7 +26,7 @@ fn run(script: &str) -> Output {
 fn every_missing_executable_is_reported_before_any_step_runs() {
     let output = run("run printf with message \"effect\"
 run \"no-such-tool-alpha\" with arguments []
-if \"a\" is \"b\"
+if \"a\" is \"a\"
   run \"no-such-tool-beta\" with arguments []
 ");
     assert_eq!(output.status.code(), Some(1));
@@ -36,6 +36,16 @@ if \"a\" is \"b\"
     assert!(stderr.contains("line 4"), "{stderr}");
     assert!(stderr.contains("no-such-tool-beta"), "{stderr}");
     assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+}
+
+#[test]
+fn a_missing_executable_in_a_branch_that_cannot_run_does_not_block_the_run() {
+    let output = run("run printf with message \"effect\"
+if \"a\" is \"b\"
+  run \"no-such-tool-beta\" with arguments []
+");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "effect\n");
 }
 
 #[test]

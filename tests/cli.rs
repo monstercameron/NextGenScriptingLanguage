@@ -1587,7 +1587,14 @@ fn closed_stdout_is_a_normal_error_for_cli_and_live_responses() {
             command.arg("--manifest-dir").arg(&manifests);
         }
         let output = command.stdout(Stdio::from(writer)).output().unwrap();
-        assert_eq!(output.status.code(), Some(1), "{arguments:?}");
+        // A command that writes to stdout exits 141 quietly when the reader is gone;
+        // `live read` of a missing socket writes nothing to stdout and reports 1.
+        let expected = if arguments.starts_with(&["live", "read"]) {
+            1
+        } else {
+            141
+        };
+        assert_eq!(output.status.code(), Some(expected), "{arguments:?}");
         assert!(
             !String::from_utf8_lossy(&output.stderr).contains("panicked"),
             "{arguments:?}: {:?}",

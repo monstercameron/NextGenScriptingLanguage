@@ -132,7 +132,7 @@ fn ordinary_run_and_applet_metadata_match_directory_mode() {
 }
 
 #[test]
-fn no_selector_keeps_the_existing_local_manifest_directory_authoritative() {
+fn no_selector_never_searches_the_working_directory() {
     let fixture = Fixture::new();
     let local = fixture.temp.path().join("manifests");
     fs::create_dir(&local).unwrap();
@@ -165,8 +165,13 @@ fn no_selector_keeps_the_existing_local_manifest_directory_authoritative() {
     let output = fixture.cli(&["applets", "list"]);
     assert!(output.status.success());
     let listed: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(listed["applets"].as_array().unwrap().len(), 1);
-    assert_eq!(listed["applets"][0]["name"], "local.default");
+    // The working directory is never searched, so its manifests/ cannot shadow the
+    // bundled applets.
+    assert!(listed["applets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|applet| applet["name"] != "local.default"));
 }
 
 #[test]

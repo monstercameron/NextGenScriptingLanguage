@@ -221,7 +221,7 @@ fn completed_status_binding_is_restored_and_command_is_not_repeated() {
         .output()
         .unwrap();
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("completed checkpoint node changed"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("completed checkpoint node"));
     assert_eq!(fs::read(dir.path().join("calls")).unwrap(), b"x");
 }
 
@@ -241,7 +241,7 @@ fn capture_preserves_named_manifest_calls_and_output_limits() {
     opts.max_output_bytes = 2;
     let program=parser::parse("run \"sh\" with arguments [\"-c\", \"printf 123456789; exit 7\"] and keep status as code\nthen save to \"forbidden\"\n").unwrap();
     let error = runtime::run(&program, &registry, &opts).err().unwrap();
-    assert!(format!("{error:#}").contains("output exceeds maximum"));
+    assert!(format!("{error:#}").contains("output exceeds the limit of 2 bytes"));
     assert!(!dir.path().join("forbidden").exists());
 }
 

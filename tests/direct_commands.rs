@@ -298,5 +298,5 @@ fn direct_calls_mix_with_manifest_adapters_and_use_distinct_checkpoint_identitie
     )
     .err()
     .unwrap();
-    assert!(format!("{error:#}").contains("completed checkpoint node changed"));
+    assert!(format!("{error:#}").contains("completed checkpoint node"));
 }

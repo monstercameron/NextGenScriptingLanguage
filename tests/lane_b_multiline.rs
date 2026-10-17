@@ -62,11 +62,8 @@ fn unclosed_bracket_is_rejected_before_effects() {
         "run printf with message \"effect\"\nuse value \"x\"\npipe to wc with flags [\n  \"-c\"\n",
     );
     assert_ne!(output.status.code(), Some(0));
-    assert!(
-        stderr(&output).contains("open bracket or brace"),
-        "{}",
-        stderr(&output)
-    );
+    // The statement starts on line 3; its own parser names the unclosed list.
+    assert!(stderr(&output).contains("line 3"), "{}", stderr(&output));
 }
 
 #[test]

@@ -208,7 +208,7 @@ fn run_wide_job_output_obeys_the_retention_cap() -> anyhow::Result<()> {
     )
     .err()
     .expect("aggregate job output must remain bounded");
-    assert!(format!("{error:#}").contains("run-wide maximum"));
+    assert!(format!("{error:#}").contains("run-wide limit of"));
     Ok(())
 }
 
@@ -381,7 +381,7 @@ fn nested_finite_program_shares_the_run_wide_stdout_budget() -> anyhow::Result<(
     )
     .err()
     .expect("nested calls must share the aggregate retained-stdout cap");
-    assert!(format!("{error:#}").contains("run-wide maximum"));
+    assert!(format!("{error:#}").contains("run-wide limit of"));
     Ok(())
 }
 
@@ -401,7 +401,7 @@ fn concurrent_task_modules_share_the_run_wide_stdout_budget() -> anyhow::Result<
     let error = runtime::run(&program, &registry, &options(directory.path(), 512))
         .err()
         .expect("parallel program modules must share the root stdout budget");
-    assert!(format!("{error:#}").contains("run-wide maximum"));
+    assert!(format!("{error:#}").contains("run-wide limit of"));
     Ok(())
 }
 

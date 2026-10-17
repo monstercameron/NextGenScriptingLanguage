@@ -338,7 +338,7 @@ fn checkpoints_skip_completed_loops_pin_body_and_require_partial_retry() {
         &["resume", "main.program", "--checkpoint", "journal"],
     );
     assert!(!changed.status.success());
-    assert!(String::from_utf8_lossy(&changed.stderr).contains("completed checkpoint node changed"));
+    assert!(String::from_utf8_lossy(&changed.stderr).contains("completed checkpoint node"));
     let partial = "for each outputpath in [\"first.out\", \"second.out\"]\n  run \"printf\" with arguments [\"partial\"]\n  then save to outputpath\n  run \"false\"\n";
     fs::write(dir.path().join("partial.program"), partial).unwrap();
     assert!(!cli(

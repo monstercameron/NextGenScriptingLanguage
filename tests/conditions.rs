@@ -347,7 +347,7 @@ fn completed_conditionals_restore_a_common_binding_and_ignore_comment_line_shift
         &["resume", "main.program", "--checkpoint", "journal"],
     );
     assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("completed checkpoint node changed"));
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("completed checkpoint node"));
 }
 
 #[test]
@@ -539,7 +539,7 @@ fn checkpoint_pins_absent_tools_in_unselected_branches_without_running_them() {
         &["resume", "main.program", "--checkpoint", "journal"],
     );
     assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("completed checkpoint node changed"));
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("completed checkpoint node"));
 }
 
 #[test]

@@ -162,14 +162,22 @@ fn boolean_and_integer_inputs_remain_typed_in_manifest_parameters() {
     fs::create_dir(&manifests).unwrap();
     fs::write(manifests.join("flags.json"),serde_json::json!({"name":"flags","binary":"printf","parameters":{"enabled":{"type":"boolean","required":true},"limit":{"type":"integer","required":true}},"arguments":[{"literal":"%s/%s"},{"parameter":"enabled"},{"parameter":"limit"}]}).to_string()).unwrap();
     let source="accept enabled as boolean with default false\naccept limit as integer with default 10\nrun flags with enabled enabled and limit limit\n";
+    let manifest_dir = manifests.to_str().unwrap();
     let result = run(
         d.path(),
         source,
-        &["--input", "enabled=true", "--input", "limit=-5"],
+        &[
+            "--manifest-dir",
+            manifest_dir,
+            "--input",
+            "enabled=true",
+            "--input",
+            "limit=-5",
+        ],
     );
     check(&result);
     assert_eq!(result.stdout, b"true/-5");
-    let result = run(d.path(), source, &[]);
+    let result = run(d.path(), source, &["--manifest-dir", manifest_dir]);
     check(&result);
     assert_eq!(result.stdout, b"false/10");
 }

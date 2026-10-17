@@ -38,10 +38,97 @@ fn validate_exit_operand(
         _ => bail!("{what} must be an integer literal or integer binding"),
     }
 }
-/// Resolve every statically known native executable before the first effect and
-/// report all unresolved ones together. Branches and loop bodies count, because
-/// validation already checks them. Once a working-directory change makes relative
-/// names unknown, later calls are left to their own run-time resolution.
+/// The outcome of a condition whose operands are both literals, or `None` when it
+/// depends on a run-time value. Mirrors the run's equality and containment rules;
+/// a type mismatch is `None`, so the run reports it when it reaches the condition.
+#[cfg(not(target_arch = "wasm32"))]
+fn static_condition(condition: &crate::ast::Condition) -> Option<bool> {
+    let is_scalar = |value: &Value| {
+        matches!(
+            value,
+            Value::String(_) | Value::Integer(_) | Value::Bool(_) | Value::Number(_) | Value::Null
+        )
+    };
+    let matched = match (&condition.left, &condition.right, &condition.operator) {
+        (
+            Value::String(haystack),
+            Value::String(needle),
+            crate::ast::ConditionOperator::Contains,
+        ) => haystack.contains(needle.as_str()),
+        (left, right, crate::ast::ConditionOperator::Equals)
+            if is_scalar(left)
+                && is_scalar(right)
+                && (matches!(left, Value::Null)
+                    || matches!(right, Value::Null)
+                    || std::mem::discriminant(left) == std::mem::discriminant(right)) =>
+        {
+            left == right
+        }
+        _ => return None,
+    };
+    Some(matched != condition.negated)
+}
+
+/// Whether a loop's body runs at least once when the loop is reached, so its
+/// executables are needed before the run starts.
+#[cfg(not(target_arch = "wasm32"))]
+fn loop_runs_once(kind: &crate::ast::LoopKind) -> bool {
+    use crate::ast::LoopKind;
+    match kind {
+        LoopKind::Repeat {
+            count: Value::Integer(count),
+        } => *count >= 1,
+        LoopKind::ForEach {
+            values: Value::List(items),
+            ..
+        } => !items.is_empty(),
+        LoopKind::While { condition } => static_condition(condition) == Some(true),
+        _ => false,
+    }
+}
+
+/// Whether a region of steps changes the working directory, directly or through
+/// a `use folder`, when it runs.
+#[cfg(not(target_arch = "wasm32"))]
+fn region_changes_directory(registry: &Registry, steps: &[crate::ast::Step]) -> Result<bool> {
+    for step in steps {
+        match &step.kind {
+            StepKind::UseFolder { .. } => return Ok(true),
+            StepKind::Invoke { call, .. }
+                if registry.resolve_call(call)?.builtin == Some(Builtin::Cd) =>
+            {
+                return Ok(true)
+            }
+            _ => {}
+        }
+    }
+    Ok(false)
+}
+
+/// Skip a branch or loop body that may not run. Its executables are resolved when
+/// the run reaches it, so a missing one there is reported at that point. A
+/// working-directory change inside it still makes later relative names unknown.
+#[cfg(not(target_arch = "wasm32"))]
+fn skip_unknown_region(
+    registry: &Registry,
+    steps: &[crate::ast::Step],
+    start: usize,
+    end: usize,
+    known_cwd: &mut bool,
+) -> Result<usize> {
+    if region_changes_directory(registry, &steps[start..end])? {
+        *known_cwd = false;
+    }
+    Ok(end)
+}
+
+/// Resolve every executable the run is certain to reach, before the first effect,
+/// and report all unresolved ones together. Top-level commands, task groups and
+/// jobs count, and so do branches and loop bodies whose condition is statically
+/// known to take them. A branch or loop body that may not run is left to the run,
+/// so a tool needed only on another path does not block this one. Once a
+/// working-directory change makes relative names unknown, later calls are left to
+/// their own run-time resolution.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn preflight_executables(
     program: &Program,
@@ -66,33 +153,77 @@ pub(crate) fn preflight_executables(
         }
         Ok(())
     };
-    for step in &program.steps {
-        match &step.kind {
-            StepKind::UseFolder { .. } => known_cwd = false,
+    let steps = &program.steps;
+    let mut index = 0;
+    while index < steps.len() {
+        let step = &steps[index];
+        index = match &step.kind {
+            StepKind::UseFolder { .. } => {
+                known_cwd = false;
+                index + 1
+            }
             StepKind::Invoke { call, .. } => {
                 if registry.resolve_call(call)?.builtin == Some(Builtin::Cd) {
                     known_cwd = false;
                 } else if known_cwd {
                     check(call, step.line, &mut missing)?;
                 }
+                index + 1
             }
-            StepKind::TaskGroup { tasks, .. } if known_cwd => {
-                for call in tasks {
+            StepKind::TaskGroup { tasks, .. } => {
+                if known_cwd {
+                    for call in tasks {
+                        check(call, step.line, &mut missing)?;
+                    }
+                }
+                index + 1
+            }
+            StepKind::SpawnJob { stages, .. } => {
+                if known_cwd {
+                    for stage in stages {
+                        check(&stage.call, stage.line, &mut missing)?;
+                    }
+                }
+                index + 1
+            }
+            // The command always runs; its branches depend on its outcome.
+            StepKind::IfCommand { call, end, .. } => {
+                if known_cwd {
                     check(call, step.line, &mut missing)?;
                 }
+                skip_unknown_region(registry, steps, index + 1, index + end, &mut known_cwd)?
             }
-            StepKind::SpawnJob { stages, .. } if known_cwd => {
-                for stage in stages {
-                    check(&stage.call, stage.line, &mut missing)?;
+            StepKind::If {
+                condition,
+                otherwise,
+                end,
+            } => match static_condition(condition) {
+                Some(true) => index + 1,
+                Some(false) => index + otherwise,
+                None => {
+                    skip_unknown_region(registry, steps, index + 1, index + end, &mut known_cwd)?
+                }
+            },
+            // Reached only after a taken `then` body, so the `otherwise` body is not run.
+            StepKind::Otherwise { end } => index + end,
+            // The catch body runs only after a failure in the try body.
+            StepKind::Catch { end, .. } => {
+                skip_unknown_region(registry, steps, index, index + end, &mut known_cwd)?
+            }
+            StepKind::Loop { kind, end } => {
+                if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
+                    if known_cwd {
+                        check(call, step.line, &mut missing)?;
+                    }
+                }
+                if loop_runs_once(kind) {
+                    index + 1
+                } else {
+                    skip_unknown_region(registry, steps, index + 1, index + end, &mut known_cwd)?
                 }
             }
-            StepKind::IfCommand { call, .. }
-            | StepKind::Loop {
-                kind: crate::ast::LoopKind::WhileCommand { call, .. },
-                ..
-            } if known_cwd => check(call, step.line, &mut missing)?,
-            _ => {}
-        }
+            _ => index + 1,
+        };
     }
     if !missing.is_empty() {
         bail!(

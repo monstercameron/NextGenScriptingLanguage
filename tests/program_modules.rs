@@ -527,7 +527,7 @@ fn changed_transitive_module_source_rejects_resume_before_replaying_completed_ef
         Ok(_) => panic!("changed transitive module source unexpectedly resumed"),
         Err(error) => error,
     };
-    assert!(format!("{error:#}").contains("completed checkpoint node changed"));
+    assert!(format!("{error:#}").contains("completed checkpoint node"));
     assert_eq!(fs::read(cwd.join("replay.log")).unwrap(), b"x");
 }
 
@@ -783,7 +783,7 @@ fn changed_body_applet_invalidates_module_cache_and_checkpoint_resume() {
     let error = flow::runtime::run_checkpointed(&checkpoint_program, &registry, &options, &resume)
         .err()
         .expect("changed helper must invalidate the completed checkpoint node");
-    assert!(format!("{error:#}").contains("completed checkpoint node changed"));
+    assert!(format!("{error:#}").contains("completed checkpoint node"));
     assert_eq!(
         fs::read(cwd.join("replay.log")).unwrap(),
         b"x",

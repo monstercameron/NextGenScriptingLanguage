@@ -272,7 +272,7 @@ fn output_limit_error_precedes_a_later_nonzero_exit_after_stdout_eof() {
     .unwrap_err();
     let error = format!("{error:#}");
     assert!(
-        error.contains("output exceeds maximum of 1 bytes"),
+        error.contains("output exceeds the limit of 1 bytes"),
         "{error}"
     );
     assert!(!error.contains("later failure"), "{error}");

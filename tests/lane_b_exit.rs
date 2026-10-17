@@ -149,7 +149,7 @@ run printf with message "end"
 fn exit_status_can_come_from_an_integer_input() {
     let directory = tempfile::tempdir().unwrap();
     let script =
-        "accept code as integer\nrun printf with message \"code\\n\"\nexit with status code\n";
+        "accept code as integer\nrun printf with message \"code\"\nexit with status code\n";
     let output = run_script(directory.path(), "run", script, &["--input", "code=42"]);
     assert_eq!(status(&output), 42, "{}", stderr(&output));
     assert_eq!(stdout(&output), "code\n");
@@ -301,7 +301,7 @@ fn exit_cancels_and_reaps_owned_job_without_waiting_for_it() {
         "run \"sleep\" with arguments [\"60\"]"
     };
     let script = format!(
-        "spawn as sleeper\n  {sleeper}\nrun printf with message \"done\\n\"\nexit with status 4\n"
+        "spawn as sleeper\n  {sleeper}\nrun printf with message \"done\"\nexit with status 4\n"
     );
     let start = Instant::now();
     let (_directory, output) = run(&script);
@@ -318,7 +318,7 @@ fn exit_cancels_and_reaps_owned_job_without_waiting_for_it() {
 fn checkpointed_exit_is_terminal_and_resume_keeps_status() {
     let directory = tempfile::tempdir().unwrap();
     let checkpoint = directory.path().join("ckpt");
-    let script = "run printf with message \"one\\n\"\nexit with status 3\n";
+    let script = "run printf with message \"one\"\nexit with status 3\n";
     let path = directory.path().join("workflow.program");
     fs::write(&path, script).unwrap();
     let mut first = Command::new(env!("CARGO_BIN_EXE_execute"));

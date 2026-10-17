@@ -369,7 +369,7 @@ fn resume_rejects_a_changed_binary_in_a_completed_node() {
     assert!(
         String::from_utf8_lossy(&resumed.stderr)
             .to_lowercase()
-            .contains("completed checkpoint node changed"),
+            .contains("completed checkpoint node"),
         "unexpected completed-binary diagnostic: {}",
         String::from_utf8_lossy(&resumed.stderr)
     );

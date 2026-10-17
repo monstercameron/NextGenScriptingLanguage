@@ -327,13 +327,13 @@ impl Emitter<'_> {
             return Ok(next);
         }
         // The `x` sentinel keeps trailing newlines, which command substitution would
-        // otherwise strip; the status is carried out of the substitution.
+        // otherwise strip. The sentinel runs only after a successful command, and a
+        // failed substitution carries the command's status out, so no `$?` reads a
+        // builtin's status.
         self.push(depth, "__execute_status=0");
         self.push(
             depth,
-            &format!(
-                "__execute_out=$({rendered}; __execute_inner=$?; printf x; exit \"$__execute_inner\") || __execute_status=$?"
-            ),
+            &format!("__execute_out=$({rendered} && printf x) || __execute_status=$?"),
         );
         self.push(depth, "if [ \"$__execute_status\" -ne 0 ]; then");
         self.push(depth + 1, PRINT_VALUE);
@@ -503,6 +503,9 @@ impl Emitter<'_> {
                     return Ok(());
                 }
                 self.push(depth, &format!("for {binding} in {}; do", words.join(" ")));
+                // Reading the variable keeps shellcheck from calling it unused when the
+                // body does not mention it.
+                self.push(depth + 1, &format!(": \"${binding}\""));
                 self.loops.push(binding.clone());
                 let result = self.body(start + 1, body_end - 1, depth + 1);
                 self.loops.pop();

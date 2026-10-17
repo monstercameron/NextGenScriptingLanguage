@@ -683,6 +683,17 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 io::stdout()
                     .write_all(&result.output)
                     .context("could not write workflow output")?;
+                if let Some(exit) = result.exit {
+                    // Same contract as the finite path: flush output, report the
+                    // message, then exit with the program's status.
+                    io::stdout()
+                        .flush()
+                        .context("could not write workflow output")?;
+                    if let Some(message) = &exit.message {
+                        runtime::write_diagnostic(format!("{message}\n").as_bytes());
+                    }
+                    std::process::exit(i32::from(exit.status));
+                }
                 return Ok(());
             }
             let checkpoint = args

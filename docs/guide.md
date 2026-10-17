@@ -359,3 +359,75 @@ For example, [`git.commit`](../manifests/git.commit.json) binds a message and op
 file list to `git commit -m …`. The [shipped catalog](../manifests) supplies the
 ordinary Unix tools and specialized `gh.repo` and `jq.ps` adapters. Quoted direct calls work without a manifest. Named parameter adapters use a
 manifest; neither requires a new Rust implementation.
+
+## Testing programs
+
+`execute test [--json] [--manifest-dir DIR] [PATH...]` runs every `*.test.program`
+under each PATH. With no PATH it uses `tests/` when that directory exists, and
+otherwise the current directory. Each test runs in its own `execute` process.
+
+```text
+tests/
+  login.test.program       the program under test
+  login.test.json          optional sidecar: inputs and expectations
+  fixtures/
+    bin/                   fake tools, first on PATH for this test
+```
+
+The sidecar sits beside the program and has the same stem. Unknown fields are
+rejected. Every field is optional.
+
+```json
+{
+  "inputs": { "name": "world" },
+  "arguments": [],
+  "expect": { "status": 0, "stdout": "hello world", "files": { "out.txt": "hi" } }
+}
+```
+
+- `inputs` become `--input NAME=VALUE` arguments.
+- `arguments` are passed after `--`.
+- `expect.status` defaults to 0.
+- `expect.stdout` is an exact byte comparison.
+- `expect.files` maps paths relative to the test's working directory to their exact
+  contents.
+
+Without a sidecar, a test expects exit status 0. Each test runs in a fresh working
+directory created with random name and mode 0700 on Unix. The directory is removed
+afterwards, without following symlinks. The `fixtures/bin` directory beside the
+test is prepended to `PATH`, and `EXECUTE_TEST_FIXTURES` names the `fixtures`
+directory.
+
+Fake tools are ordinary executables. On Unix they can be shell scripts. On Windows,
+process creation finds only `.exe` files on `PATH`, so fake tools there must be
+compiled `.exe` files; shell-script fixtures are Unix-only.
+
+The default output is TAP 13, one line per test with a YAML block for failures. With
+`--json`, the output is one document with protocol `execute.test/1`, summary counts,
+and a `tests` array giving each name and `pass` or `fail`. The exit status is 0 only
+when every test passes. A run that finds no tests is an error.
+
+## Running a directory of programs
+
+`execute run-parts DIR [--once STATE_DIR] [--continue] [--json] [--manifest-dir DIR]`
+runs each `*.program` directly inside DIR, in lexical byte order, as its own
+`execute` process. Hidden files and subdirectories are skipped.
+
+The run stops at the first failure. `--continue` runs the remaining programs
+anyway, and the programs after a failure are reported as `not_run` when it is not
+given.
+
+`--once STATE_DIR` records each completed program's name and SHA-256 content hash
+in `STATE_DIR/state.json`. The state file is replaced atomically. A later run skips
+any program whose hash is unchanged, reporting it as `skipped`. A program whose
+content has changed since it completed is reported as `changed` and is not run.
+To run it again, remove its entry from `state.json`.
+
+Each program's status is one of `ran`, `skipped`, `changed`, `failed`, or `not_run`.
+The exit status is 1 when any program fails, and otherwise 0. A `changed` program
+does not count as a failure.
+
+With `--json`, one document is printed with protocol `execute.run-parts/1`, summary
+counts for each status, and a `results` array giving each program's name, status,
+hash, and exit code. The programs' own output then goes to standard error, so
+standard output stays parseable.

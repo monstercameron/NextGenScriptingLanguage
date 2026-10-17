@@ -16,6 +16,8 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 
 mod github_annotations;
+mod run_parts;
+mod test_runner;
 
 #[derive(Debug)]
 struct Args {
@@ -166,6 +168,12 @@ fn execute() -> Result<()> {
     }
     if arguments.first().is_some_and(|a| a == "applets") {
         return applets_cli(&arguments[1..]);
+    }
+    if arguments.first().is_some_and(|a| a == "test") {
+        return test_runner::cli(&arguments[1..]);
+    }
+    if arguments.first().is_some_and(|a| a == "run-parts") {
+        return run_parts::cli(&arguments[1..]);
     }
     if arguments.first().is_some_and(|a| a == "lsp") {
         if arguments.len() != 1 && !(arguments.len() == 2 && arguments[1] == "--stdio") {

@@ -126,7 +126,8 @@ class OmarchyInterfaces(unittest.TestCase):
                         )
                     self.assertFalse((folder / "forbidden").exists())
 
-    def test_native_failures_preserve_status_but_document_output_differences(self):
+    def test_native_failures_preserve_status_and_stdout_like_bash(self):
+        # Uncaptured stdout streams as Bash does, and it is kept when the command fails.
         for name in SPECS:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 observations = self.invoke(
@@ -137,7 +138,7 @@ class OmarchyInterfaces(unittest.TestCase):
                 self.assertEqual(execute_argv, bash_argv)
                 self.assertEqual((execute.returncode, bash.returncode), (7, 7))
                 self.assertEqual(bash.stdout, b"partial\n")
-                self.assertEqual(execute.stdout, b"")
+                self.assertEqual(execute.stdout, bash.stdout)
                 self.assertEqual(bash.stderr, b"native fixture failure\n")
                 self.assertIn(b"native fixture failure", execute.stderr)
                 self.assertIn(b"exit status: 7", execute.stderr)

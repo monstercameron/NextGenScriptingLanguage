@@ -24,6 +24,23 @@ fn write_manifests(directory: &Path) -> PathBuf {
         }
     });
     std::fs::write(manifests.join("net.helper.json"), declared.to_string()).unwrap();
+    // One applet per declared effect shape, so each mapping is tested directly.
+    for (name, effect) in [
+        ("read.helper", "fs.read.workspace"),
+        ("write.helper", "fs.write.workspace"),
+        ("spawn.helper", "process.spawn"),
+        ("clock.helper", "clock.read"),
+    ] {
+        let manifest = serde_json::json!({
+            "name": name, "binary": HELPER, "accepts_stdin": false,
+            "parameters": {}, "arguments": [{ "literal": "--version" }],
+            "contract": {
+                "version": 1, "backend": "command", "lifecycle": { "kind": "oneshot" },
+                "capabilities": [effect], "effects": [effect]
+            }
+        });
+        std::fs::write(manifests.join(format!("{name}.json")), manifest.to_string()).unwrap();
+    }
     manifests
 }
 
@@ -179,4 +196,76 @@ fn a_plain_explain_without_allow_stays_advisory_and_exits_zero() {
     assert_eq!(output.status.code(), Some(0));
     let object: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(object["protocol"], "execute.explain/1");
+}
+
+fn violation_categories(object: &Value) -> Vec<String> {
+    object["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["category"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn each_declared_effect_maps_to_its_own_category_and_needs_its_own_approval() {
+    let directory = tempfile::tempdir().unwrap();
+    for (applet, category) in [
+        ("read.helper", "reads"),
+        ("write.helper", "writes"),
+        ("spawn.helper", "process"),
+    ] {
+        let source = format!("run {applet}\n");
+        let denied = gate(
+            directory.path(),
+            &source,
+            &["--json", "--allow", "undeclared"],
+        );
+        assert_eq!(denied.status.code(), Some(1), "{applet}");
+        assert!(
+            violation_categories(&verdict(&denied)).contains(&category.to_owned()),
+            "{applet} must trigger {category}"
+        );
+        let approved = gate(directory.path(), &source, &["--json", "--allow", category]);
+        assert_eq!(
+            approved.status.code(),
+            Some(0),
+            "{applet} with --allow {category}: {}",
+            String::from_utf8_lossy(&approved.stderr)
+        );
+    }
+}
+
+#[test]
+fn an_unknown_effect_is_undeclared_and_needs_explicit_approval() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run clock.helper\n";
+    let denied = gate(directory.path(), source, &["--json", "--allow", "reads"]);
+    assert_eq!(denied.status.code(), Some(1));
+    assert!(violation_categories(&verdict(&denied)).contains(&"undeclared".to_owned()));
+    let approved = gate(
+        directory.path(),
+        source,
+        &["--json", "--allow", "undeclared"],
+    );
+    assert_eq!(
+        approved.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&approved.stderr)
+    );
+}
+
+#[test]
+fn an_invocation_with_null_effects_is_undeclared_even_without_an_explicit_flag() {
+    let directory = tempfile::tempdir().unwrap();
+    let object = verdict(&gate(
+        directory.path(),
+        "run plain.helper\n",
+        &["--json", "--allow", "reads"],
+    ));
+    assert!(
+        violation_categories(&object).contains(&"undeclared".to_owned()),
+        "{object}"
+    );
 }

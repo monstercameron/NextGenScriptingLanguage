@@ -2,9 +2,16 @@
 //!
 //! The gate reads the explain plan and reports every row that triggers a category
 //! the operator has not approved. It denies by default: with no `--allow`, any
-//! effect at all is a violation. An undeclared row is a violation under its own
-//! category, so an unknown step cannot pass as harmless. The verdict is advisory.
-//! It does not stop a later run. Enforcement remains the capability policy.
+//! effect at all is a violation.
+//!
+//! Effect mapping. Each declared effect string maps to one category:
+//! `fs.read*` to `reads`; `fs.write*`, `file.write*`, or any name containing
+//! `.write` to `writes`; `network.*` to `network`; `process.spawn` to `process`.
+//! Any other effect is `undeclared`, so an unknown effect needs explicit approval.
+//! An invocation whose effects are not stated (null) is `undeclared` too.
+//!
+//! The verdict is advisory. It does not stop a later run. Enforcement remains the
+//! capability policy.
 
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
@@ -18,10 +25,20 @@ pub const CATEGORIES: &[&str] = &[
     "writes",
     "network",
     "reads",
+    "process",
     "cwd",
     "environment",
     "privileged",
     "undeclared",
+];
+
+/// Step kinds that run a command. Their effects must be stated, or they are undeclared.
+const INVOCATION_KINDS: &[&str] = &[
+    "task_group",
+    "spawn_job",
+    "if_command",
+    "while_command",
+    "invoke",
 ];
 
 /// Validate one `--allow` value. Only the listed categories are accepted.
@@ -35,40 +52,72 @@ pub fn parse_category(name: &str) -> Result<&'static str> {
     }
 }
 
-/// The categories one plan row triggers. A null effect field means the effect is
-/// not stated for this row, and an unstated effect is `undeclared`, which is its
-/// own category. A resolved call row has no effects of its own; its body is
-/// walked as separate rows, so it triggers nothing itself.
+/// The category one declared effect string belongs to.
+pub fn effect_category(effect: &str) -> &'static str {
+    if effect.starts_with("fs.read") {
+        "reads"
+    } else if effect.starts_with("fs.write")
+        || effect.starts_with("file.write")
+        || effect.contains(".write")
+    {
+        "writes"
+    } else if effect.starts_with("network.") {
+        "network"
+    } else if effect == "process.spawn" {
+        "process"
+    } else {
+        "undeclared"
+    }
+}
+
+/// The categories one plan row triggers.
 fn triggered(row: &Value) -> Vec<&'static str> {
+    // A resolved call row has no effects of its own. Its body is walked as rows.
     if row["kind"] == "call_program" && row["resolved"] == true {
         return Vec::new();
     }
-    let mut categories = Vec::new();
+    let mut categories = BTreeSet::new();
+    match row["effects"].as_array() {
+        Some(effects) => {
+            for effect in effects.iter().filter_map(Value::as_str) {
+                categories.insert(effect_category(effect));
+            }
+        }
+        None => {
+            let invocation = row["kind"]
+                .as_str()
+                .is_some_and(|kind| INVOCATION_KINDS.contains(&kind));
+            if invocation {
+                categories.insert("undeclared");
+            }
+        }
+    }
     if row["writes"] == true || row["escapes_cwd"] == true {
-        categories.push("writes");
+        categories.insert("writes");
     }
     if row["network"] == true {
-        categories.push("network");
+        categories.insert("network");
     }
     if row["reads"] == true {
-        categories.push("reads");
+        categories.insert("reads");
     }
     if row["cwd_change"] == true || row["escapes_cwd"] == true {
-        categories.push("cwd");
+        categories.insert("cwd");
     }
     if row["modifies_next_invocation"] == true || row["environment_tainted"] == true {
-        categories.push("environment");
+        categories.insert("environment");
     }
     if row["privileged"] == true {
-        categories.push("privileged");
+        categories.insert("privileged");
     }
     if row["undeclared"] == true {
-        categories.push("undeclared");
+        categories.insert("undeclared");
     }
-    categories
+    categories.into_iter().collect()
 }
 
-/// Build the verdict from an explain object and the approved categories.
+/// Build the verdict from an explain object and the approved categories. Every
+/// row with a category that is not approved is reported as one violation.
 pub fn verdict(explain: &Value, allowed: &BTreeSet<String>) -> Value {
     let mut violations = Vec::new();
     for row in explain["steps"].as_array().into_iter().flatten() {

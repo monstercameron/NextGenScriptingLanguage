@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(test, unix))]
 use std::process::Command;
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -331,8 +331,6 @@ include!("runtime/windows_process.rs");
 
 pub(crate) struct Signals {
     cancelled: Arc<AtomicBool>,
-    /// Interrupt drain state (`platform::DRAIN_*`); shared with cleanup scopes.
-    drain: Arc<AtomicU8>,
     registrations: Vec<signal_hook::SigId>,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
@@ -427,19 +425,8 @@ impl AppletInvocationContext {
 
 impl Signals {
     pub(crate) fn register_with_deadline(deadline: Option<Instant>) -> Result<Self> {
-        Self::register(deadline, false)
-    }
-
-    /// Like `register_with_deadline`, but the first interrupt drains the run rather
-    /// than cancelling it; a second interrupt cancels.
-    pub(crate) fn register_with_drain(deadline: Option<Instant>) -> Result<Self> {
-        Self::register(deadline, true)
-    }
-
-    fn register(deadline: Option<Instant>, drain: bool) -> Result<Self> {
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
-            drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
             deadline,
@@ -462,8 +449,7 @@ impl Signals {
             #[cfg(test)]
             job_panic_before_ack: None,
         };
-        let armed = drain.then(|| Arc::clone(&guard.drain));
-        guard.registrations = crate::platform::signals(guard.cancelled.clone(), armed)?;
+        guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
         Ok(guard)
     }
 
@@ -472,7 +458,7 @@ impl Signals {
         deadline: Option<Instant>,
     ) -> Result<Self> {
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
-        guard.registrations = crate::platform::signals(guard.cancelled.clone(), None)?;
+        guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
         Ok(guard)
     }
 

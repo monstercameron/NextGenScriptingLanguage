@@ -29,7 +29,7 @@ fn write_manifests(directory: &Path) -> PathBuf {
         ("read.helper", "fs.read.workspace"),
         ("write.helper", "fs.write.workspace"),
         ("spawn.helper", "process.spawn"),
-        ("clock.helper", "clock.read"),
+        ("mystery.helper", "mystery.effect"),
     ] {
         let manifest = serde_json::json!({
             "name": name, "binary": HELPER, "accepts_stdin": false,
@@ -239,7 +239,7 @@ fn each_declared_effect_maps_to_its_own_category_and_needs_its_own_approval() {
 #[test]
 fn an_unknown_effect_is_undeclared_and_needs_explicit_approval() {
     let directory = tempfile::tempdir().unwrap();
-    let source = "run clock.helper\n";
+    let source = "run mystery.helper\n";
     let denied = gate(directory.path(), source, &["--json", "--allow", "reads"]);
     assert_eq!(denied.status.code(), Some(1));
     assert!(violation_categories(&verdict(&denied)).contains(&"undeclared".to_owned()));

@@ -2,4 +2,6 @@
 //! and CLI modes; they do not change the `.program` grammar or runtime semantics.
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod checkpoint;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod errors;

@@ -48,6 +48,11 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: editors/vscode
       - run: make check
+      - name: Check Linux release binary size
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --locked --release --bin execute
+          python3 tools/check_binary_size.py target/release/execute tools/linux-binary-budget.json
       - run: make unix-smoke
       - run: make proof-smoke
       - run: npm run package

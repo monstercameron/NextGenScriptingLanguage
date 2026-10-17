@@ -45,14 +45,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y musl-tools rpm
       - run: python3 tests/releases.py
-      - run: cargo build --locked --release --target '${{ matrix.target }}' --bins
+      - run: cargo build --locked --profile dist --target '${{ matrix.target }}' --bins
       - name: Build archives and Linux packages
         env:
           BUILD_TARGET: ${{ matrix.target }}
         run: |
           extra=()
           if [[ "$RUNNER_OS" == Linux ]]; then extra+=(--linux-packages); fi
-          python3 tools/package.py --target "$BUILD_TARGET" --binaries "target/$BUILD_TARGET/release" "${extra[@]}"
+          python3 tools/package.py --target "$BUILD_TARGET" --binaries "target/$BUILD_TARGET/dist" "${extra[@]}"
       - name: Extract and run archive
         env:
           BUILD_TARGET: ${{ matrix.target }}

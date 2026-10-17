@@ -48,6 +48,11 @@ tempfile = "3"
 lto = "thin"
 strip = true
 
+# Release artifacts: one codegen unit trades build time for a smaller binary.
+[profile.dist]
+inherits = "release"
+codegen-units = 1
+
 [patch.crates-io]
 iana-time-zone = { path = "vendor/iana-time-zone" }
 

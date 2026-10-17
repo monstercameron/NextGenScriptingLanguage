@@ -1,0 +1,4 @@
+{
+  "max_bytes": null,
+  "note": "Set max_bytes to about 110% of today's Linux target/release/execute size, measured from the first Linux CI run of the Check Linux release binary size step. Until then the step reports the size without enforcing it."
+}

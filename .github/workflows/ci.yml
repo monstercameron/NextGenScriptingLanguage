@@ -8,9 +8,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: native-${{ github.workflow }}-${{ github.ref }}
-  # On main, let a started run finish so every push stream gets complete Unix results;
-  # a newer push still replaces a run that is only queued.
+  # Each commit on main gets its own group, so every pushed commit runs to completion and
+  # nothing is replaced while queued. Other refs share a group and cancel stale runs.
+  group: native-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   workflows:

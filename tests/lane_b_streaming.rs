@@ -48,6 +48,23 @@ run printf with message "b"
 }
 
 #[test]
+fn a_binding_on_a_later_pipe_stage_captures_instead_of_streaming() {
+    // The capture is on the terminal stage, not the head of the pipe group.
+    let (_directory, output) = run(r#"run printf with message "a"
+pipe to tr with from "[:lower:]" and to "[:upper:]" as shouted
+run printf with message shouted
+run printf with message shouted
+"#);
+    assert_eq!(status(&output), 0, "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output).matches('A').count(),
+        2,
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
 fn consumed_output_is_buffered_and_printed_once() {
     let (_directory, output) = run(r#"run printf with message "x"
 then tr with from "[:lower:]" and to "[:upper:]"

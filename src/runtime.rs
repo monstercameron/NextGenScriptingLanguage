@@ -1111,11 +1111,28 @@ fn streams_terminal_stdout(program: &Program, index: usize) -> bool {
     else {
         return false;
     };
-    if call.cache || call.binding.is_some() || call.result_binding.is_some() {
+    let captures = |call: &Invocation| {
+        call.cache
+            || call.binding.is_some()
+            || call.result_binding.is_some()
+            || call.status_binding.is_some()
+    };
+    if captures(call) {
         return false;
     }
     let mut end = index + 1;
     while pipe_at(program, end) {
+        // Any stage of the pipe group may capture (`pipe to b as x`); then the
+        // group's output has a consumer and must not stream.
+        if let Some(crate::ast::Step {
+            kind: StepKind::Invoke { call, .. },
+            ..
+        }) = program.steps.get(end)
+        {
+            if captures(call) {
+                return false;
+            }
+        }
         end += 1;
     }
     match program.steps.get(end).map(|step| &step.kind) {

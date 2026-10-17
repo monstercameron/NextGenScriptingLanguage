@@ -209,33 +209,24 @@ pub(super) fn native_spawn_failure(
     .into()
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn execute_group(
-    registry: &Registry,
-    calls: &[(&Invocation, &Manifest, usize)],
-    input: Input,
-    prepared_first_call: Option<(PathBuf, Vec<String>)>,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &crate::working_dir::WorkingDirectory,
-    options: &RunOptions,
-    launched: &mut usize,
-    signals: &Signals,
-) -> Result<GroupOutput> {
-    redact_command_failure(
-        registry,
-        execute_group_with_sink(
-            registry,
-            calls,
-            input,
-            prepared_first_call,
-            bindings,
-            cwd,
-            options,
-            launched,
-            signals,
-            None,
-        ),
-    )
+/// One native group to run: its calls and the input its first command reads, the first
+/// command when it is already resolved, the bindings and working directory it runs in, and the
+/// launch counter and signals it shares with the run.
+pub(super) struct GroupRequest<'a> {
+    pub(super) registry: &'a Registry,
+    pub(super) calls: &'a [(&'a Invocation, &'a Manifest, usize)],
+    pub(super) input: Input,
+    pub(super) prepared_first_call: Option<(PathBuf, Vec<String>)>,
+    pub(super) bindings: &'a BTreeMap<String, Value>,
+    pub(super) cwd: &'a crate::working_dir::WorkingDirectory,
+    pub(super) options: &'a RunOptions,
+    pub(super) launched: &'a mut usize,
+    pub(super) signals: &'a Signals,
+}
+
+pub(super) fn execute_group(request: GroupRequest<'_>) -> Result<GroupOutput> {
+    let registry = request.registry;
+    redact_command_failure(registry, execute_group_with_sink(request, None))
 }
 
 pub(super) fn redact_command_failure<T>(registry: &Registry, mut result: Result<T>) -> Result<T> {
@@ -248,20 +239,22 @@ pub(super) fn redact_command_failure<T>(registry: &Registry, mut result: Result<
     result
 }
 
-#[allow(clippy::too_many_arguments)]
 #[cfg(unix)]
 pub(super) fn execute_group_with_sink(
-    registry: &Registry,
-    calls: &[(&Invocation, &Manifest, usize)],
-    input: Input,
-    prepared_first_call: Option<(PathBuf, Vec<String>)>,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &crate::working_dir::WorkingDirectory,
-    options: &RunOptions,
-    launched: &mut usize,
-    signals: &Signals,
+    request: GroupRequest<'_>,
     mut sink: Option<&mut streaming::LineSink<'_>>,
 ) -> Result<GroupOutput> {
+    let GroupRequest {
+        registry,
+        calls,
+        input,
+        prepared_first_call,
+        bindings,
+        cwd,
+        options,
+        launched,
+        signals,
+    } = request;
     let mut writer = InputWriter::default();
     let mut children = Children(
         Vec::with_capacity(calls.len()),

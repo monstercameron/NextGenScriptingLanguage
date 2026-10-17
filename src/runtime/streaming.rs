@@ -302,15 +302,19 @@ pub(crate) fn run_stream_with_context_and_process_observer(
     super::redact_command_failure(
         registry,
         execute_group_with_sink(
-            registry,
-            &calls,
-            Input::Empty,
-            None,
-            &options.inputs,
-            &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
-            options,
-            &mut launched,
-            &signals,
+            GroupRequest {
+                registry,
+                calls: &calls,
+                input: Input::Empty,
+                prepared_first_call: None,
+                bindings: &options.inputs,
+                cwd: &crate::working_dir::WorkingDirectory::plain(
+                    options.working_directory.clone(),
+                ),
+                options,
+                launched: &mut launched,
+                signals: &signals,
+            },
             Some(&mut sink),
         ),
     )?;

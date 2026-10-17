@@ -45,7 +45,7 @@ mod step_loop;
 use spawn::execute_group_with_sink;
 use spawn::{
     captured_stage_stderr, collect_native_stages, execute_group, redact_command_failure,
-    GroupOutput,
+    GroupOutput, GroupRequest,
 };
 // Used by the Windows process path (windows_process.rs) through this module.
 #[cfg(windows)]
@@ -2428,7 +2428,7 @@ fn execute_call_group_unobserved(
         }) {
             bail!("mixed command and non-command applet groups are unsupported");
         }
-        return execute_group(
+        return execute_group(GroupRequest {
             registry,
             calls,
             input,
@@ -2438,7 +2438,7 @@ fn execute_call_group_unobserved(
             options,
             launched,
             signals,
-        );
+        });
     }
     let sensitivities = signals.sensitivity_floor();
     for (_, stage_manifest, _) in calls {

@@ -93,15 +93,17 @@ pub(crate) fn producer(
     let mut sink = streaming::LineSink::new(&mut emit, None, max_record);
     let mut launched = 0;
     execute_group_with_sink(
-        registry,
-        &calls,
-        Input::Empty,
-        None,
-        bindings,
-        &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
-        options,
-        &mut launched,
-        &signals,
+        GroupRequest {
+            registry,
+            calls: &calls,
+            input: Input::Empty,
+            prepared_first_call: None,
+            bindings,
+            cwd: &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
+            options,
+            launched: &mut launched,
+            signals: &signals,
+        },
         Some(&mut sink),
     )?;
     Ok(launched)
@@ -136,15 +138,17 @@ pub(crate) fn stream(
     let mut sink = streaming::LineSink::new(&mut emit, stream.line_limit, max_record);
     let mut launched = 0;
     execute_group_with_sink(
-        registry,
-        &calls,
-        Input::Empty,
-        None,
-        bindings,
-        &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
-        options,
-        &mut launched,
-        &signals,
+        GroupRequest {
+            registry,
+            calls: &calls,
+            input: Input::Empty,
+            prepared_first_call: None,
+            bindings,
+            cwd: &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
+            options,
+            launched: &mut launched,
+            signals: &signals,
+        },
         Some(&mut sink),
     )?;
     Ok(launched)

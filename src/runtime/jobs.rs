@@ -448,17 +448,17 @@ impl Supervisor {
                     let mut launched = 0;
                     let _output_scope =
                         super::OutputScopeGuard::enter(super::OutputScope::BackgroundJob);
-                    match execute_group(
-                        &registry,
-                        &refs,
-                        Input::Empty,
-                        None,
-                        &BTreeMap::new(),
-                        &cwd,
-                        &options,
-                        &mut launched,
-                        &signals,
-                    ) {
+                    match execute_group(GroupRequest {
+                        registry: &registry,
+                        calls: &refs,
+                        input: Input::Empty,
+                        prepared_first_call: None,
+                        bindings: &BTreeMap::new(),
+                        cwd: &cwd,
+                        options: &options,
+                        launched: &mut launched,
+                        signals: &signals,
+                    }) {
                         Ok(group) => {
                             let terminal = refs.last().expect("nonempty job");
                             let status = group.status.unwrap_or_default();

@@ -134,19 +134,22 @@ fn windows_statuses(
     }
     Ok(())
 }
-#[allow(clippy::too_many_arguments)]
 fn execute_group_with_sink(
-    registry: &Registry,
-    calls: &[(&Invocation, &Manifest, usize)],
-    input: Input,
-    mut prepared_first_call: Option<(PathBuf, Vec<String>)>,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
-    options: &RunOptions,
-    launched: &mut usize,
-    signals: &Signals,
+    request: GroupRequest<'_>,
     mut sink: Option<&mut streaming::LineSink<'_>>,
 ) -> Result<GroupOutput> {
+    let GroupRequest {
+        registry,
+        calls,
+        input,
+        mut prepared_first_call,
+        bindings,
+        cwd,
+        options,
+        launched,
+        signals,
+    } = request;
+    let cwd: &Path = cwd;
     let mut children = Children(
         Vec::with_capacity(calls.len()),
         signals.job_diagnostic_truncation.clone(),

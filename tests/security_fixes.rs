@@ -176,7 +176,7 @@ mod links {
         policy(root.path());
         let output = run(
             root.path(),
-            "use folder \"inside/dir-link\"\nread \"secret.txt\"\n",
+            "use folder \"inside/dir-link\"\n",
         );
         let text = shown(&output);
         assert!(!output.status.success(), "{text}");
@@ -329,10 +329,11 @@ mod swap_after_use_folder {
             !text.contains("OUTSIDE"),
             "the swapped target was read: {text}"
         );
-        assert!(output.status.success(), "{text}");
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "INSIDE\n",
+        // A relative host path after `use folder` is refused before the run starts: the policy
+        // cannot resolve it after a working-directory change. Nothing is read.
+        assert!(!output.status.success(), "{text}");
+        assert!(
+            text.contains("cannot preflight a relative host path after a working-directory change"),
             "{text}"
         );
     }

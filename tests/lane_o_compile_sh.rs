@@ -259,6 +259,47 @@ fn trailing_newlines_are_kept() {
     );
 }
 
+#[test]
+fn manifest_source_flags_are_mutually_exclusive() {
+    let directory = tempdir().unwrap();
+    let program = write_program(directory.path(), "run \"printf\" with arguments [\"x\"]\n");
+    let output = execute(
+        &[
+            "compile",
+            "--to",
+            "sh",
+            program.to_str().unwrap(),
+            "--manifest-dir",
+            ".",
+            "--manifest-catalog",
+            "catalog.json",
+        ],
+        directory.path(),
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("mutually exclusive"));
+}
+
+#[test]
+fn a_manifest_dir_without_the_applet_refuses_the_compile() {
+    let directory = tempdir().unwrap();
+    let manifests = directory.path().join("empty-manifests");
+    fs::create_dir(&manifests).unwrap();
+    let program = write_program(directory.path(), "run text.trim_final_lf with text \"x\"\n");
+    let output = execute(
+        &[
+            "compile",
+            "--to",
+            "sh",
+            program.to_str().unwrap(),
+            "--manifest-dir",
+            manifests.to_str().unwrap(),
+        ],
+        directory.path(),
+    );
+    assert!(!output.status.success());
+}
+
 #[cfg(unix)]
 #[test]
 fn environment_on_one_command_matches_execute() {

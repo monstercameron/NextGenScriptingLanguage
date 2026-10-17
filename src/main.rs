@@ -2000,7 +2000,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
 /// `execute compile --to sh FILE [--out PATH]`: write a checked POSIX sh script.
 /// Without `--out` the script goes to standard output; with it, only that path is written.
 fn compile_cli(arguments: &[String]) -> Result<()> {
-    const HELP: &str = "Usage: execute compile --to sh FILE [--out PATH]\n\nCompile a program to a POSIX sh script. Statements with no faithful sh equivalent are refused by name and line; nothing is approximated. Output goes to standard output unless --out names a file.";
+    const HELP: &str = "Usage: execute compile --to sh FILE [--out PATH] [--manifest-dir DIR | --manifest-catalog FILE]\n\nCompile a program to a POSIX sh script. Statements with no faithful sh equivalent are refused by name and line; nothing is approximated. Output goes to standard output unless --out names a file.";
     if arguments == ["--help"] || arguments == ["-h"] {
         writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
@@ -2008,6 +2008,8 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
     let mut target = None;
     let mut output = None;
     let mut file = None;
+    let mut manifest_dir = None;
+    let mut manifest_catalog = None;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
@@ -2023,6 +2025,26 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
                 output = Some(PathBuf::from(arguments.get(index + 1).context(HELP)?));
                 index += 2;
             }
+            "--manifest-dir" => {
+                if manifest_dir.is_some() {
+                    bail!("--manifest-dir may be specified only once");
+                }
+                if manifest_catalog.is_some() {
+                    bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+                }
+                manifest_dir = Some(PathBuf::from(arguments.get(index + 1).context(HELP)?));
+                index += 2;
+            }
+            "--manifest-catalog" => {
+                if manifest_catalog.is_some() {
+                    bail!("--manifest-catalog may be specified only once");
+                }
+                if manifest_dir.is_some() {
+                    bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
+                }
+                manifest_catalog = Some(PathBuf::from(arguments.get(index + 1).context(HELP)?));
+                index += 2;
+            }
             flag if flag.starts_with('-') => bail!("unknown compile option {flag:?}\n{HELP}"),
             path => {
                 if file.replace(PathBuf::from(path)).is_some() {
@@ -2036,7 +2058,7 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
         bail!("compile needs --to sh\n{HELP}");
     }
     let file = file.context(HELP)?;
-    let registry = load_registry(None, None)?;
+    let registry = load_registry(manifest_dir, manifest_catalog)?;
     let bytes = fs::read(&file).with_context(|| format!("reading program {}", file.display()))?;
     let source = std::str::from_utf8(&bytes)
         .with_context(|| format!("program {} is not valid UTF-8", file.display()))?;

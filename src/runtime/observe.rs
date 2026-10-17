@@ -102,6 +102,14 @@ pub fn install(observer: Arc<dyn Observer>) -> Result<ObserverGuard> {
     Ok(ObserverGuard)
 }
 
+/// Whether a run observer (recording or replay) is installed.
+pub(super) fn is_installed() -> bool {
+    OBSERVER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_some()
+}
+
 fn current() -> Option<Arc<dyn Observer>> {
     OBSERVER
         .lock()

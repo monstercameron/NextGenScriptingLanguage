@@ -7,6 +7,36 @@
       "include": "#comments"
     },
     {
+      "include": "#execute-marker"
+    },
+    {
+      "include": "#raw-block"
+    },
+    {
+      "include": "#handler-header"
+    },
+    {
+      "include": "#step-label"
+    },
+    {
+      "include": "#capture-bytes"
+    },
+    {
+      "include": "#run-program-file"
+    },
+    {
+      "include": "#process-handoff"
+    },
+    {
+      "include": "#retry-suffix"
+    },
+    {
+      "include": "#one-of"
+    },
+    {
+      "include": "#from-program-source"
+    },
+    {
       "include": "#strings"
     },
     {
@@ -677,7 +707,7 @@
     },
     "use-value": {
       "name": "meta.use-value.execute",
-      "begin": "^[ \\t]*(use[ \\t]+value)(?=[ \\t]|$)",
+      "begin": "^[ \\t]*(use[ \\t]+(?:value|bytes))(?=[ \\t]|$)",
       "end": "$",
       "patterns": [
         {
@@ -1438,6 +1468,114 @@
           "include": "#values"
         }
       ]
+    },
+    "execute-marker": {
+      "match": "^[ \\t]*(execute)[ \\t]+([0-9]+)[ \\t]*$",
+      "name": "meta.version.execute",
+      "captures": {
+        "1": {
+          "name": "keyword.control.version.execute"
+        },
+        "2": {
+          "name": "constant.numeric.version.execute"
+        }
+      }
+    },
+    "step-label": {
+      "match": "^[ \\t]*([A-Za-z][A-Za-z0-9_-]*)(:)(?=[ \\t]|$)",
+      "name": "entity.name.label.execute",
+      "captures": {
+        "1": {
+          "name": "entity.name.label.step.execute"
+        },
+        "2": {
+          "name": "punctuation.separator.label.execute"
+        }
+      }
+    },
+    "handler-header": {
+      "match": "^[ \\t]*(on)[ \\t]+(exit|interrupt)(?=[ \\t]|$)",
+      "name": "meta.handler.execute",
+      "captures": {
+        "1": {
+          "name": "keyword.control.flow.execute"
+        },
+        "2": {
+          "name": "keyword.control.handler.execute"
+        }
+      }
+    },
+    "raw-block": {
+      "name": "string.quoted.triple.raw.execute",
+      "begin": "(?<=[ \\t])\"\"\"[ \\t]*$",
+      "end": "^[ \\t]*\"\"\"[ \\t]*$",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.execute"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.execute"
+        }
+      }
+    },
+    "capture-bytes": {
+      "match": "\\b(then)[ \\t]+(capture)[ \\t]+(bytes)[ \\t]+(as)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.control.flow.execute"
+        },
+        "2": {
+          "name": "keyword.control.io.execute"
+        },
+        "3": {
+          "name": "storage.type.bytes.execute"
+        },
+        "4": {
+          "name": "keyword.control.binding.execute"
+        }
+      }
+    },
+    "run-program-file": {
+      "match": "\\b(run)[ \\t]+(program)[ \\t]+(file)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.control.flow.execute"
+        },
+        "2": {
+          "name": "keyword.control.program.execute"
+        },
+        "3": {
+          "name": "keyword.control.program.execute"
+        }
+      }
+    },
+    "process-handoff": {
+      "match": "\\b(hand[ \\t]+over[ \\t]+to|launch[ \\t]+detached|and[ \\t]+output[ \\t]+to)\\b",
+      "name": "keyword.control.process.execute"
+    },
+    "retry-suffix": {
+      "match": "\\b(and[ \\t]+retry[ \\t]+up[ \\t]+to|times?|even[ \\t]+if[ \\t]+uncertain|with[ \\t]+backoff|doubling)\\b",
+      "name": "keyword.control.retry.execute"
+    },
+    "one-of": {
+      "match": "\\b(one[ \\t]+of)\\b",
+      "name": "keyword.control.declaration.execute"
+    },
+    "from-program-source": {
+      "match": "\\b(from)[ \\t]+(program)[ \\t]+(directory|path)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.control.io.execute"
+        },
+        "2": {
+          "name": "keyword.control.program.execute"
+        },
+        "3": {
+          "name": "keyword.control.program.execute"
+        }
+      }
     }
   }
 }

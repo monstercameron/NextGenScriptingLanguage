@@ -198,6 +198,25 @@ define a program named greet
 run program greet with name "world"
 ```
 
+## Step labels
+
+```text
+statement   = [ label ] statement-body
+label       = LABEL ":"
+LABEL       = letter { letter | digit | "_" | "-" }     (not a statement keyword)
+```
+
+The label is one word, with no space before the colon. It names the statement's first
+step. A label must be unique in its program body. It cannot precede a declaration, a
+trigger or a clause, and a statement takes at most one label. The
+[language reference](language.md) explains step ids, including the derived ids that
+unlabelled steps receive.
+
+```program
+fetch: run "printf" with arguments ["hello\n"]
+run "printf" with arguments ["world\n"]
+```
+
 ## Triggers
 
 A trigger wraps its body and runs it repeatedly. A file has at most one trigger, and

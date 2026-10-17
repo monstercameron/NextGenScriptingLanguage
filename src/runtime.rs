@@ -1330,12 +1330,16 @@ struct StepIdScope {
 }
 
 impl StepIdScope {
-    fn enter(steps: &[crate::ast::Step]) -> Self {
-        let ids: std::sync::Arc<[std::sync::Arc<str>]> = crate::ast::step_ids(steps)
-            .into_iter()
-            .map(|id| std::sync::Arc::from(id.as_str()))
-            .collect();
-        let previous = STEP_IDS.with(|cell| cell.replace(Some(ids)));
+    /// Builds the table only when something reads step ids: a trace or a run observer.
+    /// Otherwise the run pays for the step index alone.
+    fn enter(steps: &[crate::ast::Step], enabled: bool) -> Self {
+        let ids = enabled.then(|| {
+            crate::ast::step_ids(steps)
+                .into_iter()
+                .map(|id| std::sync::Arc::from(id.as_str()))
+                .collect()
+        });
+        let previous = STEP_IDS.with(|cell| cell.replace(ids));
         let previous_index = STEP_INDEX.with(|index| index.replace(0));
         Self {
             previous,
@@ -4250,7 +4254,7 @@ fn run_finite_state(
     // declarations. Validate their known loop inputs before earlier effects.
     let preflight_context =
         !initial_bindings.is_empty() && state_source == FiniteStateSource::Fresh;
-    let _step_ids = StepIdScope::enter(&program.steps);
+    let _step_ids = StepIdScope::enter(&program.steps, options.trace || observe::is_installed());
     let mut bindings = initial_bindings;
     // Raw captures from `then capture bytes as NAME`, kept apart from text bindings.
     let mut byte_bindings: BTreeMap<String, Vec<u8>> = BTreeMap::new();

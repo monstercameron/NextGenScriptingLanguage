@@ -1,0 +1,9 @@
+# Show a low-urgency notification with one action, then raise the volume OSD.
+# Run with: execute examples/desktop/notify-osd.program --input summary="Build finished"
+# The selected action key is the notification's stdout; it is empty when the
+# notification is dismissed without choosing an action.
+accept summary as text
+
+run notify.send with summary summary and urgency "low" and expire_ms 4000 and action_1 "open=Open" as choice
+run "printf" with arguments ["selected: %s\n", choice]
+run osd.volume with action "raise"

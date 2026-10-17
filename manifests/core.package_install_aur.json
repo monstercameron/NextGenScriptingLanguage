@@ -1,0 +1,66 @@
+{
+  "name": "package.install_aur",
+  "binary": "yay",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "uncertain_on_failure": true,
+  "parameters": {
+    "packages": {
+      "type": "list",
+      "items": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "-S"
+    },
+    {
+      "literal": "--needed"
+    },
+    {
+      "literal": "--"
+    },
+    {
+      "spread": "packages"
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "package.install"
+    ],
+    "effects": [
+      "package.install"
+    ],
+    "ports": {
+      "inputs": {
+        "packages": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

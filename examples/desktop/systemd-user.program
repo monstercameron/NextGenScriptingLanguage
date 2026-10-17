@@ -1,0 +1,11 @@
+# Report whether a user unit is active. This program only reads state; starting,
+# stopping or enabling a unit is an effectful separate program.
+# Run with: execute examples/desktop/systemd-user.program --input unit=app.service
+accept unit as text
+
+run systemd.user.is_active with unit unit as reply and keep status as code
+take text at "/outcome" from reply as state
+if state is "active"
+  run "printf" with arguments ["%s is active\n", unit]
+otherwise
+  run "printf" with arguments ["%s is %s\n", unit, state]

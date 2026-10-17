@@ -1,0 +1,42 @@
+{
+  "name": "package.check_updates",
+  "binary": "checkupdates",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {},
+  "arguments": [],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw",
+      "trim_final_lf": true
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "updates",
+        "kind": "success"
+      },
+      {
+        "status": 2,
+        "name": "up_to_date",
+        "kind": "absence"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "result_envelope": true,
+    "capabilities": [
+      "package.query"
+    ],
+    "effects": []
+  }
+}

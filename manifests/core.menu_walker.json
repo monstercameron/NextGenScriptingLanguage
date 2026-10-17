@@ -1,0 +1,79 @@
+{
+  "name": "menu.walker",
+  "binary": "walker",
+  "accepts_stdin": true,
+  "cacheable": false,
+  "parameters": {
+    "flags": {
+      "type": "list",
+      "items": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "--dmenu"
+    },
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw",
+      "trim_final_lf": true
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "selected",
+        "kind": "success"
+      },
+      {
+        "status": 1,
+        "name": "cancelled",
+        "kind": "absence"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "result_envelope": true,
+    "capabilities": [
+      "ui.prompt"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "flags": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
+        }
+      }
+    }
+  }
+}

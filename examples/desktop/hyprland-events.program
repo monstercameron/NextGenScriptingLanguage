@@ -1,0 +1,14 @@
+# Forward Hyprland's socket2 events, one line per event, as a listener.
+# A listener must follow its input declarations directly, so the caller composes
+# the socat address from the session environment:
+#   XDG_RUNTIME_DIR              the user's runtime directory
+#   HYPRLAND_INSTANCE_SIGNATURE  the running compositor's instance name
+# The socket is $XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock.
+# Each record is the handler's pipeline input and is forwarded unchanged.
+# Run from a Hyprland session with:
+#   execute examples/desktop/hyprland-events.program --input address="UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock"
+accept address as text
+
+listen to hypr.socket2 with address address
+whenever a line arrives as event
+  then "cat"

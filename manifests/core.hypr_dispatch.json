@@ -1,0 +1,66 @@
+{
+  "name": "hypr.dispatch",
+  "binary": "hyprctl",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "uncertain_on_failure": true,
+  "parameters": {
+    "arguments": {
+      "type": "list",
+      "items": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "dispatch"
+    },
+    {
+      "spread": "arguments"
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw",
+      "trim_final_lf": true
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "compositor.control",
+      "compositor.dispatch"
+    ],
+    "effects": [
+      "compositor.dispatch"
+    ],
+    "ports": {
+      "inputs": {
+        "arguments": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+# Report whether a package is installed and print pacman's details when it is.
+# Installing is a separate, effectful program: package.install is uncertain on failure.
+# Run with: execute examples/desktop/packages.program --input package=vim
+accept package as text
+
+run package.query with package package as reply and keep status as code
+take text at "/outcome" from reply as state
+if state is "installed"
+  take text at "/value" from reply as details
+  run "printf" with arguments ["installed: %s\n", details]
+otherwise
+  run "printf" with arguments ["%s is %s\n", package, state]

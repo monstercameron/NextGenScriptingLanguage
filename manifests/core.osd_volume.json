@@ -1,0 +1,60 @@
+{
+  "name": "osd.volume",
+  "binary": "swayosd-client",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {
+    "action": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "--output-volume"
+    },
+    {
+      "parameter": "action"
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "desktop.osd"
+    ],
+    "effects": [
+      "desktop.osd"
+    ],
+    "ports": {
+      "inputs": {
+        "action": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "raise",
+              "lower",
+              "mute-toggle"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

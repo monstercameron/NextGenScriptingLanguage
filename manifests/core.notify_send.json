@@ -1,0 +1,272 @@
+{
+  "name": "notify.send",
+  "binary": "notify-send",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "uncertain_on_failure": true,
+  "parameters": {
+    "summary": {
+      "type": "string",
+      "required": true
+    },
+    "body": {
+      "type": "string"
+    },
+    "urgency": {
+      "type": "string"
+    },
+    "icon": {
+      "type": "string"
+    },
+    "expire_ms": {
+      "type": "integer"
+    },
+    "app_name": {
+      "type": "string"
+    },
+    "replace_id": {
+      "type": "integer"
+    },
+    "action_1": {
+      "type": "string"
+    },
+    "action_2": {
+      "type": "string"
+    },
+    "action_3": {
+      "type": "string"
+    },
+    "flags": {
+      "type": "list",
+      "items": "string"
+    }
+  },
+  "arguments": [
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    },
+    {
+      "when_present": "urgency",
+      "append": [
+        {
+          "literal": "--urgency"
+        },
+        {
+          "parameter": "urgency"
+        }
+      ]
+    },
+    {
+      "when_present": "icon",
+      "append": [
+        {
+          "literal": "--icon"
+        },
+        {
+          "parameter": "icon"
+        }
+      ]
+    },
+    {
+      "when_present": "expire_ms",
+      "append": [
+        {
+          "literal": "--expire-time"
+        },
+        {
+          "parameter": "expire_ms"
+        }
+      ]
+    },
+    {
+      "when_present": "app_name",
+      "append": [
+        {
+          "literal": "--app-name"
+        },
+        {
+          "parameter": "app_name"
+        }
+      ]
+    },
+    {
+      "when_present": "replace_id",
+      "append": [
+        {
+          "literal": "--replace-id"
+        },
+        {
+          "parameter": "replace_id"
+        }
+      ]
+    },
+    {
+      "when_present": "action_1",
+      "append": [
+        {
+          "literal": "--wait"
+        }
+      ]
+    },
+    {
+      "when_present": "action_1",
+      "append": [
+        {
+          "literal": "--action"
+        },
+        {
+          "parameter": "action_1"
+        }
+      ]
+    },
+    {
+      "when_present": "action_2",
+      "append": [
+        {
+          "literal": "--action"
+        },
+        {
+          "parameter": "action_2"
+        }
+      ]
+    },
+    {
+      "when_present": "action_3",
+      "append": [
+        {
+          "literal": "--action"
+        },
+        {
+          "parameter": "action_3"
+        }
+      ]
+    },
+    {
+      "literal": "--"
+    },
+    {
+      "parameter": "summary"
+    },
+    {
+      "when_present": "body",
+      "append": [
+        {
+          "parameter": "body"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw",
+      "trim_final_lf": true
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "desktop.notify"
+    ],
+    "effects": [
+      "desktop.notify"
+    ],
+    "ports": {
+      "inputs": {
+        "summary": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "body": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "urgency": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "low",
+              "normal",
+              "critical"
+            ]
+          },
+          "delivery": "single"
+        },
+        "icon": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "expire_ms": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "app_name": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "replace_id": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "action_1": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "action_2": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "action_3": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "flags": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

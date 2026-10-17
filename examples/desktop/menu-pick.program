@@ -1,0 +1,12 @@
+# Pick one item from the command-line arguments with gum. A cancelled prompt is
+# reported as its outcome name rather than treated as an empty selection.
+# Run with: execute examples/desktop/menu-pick.program -- apple pear plum
+accept items as list of text from arguments
+
+run menu.gum_choose with items items and header "Pick one" as reply and keep status as code
+take text at "/outcome" from reply as outcome
+if outcome is "selected"
+  take text at "/value" from reply as picked
+  run "printf" with arguments ["picked: %s\n", picked]
+otherwise
+  run "printf" with arguments ["no selection (%s)\n", outcome]

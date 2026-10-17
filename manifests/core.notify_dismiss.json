@@ -1,0 +1,83 @@
+{
+  "name": "notify.dismiss",
+  "binary": "makoctl",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {
+    "flags": {
+      "type": "list",
+      "items": "string"
+    },
+    "notification": {
+      "type": "integer"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "dismiss"
+    },
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    },
+    {
+      "when_present": "notification",
+      "append": [
+        {
+          "literal": "-n"
+        },
+        {
+          "parameter": "notification"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "desktop.notify"
+    ],
+    "effects": [
+      "desktop.notify"
+    ],
+    "ports": {
+      "inputs": {
+        "flags": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        },
+        "notification": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "name": "package.query",
+  "binary": "pacman",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {
+    "package": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "-Qi"
+    },
+    {
+      "literal": "--"
+    },
+    {
+      "parameter": "package"
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw",
+      "trim_final_lf": true
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "installed",
+        "kind": "success"
+      },
+      {
+        "status": 1,
+        "name": "not_installed",
+        "kind": "absence"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "result_envelope": true,
+    "capabilities": [
+      "package.query"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "package": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

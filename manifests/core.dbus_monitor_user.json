@@ -1,0 +1,61 @@
+{
+  "name": "dbus.monitor_user",
+  "binary": "busctl",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {
+    "match": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "--user"
+    },
+    {
+      "literal": "monitor"
+    },
+    {
+      "literal": "--json=short"
+    },
+    {
+      "when_present": "match",
+      "append": [
+        {
+          "literal": "--match"
+        },
+        {
+          "parameter": "match"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "outcomes": [
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "dbus.monitor"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "match": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

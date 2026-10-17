@@ -1,0 +1,75 @@
+{
+  "name": "systemd.user.is_active",
+  "binary": "systemctl",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {
+    "unit": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "--user"
+    },
+    {
+      "literal": "is-active"
+    },
+    {
+      "literal": "--"
+    },
+    {
+      "parameter": "unit"
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw",
+      "trim_final_lf": true
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "active",
+        "kind": "success"
+      },
+      {
+        "status": 3,
+        "name": "inactive",
+        "kind": "absence"
+      },
+      {
+        "status": 4,
+        "name": "unknown",
+        "kind": "absence"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "result_envelope": true,
+    "capabilities": [
+      "systemd.inspect"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "unit": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

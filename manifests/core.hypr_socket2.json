@@ -1,0 +1,51 @@
+{
+  "name": "hypr.socket2",
+  "binary": "socat",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {
+    "address": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "-U"
+    },
+    {
+      "literal": "-"
+    },
+    {
+      "parameter": "address"
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "outcomes": [
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "compositor.events"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "address": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

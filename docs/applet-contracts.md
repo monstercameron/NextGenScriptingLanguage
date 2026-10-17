@@ -729,6 +729,56 @@ take boolean at "/changed" from made_dir as dir_changed
 The example `examples/stdlib/ensure-config.program` combines these with
 `path.join`. Coverage is in `tests/lane_a_ensure.rs`.
 
+## Desktop wrappers
+
+These are ordinary command manifests that wrap installed desktop tools. Each one
+declares its argv shape, an outcome table, and its declared effects. Choices are
+port enums, so a bad value fails at `check`. Switch-style options use a
+`flags` list, because a boolean parameter would still count as present when
+`false`. Outcome names replace bare exit codes where the tool's codes are known.
+Menus and status queries use `result_envelope`, so a program can read the outcome
+name from `take text at "/outcome" from reply` after `and keep status as code`.
+Without that status capture, a non-success exit stops the program.
+
+- Notifications and OSD: `notify.send` (summary, body, urgency, icon, expire_ms,
+  app_name, replace_id, up to three actions, flags). With an action, `--wait`
+  makes stdout the selected action key. `notify.dismiss` and `notify.restore`
+  wrap `makoctl`. `osd.volume`, `osd.brightness` and `osd.caps` wrap
+  `swayosd-client`.
+- Menus: `menu.walker` and `menu.fuzzel` run in `--dmenu` mode and read items from
+  stdin. `menu.gum_choose`, `menu.gum_input` and `menu.gum_confirm` wrap `gum`.
+  Exit 1 from walker or fuzzel, and exit 130 from gum, both map to `cancelled`.
+  The exit-code meanings were taken from upstream documentation and need checking
+  against the installed versions.
+- systemd: `systemd.user.is_active` maps 0 to `active`, 3 to `inactive` and 4 to
+  `unknown`. `start`, `stop`, `restart`, `enable` and `disable` are effectful
+  and `uncertain_on_failure`.
+- D-Bus: `dbus.monitor_user` and `dbus.monitor_system` run `busctl monitor
+  --json=short` as listener producers, with an optional `match` rule.
+- Packages: `package.query` maps `pacman -Qi` to `installed` or `not_installed`.
+  `package.install` (pacman, `--needed --noconfirm`) and `package.install_aur`
+  (yay, `--needed`) are effectful and `uncertain_on_failure`. Installing requires
+  privileges the wrapper does not provide. `package.check_updates` maps
+  `checkupdates` exit 0 to `updates` and exit 2 to `up_to_date`.
+- Hyprland: `hypr.clients`, `hypr.monitors` and `hypr.workspaces` return a list of
+  JSON values. Items are typed as `json` because the record schema rejects
+  undeclared fields and Hyprland's objects contain many. `hypr.activewindow`
+  returns one JSON value. `hypr.dispatch` takes a list of dispatcher arguments
+  and is effectful. `hypr.socket2` is a `socat` listener producer.
+
+Environment inputs. The Hyprland wrappers read `HYPRLAND_INSTANCE_SIGNATURE` from
+the environment, which the tool inherits. The socket address for `hypr.socket2`
+is `UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock`.
+A listener must follow its input declarations directly, so the caller composes the
+address and passes it as the `address` input; `examples/desktop/hyprland-events.program`
+shows the command. Listener handlers receive each record as their pipeline input,
+so `then "cat"` forwards it unchanged.
+
+Examples live in `examples/desktop/`. The portable checks are in
+`tests/lane_a_desktop.rs`: they inspect each manifest, assert the argv shapes
+with `execute explain`, and run `execute check` on the examples. Tests that run
+the tools use owned shell fakes on Unix only, so the real tools are not required.
+
 ## Benchmark boundary
 
 The [applet boundary harness](../benchmarks/applet_boundaries.py) compares one

@@ -1,0 +1,132 @@
+{
+  "name": "menu.gum_input",
+  "binary": "gum",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {
+    "prompt": {
+      "type": "string"
+    },
+    "placeholder": {
+      "type": "string"
+    },
+    "value": {
+      "type": "string"
+    },
+    "flags": {
+      "type": "list",
+      "items": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "input"
+    },
+    {
+      "when_present": "prompt",
+      "append": [
+        {
+          "literal": "--prompt"
+        },
+        {
+          "parameter": "prompt"
+        }
+      ]
+    },
+    {
+      "when_present": "placeholder",
+      "append": [
+        {
+          "literal": "--placeholder"
+        },
+        {
+          "parameter": "placeholder"
+        }
+      ]
+    },
+    {
+      "when_present": "value",
+      "append": [
+        {
+          "literal": "--value"
+        },
+        {
+          "parameter": "value"
+        }
+      ]
+    },
+    {
+      "when_present": "flags",
+      "append": [
+        {
+          "spread": "flags"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "raw",
+      "trim_final_lf": true
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "entered",
+        "kind": "success"
+      },
+      {
+        "status": 130,
+        "name": "cancelled",
+        "kind": "absence"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "result_envelope": true,
+    "capabilities": [
+      "ui.prompt"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "prompt": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "placeholder": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "flags": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

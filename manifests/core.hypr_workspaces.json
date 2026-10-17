@@ -1,0 +1,45 @@
+{
+  "name": "hypr.workspaces",
+  "binary": "hyprctl",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {},
+  "arguments": [
+    {
+      "literal": "-j"
+    },
+    {
+      "literal": "workspaces"
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "list",
+      "encoding": "json",
+      "items": {
+        "type": "json"
+      }
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "compositor.inspect"
+    ],
+    "effects": []
+  }
+}

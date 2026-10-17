@@ -1,0 +1,6 @@
+# Print the focused window's class from hyprctl's JSON output. Requires a running
+# Hyprland session: hyprctl reads HYPRLAND_INSTANCE_SIGNATURE from the environment.
+# Run with: execute examples/desktop/hyprland-clients.program
+run hypr.activewindow as active
+take text at "/class" from active as window_class
+run "printf" with arguments ["focused: %s\n", window_class]

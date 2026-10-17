@@ -1,0 +1,8 @@
+# Print each user-bus signal that busctl reports, one JSON line per message.
+# busctl runs until the program is stopped. Change the match rule in this file to
+# watch a different signal. Each record is the handler's pipeline input, so the
+# handler forwards it unchanged to stdout.
+# Run with: execute examples/desktop/dbus-monitor.program
+listen to dbus.monitor_user with match "type='signal'"
+whenever a line arrives as message
+  then "cat"

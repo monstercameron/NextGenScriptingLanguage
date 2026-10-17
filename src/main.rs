@@ -48,6 +48,21 @@ struct FiniteCheckSnapshot {
     registry: Registry,
 }
 
+/// A closed stdout reader surfaces as a broken pipe: EPIPE on Unix, and on
+/// Windows ERROR_BROKEN_PIPE (109) or ERROR_NO_DATA (232) from pipe writes.
+/// Such an error ends the process quietly, as SIGPIPE would.
+fn is_closed_stdout(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<io::Error>().is_some_and(|io_error| {
+            io_error.kind() == io::ErrorKind::BrokenPipe
+                || (cfg!(windows) && matches!(io_error.raw_os_error(), Some(109 | 232)))
+        })
+    })
+}
+
+/// Exit status when the stdout reader has gone: the SIGPIPE convention (128 + 13).
+const STDOUT_CLOSED_EXIT: i32 = 141;
+
 struct SignalRegistration(signal_hook::SigId);
 
 impl Drop for SignalRegistration {
@@ -81,6 +96,10 @@ fn register_cancellation_signal(
 
 fn main() {
     if let Err(error) = execute() {
+        if is_closed_stdout(&error) {
+            // The reader went away; stop quietly without a diagnostic.
+            std::process::exit(STDOUT_CLOSED_EXIT);
+        }
         runtime::write_diagnostic(format!("execute: {error:#}\n").as_bytes());
         // The run has already cleaned up its children before returning this error.
         if let Some(code) = runtime::interrupt_exit_code() {
@@ -295,7 +314,7 @@ fn remote_resolve(arguments: &[String]) -> Result<()> {
     if addresses.is_empty() {
         bail!("remote host resolved to no addresses");
     }
-    let mut stdout = io::stdout().lock();
+    let mut stdout = io::stdout();
     for address in addresses {
         writeln!(stdout, "{address}")?;
     }
@@ -373,7 +392,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 "interface": interface,
                 "graph": serde_json::to_value(&graph)?
             })),
-            "explain" => writeln!(io::stdout().lock(), "{}", graph.to_dot()).map_err(Into::into),
+            "explain" => writeln!(io::stdout(), "{}", graph.to_dot()).map_err(Into::into),
             "run" => {
                 let options = RunOptions {
                     inputs,
@@ -481,7 +500,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             }
             "explain" => {
                 writeln!(
-                    std::io::stdout().lock(),
+                    io::stdout(),
                     "screen {:?}; components {:?}; connections {}",
                     screen.title,
                     screen.placements,
@@ -504,7 +523,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                             if let flow::ast::StepKind::Invoke { call, .. } = step.kind {
                                 let manifest = registry.resolve_call(&call)?;
                                 writeln!(
-                                    std::io::stdout().lock(),
+                                    io::stdout(),
                                     "line {}: {:?} parameters {:?}",
                                     step.line,
                                     manifest.binary_for(&call),
@@ -523,7 +542,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     );
                 }
                 writeln!(
-                    std::io::stdout().lock(),
+                    io::stdout(),
                     "{}",
                     serde_json::to_string_pretty(&flow::ui::snapshot(
                         &screen, &registry, &options
@@ -585,12 +604,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 let pipeline = runtime::explain_with_inputs(&stream.pipeline, &registry, &inputs)?;
                 match stream.line_limit {
                     Some(limit) => writeln!(
-                        std::io::stdout().lock(),
+                        io::stdout(),
                         "persistent native pipeline; raw output to stdout; take the first {limit} final records; per-record limit {} bytes\n{pipeline}",
                         args.max_record_bytes
                     )?,
                     None => writeln!(
-                        std::io::stdout().lock(),
+                        io::stdout(),
                         "persistent native pipeline; raw output to stdout until source EOF; per-record limit {} bytes\n{pipeline}",
                         args.max_record_bytes
                     )?,
@@ -719,7 +738,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         "explain" => {
             writeln!(
-                std::io::stdout().lock(),
+                io::stdout(),
                 "{}",
                 runtime::explain_with_inputs(&program, &registry, &inputs)?
             )?;
@@ -901,11 +920,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 return Ok(None);
             }
             "--version" | "-V" => {
-                writeln!(
-                    std::io::stdout().lock(),
-                    "execute {}",
-                    env!("CARGO_PKG_VERSION")
-                )?;
+                writeln!(io::stdout(), "execute {}", env!("CARGO_PKG_VERSION"))?;
                 return Ok(None);
             }
             "--manifest-dir" => {
@@ -1287,7 +1302,7 @@ fn take_option_value(
 fn applets_cli(arguments: &[String]) -> Result<()> {
     const HELP: &str = "Usage: execute applets list [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets inspect NAME_OR_PHRASE [--manifest-dir PATH | --manifest-catalog FILE]\n       execute applets discover\n       execute applets match --json REQUEST [--manifest-dir PATH | --manifest-catalog FILE]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. Inspect emits validated contract metadata without executing applets. Discover reports installed commands using PATH metadata only. Match ranks declared typed ports without running applets. Versioned contracts expose typed I/O, outcomes, effects, backends, and lifecycle while retaining legacy fields for compatibility.\nUse -- before a name or phrase beginning with a hyphen.";
     if arguments == ["--help"] || arguments == ["-h"] {
-        writeln!(std::io::stdout().lock(), "{HELP}")?;
+        writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
     }
     let command = arguments.first().context(HELP)?;
@@ -1419,7 +1434,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
 fn modules_cli(arguments: &[String]) -> Result<()> {
     const HELP: &str = "Usage: execute modules inspect MANIFEST [--root DIR] [--lock FILE]\n       execute modules verify MANIFEST --lock FILE [--root DIR]\n       execute modules lock MANIFEST --output FILE [--root DIR]\n\nValidate a local program-module package graph. No packages are fetched or installed. A lock command writes only to its explicit --output path.";
     if arguments == ["--help"] || arguments == ["-h"] {
-        writeln!(io::stdout().lock(), "{HELP}")?;
+        writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
     }
     let command = arguments.first().context(HELP)?.as_str();
@@ -1566,7 +1581,7 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
 fn service_cli(arguments: &[String]) -> Result<()> {
     const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--input NAME=VALUE ...] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
     if arguments == ["--help"] || arguments == ["-h"] {
-        writeln!(io::stdout().lock(), "{HELP}")?;
+        writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
     }
     if arguments.first().map(String::as_str) != Some("generate") {
@@ -1743,7 +1758,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
         }
         None => flow::service_deployment::render_for_workflow(&request)?,
     };
-    print!("{rendered}");
+    write!(io::stdout(), "{rendered}")?;
     Ok(())
 }
 
@@ -1845,11 +1860,7 @@ fn usage() -> &'static str {
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {
-    writeln!(
-        std::io::stdout().lock(),
-        "{}",
-        serde_json::to_string_pretty(value)?
-    )?;
+    writeln!(io::stdout(), "{}", serde_json::to_string_pretty(value)?)?;
     Ok(())
 }
 
@@ -1871,7 +1882,7 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
 
 fn print_help() -> Result<()> {
     writeln!(
-        std::io::stdout().lock(),
+        io::stdout(),
         "{}\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\nData-flow policies can declare applet-scoped secrets.environment names for output taint and redaction.\nSecurity scope: --capability-policy grants applet capabilities; remote egress and persistence need --data-flow-policy.",
         usage()
     )?;

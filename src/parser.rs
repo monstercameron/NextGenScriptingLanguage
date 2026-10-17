@@ -456,37 +456,110 @@ fn parse_loop<'arena, 'source: 'arena>(
     Ok(())
 }
 
+/// One statement after joining its continuation lines and raw block strings.
+struct LogicalLine {
+    number: usize,
+    indent: usize,
+    text: String,
+}
+
+/// Physical lines form statements. An open `[` or `{` continues the statement onto
+/// following lines until the brackets balance. A piece ending in ` """` takes a raw
+/// block up to a line holding only `"""`; the block becomes one quoted string with
+/// no escape processing, so embedded programs need no backslash escaping.
+fn logical_lines(source: &str) -> Result<Vec<LogicalLine>> {
+    let physical: Vec<&str> = source.lines().collect();
+    let mut statements = Vec::new();
+    let mut index = 0;
+    while index < physical.len() {
+        let number = index + 1;
+        let first = strip_comment(physical[index]);
+        index += 1;
+        if first.trim().is_empty() {
+            continue;
+        }
+        let mut indent = 0;
+        for byte in first.bytes() {
+            match byte {
+                b' ' => indent += 1,
+                b'\t' => bail!("line {number}: tabs are not allowed for indentation"),
+                _ => break,
+            }
+        }
+        let mut text = take_piece(first.trim_start_matches(' '), number, &physical, &mut index)?;
+        // Most statements have no bracket, so skip the second tokenize for them.
+        while (text.contains('[') || text.contains('{')) && bracket_depth(&text, number)? > 0 {
+            let Some(next) = physical.get(index) else {
+                bail!("line {number}: statement ends inside an open bracket or brace");
+            };
+            index += 1;
+            let next = strip_comment(next);
+            if next.trim().is_empty() {
+                continue;
+            }
+            text.push(' ');
+            text.push_str(&take_piece(next.trim(), number, &physical, &mut index)?);
+        }
+        statements.push(LogicalLine {
+            number,
+            indent,
+            text,
+        });
+    }
+    Ok(statements)
+}
+
+/// Returns one piece of a statement, with a raw block replaced by its quoted text.
+fn take_piece(piece: &str, number: usize, physical: &[&str], index: &mut usize) -> Result<String> {
+    let trimmed = piece.trim_end();
+    if !trimmed.ends_with(" \"\"\"") {
+        return Ok(piece.to_owned());
+    }
+    let mut body = Vec::new();
+    loop {
+        let Some(raw) = physical.get(*index) else {
+            bail!("line {number}: raw block string has no closing \"\"\" line");
+        };
+        *index += 1;
+        if raw.trim() == "\"\"\"" {
+            break;
+        }
+        body.push(*raw);
+    }
+    let quoted = serde_json::to_string(&body.join("\n")).context("encoding raw block string")?;
+    Ok(format!("{}{quoted}", &trimmed[..trimmed.len() - 3]))
+}
+
+/// Net count of open brackets and braces in a statement's tokens.
+fn bracket_depth(text: &str, number: usize) -> Result<i64> {
+    let mut tokens = Vec::new();
+    tokenize_into(text, &mut tokens).with_context(|| format!("line {number}"))?;
+    Ok(tokens.iter().fold(0, |depth, token| match token {
+        Token::LeftBracket | Token::LeftBrace => depth + 1,
+        Token::RightBracket | Token::RightBrace => depth - 1,
+        _ => depth,
+    }))
+}
+
 /// Parse the line-oriented workflow language into its AST.
 pub fn parse(source: &str) -> Result<Program> {
+    let statements = logical_lines(source)?;
     let mut definitions = BTreeMap::new();
     let mut inputs = Vec::new();
     let mut steps: Vec<Step> = Vec::new();
     let mut token_arena = Vec::new();
     let mut lines = Vec::new();
-    for (index, source_line) in source.lines().enumerate() {
-        let line_number = index + 1;
-        let line = strip_comment(source_line);
-        if line.trim().is_empty() {
-            continue;
-        }
-        let mut indent = 0;
-        for byte in line.bytes() {
-            match byte {
-                b' ' => indent += 1,
-                b'\t' => bail!("line {line_number}: tabs are not allowed for indentation"),
-                _ => break,
-            }
-        }
-        let content = line.trim_start_matches(' ');
+    for statement in &statements {
         let token_start = token_arena.len();
-        tokenize_into(content, &mut token_arena).with_context(|| format!("line {line_number}"))?;
+        tokenize_into(&statement.text, &mut token_arena)
+            .with_context(|| format!("line {}", statement.number))?;
         let token_range = token_start..token_arena.len();
         if token_range.is_empty() {
             continue;
         }
         lines.push(SourceLine {
-            number: line_number,
-            indent,
+            number: statement.number,
+            indent: statement.indent,
             token_range,
         });
     }

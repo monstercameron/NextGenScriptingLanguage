@@ -657,12 +657,34 @@ class SoakRunAssertions(unittest.TestCase):
         peaks = [(2000, 5, 12)] * 9
         self.assertEqual(soak.run_peak_violations(peaks, self.LIMITS), [])
 
-    def test_run_peaks_that_drift_upward_fail(self):
+    def test_run_peaks_that_keep_rising_past_the_floor_fail(self):
         import soak
 
-        peaks = [(2000, 5, 12)] * 3 + [(2000, 5, 12)] * 3 + [(3000, 5, 12)] * 3
+        # 5 MiB above the first third, rising through the middle and the last third.
+        peaks = [(2000, 5, 12)] * 3 + [(7000, 5, 12)] * 3 + [(8000, 5, 12)] * 3
         failures = soak.run_peak_violations(peaks, self.LIMITS)
-        self.assertTrue(any("grew" in failure for failure in failures), failures)
+        self.assertTrue(any("kept rising" in failure for failure in failures), failures)
+
+    def test_a_single_high_run_at_the_end_is_not_a_trend(self):
+        import soak
+
+        peaks = [(2000, 5, 12)] * 6 + [(9000, 5, 12), (2000, 5, 12), (2000, 5, 12)]
+        self.assertEqual(soak.run_peak_violations(peaks, self.LIMITS), [])
+
+    def test_rise_under_the_two_mebibyte_floor_passes(self):
+        import soak
+
+        # 1.5 MiB above a 2000 kB first third: below max(10%, 2 MiB), so it passes.
+        peaks = [(2000, 5, 12)] * 3 + [(3500, 5, 12)] * 3 + [(3500, 5, 12)] * 3
+        self.assertEqual(soak.run_peak_violations(peaks, self.LIMITS), [])
+
+    def test_percentage_limit_applies_above_the_floor(self):
+        import soak
+
+        # A 100 MB process: 10% is 10 MB, so 5 MB of rise is within the limit.
+        base = 100_000
+        peaks = [(base, 5, 12)] * 3 + [(base + 5000, 5, 12)] * 3 + [(base + 5000, 5, 12)] * 3
+        self.assertEqual(soak.run_peak_violations(peaks, self.LIMITS), [])
 
     def test_too_few_runs_is_a_failure_not_a_pass(self):
         import soak

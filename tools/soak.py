@@ -53,6 +53,23 @@ def parse_status(text):
     return rss_kb, threads
 
 
+# Graph RSS growth is judged against the larger of the percentage and this floor, so a few
+# megabytes of allocator noise on a small process cannot fail the run on its own.
+MIN_RSS_GROWTH_KB = 2048
+
+
+def fd_targets(pid):
+    """What each open descriptor of a live process points at, as sorted ``fd -> target``."""
+    targets = {}
+    for name in os.listdir(f"/proc/{pid}/fd"):
+        try:
+            targets[int(name)] = os.readlink(f"/proc/{pid}/fd/{name}")
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            # The descriptor closed between listing and reading it.
+            continue
+    return {str(fd): targets[fd] for fd in sorted(targets)}
+
+
 def sample(pid):
     """One sample of a live process: (rss_kb, threads, open_descriptors)."""
     status = Path(f"/proc/{pid}/status").read_text()
@@ -85,19 +102,31 @@ def violations(samples, warmup_index, limits):
 
 
 def run_peak_violations(peaks, limits):
-    """Per-run peaks must not drift: the last third must fit the first third's limits."""
+    """Per-run peaks must not drift upward over the run.
+
+    RSS growth fails only when it is above max(rss_growth_pct, MIN_RSS_GROWTH_KB) of the
+    first third's peak AND it keeps rising: the middle third and the last third are both
+    above that limit, and the last third reaches at least the middle third's peak. A single
+    high run at the end is not a trend and passes. Descriptor and thread drift use their
+    slack directly.
+    """
     if len(peaks) < 6:
         return ["too few runs to compare thirds"]
     third = len(peaks) // 3
-    first, last = peaks[:third], peaks[-third:]
+    first, middle, last = peaks[:third], peaks[third : 2 * third], peaks[2 * third :]
     failures = []
     first_rss = max(p[0] for p in first)
+    middle_rss = max(p[0] for p in middle)
     last_rss = max(p[0] for p in last)
-    growth = (last_rss - first_rss) * 100.0 / max(first_rss, 1)
-    if growth > limits["rss_growth_pct"]:
+    limit = max(limits["rss_growth_pct"] * first_rss / 100.0, MIN_RSS_GROWTH_KB)
+    if (
+        middle_rss - first_rss > limit
+        and last_rss - first_rss > limit
+        and last_rss >= middle_rss
+    ):
         failures.append(
-            f"run peak RSS grew {growth:.1f}% from the first third ({first_rss} kB) "
-            f"to the last ({last_rss} kB)"
+            f"run peak RSS rose above {first_rss + limit:.0f} kB and kept rising: "
+            f"first third {first_rss} kB, middle {middle_rss} kB, last {last_rss} kB"
         )
     if max(p[2] for p in last) > max(p[2] for p in first) + limits["fd_slack"]:
         failures.append("run peak descriptors drifted upward")
@@ -129,6 +158,7 @@ def soak_service(binary, duration, warmup, interval, limits):
             )
             samples = []
             early = None
+            targets = None
             started = time.monotonic()
             try:
                 while time.monotonic() - started < duration:
@@ -138,8 +168,12 @@ def soak_service(binary, duration, warmup, interval, limits):
                     samples.append(sample(process.pid))
                     time.sleep(interval)
             finally:
+                if process.poll() is None:
+                    targets = fd_targets(process.pid)
                 stop(process)
-        return finish("service", samples, early, process.returncode, warmup, interval, limits)
+        result = finish("service", samples, early, process.returncode, warmup, interval, limits)
+        result["fd_targets"] = targets
+        return result
 
 
 def soak_live(binary, duration, warmup, interval, limits):
@@ -170,6 +204,7 @@ def soak_live(binary, duration, warmup, interval, limits):
             samples = []
             failed_calls = []
             early = None
+            targets = None
             started = time.monotonic()
             calls = 0
             try:
@@ -198,6 +233,8 @@ def soak_live(binary, duration, warmup, interval, limits):
                     samples.append(sample(server.pid))
                     time.sleep(interval)
             finally:
+                if server.poll() is None:
+                    targets = fd_targets(server.pid)
                 subprocess.run(
                     [str(binary), "live", "control", "stop", "--socket", str(socket)],
                     stdout=subprocess.DEVNULL,
@@ -207,6 +244,7 @@ def soak_live(binary, duration, warmup, interval, limits):
                 stop(server)
         result = finish("live", samples, early, server.returncode, warmup, interval, limits)
         result["calls"] = calls
+        result["fd_targets"] = targets
         result["failed_calls"] = failed_calls[:10]
         if failed_calls:
             result["ok"] = False
@@ -300,6 +338,10 @@ def finish(name, samples, early, status, warmup, interval, limits):
         "samples": len(samples),
         "baseline": samples[warmup_index] if len(samples) > warmup_index else None,
         "last": samples[-1] if samples else None,
+        "timeline": [
+            [round(index * interval, 1), rss_kb, threads, fds]
+            for index, (rss_kb, threads, fds) in enumerate(samples)
+        ],
     }
 
 

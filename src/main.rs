@@ -421,8 +421,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     };
     if flow::graph::is_graph(&source) {
         reject_finite_only_options(&args, "graph")?;
+        // `run --checkpoint` is accepted; resume and the trigger/UI options are not yet.
         if args.command == "resume"
-            || args.checkpoint_dir.is_some()
             || args.max_runs.is_some()
             || args.max_record_bytes_set
             || args.headless
@@ -481,7 +481,15 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let _signal_registration =
                     register_cancellation_signal(std::sync::Arc::clone(&cancelled))?;
-                let result = flow::graph::run(graph, &registry, &options, cancelled)?;
+                let result = match args.checkpoint_dir.as_deref() {
+                    Some(directory) => {
+                        let store = flow::graph::open_checkpoint_directory(directory)?;
+                        flow::graph::run_checkpointed(
+                            graph, &registry, &options, cancelled, store, false,
+                        )?
+                    }
+                    None => flow::graph::run(graph, &registry, &options, cancelled)?,
+                };
                 let outputs = result
                     .outputs
                     .into_iter()

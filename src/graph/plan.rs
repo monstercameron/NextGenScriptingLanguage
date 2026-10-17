@@ -1287,6 +1287,123 @@ impl GraphPlan {
         issues
     }
 
+    /// Why this graph cannot be checkpointed, if it cannot. Phase 1 covers finite
+    /// applet graphs whose nodes have at most one stream input each.
+    pub fn checkpoint_refusal(&self) -> Result<()> {
+        for node in &self.nodes {
+            let source = match &node.kind {
+                GraphNodeKind::Applet { .. } | GraphNodeKind::AppletResultEvent { .. } => None,
+                GraphNodeKind::ProgramService { .. } => Some("a persistent program service"),
+                GraphNodeKind::Timer { .. } => Some("a timer"),
+                GraphNodeKind::Listener { .. } => Some("a listener"),
+                GraphNodeKind::NativeStream { .. } => Some("a native stream"),
+                GraphNodeKind::Renderer { .. } => Some("a renderer"),
+            };
+            if let Some(source) = source {
+                bail!(
+                    "graph node {:?} is {source}; checkpointed graphs support only finite applet nodes",
+                    node.id
+                );
+            }
+            let streams = node
+                .inputs
+                .values()
+                .filter(|schema| schema.delivery != PortDelivery::Single)
+                .count();
+            if streams > 1 {
+                bail!(
+                    "graph node {:?} has {streams} stream inputs; checkpointed graphs allow at most one per node",
+                    node.id
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// A fingerprint per node. It covers the node's definition without source
+    /// lines, its incoming edges, the identity of the invocation it runs, and its
+    /// upstream fingerprints. A completed record is reused only while it matches.
+    pub fn checkpoint_fingerprints(
+        &self,
+        registry: &Registry,
+        cwd: &std::path::Path,
+    ) -> Result<BTreeMap<String, String>> {
+        let mut fingerprints = BTreeMap::<String, String>::new();
+        while fingerprints.len() < self.nodes.len() {
+            let before = fingerprints.len();
+            for node in &self.nodes {
+                if fingerprints.contains_key(&node.id) {
+                    continue;
+                }
+                let incoming: Vec<&EdgeSpec> = self
+                    .edges
+                    .iter()
+                    .filter(|edge| edge.to.node == node.id)
+                    .collect();
+                if incoming
+                    .iter()
+                    .any(|edge| !fingerprints.contains_key(&edge.from.node))
+                {
+                    continue;
+                }
+                let fingerprint =
+                    self.node_fingerprint(node, &incoming, &fingerprints, registry, cwd)?;
+                fingerprints.insert(node.id.clone(), fingerprint);
+            }
+            if fingerprints.len() == before {
+                bail!("checkpointed graphs must be acyclic");
+            }
+        }
+        Ok(fingerprints)
+    }
+
+    fn node_fingerprint(
+        &self,
+        node: &GraphNode,
+        incoming: &[&EdgeSpec],
+        fingerprints: &BTreeMap<String, String>,
+        registry: &Registry,
+        cwd: &std::path::Path,
+    ) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        let mut definition = node.clone();
+        definition.line = None;
+        let mut edges: Vec<serde_json::Value> = incoming
+            .iter()
+            .map(|edge| {
+                serde_json::json!({
+                    "from": edge.from,
+                    "to": edge.to,
+                    "capacity": edge.capacity,
+                    "policy": edge.policy,
+                    "upstream": fingerprints.get(&edge.from.node),
+                })
+            })
+            .collect();
+        edges.sort_by_key(|edge| edge.to_string());
+        let identity = serde_json::to_vec(&serde_json::json!({
+            "node": definition,
+            "incoming": edges,
+        }))?;
+        let mut hash = Sha256::new();
+        hash.update((identity.len() as u64).to_le_bytes());
+        hash.update(&identity);
+        if let Some(call) = node.invocation() {
+            crate::runtime::resume::invocation_identity(&mut hash, call, registry, cwd)?;
+        }
+        Ok(format!("{:x}", hash.finalize()))
+    }
+
+    /// Whether an interrupted run of `node` may run again without a manual retry.
+    /// Like an ordinary invocation, its applet must be builtin or cacheable.
+    pub fn checkpoint_retry_safe(&self, node: &GraphNode, registry: &Registry) -> Result<bool> {
+        let Some(call) = node.invocation() else {
+            return Ok(false);
+        };
+        let manifest = registry.resolve_call(call)?;
+        Ok(manifest.builtin.is_some() || manifest.cacheable)
+    }
+
     pub fn output_terminals(&self) -> Vec<PortRef> {
         let bound = self
             .edges

@@ -379,6 +379,17 @@ fn node_fingerprint_with_digests(
     }
     Ok(format!("{:x}", hash.finalize()))
 }
+/// The identity of one invocation as a graph node's checkpoint fingerprint sees it:
+/// its resolved manifest, executable path and content digest, and working directory.
+pub(crate) fn invocation_identity(
+    hash: &mut Sha256,
+    call: &Invocation,
+    registry: &Registry,
+    cwd: &Path,
+) -> Result<()> {
+    manifest_identity(hash, call, registry, cwd, &mut HashMap::new(), false)
+}
+
 pub(super) fn retry_safe(
     program: &Program,
     start: usize,

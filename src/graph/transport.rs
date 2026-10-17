@@ -1,5 +1,6 @@
 //! Bounded event transport and structured graph execution.
 
+use super::checkpoint::{Checkpointing, GraphCheckpointStore};
 use super::plan::{
     validate_payload, BufferPolicy, GraphNode, GraphNodeKind, GraphPlan, PortRef, PortSchema,
     PortValue,
@@ -371,6 +372,22 @@ pub struct NodeIo {
     deadline: Option<Instant>,
     input_sensitivity: Option<SensitivitySet>,
     max_message_bytes: usize,
+    /// Outputs held back while a checkpointed node runs; see `begin_recording`.
+    recording: Option<Vec<RecordedEmit>>,
+    /// Called once, just before the node first invokes an applet.
+    effects_started: Option<EffectsHook>,
+}
+
+/// Runs just before a node's first applet invocation, so a checkpoint can mark the
+/// node in flight only once its effects may have begun.
+pub(crate) type EffectsHook = Arc<dyn Fn() -> Result<()> + Send + Sync>;
+
+/// One output a node emitted while its outputs were held back for checkpointing.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RecordedEmit {
+    pub port: String,
+    pub payload: PortValue,
+    pub sensitivity: SensitivitySet,
 }
 
 fn cached_input_names(
@@ -728,7 +745,41 @@ impl NodeIo {
     }
 
     pub fn emit(&mut self, port: &str, payload: PortValue) -> Result<PortEmitReport> {
-        self.emit_with_remote_metadata(port, payload, None)
+        self.emit_with_remote_metadata(port, payload, None, None)
+    }
+
+    /// Deliver an output exactly as a checkpointed node recorded it. Its sensitivity
+    /// is restored from the record instead of recomputed from this replay's inputs.
+    pub(crate) fn emit_recorded(
+        &mut self,
+        port: &str,
+        payload: PortValue,
+        sensitivity: SensitivitySet,
+    ) -> Result<PortEmitReport> {
+        self.emit_with_remote_metadata(port, payload, None, Some(sensitivity))
+    }
+
+    /// Hold back this node's outputs instead of delivering them, until the
+    /// matching `finish_recording`. Checkpointed nodes do this so that a node's
+    /// outputs reach downstream nodes only after its completion is recorded.
+    pub(crate) fn begin_recording(&mut self, effects_started: EffectsHook) {
+        self.recording = Some(Vec::new());
+        self.effects_started = Some(effects_started);
+    }
+
+    /// Stop holding outputs and return them in emission order.
+    pub(crate) fn finish_recording(&mut self) -> Vec<RecordedEmit> {
+        self.effects_started = None;
+        self.recording.take().unwrap_or_default()
+    }
+
+    /// Note that the node is about to invoke an applet. The first call runs the
+    /// checkpoint hook, if one is installed.
+    pub(crate) fn mark_effects_started(&self) -> Result<()> {
+        match &self.effects_started {
+            Some(hook) => hook(),
+            None => Ok(()),
+        }
     }
 
     /// Emit a validated remote event while preserving its source event name,
@@ -739,7 +790,7 @@ impl NodeIo {
         payload: PortValue,
         metadata: RemoteEventMetadata,
     ) -> Result<PortEmitReport> {
-        self.emit_with_remote_metadata(port, payload, Some(metadata))
+        self.emit_with_remote_metadata(port, payload, Some(metadata), None)
     }
 
     fn emit_with_remote_metadata(
@@ -747,6 +798,7 @@ impl NodeIo {
         port: &str,
         payload: PortValue,
         remote: Option<RemoteEventMetadata>,
+        sensitivity: Option<SensitivitySet>,
     ) -> Result<PortEmitReport> {
         self.check_cancelled()?;
         let schema = self.schemas.get(port).ok_or_else(|| {
@@ -774,6 +826,28 @@ impl NodeIo {
         if sinks.is_empty() {
             return Ok(PortEmitReport::default());
         }
+        let sensitivity = sensitivity.unwrap_or_else(|| {
+            let mut labels = SensitivitySet::from_label(schema.sensitivity);
+            if let Some(input) = &self.input_sensitivity {
+                labels.extend(input);
+            }
+            labels
+        });
+        // A held-back output takes no sequence number until it is delivered.
+        if let Some(recording) = self.recording.as_mut() {
+            if remote.is_some() {
+                bail!(
+                    "remote events from node {:?} cannot be checkpointed",
+                    self.node
+                );
+            }
+            recording.push(RecordedEmit {
+                port: port.to_owned(),
+                payload,
+                sensitivity,
+            });
+            return Ok(PortEmitReport::default());
+        }
         let sequence = next_sequence(&self.next_sequence)?;
         let envelope = EventEnvelope {
             port: PortRef::new(self.node.clone(), port),
@@ -781,13 +855,7 @@ impl NodeIo {
             generation: self.generation,
             revision: self.revision,
             sequence,
-            sensitivity: {
-                let mut labels = SensitivitySet::from_label(schema.sensitivity);
-                if let Some(input) = &self.input_sensitivity {
-                    labels.extend(input);
-                }
-                labels
-            },
+            sensitivity,
             remote,
             payload,
         };
@@ -1096,6 +1164,8 @@ impl GraphSession {
                 deadline: context.deadline,
                 input_sensitivity: initial_input_sensitivity(node),
                 max_message_bytes: options.max_message_bytes,
+                recording: None,
+                effects_started: None,
             };
             let node_owned = node.clone();
             let executor = Arc::clone(&executor);
@@ -1564,6 +1634,8 @@ mod payload_size_tests {
             deadline: None,
             input_sensitivity: None,
             max_message_bytes,
+            recording: None,
+            effects_started: None,
         };
         (scope, io, queue)
     }
@@ -1731,6 +1803,7 @@ impl RuntimeGraphExecutor {
             let (input_sensitivities, invocation_sensitivities) =
                 self.invocation_sensitivity_sets(node, call, io)?;
             self.authorize_remote_input(call, &input_sensitivities)?;
+            io.mark_effects_started()?;
             let options = self.invocation_options(context)?;
             let result = account_invocation_processes(
                 invoke_for_graph(
@@ -1768,6 +1841,7 @@ impl RuntimeGraphExecutor {
             let (input_sensitivities, invocation_sensitivities) =
                 self.invocation_sensitivity_sets(node, call, io)?;
             self.authorize_remote_input(call, &input_sensitivities)?;
+            io.mark_effects_started()?;
             let options = self.invocation_options(context)?;
             let result = account_invocation_processes(
                 invoke_for_graph(
@@ -2895,11 +2969,43 @@ fn value_to_source(value: &Value) -> Result<String> {
 }
 
 /// Execute a finite graph with the shared applet backend adapter.
+/// Run a finite graph without checkpoints. Terminal outputs keep arrival order.
 pub fn run(
     plan: GraphPlan,
     registry: &Registry,
     options: &RunOptions,
     cancelled: Arc<AtomicBool>,
+) -> Result<GraphRunResult> {
+    run_plan(plan, registry, options, cancelled, None)
+}
+
+/// Run a finite applet graph with its node completions recorded in `store` (#71
+/// phase 1). Terminal outputs come in node completion order. A node recorded by an
+/// earlier run replays its outputs instead of running. `retry_uncertain` lets a node
+/// that was interrupted with side effects run again.
+pub fn run_checkpointed(
+    plan: GraphPlan,
+    registry: &Registry,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    store: Arc<dyn GraphCheckpointStore>,
+    retry_uncertain: bool,
+) -> Result<GraphRunResult> {
+    run_plan(
+        plan,
+        registry,
+        options,
+        cancelled,
+        Some((store, retry_uncertain)),
+    )
+}
+
+fn run_plan(
+    plan: GraphPlan,
+    registry: &Registry,
+    options: &RunOptions,
+    cancelled: Arc<AtomicBool>,
+    checkpoint: Option<(Arc<dyn GraphCheckpointStore>, bool)>,
 ) -> Result<GraphRunResult> {
     let deadline = options
         .total_timeout
@@ -2964,6 +3070,17 @@ pub fn run(
         }
     }
     check_preflight_budget(&cancelled, deadline)?;
+    let checkpointing = match checkpoint {
+        Some((store, retry_uncertain)) => Some(super::checkpoint::prepare(
+            &plan,
+            registry,
+            &cwd,
+            store,
+            retry_uncertain,
+        )?),
+        None => None,
+    };
+    let ordering_store = checkpointing.as_ref().map(Checkpointing::store);
     let executor: Arc<dyn GraphExecutor> = if plan
         .nodes()
         .iter()
@@ -2982,12 +3099,23 @@ pub fn run(
             module_session,
         ))
     };
+    let executor: Arc<dyn GraphExecutor> = match checkpointing {
+        Some(checkpointing) => Arc::new(super::checkpoint::CheckpointedExecutor::new(
+            executor,
+            checkpointing,
+        )),
+        None => executor,
+    };
     let graph_options = GraphRunOptions {
         cancelled,
         deadline,
         ..GraphRunOptions::default()
     };
-    GraphSession::start(plan, executor, graph_options)?.run_to_completion()
+    let mut result = GraphSession::start(plan, executor, graph_options)?.run_to_completion()?;
+    if let Some(store) = ordering_store {
+        super::checkpoint::order_by_completion(&mut result.outputs, store.as_ref())?;
+    }
+    Ok(result)
 }
 
 fn graph_module_sensitivity_floor(
@@ -3129,6 +3257,8 @@ mod input_cursor_tests {
             deadline: None,
             input_sensitivity: None,
             max_message_bytes: 1024,
+            recording: None,
+            effects_started: None,
         }
     }
 
@@ -3754,6 +3884,8 @@ mod emit_fanout_tests {
             deadline: None,
             input_sensitivity: Some(SensitivitySet::from_label(Sensitivity::Internal)),
             max_message_bytes,
+            recording: None,
+            effects_started: None,
         };
         (scope, io, queues)
     }

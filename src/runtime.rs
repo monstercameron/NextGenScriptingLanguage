@@ -39,7 +39,7 @@ pub(crate) mod statement_hook;
 mod terminal;
 use observe::execute_call_group;
 mod program_backend;
-mod resume;
+pub(crate) mod resume;
 mod service;
 mod streaming;
 pub mod tasks;

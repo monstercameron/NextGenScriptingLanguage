@@ -4,20 +4,26 @@
 //! A graph edge never changes a payload's representation: callers must declare
 //! a matching schema or insert an applet that performs an explicit conversion.
 
+mod checkpoint;
 mod plan;
 mod syntax;
 mod transport;
 
 pub use crate::contracts::{OutputType, PortDelivery, ValueSchema};
+pub use checkpoint::{
+    open_checkpoint_directory, CompletedNode, GraphCheckpointState, GraphCheckpointStore,
+    InterruptedNode, MemoryGraphStore, RecordedOutput,
+};
 pub use plan::{
     BufferPolicy, EdgeSpec, GraphDiagnostic, GraphNode, GraphNodeKind, GraphPlan, PortDirection,
     PortRef, PortSchema, PortValue,
 };
 pub use syntax::{is_graph, parse};
 pub use transport::{
-    run, ChannelStdinSource, EventEnvelope, GraphContext, GraphExecutor, GraphRunOptions,
-    GraphRunResult, GraphSession, GraphStdinSource, NodeIo, PortEmitReport, RemoteEventMetadata,
-    RuntimeGraphExecutor, MAX_GRAPH_LISTENER_READERS, MAX_LISTENER_PORTS_PER_SOURCE,
+    run, run_checkpointed, ChannelStdinSource, EventEnvelope, GraphContext, GraphExecutor,
+    GraphRunOptions, GraphRunResult, GraphSession, GraphStdinSource, NodeIo, PortEmitReport,
+    RemoteEventMetadata, RuntimeGraphExecutor, MAX_GRAPH_LISTENER_READERS,
+    MAX_LISTENER_PORTS_PER_SOURCE,
 };
 
 use crate::ast::Invocation;

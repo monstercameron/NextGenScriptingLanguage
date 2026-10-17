@@ -1227,22 +1227,8 @@ fn open_output_file(
     registry: &Registry,
     cwd: &Path,
 ) -> Result<File> {
-    #[cfg(windows)]
-    {
-        if let Ok(metadata) = std::fs::symlink_metadata(destination) {
-            use std::os::windows::fs::MetadataExt;
-            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-            if metadata.file_type().is_symlink()
-                || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            {
-                bail!(
-                    "refusing to write through a link or reparse point: {}",
-                    destination.display()
-                );
-            }
-        }
-    }
-    let mut options = std::fs::OpenOptions::new();
+    // New files are owner-only (0600 on Unix).
+    let mut options = crate::platform::private_options();
     options.write(true).create(true);
     if append {
         options.append(true);
@@ -1253,14 +1239,73 @@ fn open_output_file(
         // Refuse a symlink in the final component instead of following it.
         options.custom_flags(libc::O_NOFOLLOW);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Open a reparse point itself, then reject it from the handle below.
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
     let file = options
         .open(destination)
         .with_context(|| format!("opening {} for output", destination.display()))?;
-    // Re-check the resolved path of the file that was just opened, so a link in
-    // an intermediate directory cannot move the write outside the grant.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            bail!(
+                "refusing to write through a link or reparse point: {}",
+                destination.display()
+            );
+        }
+    }
+    // Re-check the resolved path, so a link in an intermediate directory cannot
+    // move the write outside the grant.
     let canonical = std::fs::canonicalize(destination)
         .with_context(|| format!("resolving {}", destination.display()))?;
     crate::capabilities::authorize_host_path(registry, &canonical, true, cwd)?;
+    // The grant applies to the file that was opened, not to a path looked up
+    // again later: its identity must match the authorized path.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata()?;
+        let by_path = std::fs::metadata(&canonical)
+            .with_context(|| format!("checking {}", canonical.display()))?;
+        if opened.dev() != by_path.dev() || opened.ino() != by_path.ino() {
+            bail!(
+                "redirect target changed while it was being opened: {}",
+                destination.display()
+            );
+        }
+        if opened.nlink() > 1 {
+            bail!(
+                "refusing to write a hard-linked file: {}",
+                destination.display()
+            );
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: the handle belongs to `file`, which outlives this call, and
+        // `info` is a valid, writable structure of the size the API expects.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("checking {}", destination.display()));
+        }
+        if info.nNumberOfLinks > 1 {
+            bail!(
+                "refusing to write a hard-linked file: {}",
+                destination.display()
+            );
+        }
+    }
     if !append {
         file.set_len(0)
             .with_context(|| format!("truncating {}", destination.display()))?;

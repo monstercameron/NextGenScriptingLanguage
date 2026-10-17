@@ -130,3 +130,50 @@ fn a_symlinked_append_target_is_refused_and_not_written() {
     assert!(runtime::run(&program, &registry, &options(directory.path())).is_err());
     assert_eq!(fs::read(&real).unwrap(), b"keep me");
 }
+
+#[test]
+fn a_hard_linked_redirect_target_is_refused_and_not_written() {
+    // A second name for the same file would let a write through one name change
+    // the other. This runs without a policy: policy paths with a Windows drive
+    // prefix are not supported, and the link check does not depend on a grant.
+    let directory = tempfile::tempdir().unwrap();
+    let allowed = directory.path().join("allowed");
+    fs::create_dir(&allowed).unwrap();
+    let real = allowed.join("real.txt");
+    fs::write(&real, b"keep me").unwrap();
+    fs::hard_link(&real, allowed.join("alias.txt")).unwrap();
+
+    let registry = registry_for(&binary());
+    let program = parser::parse("run fixture.echo and stderr to \"allowed/alias.txt\"\n").unwrap();
+    let error = runtime::run(&program, &registry, &options(directory.path()))
+        .err()
+        .expect("hard-linked target must be refused");
+    assert!(format!("{error:#}").contains("hard-linked"), "{error:#}");
+    assert_eq!(fs::read(&real).unwrap(), b"keep me");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_new_redirect_file_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let allowed = directory.path().join("allowed");
+    fs::create_dir(&allowed).unwrap();
+    let registry = registry_for(&binary());
+    registry.set_host_state(Some(CapabilityPolicy {
+        version: 1,
+        applets: BTreeMap::from([(
+            "fixture.echo".into(),
+            grant(&["process.exec", "filesystem.write"], vec![allowed.clone()]),
+        )]),
+    }));
+    // The command fails with usage on stderr, so its stderr lands in the file.
+    let program = parser::parse("run fixture.echo and stderr to \"allowed/new.txt\"\n").unwrap();
+    let _ = runtime::run(&program, &registry, &options(directory.path()));
+    let mode = fs::metadata(allowed.join("new.txt"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}

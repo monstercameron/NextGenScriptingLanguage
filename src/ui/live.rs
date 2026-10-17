@@ -341,6 +341,7 @@ pub(crate) fn validate_state(screen: &Screen, value: &Json) -> Result<()> {
     Ok(())
 }
 impl App {
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     fn live_state_json(&self) -> Result<Json> {
         // The publication owns one final JSON tree. Rows already are JSON;
         // copy them once at this boundary rather than through an owned UiState.
@@ -432,6 +433,7 @@ impl App {
             events: Vec::new(),
         }
     }
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     fn apply_live_state(&mut self, mut ui: UiState) -> Result<()> {
         // Source/state validation gives each placed component and widget one
         // owner. Transfer incoming payloads into the renderer without a copy.
@@ -522,6 +524,7 @@ impl App {
     }
 }
 
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 fn publish(
     app: &App,
     state: &mut MutexGuard<'_, crate::live::state::State>,
@@ -567,6 +570,7 @@ fn publish(
     Ok(())
 }
 
+#[cfg(feature = "tui")]
 pub(crate) fn run(shared: Arc<Shared>, options: &RunOptions) -> Result<()> {
     let mut source_epoch = u64::MAX;
     let mut app: Option<App> = None;
@@ -662,7 +666,7 @@ pub(crate) fn run(shared: Arc<Shared>, options: &RunOptions) -> Result<()> {
                 reader.unpark();
                 match message? {
                     TerminalEvent::Key(key) => {
-                        if app.key(key) {
+                        if app.key(key.into()) {
                             shared.stop.store(true, Ordering::Relaxed);
                         }
                     }

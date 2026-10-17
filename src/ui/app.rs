@@ -7,12 +7,14 @@ use crate::{
     runtime::{self, RunOptions},
 };
 use anyhow::{bail, Context, Result};
+#[cfg(feature = "tui")]
 use crossterm::{
     cursor::{Hide, Show},
-    event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{self, Event as TerminalEvent},
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
+#[cfg(feature = "tui")]
 use ratatui::{
     backend::{CrosstermBackend, TestBackend},
     layout::{Constraint, Direction, Layout, Rect},
@@ -31,18 +33,24 @@ use serde_json::Value as Json;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
-    io::{self, IsTerminal},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender, SyncSender, TryRecvError},
+        mpsc::{self, Receiver, Sender, SyncSender},
         Arc,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+#[cfg(feature = "tui")]
+use std::{
+    io::{self, IsTerminal},
+    sync::mpsc::TryRecvError,
+};
+#[cfg(feature = "tui")]
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Clone)]
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 struct View {
     text: String,
     selected: usize,
@@ -80,10 +88,12 @@ struct Job {
     handle: JoinHandle<()>,
     execution: Execution,
 }
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 struct Instance {
     name: String,
     component: Component,
     views: Vec<View>,
+    #[cfg(feature = "tui")]
     widget_layout: Layout,
     list_items: Vec<Vec<String>>,
     inputs: BTreeMap<String, String>,
@@ -120,10 +130,13 @@ fn handler_run_result(result: Result<runtime::RunResult>) -> Result<runtime::Run
         _ => Ok(result),
     }
 }
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 struct App {
     screen: Screen,
     instances: Vec<Instance>,
+    #[cfg(feature = "tui")]
     root_layout: Layout,
+    #[cfg(feature = "tui")]
     columns_layout: Layout,
     shortcut_labels: String,
     focus: Vec<(usize, usize)>,
@@ -260,6 +273,7 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
     needed
 }
 
+#[cfg(feature = "tui")]
 fn widget_layout(widgets: &[Widget]) -> Layout {
     let constraints = widgets
         .iter()
@@ -319,6 +333,7 @@ impl App {
             .map(|name| {
                 let component = screen.components[name].clone();
                 let views = component.widgets.iter().map(View::new).collect();
+                #[cfg(feature = "tui")]
                 let widget_layout = widget_layout(&component.widgets);
                 let list_items = component
                     .widgets
@@ -390,6 +405,7 @@ impl App {
                     name: name.clone(),
                     component,
                     views,
+                    #[cfg(feature = "tui")]
                     widget_layout,
                     list_items,
                     inputs: BTreeMap::new(),
@@ -406,6 +422,7 @@ impl App {
                 }
             })
             .collect::<Vec<_>>();
+        #[cfg(feature = "tui")]
         let root_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -413,6 +430,7 @@ impl App {
                 Constraint::Min(1),
                 Constraint::Length(1),
             ]);
+        #[cfg(feature = "tui")]
         let columns_layout = if instances.len() == 2 {
             Layout::default()
                 .direction(Direction::Horizontal)
@@ -450,7 +468,9 @@ impl App {
         let mut app = Self {
             screen: screen.clone(),
             instances,
+            #[cfg(feature = "tui")]
             root_layout,
+            #[cfg(feature = "tui")]
             columns_layout,
             shortcut_labels,
             focus,
@@ -1005,8 +1025,9 @@ impl App {
             .iter()
             .all(|v| v.job.is_none() && v.queue.is_empty())
     }
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     fn key(&mut self, key: KeyEvent) -> bool {
-        if key.kind == KeyEventKind::Release {
+        if key.released {
             return false;
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -1112,6 +1133,7 @@ impl App {
         }
         false
     }
+    #[cfg(feature = "tui")]
     fn render(&self, frame: &mut Frame) {
         let area = frame.area();
         if area.width < 45 || area.height < 16 {
@@ -1244,6 +1266,13 @@ impl App {
             root[2],
         );
     }
+    #[cfg(not(feature = "tui"))]
+    fn rendered_frame(&self) -> String {
+        // Frames need the tui feature; the minimal build reports none.
+        String::new()
+    }
+
+    #[cfg(feature = "tui")]
     fn rendered_frame(&self) -> String {
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("in-memory terminal");
         terminal
@@ -1364,6 +1393,7 @@ fn display_value(value: &Json) -> String {
         _ => value.to_string(),
     }
 }
+#[cfg(feature = "tui")]
 fn display_cell(value: &Json) -> Cow<'_, str> {
     match value {
         Json::String(text) => safe(text),
@@ -1380,6 +1410,7 @@ fn display_cell(value: &Json) -> Cow<'_, str> {
         }
     }
 }
+#[cfg(feature = "tui")]
 fn render_table(frame: &mut Frame, area: Rect, block: Block<'_>, widget: &Widget, view: &View) {
     // The bordered block takes two rows and the default one-line header takes one.
     // This stateless table starts at row zero, so rows after the visible viewport
@@ -1419,6 +1450,7 @@ fn render_table(frame: &mut Frame, area: Rect, block: Block<'_>, widget: &Widget
     );
 }
 /// Keep horizontal labels bounded by display columns, including wide Unicode.
+#[cfg(feature = "tui")]
 fn bounded_label(value: &str, width: usize) -> Cow<'_, str> {
     let mut text = safe(value);
     if text.contains(['\n', '\t']) {
@@ -1443,6 +1475,7 @@ fn bounded_label(value: &str, width: usize) -> Cow<'_, str> {
     result.push('…');
     Cow::Owned(result)
 }
+#[cfg(feature = "tui")]
 fn render_bars(frame: &mut Frame, area: Rect, block: Block<'_>, view: &View, suffix: &str) {
     let inner = block.inner(area);
     if inner.is_empty() {
@@ -1487,6 +1520,7 @@ fn render_bars(frame: &mut Frame, area: Rect, block: Block<'_>, view: &View, suf
         area,
     );
 }
+#[cfg(feature = "tui")]
 fn render_chart(
     frame: &mut Frame,
     area: Rect,
@@ -1566,7 +1600,9 @@ impl Drop for Signals {
         }
     }
 }
+#[cfg(feature = "tui")]
 struct TerminalGuard;
+#[cfg(feature = "tui")]
 impl TerminalGuard {
     fn enter() -> Result<Self> {
         terminal::enable_raw_mode()?;
@@ -1575,6 +1611,7 @@ impl TerminalGuard {
         Ok(guard)
     }
 }
+#[cfg(feature = "tui")]
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
@@ -1582,11 +1619,13 @@ impl Drop for TerminalGuard {
     }
 }
 
+#[cfg(feature = "tui")]
 struct InputReader {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
+#[cfg(feature = "tui")]
 impl InputReader {
     fn start(
         sender: mpsc::SyncSender<std::io::Result<TerminalEvent>>,
@@ -1625,6 +1664,7 @@ impl InputReader {
     }
 }
 
+#[cfg(feature = "tui")]
 fn send_terminal_event(
     mut message: std::io::Result<TerminalEvent>,
     sender: &mpsc::SyncSender<std::io::Result<TerminalEvent>>,
@@ -1649,6 +1689,7 @@ fn send_terminal_event(
     }
 }
 
+#[cfg(feature = "tui")]
 impl Drop for InputReader {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
@@ -1706,6 +1747,7 @@ pub fn snapshot(screen: &Screen, registry: &Registry, options: &RunOptions) -> R
     }
     Ok(app.snapshot())
 }
+#[cfg(feature = "tui")]
 pub fn run(
     screen: &Screen,
     registry: &Registry,
@@ -1749,7 +1791,7 @@ pub fn run(
                 input_reader.unpark();
                 match message? {
                     TerminalEvent::Key(key) => {
-                        if app.key(key) {
+                        if app.key(key.into()) {
                             break;
                         }
                     }

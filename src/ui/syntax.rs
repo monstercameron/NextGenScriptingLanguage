@@ -6,7 +6,80 @@ use crate::{
     runtime,
 };
 use anyhow::{bail, Context, Result};
-use crossterm::event::{KeyCode, KeyModifiers};
+/// A key the screen language can name. Terminal input is reduced to these
+/// before screen logic sees it, so parsing needs no terminal crate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyCode {
+    Char(char),
+    Esc,
+    Enter,
+    Tab,
+    BackTab,
+    Backspace,
+    Up,
+    Down,
+    F(u8),
+    /// Any other key. It matches no shortcut or input action.
+    Other,
+}
+
+/// Modifier bits with the terminal's values, so modifiers compare exactly as before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyModifiers(u8);
+
+impl KeyModifiers {
+    pub const NONE: Self = Self(0);
+    pub const SHIFT: Self = Self(1);
+    pub const CONTROL: Self = Self(2);
+    pub const ALT: Self = Self(4);
+
+    pub fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+/// One key event. `released` marks key-release events, which screens ignore.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyEvent {
+    pub code: KeyCode,
+    pub modifiers: KeyModifiers,
+    pub released: bool,
+}
+
+impl KeyEvent {
+    pub fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
+        Self {
+            code,
+            modifiers,
+            released: false,
+        }
+    }
+}
+
+#[cfg(feature = "tui")]
+impl From<crossterm::event::KeyEvent> for KeyEvent {
+    fn from(event: crossterm::event::KeyEvent) -> Self {
+        use crossterm::event::{KeyCode as Terminal, KeyEventKind};
+        let code = match event.code {
+            Terminal::Char(c) => KeyCode::Char(c),
+            Terminal::Esc => KeyCode::Esc,
+            Terminal::Enter => KeyCode::Enter,
+            Terminal::Tab => KeyCode::Tab,
+            Terminal::BackTab => KeyCode::BackTab,
+            Terminal::Backspace => KeyCode::Backspace,
+            Terminal::Up => KeyCode::Up,
+            Terminal::Down => KeyCode::Down,
+            Terminal::F(number) => KeyCode::F(number),
+            _ => KeyCode::Other,
+        };
+        Self {
+            code,
+            modifiers: KeyModifiers(event.modifiers.bits()),
+            released: event.kind == KeyEventKind::Release,
+        }
+    }
+}
+
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq)]

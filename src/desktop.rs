@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
-use std::io::{self, IsTerminal, Read, Write};
+#[cfg(feature = "tui")]
+use std::io::Write;
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -1342,6 +1344,7 @@ pub struct DesktopGraphExecutor {
     quickshell_binary: PathBuf,
     quickshell_config: PathBuf,
     embedded_quickshell: bool,
+    #[cfg(feature = "tui")]
     tui: std::sync::Arc<std::sync::Mutex<TuiRendererState>>,
 }
 
@@ -1390,6 +1393,7 @@ impl DesktopGraphExecutor {
             quickshell_binary: quickshell_binary.into(),
             quickshell_config: quickshell_config.into(),
             embedded_quickshell,
+            #[cfg(feature = "tui")]
             tui: std::sync::Arc::new(std::sync::Mutex::new(TuiRendererState::default())),
         }
     }
@@ -1577,6 +1581,18 @@ impl DesktopGraphExecutor {
         Ok(renderer)
     }
 
+    #[cfg(not(feature = "tui"))]
+    fn execute_tui(
+        &self,
+        _node: &GraphNode,
+        _io: &mut NodeIo,
+        _context: &GraphContext,
+        backend: &str,
+    ) -> Result<()> {
+        bail!("desktop renderer backend {backend:?} requires the tui feature")
+    }
+
+    #[cfg(feature = "tui")]
     fn execute_tui(
         &self,
         node: &GraphNode,
@@ -1650,6 +1666,7 @@ impl DesktopGraphExecutor {
         Ok(())
     }
 
+    #[cfg(feature = "tui")]
     fn tui_lock(&self) -> Result<std::sync::MutexGuard<'_, TuiRendererState>> {
         self.tui
             .lock()
@@ -1735,6 +1752,7 @@ impl GraphExecutor for DesktopGraphExecutor {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(feature = "tui")]
 struct TuiWidget {
     key: String,
     component: String,
@@ -1743,6 +1761,7 @@ struct TuiWidget {
 }
 
 #[derive(Debug, Default)]
+#[cfg(feature = "tui")]
 struct TuiRendererState {
     widgets: Vec<TuiWidget>,
     buttons: Vec<String>,
@@ -1752,8 +1771,10 @@ struct TuiRendererState {
     lease_held: bool,
 }
 
+#[cfg(feature = "tui")]
 static TUI_TERMINAL_LEASE: std::sync::OnceLock<std::sync::Mutex<bool>> = std::sync::OnceLock::new();
 
+#[cfg(feature = "tui")]
 impl TuiRendererState {
     fn add(&mut self, key: String, component: &str, properties: &Value) -> Result<()> {
         if self.widgets.len() >= DEFAULT_MAX_WIDGETS {
@@ -1982,6 +2003,7 @@ impl TuiRendererState {
     }
 }
 
+#[cfg(feature = "tui")]
 fn acquire_tui_terminal_lease() -> Result<()> {
     let lease = TUI_TERMINAL_LEASE.get_or_init(|| std::sync::Mutex::new(false));
     let mut occupied = match lease.lock() {
@@ -1995,6 +2017,7 @@ fn acquire_tui_terminal_lease() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "tui")]
 fn release_tui_terminal_lease() {
     let lease = TUI_TERMINAL_LEASE.get_or_init(|| std::sync::Mutex::new(false));
     let mut occupied = match lease.lock() {
@@ -2007,6 +2030,7 @@ fn release_tui_terminal_lease() {
 /// Replace terminal control characters with visible Unicode markers before
 /// rendering applet-provided text, so untrusted data cannot issue ANSI, OSC,
 /// carriage-return, or backspace terminal commands.
+#[cfg(feature = "tui")]
 fn sanitize_terminal_text(value: &str) -> String {
     let mut sanitized = String::with_capacity(value.len());
     for character in value.chars() {
@@ -2022,6 +2046,7 @@ fn sanitize_terminal_text(value: &str) -> String {
     sanitized
 }
 
+#[cfg(feature = "tui")]
 impl Drop for TuiRendererState {
     fn drop(&mut self) {
         self.leave_terminal();
@@ -2380,6 +2405,7 @@ fn run_bounded(command: &mut Command, max_bytes: usize, timeout: Duration) -> Re
 }
 
 #[cfg(test)]
+#[cfg(feature = "tui")]
 mod terminal_tests {
     use super::{acquire_tui_terminal_lease, release_tui_terminal_lease, sanitize_terminal_text};
 

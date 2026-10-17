@@ -208,7 +208,7 @@ fn execute() -> Result<()> {
         None => return Ok(()),
     };
 
-    if args.json {
+    if args.json && args.command == "check" {
         let path = args.file.to_string_lossy().into_owned();
         let path_bytes = args.file.as_os_str().as_encoded_bytes().to_vec();
         let source = fs::read_to_string(&args.file).ok();
@@ -760,6 +760,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             runtime::validate_with_arguments(&program, &registry, &inputs)?;
             Ok(())
         }
+        "explain" if args.json => {
+            // Validate with the same inputs as `check` before describing effects.
+            runtime::validate_with_arguments(&program, &registry, &inputs)?;
+            let path = args.file.to_string_lossy().into_owned();
+            write_json(&flow::agent::explain::explain_json(&program, &registry, &path)?)
+        }
         "explain" => {
             writeln!(
                 io::stdout(),
@@ -925,7 +931,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 program_arguments.extend_from_slice(&arguments[index..]);
                 break;
             }
-            "--json" if command == "check" => {
+            "--json" if command == "check" || command == "explain" => {
                 if json {
                     bail!("--json may be specified only once");
                 }

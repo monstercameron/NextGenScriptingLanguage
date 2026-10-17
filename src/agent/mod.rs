@@ -5,3 +5,5 @@
 pub mod checkpoint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod errors;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod explain;

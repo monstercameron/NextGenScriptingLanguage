@@ -327,7 +327,7 @@ impl Supervisor {
                     stage.line
                 );
             }
-            if !call.status_binding.is_none() {
+            if call.status_binding.is_some() {
                 bail!(
                     "line {}: background stages cannot bind native status",
                     stage.line

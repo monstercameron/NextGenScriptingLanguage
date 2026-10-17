@@ -595,7 +595,7 @@ pub(crate) fn run_program_module_service(
     );
     let cancelled_shutdown = result.as_ref().is_err_and(|error| {
         service_cancelled.load(Ordering::Acquire)
-            && !deadline.is_some_and(|deadline| Instant::now() >= deadline)
+            && deadline.is_none_or(|deadline| Instant::now() < deadline)
             && error
                 .downcast_ref::<execution_result::ExecutionFailure>()
                 .is_some_and(|failure| {

@@ -194,7 +194,7 @@ fn path_join_adds_platform_separators_and_skips_empty_segments() {
     );
     assert_eq!(call("path.join", json!({"parts": []})).unwrap(), json!(""));
     // As with Path::join, an absolute segment replaces the path built so far.
-    let absolute = Path::new("config").join("/etc").join("x");
+    let absolute = Path::new("config").join(Path::new("/etc")).join("x");
     assert_eq!(
         call("path.join", json!({"parts": ["config", "/etc", "x"]})).unwrap(),
         json!(absolute.to_str().unwrap())

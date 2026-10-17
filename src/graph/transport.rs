@@ -1939,7 +1939,7 @@ impl RuntimeGraphExecutor {
                 };
                 if let Err(error) = io.emit(&event_port, payload) {
                     if run_cancelled.load(Ordering::Acquire)
-                        && !run_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+                        && run_deadline.is_none_or(|deadline| Instant::now() < deadline)
                     {
                         return Err(service_cancellation_failure(
                             "graph-owned program service cancelled while emitting an event",
@@ -2119,12 +2119,10 @@ impl RuntimeGraphExecutor {
         if sink_schema.delivery != expected_delivery
             || (raw_listener_records && sink_schema.schema.kind != OutputType::Bytes)
             || (!raw_listener_records
-                && expected_schema
+                && (expected_schema
                     .as_ref()
-                    .is_some_and(|schema| &sink_schema.schema != schema))
-            || (!raw_listener_records
-                && expected_schema.is_none()
-                && sink_schema.schema.kind != OutputType::Bytes)
+                    .is_some_and(|schema| &sink_schema.schema != schema)
+                    || (expected_schema.is_none() && sink_schema.schema.kind != OutputType::Bytes)))
         {
             bail!(
                 "graph stream node {:?} stdout port does not match its final applet output contract",

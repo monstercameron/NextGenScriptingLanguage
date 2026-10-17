@@ -209,6 +209,7 @@ fn yaml_stringify_quotes_only_when_needed_and_round_trips() {
 }
 
 #[test]
+#[allow(clippy::approx_constant)] // 3.14 is a TOML data value, not a use of PI.
 fn toml_tables_arrays_of_tables_and_inline_values() {
     let document = r#"title = "TOML Example"
 

@@ -62,7 +62,7 @@ fn policy_file(work: &Path, body: &str) -> PathBuf {
     policy
 }
 
-fn line_of<'a>(plan: &'a str, number: usize) -> &'a str {
+fn line_of(plan: &str, number: usize) -> &str {
     let prefix = format!("line {number}:");
     plan.lines()
         .find(|line| line.starts_with(&prefix))
@@ -420,7 +420,7 @@ fn command_for_refuses_a_privileged_launch_before_any_command_is_built() {
         "elevated.run",
         directory.path(),
     );
-    let error = format!("{:#}", registered.err().expect("refused"));
+    let error = format!("{:#}", registered.unwrap_err());
     assert!(error.contains("denies privileged steps"), "{error}");
     // A direct executable that is not registered: refused by its resolved name.
     let direct = flow::capabilities::command_for(
@@ -430,7 +430,7 @@ fn command_for_refuses_a_privileged_launch_before_any_command_is_built() {
         "sudo",
         directory.path(),
     );
-    let error = format!("{:#}", direct.err().expect("refused"));
+    let error = format!("{:#}", direct.unwrap_err());
     assert!(error.contains("denies privileged steps"), "{error}");
     // An unregistered applet name over a renamed elevator: refused by the resolved path.
     let renamed = directory.path().join("pkexec");
@@ -442,6 +442,6 @@ fn command_for_refuses_a_privileged_launch_before_any_command_is_built() {
         "tool",
         directory.path(),
     );
-    let error = format!("{:#}", renamed_refused.err().expect("refused"));
+    let error = format!("{:#}", renamed_refused.unwrap_err());
     assert!(error.contains("denies privileged steps"), "{error}");
 }

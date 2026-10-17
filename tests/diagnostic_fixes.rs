@@ -25,7 +25,7 @@ fn fixture_registry() -> Registry {
 /// Apply every edit of a fix, highest offset first so earlier offsets stay valid.
 fn apply(source: &str, fix: &SuggestedFix) -> String {
     let mut edits = fix.edits.clone();
-    edits.sort_by(|left, right| right.span.start_byte.cmp(&left.span.start_byte));
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.span.start_byte));
     let mut text = source.to_owned();
     for edit in edits {
         text.replace_range(edit.span.start_byte..edit.span.end_byte, &edit.replacement);

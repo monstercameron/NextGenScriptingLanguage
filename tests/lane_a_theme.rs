@@ -2,6 +2,7 @@
 //! link, reload, and roll the link back when the reload fails. The portable test
 //! checks the program; the Unix tests create real links and a fake `hyprctl`.
 
+#[cfg(unix)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -15,6 +16,7 @@ fn example() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/desktop/theme-switch.program")
 }
 
+#[cfg(unix)]
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }

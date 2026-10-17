@@ -1915,9 +1915,9 @@ fn validate_schema_keywords(schema: &Value) -> Result<()> {
         bail!("items requires type array");
     }
     if let Some(enumeration) = object.get("enum") {
-        if !enumeration
+        if enumeration
             .as_array()
-            .is_some_and(|values| !values.is_empty())
+            .is_none_or(|values| values.is_empty())
         {
             bail!("schema enum must be a nonempty array");
         }

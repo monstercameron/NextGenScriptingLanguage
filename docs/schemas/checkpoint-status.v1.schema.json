@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/checkpoint-status.v1.schema.json",
+  "title": "Execute checkpoint status, protocol execute.checkpoint_status/1",
+  "description": "Read-only summary from `execute checkpoint status DIR --json`. The journal checksum is reported as present or missing and is never verified by this command.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "directory", "journal", "blobs", "lock_file_present", "resume_action"],
+  "properties": {
+    "protocol": { "const": "execute.checkpoint_status/1" },
+    "directory": { "type": "string" },
+    "journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "status",
+        "program_path",
+        "completed_nodes",
+        "in_flight",
+        "error",
+        "checksum",
+        "checksum_verified"
+      ],
+      "properties": {
+        "version": { "type": ["integer", "null"] },
+        "status": {
+          "type": "string",
+          "enum": ["running", "failed", "interrupted", "completed", "idle"]
+        },
+        "program_path": { "type": ["string", "null"] },
+        "completed_nodes": { "type": "integer", "minimum": 0 },
+        "in_flight": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["line", "start", "end", "retry_safe"],
+          "properties": {
+            "line": { "type": ["integer", "null"] },
+            "start": { "type": ["integer", "null"] },
+            "end": { "type": ["integer", "null"] },
+            "retry_safe": { "type": ["boolean", "null"] }
+          }
+        },
+        "error": { "type": ["string", "null"] },
+        "checksum": { "type": "string", "enum": ["present", "missing"] },
+        "checksum_verified": { "const": false }
+      }
+    },
+    "blobs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "bytes"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "lock_file_present": { "type": "boolean" },
+    "resume_action": {
+      "type": "string",
+      "enum": [
+        "restores_completed_result",
+        "idle_no_action",
+        "requires_retry_uncertain",
+        "retries_in_flight_node",
+        "may_be_active_or_crashed",
+        "continues_from_last_completed_node"
+      ]
+    }
+  }
+}

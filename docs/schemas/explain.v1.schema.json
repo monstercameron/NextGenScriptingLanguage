@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/explain.v1.schema.json",
+  "title": "Execute explain plan, protocol execute.explain/1",
+  "description": "Output of `execute explain FILE --json`. Nothing is executed. A null effects or undeclared:true row cannot be treated as harmless; summary.effects_declared is true only when no row is undeclared. Paths, escapes_cwd, and folder tracking are advisory static analysis, not containment guarantees; enforcement is the capability policy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "program", "steps", "summary"],
+  "properties": {
+    "protocol": { "const": "execute.explain/1" },
+    "program": { "type": "string" },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "line", "kind", "scope", "direct", "applet", "binary", "argv", "effects",
+          "capabilities", "writes", "network", "reads", "cwd_change",
+          "modifies_next_invocation", "environment_sensitive", "environment_tainted",
+          "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared"
+        ],
+        "properties": {
+          "line": { "type": "integer", "minimum": 1 },
+          "kind": { "type": "string" },
+          "scope": { "type": ["string", "null"] },
+          "direct": { "type": "boolean" },
+          "applet": { "type": ["string", "null"] },
+          "binary": { "type": ["string", "null"] },
+          "argv": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          },
+          "effects": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          },
+          "capabilities": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          },
+          "writes": { "type": ["boolean", "null"] },
+          "network": { "type": ["boolean", "null"] },
+          "reads": { "type": ["boolean", "null"] },
+          "cwd_change": { "type": ["boolean", "null"] },
+          "modifies_next_invocation": { "type": "boolean" },
+          "environment_sensitive": { "type": "boolean" },
+          "environment_tainted": { "type": "boolean" },
+          "path": { "type": ["string", "null"] },
+          "path_is_runtime": { "type": "boolean" },
+          "escapes_cwd": { "type": "boolean" },
+          "resolved": { "type": ["boolean", "null"] },
+          "undeclared": { "type": "boolean" }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invocations", "executables", "writes", "write_effects", "write_paths",
+        "runtime_write_paths", "escaping_write_paths", "network", "reads", "cwd_changes",
+        "modifies_next_invocation", "environment_tainted_invocations",
+        "undeclared_invocations", "effects_declared", "privileged"
+      ],
+      "properties": {
+        "invocations": { "type": "integer", "minimum": 0 },
+        "executables": { "type": "array", "items": { "type": "string" } },
+        "writes": { "type": "boolean" },
+        "write_effects": { "type": "array", "items": { "type": "string" } },
+        "write_paths": { "type": "array", "items": { "type": "string" } },
+        "runtime_write_paths": { "type": "integer", "minimum": 0 },
+        "escaping_write_paths": { "type": "integer", "minimum": 0 },
+        "network": { "type": "boolean" },
+        "reads": { "type": "boolean" },
+        "cwd_changes": { "type": "boolean" },
+        "modifies_next_invocation": { "type": "boolean" },
+        "environment_tainted_invocations": { "type": "integer", "minimum": 0 },
+        "undeclared_invocations": { "type": "integer", "minimum": 0 },
+        "effects_declared": { "type": "boolean" },
+        "privileged": { "type": "string" }
+      }
+    }
+  }
+}

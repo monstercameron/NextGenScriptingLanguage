@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/error.v1.schema.json",
+  "title": "Execute structured runtime error, protocol execute.error/1",
+  "description": "The single JSON object written as the final stderr line when `--json-errors` is given. Codes are stable; new codes are additive within protocol 1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "code", "category", "message", "exit_code"],
+  "properties": {
+    "protocol": { "const": "execute.error/1" },
+    "code": {
+      "type": "string",
+      "enum": [
+        "command_failed",
+        "applet_invocation_failed",
+        "applet_failed",
+        "policy_denied",
+        "remote_failed",
+        "auth_failed",
+        "execution_failed",
+        "task_failed",
+        "interrupted",
+        "execute_error"
+      ]
+    },
+    "category": {
+      "type": "string",
+      "enum": ["process", "applet", "policy", "remote", "auth", "execution", "signal", "runtime"]
+    },
+    "message": { "type": "string" },
+    "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 }
+  }
+}

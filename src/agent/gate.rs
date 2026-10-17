@@ -2,7 +2,10 @@
 //!
 //! The gate reads the explain plan and reports every row that triggers a category
 //! the operator has not approved. It denies by default: with no `--allow`, any
-//! effect at all is a violation.
+//! effect at all is a violation. With `--policy-header`, a category the program's
+//! header does not declare is also a violation. The header restricts and never
+//! approves. A retried step reports its attempt count, and `even if uncertain` on a
+//! network or writes step also needs `--allow undeclared`.
 //!
 //! Effect mapping. Each declared effect string maps to one category:
 //! `fs.read*` to `reads`; `fs.write*`, `file.write*`, or any name containing
@@ -136,30 +139,66 @@ fn triggered(row: &Value) -> Vec<&'static str> {
     if row["undeclared"] == true {
         categories.insert("undeclared");
     }
+    // A retry past an uncertain outcome may repeat a network or write effect that
+    // already happened, so it needs the explicit `undeclared` approval as well.
+    if row["retry"]["even_if_uncertain"] == true
+        && (categories.contains("network") || categories.contains("writes"))
+    {
+        categories.insert("undeclared");
+    }
     categories.into_iter().collect()
 }
 
-/// Build the verdict from an explain object and the approved categories. Every
-/// row with a category that is not approved is reported as one violation.
-pub fn verdict(explain: &Value, allowed: &BTreeSet<String>) -> Value {
+/// Build the verdict from an explain object. A category is a violation when it is
+/// not approved by `--allow`, or, when `declared` is given (a program's policy
+/// header), when the program does not declare it. The header only restricts: it
+/// never approves anything. A step with a retry reports its attempts, because each
+/// attempt may repeat its effects.
+pub fn verdict(
+    explain: &Value,
+    allowed: &BTreeSet<String>,
+    declared: Option<&BTreeSet<String>>,
+) -> Value {
     let mut violations = Vec::new();
+    let mut retries = Vec::new();
     for row in explain["steps"].as_array().into_iter().flatten() {
+        let attempts = row["retry"]["attempts"].as_u64();
+        if let Some(attempts) = attempts {
+            retries.push(json!({
+                "line": row["line"],
+                "kind": row["kind"],
+                "attempts": attempts,
+                "even_if_uncertain": row["retry"]["even_if_uncertain"],
+            }));
+        }
         for category in triggered(row) {
-            if !allowed.contains(category) {
-                violations.push(json!({
-                    "line": row["line"],
-                    "kind": row["kind"],
-                    "category": category,
-                    "applet": row["applet"],
-                    "binary": row["binary"],
-                }));
+            let reason = if !allowed.contains(category) {
+                "not_approved"
+            } else if declared.is_some_and(|declared| !declared.contains(category)) {
+                "not_declared"
+            } else {
+                continue;
+            };
+            let mut violation = json!({
+                "line": row["line"],
+                "kind": row["kind"],
+                "category": category,
+                "reason": reason,
+                "applet": row["applet"],
+                "binary": row["binary"],
+            });
+            if let Some(attempts) = attempts {
+                violation["attempts"] = json!(attempts);
             }
+            violations.push(violation);
         }
     }
     json!({
         "protocol": PROTOCOL,
         "program": explain["program"],
         "allowed_categories": allowed.iter().collect::<Vec<_>>(),
+        "declared_categories": declared.map(|declared| declared.iter().collect::<Vec<_>>()),
+        "retries": retries,
         "allowed": violations.is_empty(),
         "violations": violations,
     })

@@ -6,10 +6,9 @@ Current source accepts a `graph` block as a workflow file. Use the ordinary
 terminal port events as JSON. Graphs can declare the same typed top-level inputs
 as finite programs, then use those names in applet parameters. `--input` and
 declared positional arguments follow the ordinary workflow rules. Finite applet
-graphs have a phase 1 checkpoint API (see [Checkpoints](#checkpoints)); the
-on-disk journal for it is still pending, so `run --checkpoint` on a graph is
-refused for now. Resume, trigger/run limits and UI options are not supported for
-graphs. The small example is
+graphs can be checkpointed with `run --checkpoint DIR` and continued with
+`resume --checkpoint DIR` (see [Checkpoints](#checkpoints)). Trigger/run limits
+and UI options are not supported for graphs. The small example is
 [`examples/graph/composition.program`](../examples/graph/composition.program).
 
 The [runtime composition proof](../examples/composition/graph-runtime/README.md)
@@ -197,11 +196,30 @@ that effective label before graph execution; see the
 
 ## Checkpoints
 
-`graph::run_checkpointed(plan, &registry, &run_options, cancelled, store,
-retry_uncertain)` runs a finite applet graph whose completed nodes are recorded
-in a `GraphCheckpointStore`. The store is a trait; `MemoryGraphStore` implements
-it in memory for tests. The on-disk store (the v5 `graph.jsonl` journal) is
-pending, and until it lands the CLI refuses `run --checkpoint` for graphs.
+`execute run GRAPH --checkpoint DIR` runs a finite applet graph and records each
+completed node in `DIR`. If the run is interrupted, `execute resume GRAPH
+--checkpoint DIR` continues it. A node that was in flight when the run stopped
+has side effects that may have happened, so resume refuses it unless
+`--retry-uncertain` is passed. `execute checkpoint status DIR` reports the
+committed nodes and any node in flight.
+
+The on-disk journal is journal version 5, mode `graph`. `journal.json` holds
+the graph's identity, the count and chain digest of the committed nodes, and the
+nodes in flight. A node enters the in-flight list before its first applet
+invocation, and `journal.json` is written before that invocation starts.
+`graph.jsonl` holds one line per completed node, and a node's line is durable
+before `journal.json` names it. Lines past the committed count are ignored, and
+a chain mismatch refuses the resume. A program checkpoint is refused by a graph
+resume, and a graph checkpoint is refused by a program resume.
+
+The identity covers the canonical plan, including its inputs, and the working
+directory. A resume must present the same identity. Completed payloads are written
+only after the program journal's persistence policy accepts their sensitivity
+labels.
+
+The Rust API is `graph::run_checkpointed(plan, &registry, &run_options,
+cancelled, store, retry_uncertain)`. `GraphCheckpointStore` is the storage trait,
+and `MemoryGraphStore` implements it in memory for tests.
 
 Phase 1 covers these graphs:
 

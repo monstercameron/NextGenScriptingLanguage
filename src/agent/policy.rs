@@ -1,11 +1,15 @@
-//! `# execute-policy: allow CATEGORY...` header: the approvals a program's author
-//! declares. It is an ordinary leading comment, so the grammar is unchanged. The
-//! header is read only by `execute explain --json --policy-header`, which merges it
-//! into the gate's approved categories. It does not grant anything at run time.
+//! `# execute-policy: allow CATEGORY...` header: the categories a program declares
+//! it intends to use. It is an ordinary leading comment, so the grammar is unchanged.
+//! The header is read only by `execute explain --json --policy-header`, which reports
+//! every effect category the program does not declare as a violation.
+//!
+//! The header never approves anything. Approvals come only from `--allow`, and a
+//! category needs both an approval and a declaration to pass. A header-only check
+//! without `--allow` therefore denies every effect. `allow none` declares that the
+//! program uses no effects.
 //!
 //! Fail-closed rules: exactly one header is allowed, it must be in the leading
-//! comment block, and every category must be a known gate category. `allow none`
-//! declares that nothing is approved.
+//! comment block, and every category must be a known gate category.
 
 use crate::agent::gate::parse_category;
 use anyhow::{bail, Result};

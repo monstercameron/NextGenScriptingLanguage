@@ -473,6 +473,8 @@ pub(crate) fn validate(
             steps: plan.program.steps[doc.cursor..].to_vec(),
             trigger: None,
         };
+        // Live documents refuse hand-over and detached launch anywhere in the program.
+        crate::runtime::handoff::reject_in_live(&plan.program)?;
         runtime::preflight_inputs(&tail, registry, &declared)?;
         runtime::validate_live(
             &tail,

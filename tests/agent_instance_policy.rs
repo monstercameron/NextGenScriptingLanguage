@@ -15,6 +15,16 @@ fn write_manifests(directory: &Path) -> PathBuf {
         "parameters": {}, "arguments": [{ "literal": "--version" }]
     });
     std::fs::write(manifests.join("plain.helper.json"), plain.to_string()).unwrap();
+    // A network step, for the retry rule: its effect is declared as network.
+    let network = serde_json::json!({
+        "name": "net.helper", "binary": HELPER, "accepts_stdin": false,
+        "parameters": {}, "arguments": [{ "literal": "--version" }],
+        "contract": {
+            "version": 1, "backend": "command", "lifecycle": { "kind": "oneshot" },
+            "capabilities": ["network.loopback"], "effects": ["network.loopback"]
+        }
+    });
+    std::fs::write(manifests.join("net.helper.json"), network.to_string()).unwrap();
     manifests
 }
 
@@ -93,12 +103,44 @@ fn the_lock_is_released_when_a_run_finishes() {
 }
 
 #[test]
-fn a_policy_header_approves_its_categories_and_the_gate_passes() {
+fn a_policy_header_alone_approves_nothing_and_the_gate_denies() {
+    // The header declares intent; it never approves. With no --allow, the undeclared
+    // step is a violation even though the header names it.
     let directory = tempfile::tempdir().unwrap();
-    policy_program(directory.path(), "# execute-policy: allow undeclared\n");
+    policy_program(
+        directory.path(),
+        "# execute-policy: allow undeclared
+",
+    );
     let output = execute(
         directory.path(),
         &["explain", "policy.program", "--json", "--policy-header"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let verdict: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(verdict["protocol"], "execute.gate/1");
+    assert_eq!(verdict["allowed"], false);
+    assert_eq!(verdict["violations"][0]["reason"], "not_approved");
+}
+
+#[test]
+fn an_allow_flag_approves_and_the_declared_header_lets_it_pass() {
+    let directory = tempfile::tempdir().unwrap();
+    policy_program(
+        directory.path(),
+        "# execute-policy: allow undeclared
+",
+    );
+    let output = execute(
+        directory.path(),
+        &[
+            "explain",
+            "policy.program",
+            "--json",
+            "--policy-header",
+            "--allow",
+            "undeclared",
+        ],
     );
     assert_eq!(
         output.status.code(),
@@ -107,8 +149,39 @@ fn a_policy_header_approves_its_categories_and_the_gate_passes() {
         String::from_utf8_lossy(&output.stderr)
     );
     let verdict: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(verdict["protocol"], "execute.gate/1");
     assert_eq!(verdict["allowed"], true);
+    assert_eq!(
+        verdict["declared_categories"],
+        serde_json::json!(["undeclared"])
+    );
+}
+
+#[test]
+fn a_header_restricts_an_approved_category_it_does_not_declare() {
+    // --allow approves `undeclared`, but the header declares only `reads`, so the
+    // undeclared step is reported as not declared.
+    let directory = tempfile::tempdir().unwrap();
+    policy_program(
+        directory.path(),
+        "# execute-policy: allow reads
+",
+    );
+    let output = execute(
+        directory.path(),
+        &[
+            "explain",
+            "policy.program",
+            "--json",
+            "--policy-header",
+            "--allow",
+            "undeclared",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let verdict: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(verdict["allowed"], false);
+    assert_eq!(verdict["violations"][0]["category"], "undeclared");
+    assert_eq!(verdict["violations"][0]["reason"], "not_declared");
 }
 
 #[test]
@@ -122,29 +195,6 @@ fn allow_none_approves_nothing_and_the_gate_denies() {
     assert_eq!(output.status.code(), Some(1));
     let verdict: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(verdict["allowed"], false);
-}
-
-#[test]
-fn the_header_and_allow_flags_combine() {
-    let directory = tempfile::tempdir().unwrap();
-    policy_program(directory.path(), "# execute-policy: allow undeclared\n");
-    let output = execute(
-        directory.path(),
-        &[
-            "explain",
-            "policy.program",
-            "--json",
-            "--policy-header",
-            "--allow",
-            "reads",
-        ],
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 #[test]
@@ -217,4 +267,60 @@ fn policy_header_is_refused_for_text_output_and_for_non_finite_programs() {
     assert!(!graph.status.success());
     assert!(String::from_utf8_lossy(&graph.stderr).contains("not graph programs"));
     assert!(graph.stdout.is_empty());
+}
+
+fn gate_with(directory: &Path, program: &str, extra: &[&str]) -> Output {
+    std::fs::write(directory.join("retry.program"), program).unwrap();
+    let mut arguments = vec!["explain", "retry.program", "--json"];
+    arguments.extend_from_slice(extra);
+    execute(directory, &arguments)
+}
+
+#[test]
+fn a_retry_past_an_uncertain_network_step_needs_the_undeclared_approval() {
+    // Each attempt may repeat the network effect, so the verdict shows the attempts,
+    // and the uncertain retry also needs `--allow undeclared`.
+    let directory = tempfile::tempdir().unwrap();
+    let program = "run net.helper and retry up to 2 times even if uncertain
+";
+    let refused = gate_with(directory.path(), program, &["--allow", "network"]);
+    assert_eq!(refused.status.code(), Some(1));
+    let verdict: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(verdict["retries"][0]["attempts"], 3);
+    let undeclared = verdict["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|violation| violation["category"] == "undeclared")
+        .expect("an undeclared violation");
+    assert_eq!(undeclared["attempts"], 3);
+
+    let allowed = gate_with(
+        directory.path(),
+        program,
+        &["--allow", "network", "--allow", "undeclared"],
+    );
+    assert_eq!(
+        allowed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+}
+
+#[test]
+fn a_retry_without_the_uncertain_clause_passes_on_the_declared_network_approval() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = "run net.helper and retry up to 2 times
+";
+    let output = gate_with(directory.path(), program, &["--allow", "network"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let verdict: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(verdict["retries"][0]["attempts"], 3);
+    assert_eq!(verdict["allowed"], true);
 }

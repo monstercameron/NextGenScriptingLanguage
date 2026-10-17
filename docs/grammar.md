@@ -267,7 +267,10 @@ These options are not part of the program text. The language reference describes
 one in full.
 
 - `run FILE --what-if` prints the plan and its fingerprint, and runs nothing.
-- `run FILE --confirm FINGERPRINT` runs only when the current plan has that fingerprint.
+- `run FILE --confirm FINGERPRINT` runs only when the current fingerprint matches. It
+  covers the plan, the resolved inputs (environment values as digests), the working
+  directory, the capability and data-flow policy file contents, the manifest files,
+  and the program's version. See the language reference for the exact list.
 - `run FILE --single-instance LOCK` refuses to start while another run holds LOCK.
 - `run FILE --control` hosts the run on a live control endpoint, and `attach` reads or
   controls that endpoint.

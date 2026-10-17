@@ -261,6 +261,12 @@ fn declared_secret_environment_values_never_appear_in_the_record() {
         r#"{"version":1,"secrets":{"environment":{"secret.echo":["RECORD_SENTINEL"]}}}"#,
     )
     .unwrap();
+    // The policy loader accepts only an owner-private file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&policy, fs::Permissions::from_mode(0o600)).unwrap();
+    }
     fs::write(work.path().join("secret.program"), "run secret.echo\n").unwrap();
     let record = work.path().join("record");
 

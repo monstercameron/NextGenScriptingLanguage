@@ -263,12 +263,36 @@ fn execute() -> Result<()> {
             {
                 match load_registry(args.manifest_dir.clone(), args.manifest_catalog.clone()) {
                     Ok(registry) => {
-                        let diagnostics = flow::diagnostics::analyze_source_at(
-                            &source,
-                            Some(&args.file),
-                            &registry,
-                        );
-                        (diagnostics, Some(FiniteCheckSnapshot { source, registry }))
+                        // The policy must be installed here too: static analysis reads
+                        // the files that the program calls, and those reads are authorized.
+                        let policies = args
+                            .capability_policy
+                            .as_deref()
+                            .map(load_capability_policy)
+                            .transpose()
+                            .and_then(|capability| {
+                                args.data_flow_policy
+                                    .as_deref()
+                                    .map(load_data_flow_policy)
+                                    .transpose()
+                                    .map(|data_flow| (capability, data_flow))
+                            });
+                        match policies {
+                            Ok((capability, data_flow)) => {
+                                let registry = install_workflow_policy_state(
+                                    registry,
+                                    capability.as_ref(),
+                                    data_flow.as_ref(),
+                                );
+                                let diagnostics = flow::diagnostics::analyze_source_at(
+                                    &source,
+                                    Some(&args.file),
+                                    &registry,
+                                );
+                                (diagnostics, Some(FiniteCheckSnapshot { source, registry }))
+                            }
+                            Err(_) => (Vec::new(), None),
+                        }
                     }
                     // Diagnostics are best effort. Keep the authoritative load at
                     // its existing point so catalog errors retain their ordering.
@@ -424,12 +448,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     };
     if flow::graph::is_graph(&source) {
         reject_finite_only_options(&args, "graph")?;
-        // `run --checkpoint` is accepted; resume and the trigger/UI options are not yet.
-        if args.command == "resume"
-            || args.max_runs.is_some()
+        // `run` and `resume` accept `--checkpoint`; the trigger and UI options are not
+        // supported for graphs.
+        if args.max_runs.is_some()
             || args.max_record_bytes_set
             || args.headless
-            || args.retry_uncertain
             || args.missed_ticks.is_some()
             || args.max_catch_up.is_some()
             || args.calendar_dedup.is_some()
@@ -471,7 +494,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 "graph": serde_json::to_value(&graph)?
             })),
             "explain" => writeln!(io::stdout(), "{}", graph.to_dot()).map_err(Into::into),
-            "run" => {
+            "run" | "resume" => {
                 let options = RunOptions {
                     inputs,
                     working_directory: env::current_dir()?,
@@ -486,9 +509,19 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     register_cancellation_signal(std::sync::Arc::clone(&cancelled))?;
                 let result = match args.checkpoint_dir.as_deref() {
                     Some(directory) => {
-                        let store = flow::graph::open_checkpoint_directory(directory)?;
+                        let cwd = fs::canonicalize(&options.working_directory)?;
+                        let identity = flow::graph::checkpoint_identity(&graph, &cwd)?;
+                        let resume = args.command == "resume";
+                        let store = flow::graph::open_checkpoint_directory(
+                            directory, resume, &identity, &registry,
+                        )?;
                         flow::graph::run_checkpointed(
-                            graph, &registry, &options, cancelled, store, false,
+                            graph,
+                            &registry,
+                            &options,
+                            cancelled,
+                            store,
+                            args.retry_uncertain,
                         )?
                     }
                     None => flow::graph::run(graph, &registry, &options, cancelled)?,
@@ -735,8 +768,48 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     if args.headless {
         bail!("--headless applies only to UI programs");
     }
-    let program = flow::program_files::parse_source(&args.file, &source)
-        .with_context(|| format!("could not parse workflow {}", args.file.display()))?;
+    let registry = match registry_hint {
+        Some(registry) => install_workflow_policy_state(
+            registry,
+            capability_policy.as_ref(),
+            data_flow_policy.as_ref(),
+        ),
+        None => match load_workflow_registry(
+            args.manifest_dir.clone(),
+            args.manifest_catalog.clone(),
+            capability_policy.as_ref(),
+            data_flow_policy.as_ref(),
+        ) {
+            Ok(registry) => registry,
+            Err(error) => {
+                // The program's own syntax error is the more useful report, so parse
+                // first. A file call that needs the policy is not such an error here.
+                if let Err(parse_error) =
+                    flow::program_files::parse_source(&args.file, &source, None)
+                {
+                    if !format!("{parse_error:#}").contains("needs the program's capability policy")
+                    {
+                        return Err(parse_error).with_context(|| {
+                            format!("could not parse workflow {}", args.file.display())
+                        });
+                    }
+                }
+                return Err(error);
+            }
+        },
+    };
+    // The registry carries the capability policy, which authorizes the reads of any
+    // program file the program calls, so it is loaded before the program is parsed.
+    let cwd = env::current_dir()?;
+    let program = flow::program_files::parse_source(
+        &args.file,
+        &source,
+        Some(flow::program_files::Access {
+            registry: &registry,
+            cwd: &cwd,
+        }),
+    )
+    .with_context(|| format!("could not parse workflow {}", args.file.display()))?;
     // A script's own `--help` (from a shebang line) shows its accept declarations.
     if args.command == "run"
         && !args.program_arguments_literal
@@ -785,19 +858,6 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     {
         bail!("--max-record-bytes applies only to listener programs");
     }
-    let registry = match registry_hint {
-        Some(registry) => install_workflow_policy_state(
-            registry,
-            capability_policy.as_ref(),
-            data_flow_policy.as_ref(),
-        ),
-        None => load_workflow_registry(
-            args.manifest_dir,
-            args.manifest_catalog,
-            capability_policy.as_ref(),
-            data_flow_policy.as_ref(),
-        )?,
-    };
     if capability_policy.is_some() {
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
         flow::capabilities::preflight(&program, &registry, &env::current_dir()?)?;
@@ -810,9 +870,24 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
         let path = args.file.to_string_lossy().into_owned();
         let plan = flow::agent::explain::explain_json(&program, &registry, &path)?;
-        let fingerprint = flow::agent::what_if::fingerprint(&plan)?;
+        let run_directory = env::current_dir()?;
+        let context = flow::agent::what_if::RunSettings {
+            declarations: &program.inputs,
+            inputs: &inputs,
+            cwd: &run_directory,
+            capability_policy: args.capability_policy.as_deref(),
+            data_flow_policy: args.data_flow_policy.as_deref(),
+            manifest_dir: args.manifest_dir.as_deref(),
+            manifest_catalog: args.manifest_catalog.as_deref(),
+        };
+        let (fingerprint, settings) = flow::agent::what_if::fingerprint(&plan, &context)?;
         if args.what_if {
-            write_json(&flow::agent::what_if::report(&path, &fingerprint, plan))?;
+            write_json(&flow::agent::what_if::report(
+                &path,
+                &fingerprint,
+                plan,
+                settings,
+            ))?;
             return Ok(());
         }
         if let Some(expected) = &args.confirm {
@@ -873,15 +948,18 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 write_json(&plan)
             } else {
                 // Gate mode: report violations, and exit nonzero unless all are approved.
-                // Approvals come from --allow and from the program's policy header.
-                let mut allowed: std::collections::BTreeSet<String> =
+                // Approvals come only from --allow. The policy header declares intent:
+                // with --policy-header, an undeclared category is a violation too.
+                let allowed: std::collections::BTreeSet<String> =
                     args.allow.iter().cloned().collect();
-                if args.policy_header {
+                let declared = if args.policy_header {
                     let source = fs::read_to_string(&args.file)
                         .with_context(|| format!("reading {}", args.file.display()))?;
-                    allowed.extend(flow::agent::policy::header_categories(&source)?);
-                }
-                let verdict = flow::agent::gate::verdict(&plan, &allowed);
+                    Some(flow::agent::policy::header_categories(&source)?)
+                } else {
+                    None
+                };
+                let verdict = flow::agent::gate::verdict(&plan, &allowed, declared.as_ref());
                 let passed = verdict["allowed"] == true;
                 write_json(&verdict)?;
                 if !passed {
@@ -2092,8 +2170,15 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     )?;
     let source = fs::read_to_string(&positional[1])
         .with_context(|| format!("reading workflow {}", positional[1].display()))?;
-    let program = flow::program_files::parse_source(&positional[1], &source)
-        .with_context(|| format!("parsing workflow {}", positional[1].display()))?;
+    let program = flow::program_files::parse_source(
+        &positional[1],
+        &source,
+        Some(flow::program_files::Access {
+            registry: &registry,
+            cwd: &working_directory,
+        }),
+    )
+    .with_context(|| format!("parsing workflow {}", positional[1].display()))?;
     let resolved_inputs =
         flow::inputs::parse_cli_arguments(&program.inputs, &supplied_inputs, &program_arguments)?;
     runtime::validate_with_arguments(&program, &registry, &resolved_inputs)?;

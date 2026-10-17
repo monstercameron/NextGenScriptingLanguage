@@ -254,3 +254,47 @@ fn hand_over_writes_earlier_output_before_the_program_starts() {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "beforeinner");
 }
+
+#[test]
+fn run_control_refuses_hand_over_and_detached_launch() {
+    let directory = tempdir().unwrap();
+    for text in [
+        "hand over to \"C:/Windows/System32/cmd.exe\" with arguments [\"/c\", \"exit\"]\n",
+        "launch detached \"C:/Windows/System32/cmd.exe\" with arguments [\"/c\", \"exit\"]\n",
+    ] {
+        let program = write_program(directory.path(), text);
+        let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .args(["run", program.to_str().unwrap(), "--control"])
+            .current_dir(directory.path())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_ne!(output.status.code(), Some(0), "--control accepted: {text}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("live programs do not support"),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn detached_launches_are_capped_per_run() {
+    let directory = tempdir().unwrap();
+    let items: Vec<String> = (0..65).map(|index| format!("\"n{index}\"")).collect();
+    let execute_path = env!("CARGO_BIN_EXE_execute").replace('\\', "/");
+    let program = write_program(
+        directory.path(),
+        &format!(
+            "for each item in [{}]\n  launch detached \"{execute_path}\" with arguments [\"--version\"]\n",
+            items.join(", ")
+        ),
+    );
+    let output = execute(&["run", program.to_str().unwrap()], directory.path());
+    assert_ne!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("limited to 64 detached programs"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

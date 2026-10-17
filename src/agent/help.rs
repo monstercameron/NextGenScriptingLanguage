@@ -29,7 +29,7 @@ pub fn cli(arguments: &[String]) -> Result<i32> {
         }
     }
     let file = file.ok_or_else(|| anyhow!("{USAGE}"))?;
-    let program = crate::program_files::parse_file(Path::new(file))?;
+    let program = crate::program_files::parse_file(Path::new(file), None)?;
     let description = describe(&program, Path::new(file).to_string_lossy().as_ref());
     if as_json {
         println!("{}", serde_json::to_string_pretty(&description)?);

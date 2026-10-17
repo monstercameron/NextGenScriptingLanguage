@@ -57,6 +57,9 @@ pub fn summarize(directory: &Path) -> Result<Value> {
         .get("data")
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("checkpoint journal has no data object"))?;
+    if data.get("kind").and_then(Value::as_str) == Some("graph") {
+        return summarize_graph(directory, &journal, data);
+    }
     let status = data
         .get("status")
         .and_then(Value::as_str)
@@ -116,6 +119,60 @@ pub fn summarize(directory: &Path) -> Result<Value> {
         "blobs": { "count": blob_count, "bytes": blob_bytes },
         "lock_file_present": directory.join("lock").is_file(),
         "resume_action": resume_action,
+    }))
+}
+
+/// The status of a graph checkpoint (journal mode `graph`): committed nodes and the
+/// nodes in flight. A graph journal has no program status or snapshot.
+fn summarize_graph(
+    directory: &Path,
+    journal: &Value,
+    data: &serde_json::Map<String, Value>,
+) -> Result<Value> {
+    let completed_nodes = data
+        .get("completed_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("graph checkpoint has no completed count"))?;
+    let in_flight: Vec<Value> = data
+        .get("in_flight")
+        .and_then(Value::as_array)
+        .map(|nodes| {
+            nodes
+                .iter()
+                .map(|node| {
+                    json!({
+                        "node": node.get("node").cloned().unwrap_or(Value::Null),
+                        "retry_safe": node.get("retry_safe").cloned().unwrap_or(Value::Null),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let (blob_count, blob_bytes) = blob_totals(&directory.join("blobs"))?;
+    let action = if in_flight.is_empty() {
+        "continues_from_last_completed_node"
+    } else if in_flight
+        .iter()
+        .any(|node| node["retry_safe"] != json!(true))
+    {
+        "requires_retry_uncertain"
+    } else {
+        "retries_in_flight_node"
+    };
+    Ok(json!({
+        "protocol": PROTOCOL,
+        "directory": directory.to_string_lossy(),
+        "journal": {
+            "kind": "graph",
+            "version": data.get("version").cloned().unwrap_or(Value::Null),
+            "completed_nodes": completed_nodes,
+            "in_flight": in_flight,
+            "checksum": if journal.get("checksum").is_some() { "present" } else { "missing" },
+            "checksum_verified": false,
+        },
+        "blobs": { "count": blob_count, "bytes": blob_bytes },
+        "lock_file_present": directory.join("lock").is_file(),
+        "resume_action": action,
     }))
 }
 

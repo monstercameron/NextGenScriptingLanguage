@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) mod elements;
+pub(super) mod graph;
 #[allow(dead_code)]
 mod leaf_cursor;
 use elements::ElementReplay;
@@ -27,8 +28,12 @@ const INLINE_JOURNAL_VERSION: u32 = 2;
 /// records only how many lines are committed, plus their chain digest.
 const SEGMENTED_JOURNAL_VERSION: u32 = 3;
 /// Version 4 adds the per-element log `elements.jsonl` for top-level `for each`
-/// and `parallel for each` nodes. Older builds refuse it by version.
-const JOURNAL_VERSION: u32 = 4;
+/// and `parallel for each` nodes.
+const ELEMENTS_JOURNAL_VERSION: u32 = 4;
+/// Version 5 is the one version gate for every journal. It adds mode `graph`:
+/// `journal.json` holds the graph's committed count and in-flight set, and
+/// `graph.jsonl` holds its completed nodes. Older builds refuse it by version.
+const JOURNAL_VERSION: u32 = 5;
 const COMPLETED_LOG: &str = "completed.jsonl";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -372,21 +377,7 @@ impl Journal {
             }
         }
 
-        let lock_path = directory.join("lock");
-        let lock = open_regular(&lock_path, "checkpoint lock", true)?;
-        restrict_file(&lock)?;
-        #[cfg(windows)]
-        crate::platform::windows::lock(&lock)?;
-        #[cfg(unix)]
-        let lock_result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        #[cfg(unix)]
-        if lock_result == -1 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
-                bail!("checkpoint is already locked: {}", directory.display());
-            }
-            return Err(error).context("locking checkpoint");
-        }
+        let lock = lock_directory(&directory)?;
 
         let journal_path = directory.join("journal.json");
         let blobs_directory = directory.join("blobs");
@@ -987,6 +978,27 @@ impl Journal {
     }
 }
 
+/// Take the exclusive lock of a checkpoint directory. Every journal mode, program or
+/// graph, holds it for as long as the journal is open.
+fn lock_directory(directory: &Path) -> Result<File> {
+    let lock_path = directory.join("lock");
+    let lock = open_regular(&lock_path, "checkpoint lock", true)?;
+    restrict_file(&lock)?;
+    #[cfg(windows)]
+    crate::platform::windows::lock(&lock)?;
+    #[cfg(unix)]
+    let lock_result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    #[cfg(unix)]
+    if lock_result == -1 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            bail!("checkpoint is already locked: {}", directory.display());
+        }
+        return Err(error).context("locking checkpoint");
+    }
+    Ok(lock)
+}
+
 /// Assemble `{"checksum":…,"data":…}` exactly as `JournalEnvelopeRef` serializes
 /// it, around data that is already encoded. The checksum is lowercase hex, so it
 /// needs no JSON escaping.
@@ -1130,6 +1142,9 @@ fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
     let version = serde_json::from_str::<JournalVersion>(body)
         .context("checkpoint journal is malformed or corrupt")?
         .version;
+    if graph::is_graph_body(body) {
+        bail!("this checkpoint holds a graph run; resume it with `execute resume GRAPH --checkpoint DIR`");
+    }
     let (data, log) = if version == LEGACY_JOURNAL_VERSION || version == INLINE_JOURNAL_VERSION {
         let data: JournalData =
             serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
@@ -1138,7 +1153,10 @@ fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
         }
         let (_, log) = encode_completed_log(&data.completed)?;
         (data, log)
-    } else if version == SEGMENTED_JOURNAL_VERSION || version == JOURNAL_VERSION {
+    } else if version == SEGMENTED_JOURNAL_VERSION
+        || version == ELEMENTS_JOURNAL_VERSION
+        || version == JOURNAL_VERSION
+    {
         let disk: JournalDisk =
             serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
         if serialized_digest(&disk)? != envelope.checksum {

@@ -304,14 +304,16 @@ pub(in crate::runtime) fn for_each_resume(
     if !tracks_in_flight(journal, program, index) {
         return Ok(None);
     }
-    let Some(replay) = journal.take_element_replay() else {
-        return Ok(None);
-    };
+    // Only a sequential for each resumes here. A parallel group takes its replay in
+    // group_journal, so this must not consume it.
     let StepKind::Loop {
         kind: LoopKind::ForEach { binding, values },
         ..
     } = &program.steps[index].kind
     else {
+        return Ok(None);
+    };
+    let Some(replay) = journal.take_element_replay() else {
         return Ok(None);
     };
     if replay.commits.is_empty() && replay.pending.is_empty() {
@@ -405,6 +407,7 @@ pub(in crate::runtime) fn group_journal<'a>(
     each: &TaskEach,
     bindings: &BTreeMap<String, Value>,
     registry: &Registry,
+    sensitivities: &crate::security::SensitivitySet,
 ) -> Result<Option<(GroupJournal<'a>, BTreeMap<usize, ElementOutcome>)>> {
     let Some(journal) = journal else {
         return Ok(None);
@@ -412,6 +415,9 @@ pub(in crate::runtime) fn group_journal<'a>(
     if !tracks_in_flight(journal, program, index) {
         return Ok(None);
     }
+    // The floor is fixed for the run, so refusing here is the same refusal the first
+    // element commit would get, and it happens before any element writes a line.
+    crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
     let items = list_items(&each.values, bindings)?;
     let node_fingerprint = journal.in_flight_fingerprint()?;
     let mut skip = BTreeMap::new();

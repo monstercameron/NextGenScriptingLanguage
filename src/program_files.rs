@@ -4,28 +4,50 @@
 //! runs. A called file runs in-process with its explicit inputs and its own
 //! bindings. Called files cannot declare triggers, local programs, or environment
 //! and argument sources.
-use crate::ast::{InputDeclaration, InputSource, Program, ReusableProgram, Step, StepKind, Value};
+//!
+//! Reading a called file is a host read: it is authorized through the capability
+//! policy exactly as other path reads are. Called files are capped at
+//! `MAX_PROGRAM_FILE_BYTES` and must be regular files. Load errors name the file
+//! and line and never quote its text.
+use crate::ast::{
+    InputDeclaration, InputSource, Invocation, LoopKind, Program, ReusableProgram, Step, StepKind,
+    Value,
+};
+use crate::manifest::Registry;
 use crate::parser::{self, RawProgram, PROGRAM_FILE_PREFIX};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_FILE_CALL_DEPTH: usize = 16;
 const MAX_CALLED_FILES: usize = 256;
+/// The largest program file a `run program file` call may read.
+pub const MAX_PROGRAM_FILE_BYTES: u64 = 1024 * 1024;
+
+/// What a load may consult: the registry, which carries the capability policy, and
+/// the working directory that relative policy grants resolve against.
+#[derive(Clone, Copy)]
+pub struct Access<'a> {
+    pub registry: &'a Registry,
+    pub cwd: &'a Path,
+}
 
 /// Parse a program file from disk, resolving its file calls and location inputs.
-pub fn parse_file(path: &Path) -> Result<Program> {
+pub fn parse_file(path: &Path, access: Option<Access<'_>>) -> Result<Program> {
     let source = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    parse_source(path, &source)
+    parse_source(path, &source, access)
 }
 
 /// Parse program text read from `path`, so relative file calls and location inputs
-/// resolve from that program's own directory.
-pub fn parse_source(path: &Path, source: &str) -> Result<Program> {
+/// resolve from that program's own directory. Without an `access`, any file call is
+/// refused, because its read could not be authorized.
+pub fn parse_source(path: &Path, source: &str, access: Option<Access<'_>>) -> Result<Program> {
     let canonical =
         fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))?;
     let mut loader = Loader {
+        access,
         called: BTreeMap::new(),
         stack: Vec::new(),
     };
@@ -40,21 +62,22 @@ pub fn parse_source(path: &Path, source: &str) -> Result<Program> {
 
 /// Parse text whose path is known when there is one; without a path, file calls
 /// are an error.
-pub fn parse_at(source: &str, path: Option<&Path>) -> Result<Program> {
+pub fn parse_at(source: &str, path: Option<&Path>, access: Option<Access<'_>>) -> Result<Program> {
     match path {
-        Some(path) => parse_source(path, source),
+        Some(path) => parse_source(path, source, access),
         None => parser::parse(source),
     }
 }
 
-struct Loader {
+struct Loader<'a> {
+    access: Option<Access<'a>>,
     /// Called files, keyed by `file:` plus their canonical path.
     called: BTreeMap<String, ReusableProgram>,
     /// Canonical paths of the files being resolved, outermost first.
     stack: Vec<PathBuf>,
 }
 
-impl Loader {
+impl Loader<'_> {
     fn resolve(&mut self, raw: &mut RawProgram, file: &Path) -> Result<()> {
         let directory = file
             .parent()
@@ -85,6 +108,9 @@ impl Loader {
 
     /// Load one called file, returning its definition key.
     fn load(&mut self, path: &Path, line: usize) -> Result<String> {
+        let access = self.access.context(
+            "run program file needs the program's capability policy to authorize its read; this entry point cannot load it",
+        )?;
         let canonical = fs::canonicalize(path)
             .with_context(|| format!("line {line}: program file {} not found", path.display()))?;
         let shown = display_path(&canonical);
@@ -109,10 +135,14 @@ impl Loader {
         if self.called.len() >= MAX_CALLED_FILES {
             bail!("line {line}: a program may call at most {MAX_CALLED_FILES} program files");
         }
-        let source = fs::read_to_string(&canonical)
-            .with_context(|| format!("line {line}: reading program file {shown}"))?;
-        let mut raw =
-            parser::parse_raw(&source).with_context(|| format!("program file {shown}"))?;
+        authorize_read(access, &canonical, &shown, line)?;
+        let source = read_program_file(&canonical, &shown, line)?;
+        let mut raw = parser::parse_raw(&source).map_err(|error| {
+            anyhow::anyhow!(
+                "line {}: called program file {shown} is not valid program text",
+                error_line(&error).unwrap_or(1)
+            )
+        })?;
         if raw.trigger.is_some() {
             bail!("line {line}: called program file {shown} cannot declare a trigger");
         }
@@ -134,6 +164,19 @@ impl Loader {
                 input.name
             );
         }
+        // Applet names come from the file's text, so they are checked here and reported
+        // by position only. A later diagnostic would otherwise quote them.
+        for step in &raw.steps {
+            if calls_of(step)
+                .into_iter()
+                .any(|call| undeclared(access.registry, call))
+            {
+                bail!(
+                    "line {}: called program file {shown} calls an applet that is not declared",
+                    step.line
+                );
+            }
+        }
         self.stack.push(canonical.clone());
         let resolved = self.resolve(&mut raw, &canonical);
         self.stack.pop();
@@ -148,6 +191,80 @@ impl Loader {
         );
         Ok(key)
     }
+}
+
+/// The read of a called file is a host read, authorized exactly as other path reads
+/// are, through the capability policy.
+#[cfg(not(target_arch = "wasm32"))]
+fn authorize_read(access: Access<'_>, canonical: &Path, shown: &str, line: usize) -> Result<()> {
+    crate::capabilities::authorize_host_path(access.registry, canonical, false, access.cwd)
+        .with_context(|| {
+            format!(
+                "line {line}: reading program file {shown} is not allowed by the capability policy"
+            )
+        })
+}
+
+/// A build without a host filesystem cannot read a called file at all.
+#[cfg(target_arch = "wasm32")]
+fn authorize_read(_access: Access<'_>, _canonical: &Path, shown: &str, line: usize) -> Result<()> {
+    bail!("line {line}: program file {shown} cannot be read: this build has no host filesystem")
+}
+
+/// Read a called file. Only regular files are read, and the read is capped, so a
+/// device, a pipe, or a huge file cannot hang or exhaust the process. The errors name
+/// the file and never contain its text.
+fn read_program_file(canonical: &Path, shown: &str, line: usize) -> Result<String> {
+    let metadata = fs::metadata(canonical)
+        .with_context(|| format!("line {line}: program file {shown} cannot be read"))?;
+    if !metadata.is_file() {
+        bail!("line {line}: program file {shown} is not a regular file");
+    }
+    if metadata.len() > MAX_PROGRAM_FILE_BYTES {
+        bail!("line {line}: program file {shown} is larger than 1 MiB");
+    }
+    let file = File::open(canonical)
+        .with_context(|| format!("line {line}: program file {shown} cannot be read"))?;
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        bail!("line {line}: program file {shown} is not a regular file");
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_PROGRAM_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("line {line}: program file {shown} cannot be read"))?;
+    if bytes.len() as u64 > MAX_PROGRAM_FILE_BYTES {
+        bail!("line {line}: program file {shown} is larger than 1 MiB");
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| anyhow::anyhow!("line {line}: program file {shown} is not UTF-8 text"))
+}
+
+/// The line a parse error names, from its leading `line N:`, if it has one.
+fn error_line(error: &anyhow::Error) -> Option<usize> {
+    let text = format!("{error:#}");
+    let rest = text.strip_prefix("line ")?;
+    rest.split(':').next()?.trim().parse().ok()
+}
+
+/// The invocations a statement runs as commands.
+fn calls_of(step: &Step) -> Vec<&Invocation> {
+    match &step.kind {
+        StepKind::Invoke { call, .. }
+        | StepKind::IfCommand { call, .. }
+        | StepKind::Loop {
+            kind: LoopKind::WhileCommand { call, .. },
+            ..
+        } => vec![call],
+        StepKind::TaskGroup { tasks, .. } => tasks.iter().collect(),
+        StepKind::SpawnJob { stages, .. } => stages.iter().map(|stage| &stage.call).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A catalog command that the registry does not declare. Direct executables name
+/// their own binary and are not looked up.
+fn undeclared(registry: &Registry, call: &Invocation) -> bool {
+    !call.direct && registry.resolve_call(call).is_err()
 }
 
 /// Program-location inputs take the canonical location of their own program file

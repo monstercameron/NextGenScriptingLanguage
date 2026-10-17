@@ -256,7 +256,12 @@ pub fn analyze_source_at(
         }
     }
 
-    match crate::program_files::parse_at(source, path) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let access = crate::program_files::Access {
+        registry,
+        cwd: &cwd,
+    };
+    match crate::program_files::parse_at(source, path, Some(access)) {
         Ok(program) => {
             collect_program_diagnostics(source, &program, registry, &mut diagnostics);
             collect_pipeline_diagnostics(source, &program, registry, &mut diagnostics);

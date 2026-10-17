@@ -132,3 +132,75 @@ fn a_changed_committed_element_refuses_resume() {
         String::from_utf8_lossy(&refused.stderr)
     );
 }
+
+#[cfg(unix)]
+fn tree_contains(path: &Path, needle: &[u8]) -> bool {
+    let Ok(entries) = fs::read_dir(path) else {
+        return fs::read(path).is_ok_and(|bytes| bytes.windows(needle.len()).any(|w| w == needle));
+    };
+    entries
+        .flatten()
+        .any(|entry| tree_contains(&entry.path(), needle))
+}
+
+/// A sensitive element is refused at checkpoint persistence, as a node is, and its
+/// output never reaches the element log or any other checkpoint file.
+#[cfg(unix)]
+#[test]
+fn a_secret_element_is_refused_at_persistence_and_never_reaches_the_log() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempdir().unwrap();
+    let root = directory.path();
+    let producer = root.join("secret-producer");
+    fs::write(&producer, "#!/bin/sh\nprintf 'TOP-SECRET-MARKER'\n").unwrap();
+    fs::set_permissions(&producer, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::create_dir(root.join("manifests")).unwrap();
+    let manifest = serde_json::json!({
+        "name": "fixture.secret",
+        "binary": producer,
+        "parameters": {},
+        "arguments": [],
+        "contract": {
+            "version": 1,
+            "output": {"type": "text", "encoding": "raw"},
+            "ports": {
+                "inputs": {},
+                "outputs": {
+                    "value": {
+                        "schema": {"type": "text"},
+                        "delivery": "single",
+                        "sensitivity": "secret"
+                    }
+                },
+                "events": {}
+            }
+        }
+    });
+    fs::write(
+        root.join("manifests").join("fixture.secret.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("secret.program"),
+        "for each item in [\"a\", \"b\"]\n  run fixture.secret\n",
+    )
+    .unwrap();
+
+    let output = execute(
+        &[
+            "run",
+            "secret.program",
+            "--checkpoint",
+            "ck",
+            "--manifest-dir",
+            "manifests",
+        ],
+        root,
+    );
+    assert_ne!(output.status.code(), Some(0), "a secret element persisted");
+    assert!(
+        !tree_contains(&root.join("ck"), b"TOP-SECRET-MARKER"),
+        "the secret reached the checkpoint directory"
+    );
+}

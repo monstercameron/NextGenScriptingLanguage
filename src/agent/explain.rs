@@ -564,10 +564,19 @@ impl Walker<'_> {
     fn call_program(&mut self, line: usize, call: &Invocation, scope: Option<&str>) {
         let name = call.operation.clone();
         let mut row = Row::plain(line, "call_program", scope);
-        row.applet = Some(crate::program_files::display_key(
-            &name,
-            self.program_directory.as_deref(),
-        ));
+        // A file call is shown relative to the file that makes it: the innermost called
+        // file on the stack, or the top-level program when the call is in that program.
+        let caller = self
+            .stack
+            .iter()
+            .rev()
+            .find_map(|open| {
+                open.strip_prefix(crate::parser::PROGRAM_FILE_PREFIX)
+                    .and_then(|path| std::path::Path::new(path).parent())
+                    .map(std::path::Path::to_path_buf)
+            })
+            .or_else(|| self.program_directory.clone());
+        row.applet = Some(crate::program_files::display_key(&name, caller.as_deref()));
         if self.stack.contains(&name) {
             row.resolved = Some(false);
             row.undeclared = true;

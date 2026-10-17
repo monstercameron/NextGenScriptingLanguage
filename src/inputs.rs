@@ -391,7 +391,7 @@ pub fn describe(
     }))
 }
 
-fn literal_json(value: &Value) -> Result<serde_json::Value> {
+pub(crate) fn literal_json(value: &Value) -> Result<serde_json::Value> {
     crate::structured::to_json(value).context("input inspection requires literal values")
 }
 

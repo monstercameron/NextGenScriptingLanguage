@@ -755,6 +755,11 @@ result binds the same way. The file is read and checked when the caller loads, s
 a missing file, a cycle, or a literal call input of the wrong type is refused before
 the first effect. Values computed at run time are checked when their call starts.
 
+The read of a called file is a host read. The capability policy must allow it, or the
+call is refused. A called file must be a regular file of at most 1 MiB. Its load
+errors name the file and the line, and never quote the file's text, so a refused or
+unparseable file does not leak its contents.
+
 ```text
 accept name as text with default "world"
 run program file "install/config/fonts.program" with theme name as fonts
@@ -789,6 +794,11 @@ declares this with an outcome of kind `retryable` in its contract. A quoted
 executable has no contract, so any nonzero exit counts as retryable. Other outcomes
 are never retried, and a retry that does not apply is refused with a message naming
 the reason.
+
+In the gate (`explain --json --allow`), a retried step is reported with its attempts,
+because each attempt may repeat its effects. Its violations carry `attempts`, and the
+verdict lists every retry under `retries`. A retry with `even if uncertain` on a step
+with network or writes effects also needs `--allow undeclared`.
 
 Retrying also needs the effects to be safe to repeat. The attempt is safe when its
 outcome declares that nothing started (`effect_certainty: not_started`), or when the
@@ -915,7 +925,7 @@ use separate programs or explicitly save the results you need.
 
 `launch detached "program" with arguments [...]` starts the program and continues without waiting. The script does not own the child: exiting the script neither waits for nor cancels it. An optional `and output to "file"` sends stdout and stderr to that file, which is truncated and checked exactly like a redirect target: the write grant and persistence policy apply, and a link is refused. A detached command produces no pipeline data, so it cannot feed a `then` or `pipe to` statement.
 
-Both forms take one fresh native program named by a quoted path. They reject redirection, stdin, environment changes, result bindings, `discard stderr`, and caching. They are refused under `--checkpoint`, in triggered, service and listener programs, in live and browser programs, and in TUI handlers.
+Both forms take one fresh native program named by a quoted path. They reject redirection, stdin, environment changes, result bindings, `discard stderr`, and caching. They are refused under `--checkpoint`, under `run --control`, in live programs (including live source edits, which check the whole program), in triggered, service and listener programs, in browser programs, and in TUI handlers. A run may start at most 64 detached programs; the next one is an error. On Unix a waiter thread reaps each detached child when it exits. On Windows, `CREATE_BREAKAWAY_FROM_JOB` escapes an outer job only when that job permits breakaway; where it does not, the child stays in the outer job and that job's close can end it.
 
 ## Finite stdin and Unix composition
 
@@ -1170,21 +1180,32 @@ are unchanged. Installed 0.8.0 does not include this option.
 Three options confirm what runs, and they change nothing in the program itself.
 
 **Policy header.** A leading comment block may hold one line
-`# execute-policy: allow CATEGORY...`. The categories are `writes`, `network`,
-`reads`, `process`, `cwd`, `environment`, `privileged`, `system` (package installs
-and service control, which `process` does not cover) and `undeclared`, and
-`allow none` approves nothing. The header must be in the leading comments, there
-may be only one, and an unknown category is an error. `execute explain FILE --json
---policy-header` merges the approved categories into the effects report. The header
-grants nothing at run time: enforcement stays with the capability policy.
+`# execute-policy: allow CATEGORY...` that declares the categories the program intends
+to use. The categories are `writes`, `network`, `reads`, `process`, `cwd`,
+`environment`, `privileged`, `system` (package installs and service control, which
+`process` does not cover) and `undeclared`. `allow none` declares that the program
+uses no effects. The header must be in the leading comments, there may be only one,
+and an unknown category is an error. `execute explain FILE --json --policy-header`
+reports every effect category the program does not declare as a violation. The
+header never approves anything. A category passes only when `--allow` approves it
+and the header declares it, so a header-only check without `--allow` denies every
+effect. The header grants nothing at run time: enforcement stays with the capability
+policy.
 
 **What-if and confirm.** `execute run FILE --what-if` prints the plan the run would
-execute, as the explain JSON, with its fingerprint (`execute.what_if/1`). It runs
-nothing and writes nothing. `execute run FILE --confirm FINGERPRINT` runs only when
-the current plan has that fingerprint. Otherwise it stops before any effect with
-`plan changed since --what-if`, so a changed program, manifest or input must be
-reviewed again. Both options apply to finite programs and to `run` only, and
-`--what-if` takes precedence when both are given.
+execute, as the explain JSON, with its fingerprint (`execute.what_if/1`) and the
+settings the fingerprint covers. It runs nothing and writes nothing. `execute run FILE
+--confirm FINGERPRINT` runs only when the current fingerprint equals the one given.
+Otherwise it stops before any effect with `plan changed since --what-if`. The
+fingerprint is a SHA-256 over the explain plan and these settings: the resolved input
+names, types, and values; the working directory; the contents of the
+`--capability-policy` and `--data-flow-policy` files; the contents of each `.json`
+manifest in the `--manifest-dir` directory, or of the `--manifest-catalog` file; and
+the program's version. The bundled manifests are covered by that version only. A
+value from an environment input appears as a SHA-256 digest and is never printed,
+and a policy file appears as its path and digest. Changing any covered setting
+requires a new `--what-if` review. Both options apply to finite programs and to `run`
+only, and `--what-if` takes precedence when both are given.
 
 **Single instance.** `execute run FILE --single-instance LOCK` takes an exclusive
 lock on the file LOCK without waiting. A second run that names the same lock fails

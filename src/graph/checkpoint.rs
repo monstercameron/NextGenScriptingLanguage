@@ -252,12 +252,32 @@ pub(crate) fn order_by_completion(
     Ok(())
 }
 
-/// Open the graph checkpoint stored in `directory`. Until the v5 graph journal
-/// lands, this refuses, so a graph run never starts with a checkpoint it cannot
-/// record.
-pub fn open_checkpoint_directory(directory: &Path) -> Result<Arc<dyn GraphCheckpointStore>> {
-    bail!(
-        "graph checkpoints in {} need the v5 graph journal, which is not available yet",
-        directory.display()
-    )
+/// Open the graph checkpoint in `directory` as the store for `run_checkpointed`.
+/// `resume` says whether the checkpoint must already exist; a fresh run refuses an
+/// existing one. Completed payloads are written only after the program journal's
+/// persistence policy accepts their sensitivity labels.
+pub fn open_checkpoint_directory(
+    directory: &Path,
+    resume: bool,
+    identity: &str,
+    registry: &Registry,
+) -> Result<Arc<dyn GraphCheckpointStore>> {
+    let registry = registry.clone();
+    let authorize: crate::runtime::PersistenceAuthorizer =
+        Arc::new(move |floor: &SensitivitySet| {
+            crate::runtime::authorize_checkpoint_persistence(&registry, floor)
+        });
+    crate::runtime::open_graph_checkpoint(directory, resume, identity, authorize)
+}
+
+/// The identity a graph checkpoint is written with: the canonical plan (inputs
+/// included) and the working directory. A resume must present the same identity.
+pub fn checkpoint_identity(plan: &GraphPlan, cwd: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"execute-graph-checkpoint-identity/v5\n");
+    digest.update(plan.to_json()?.as_bytes());
+    digest.update(b"\n");
+    digest.update(cwd.to_string_lossy().as_bytes());
+    Ok(format!("{:x}", digest.finalize()))
 }

@@ -73,7 +73,12 @@ fn pipe_to_as_binds_the_terminal_stage_output_and_runs() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "A\n");
+    // The final printf's format adds a newline after the shouted text, which already
+    // ends in one. POSIX printf keeps both; Windows' printf drops one. Compare the text.
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim_end_matches('\n'),
+        "A"
+    );
 }
 
 #[test]

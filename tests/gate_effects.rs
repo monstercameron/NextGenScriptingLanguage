@@ -83,13 +83,22 @@ fn unknown_effects_stay_undeclared() {
 }
 
 #[test]
-fn the_demo_passes_the_gate_with_its_policy_header() {
+fn the_demo_passes_the_gate_when_approved_and_declared() {
+    // The header declares the demo's categories; approvals come only from --allow.
     let program = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/demo/theme-refresh.program");
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))
         .arg("explain")
         .arg(&program)
         .arg("--json")
         .arg("--policy-header")
+        .args([
+            "--allow",
+            "writes",
+            "--allow",
+            "process",
+            "--allow",
+            "undeclared",
+        ])
         .arg("--manifest-dir")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests"))
         .output()

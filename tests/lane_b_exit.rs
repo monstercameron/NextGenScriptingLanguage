@@ -41,7 +41,7 @@ fn stdout(output: &Output) -> String {
 
 #[test]
 fn exit_sets_status_and_keeps_pipeline_output() {
-    let (_directory, output) = run(r#"run printf with message "out\n"
+    let (_directory, output) = run(r#"run printf with message "out"
 exit with status 2
 "#);
     assert_eq!(status(&output), 2, "{}", stderr(&output));
@@ -51,7 +51,7 @@ exit with status 2
 
 #[test]
 fn exit_zero_after_output_prints_and_exits_zero() {
-    let (_directory, output) = run(r#"run printf with message "done\n"
+    let (_directory, output) = run(r#"run printf with message "done"
 exit with status 0
 "#);
     assert_eq!(status(&output), 0, "{}", stderr(&output));
@@ -69,7 +69,7 @@ fn fail_writes_exact_message_and_defaults_to_status_one() {
 
 #[test]
 fn fail_with_explicit_status_and_output_delivered() {
-    let (_directory, output) = run(r#"run printf with message "partial\n"
+    let (_directory, output) = run(r#"run printf with message "partial"
 fail with message "bad input" and status 7
 "#);
     assert_eq!(status(&output), 7);
@@ -80,12 +80,12 @@ fail with message "bad input" and status 7
 #[test]
 fn finally_runs_before_exit_and_catch_does_not_catch_exit() {
     let (_directory, output) = run(r#"try
-  run printf with message "body\n"
+  run printf with message "body"
   exit with status 3
 catch failure
-  run printf with message "caught\n"
+  run printf with message "caught"
 finally
-  run printf with message "cleanup\n"
+  run printf with message "cleanup"
 "#);
     assert_eq!(status(&output), 3, "{}", stderr(&output));
     assert_eq!(stdout(&output), "cleanup\n");
@@ -96,7 +96,7 @@ fn catch_does_not_intercept_fail() {
     let (_directory, output) = run(r#"try
   fail with message "inner" and status 4
 catch failure
-  run printf with message "caught\n"
+  run printf with message "caught"
 "#);
     assert_eq!(status(&output), 4);
     assert_eq!(stderr(&output), "inner\n");
@@ -106,11 +106,11 @@ catch failure
 #[test]
 fn exit_inside_reusable_program_ends_the_whole_run() {
     let (_directory, output) = run(r#"define a program named stop
-  run printf with message "in stop\n"
+  run printf with message "in stop"
   exit with status 5
-  run printf with message "never\n"
+  run printf with message "never"
 run program stop
-run printf with message "after\n"
+run printf with message "after"
 "#);
     assert_eq!(status(&output), 5, "{}", stderr(&output));
     assert!(!stdout(&output).contains("after"), "{}", stdout(&output));
@@ -120,9 +120,9 @@ run printf with message "after\n"
 #[test]
 fn exit_inside_loop_stops_iteration() {
     let (_directory, output) = run(r#"repeat 5 times
-  run printf with message "tick\n"
+  run printf with message "tick"
   exit with status 6
-run printf with message "after\n"
+run printf with message "after"
 "#);
     assert_eq!(status(&output), 6);
     assert_eq!(stdout(&output), "tick\n");
@@ -130,10 +130,10 @@ run printf with message "after\n"
 
 #[test]
 fn fail_inside_if_body_is_taken_only_when_matched() {
-    let (_directory, output) = run(r#"run printf with message "start\n"
+    let (_directory, output) = run(r#"run printf with message "start"
 if "a" is "b"
   fail with message "not taken" and status 9
-run printf with message "end\n"
+run printf with message "end"
 "#);
     assert_eq!(status(&output), 0, "{}", stderr(&output));
     assert_eq!(stdout(&output), "end\n");

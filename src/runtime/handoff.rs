@@ -19,6 +19,10 @@ use std::fs::File;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+/// Detached launches allowed in one run. Each one is an owned child until it exits,
+/// so the cap bounds the waiter threads and process-table entries a loop can create.
+pub(crate) const MAX_DETACHED_LAUNCHES: usize = 64;
+
 /// The process-level request a marker step left for the next native command.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ProcessRequest {
@@ -101,6 +105,24 @@ fn detached_stdio(output: Option<File>) -> Result<(Stdio, Stdio, Stdio)> {
     Ok((Stdio::null(), Stdio::from(file), Stdio::from(stderr)))
 }
 
+/// Refuse hand-over and detached launch anywhere in a program that runs live, where a
+/// process cannot take over or outlive the live session. Checks the whole program,
+/// including statements before a live cursor, so an edit cannot hide a marker there.
+pub(crate) fn reject_in_live(program: &Program) -> Result<()> {
+    if let Some(step) = program.steps.iter().find(|step| {
+        matches!(
+            step.kind,
+            StepKind::HandOver | StepKind::LaunchDetached { .. }
+        )
+    }) {
+        bail!(
+            "line {}: live programs do not support hand over or detached launch",
+            step.line
+        );
+    }
+    Ok(())
+}
+
 /// Hand the script over to `command`. On Unix this returns only if `execve` fails.
 /// On Windows it returns the child's exit code once the child has finished.
 #[cfg(unix)]
@@ -153,12 +175,21 @@ pub(crate) fn launch_detached(mut command: Command, output: Option<File>) -> Res
             Ok(())
         });
     }
-    let child = command
+    let mut child = command
         .spawn()
         .context("launching the native program detached")?;
-    // Dropping the handle neither waits nor kills. The child is reparented when
-    // this process exits.
-    Ok(child.id())
+    let pid = child.id();
+    // A waiter thread owns the child and reaps it when it exits, so finished detached
+    // programs do not linger as zombies. The waiter never signals or cancels the child:
+    // the script's exit does not reach it, and a waiter outliving the script just
+    // reaps the child when it finishes.
+    std::thread::Builder::new()
+        .name("detached-child-reaper".into())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .context("starting the detached child waiter")?;
+    Ok(pid)
 }
 
 #[cfg(windows)]
@@ -169,8 +200,10 @@ pub(crate) fn launch_detached(mut command: Command, output: Option<File>) -> Res
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     flush_output()?;
     let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
-    // Breakaway keeps the child out of a parent job that would kill it on close.
-    // A job that forbids breakaway refuses the flag, so retry without it. Output
+    // CREATE_BREAKAWAY_FROM_JOB escapes an outer job only when that job permits
+    // breakaway (JOB_OBJECT_LIMIT_BREAKAWAY_OK). Where the job forbids it, spawn
+    // refuses the flag and this retries without it, so the child stays in the outer
+    // job and that job's close can end it. Output
     // files are reopened per attempt because a refused spawn may have consumed them.
     let mut spawn = |flags: u32| -> Result<std::process::Child> {
         let output = match &output {
@@ -248,6 +281,16 @@ mod tests {
         let mut command = shell("exit 7", "exit /b 7", temp.path());
         command.env_clear();
         assert_eq!(hand_over(command).unwrap(), 7);
+    }
+
+    #[test]
+    fn live_refusal_covers_markers_before_a_cursor() {
+        let program =
+            crate::parser::parse("launch detached \"x\"\nrun text.trim_final_lf with text \"a\"\n")
+                .unwrap();
+        assert!(reject_in_live(&program).is_err());
+        let plain = crate::parser::parse("run text.trim_final_lf with text \"a\"\n").unwrap();
+        assert!(reject_in_live(&plain).is_ok());
     }
 
     #[test]

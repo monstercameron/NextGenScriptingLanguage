@@ -67,6 +67,26 @@ fn main() {
             std::fs::write(p, n.to_string()).unwrap();
             print!("{n}");
         }
+        "count-wait" => {
+            // args: counter directory, element name, gate directory. Counts this
+            // run in `<dir>/<name>`, then waits while `<gate>/<name>.hold` exists.
+            let path = std::path::Path::new(&args[1]).join(&args[2]);
+            let n = std::fs::read_to_string(&path)
+                .unwrap_or_else(|_| "0".into())
+                .parse::<u32>()
+                .unwrap()
+                + 1;
+            std::fs::write(&path, n.to_string()).unwrap();
+            let hold = std::path::Path::new(&args[3]).join(format!("{}.hold", args[2]));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while hold.exists() {
+                if std::time::Instant::now() >= deadline {
+                    std::process::exit(3);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            print!("{n}");
+        }
         "flaky" => {
             // flaky COUNTER FAILURES STATUS: count this run, and exit STATUS while
             // the count is at most FAILURES. Otherwise print the count and succeed.

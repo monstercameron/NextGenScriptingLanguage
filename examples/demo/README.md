@@ -11,10 +11,11 @@ compositor and needs no network and no models. The fake `hyprctl` lives in
 3. Reloads the compositor with `hyprctl reload`. This is the step that can fail.
 4. Prints the active theme.
 
-Its leading `# execute-policy: allow writes process undeclared` header declares the approvals the
-author expects: the program writes files and starts a process. The direct commands
+Its leading `# execute-policy: allow writes process undeclared` header declares the categories the
+author intends to use: the program writes files and starts a process. The header never approves
+anything; approvals come only from `--allow`. The direct commands
 `hyprctl` and `printf` state no effects of their own, so the gate counts them as
-`undeclared`, and the header approves that openly. The reload fails until
+`undeclared`, and the header declares them openly. The reload fails until
 the config is fixed, so a run stops there, and the checkpoint lets the run continue.
 
 ## Run the whole loop
@@ -80,7 +81,7 @@ finds it with `grep`.
 - `check` validates the program. `check --json` prints the diagnostic record, and each
   diagnostic may carry suggested fixes.
 - `explain` prints one line per resolved step. `explain --json` gives the same plan as
-  JSON, and `--policy-header` merges the program's policy header into its approvals.
+  JSON, and `--policy-header` makes the program's policy header a declaration: any category it does not declare is a violation.
 - `run --checkpoint` and `resume --checkpoint` record completed steps and restart from the
   failed one. The checkpoint records the program text and its inputs. A repair may change
   only the failed or unexecuted suffix, so completed steps keep their fingerprints.

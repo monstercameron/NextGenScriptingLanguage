@@ -32,7 +32,7 @@ mod checkpoint;
 mod control;
 mod control_flow;
 pub mod execution_result;
-mod handoff;
+pub(crate) mod handoff;
 pub mod invocation_io;
 mod jobs;
 pub(crate) mod live;
@@ -47,6 +47,7 @@ mod service;
 mod streaming;
 pub mod tasks;
 pub mod worker_backend;
+pub(crate) use checkpoint::graph::{open_graph_checkpoint, PersistenceAuthorizer};
 pub use checkpoint::{read_repair_state, CheckpointOptions, RepairState};
 pub use resume::run_checkpointed;
 pub(crate) use streaming::run_stream_with_context_and_process_observer;
@@ -4267,6 +4268,8 @@ fn run_finite_state(
     let mut pending_env: Option<crate::capabilities::CommandEnvOverlay> = None;
     let mut pending_handoff = false;
     let mut pending_process: Option<handoff::ProcessRequest> = None;
+    // Detached launches started in this run, bounded by handoff::MAX_DETACHED_LAUNCHES.
+    let mut detached_launches = 0usize;
     let mut result = RunResult {
         output: Vec::new(),
         cache_hits: 0,
@@ -4536,6 +4539,12 @@ fn run_finite_state(
                         .with_context(|| format!("line {}", step.line))?;
                     if let Some(journal) = journal.as_deref_mut() {
                         if checkpoint::elements::for_each_element_due(journal, program, header) {
+                            // The same persistence gate as a node: an element's state reaches
+                            // the journal only if the checkpoint policy allows it.
+                            authorize_checkpoint_persistence(
+                                registry,
+                                &signals.sensitivity_floor(),
+                            )?;
                             let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                                 options.max_output_bytes,
                                 signals,
@@ -4946,6 +4955,7 @@ fn run_finite_state(
                                 each,
                                 &bindings,
                                 registry,
+                                &signals.sensitivity_floor(),
                             )? {
                                 Some((mut sink, skip)) => tasks::run_each(
                                     config,
@@ -5305,6 +5315,14 @@ fn run_finite_state(
                                 });
                             }
                             handoff::ProcessRequest::Detach(output) => {
+                                detached_launches += 1;
+                                if detached_launches > handoff::MAX_DETACHED_LAUNCHES {
+                                    bail!(
+                                        "line {}: launch detached is limited to {} detached programs per run",
+                                        step.line,
+                                        handoff::MAX_DETACHED_LAUNCHES
+                                    );
+                                }
                                 // The output is a write target exactly like a redirect.
                                 let output = match output {
                                     Some(path) => {

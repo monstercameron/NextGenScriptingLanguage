@@ -69,6 +69,13 @@ pub(super) fn node_end(program: &Program, start: usize) -> usize {
     {
         return start + end;
     }
+    // A job handle is never serialized, so a spawn's node runs through the statement
+    // that awaits or cancels the job. Validation refuses a spawn with no such statement.
+    if let StepKind::SpawnJob { name, .. } = &program.steps[start].kind {
+        if let Some(end) = job_end(program, start, name) {
+            return end;
+        }
+    }
     let mut end = start + 1;
     if matches!(program.steps[start].kind, StepKind::Invoke { .. }) {
         while pipe_at(program, end) {
@@ -76,6 +83,76 @@ pub(super) fn node_end(program: &Program, start: usize) -> usize {
         }
     }
     end
+}
+
+/// The index just past the top-level statement that awaits or cancels the job
+/// spawned at `start`, if one exists.
+fn job_end(program: &Program, start: usize, name: &str) -> Option<usize> {
+    let mut index = start + 1;
+    while index < program.steps.len() {
+        let end = node_end(program, index).min(program.steps.len());
+        if program.steps[index..end]
+            .iter()
+            .any(|step| ends_job(&step.kind, name))
+        {
+            return Some(end);
+        }
+        index = end;
+    }
+    None
+}
+
+fn ends_job(kind: &StepKind, name: &str) -> bool {
+    matches!(
+        kind,
+        StepKind::AwaitJob { name: job, .. } | StepKind::CancelJob { name: job } if job == name
+    )
+}
+
+fn is_job_step(kind: &StepKind) -> bool {
+    matches!(
+        kind,
+        StepKind::SpawnJob { .. }
+            | StepKind::InspectJob { .. }
+            | StepKind::AwaitJob { .. }
+            | StepKind::CancelJob { .. }
+    )
+}
+
+/// Whether a checkpointed program's job operations can be recorded. Each spawn must
+/// be awaited or cancelled in the same checkpoint node, so its handle never crosses a
+/// checkpoint. Jobs inside reusable program definitions are not supported yet.
+pub(super) fn validate_checkpoint_jobs(program: &Program) -> Result<()> {
+    if program
+        .definitions
+        .values()
+        .flat_map(|definition| &definition.steps)
+        .any(|step| is_job_step(&step.kind))
+    {
+        bail!("checkpointed and resumed programs do not support background jobs inside reusable program definitions");
+    }
+    let mut index = 0;
+    while index < program.steps.len() {
+        let end = node_end(program, index).min(program.steps.len());
+        let node = &program.steps[index..end];
+        for step in node {
+            if let StepKind::SpawnJob { name, .. } = &step.kind {
+                if !node.iter().any(|other| ends_job(&other.kind, name)) {
+                    bail!(
+                        "line {}: checkpointed job {name:?} must be awaited or cancelled in the same statement",
+                        step.line
+                    );
+                }
+            }
+        }
+        index = end;
+    }
+    Ok(())
+}
+
+/// Whether a checkpointed run can record its job operations.
+pub(super) fn checkpoint_jobs_supported(program: &Program) -> bool {
+    validate_checkpoint_jobs(program).is_ok()
 }
 fn manifest_identity(
     hash: &mut Sha256,
@@ -339,6 +416,14 @@ pub(super) fn retry_safe(
                 }
             }
         }
+        if let StepKind::SpawnJob { stages, .. } = &step.kind {
+            for stage in stages {
+                let manifest = registry.resolve_call(&stage.call)?;
+                if manifest.builtin.is_none() && !manifest.cacheable {
+                    return Ok(false);
+                }
+            }
+        }
     }
     Ok(true)
 }
@@ -368,6 +453,13 @@ pub(super) fn uncertain_on_failure(
                 }
             }
         }
+        if let StepKind::SpawnJob { stages, .. } = &step.kind {
+            for stage in stages {
+                if registry.resolve_call(&stage.call)?.uncertain_on_failure {
+                    return Ok(true);
+                }
+            }
+        }
     }
     Ok(false)
 }
@@ -392,11 +484,7 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
             step.line
         );
     }
-    if super::has_job_operations(program) {
-        bail!(
-            "checkpointed and resumed programs do not support non-serializable background job handles"
-        );
-    }
+    validate_checkpoint_jobs(program)?;
     // Checkpoints record one node per top-level statement. An exit nested in a
     // compound node, a try block or a reusable call would end partway through
     // a node that resume cannot re-enter, so only top-level exits are supported.

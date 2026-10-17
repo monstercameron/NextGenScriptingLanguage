@@ -4007,7 +4007,9 @@ fn run_finite_state(
     if !resuming {
         preflight_executables(program, registry, &cwd)?;
     }
-    if (!signals.background_jobs_allowed || state_out.is_some() || journal.is_some())
+    if (!signals.background_jobs_allowed
+        || state_out.is_some()
+        || (journal.is_some() && !resume::checkpoint_jobs_supported(program)))
         && (has_job_operations(program) || module_session.has_background_job_operations())
     {
         bail!("finite-scope background job handles are unsupported in this execution lifetime, including imported program modules");

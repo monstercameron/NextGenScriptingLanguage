@@ -2901,7 +2901,24 @@ mod argument_decoder_compat {
                     Ok(RawArgument::JsonArguments)
                 ));
                 *extensions += 1;
-            } else {
+            } else if value.get("json_parameter").is_some() {
+                // Extension nodes are outside the legacy grammar, so the legacy
+                // oracle cannot compare them. Check the current decoder directly.
+                let source = value.to_string();
+                assert!(
+                    value["json_parameter"].is_string(),
+                    "invalid json_parameter node: {source}"
+                );
+                assert!(
+                    serde_json::from_str::<LegacyArgument>(&source).is_err(),
+                    "new json_parameter node unexpectedly belongs to the legacy grammar: {source}"
+                );
+                assert!(matches!(
+                    serde_json::from_str::<RawArgument>(&source),
+                    Ok(RawArgument::JsonParameter { .. })
+                ));
+                *extensions += 1;
+            } else if !contains_extension(value) {
                 compare(&value.to_string());
             }
             if let Some(children) = value.get("append").and_then(|v| v.as_array()) {
@@ -2909,6 +2926,16 @@ mod argument_decoder_compat {
                     visit(child, extensions);
                 }
             }
+        }
+        // A `when_present` wrapper around an extension node is checked through
+        // its children, because the legacy oracle rejects the whole wrapper.
+        fn contains_extension(value: &serde_json::Value) -> bool {
+            value.get("json_arguments").is_some()
+                || value.get("json_parameter").is_some()
+                || value
+                    .get("append")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|children| children.iter().any(contains_extension))
         }
         let mut extensions = 0;
         for entry in

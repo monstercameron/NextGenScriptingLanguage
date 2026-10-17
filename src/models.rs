@@ -129,6 +129,7 @@ struct Options {
     max_bytes: usize,
     env_file: Option<String>,
     endpoint: Option<String>,
+    api_key_env: Option<String>,
     fixture: Option<String>,
     schema: Option<Value>,
 }
@@ -231,7 +232,6 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
     let endpoint = endpoint_for(&options).map_err(|_| failure(FailureClass::Configuration))?;
     validate_endpoint(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
     let parsed = Url::parse(&endpoint).map_err(|_| failure(FailureClass::Configuration))?;
-    let loopback = parsed.host().is_some_and(is_loopback);
     let transport = if options.fixture.is_some() {
         "fixture"
     } else if parsed.scheme() == "https" {
@@ -255,14 +255,20 @@ pub fn run<R: Read, W: Write>(args: &[String], input: &mut R, output: &mut W) ->
             }
         })?
     } else {
-        // Credentials are optional only when the endpoint is loopback, which
-        // covers local model servers. Remote endpoints always need a key.
-        let key = match credential(options.provider, options.env_file.as_deref()) {
-            Ok(key) => Some(key),
-            Err(error) if loopback && is_failure(&error, FailureClass::CredentialsMissing) => None,
-            Err(error) if error.downcast_ref::<ModelFailure>().is_some() => return Err(error),
-            Err(_) => return Err(failure(FailureClass::Configuration)),
-        };
+        let key = select_credential(
+            options.provider,
+            &parsed,
+            options.api_key_env.as_deref(),
+            options.env_file.as_deref(),
+            &|name: &str| std::env::var(name).ok(),
+        )
+        .map_err(|error| {
+            if error.downcast_ref::<ModelFailure>().is_some() {
+                error
+            } else {
+                failure(FailureClass::Configuration)
+            }
+        })?;
         post_json(
             &endpoint,
             key.as_deref(),
@@ -297,14 +303,17 @@ Reads state/input bytes from stdin and writes one execute.model/1 JSON result.\n
 Options: --provider jev|openai --model NAME --question TEXT --instruction TEXT\n\
          --labels LABEL... | --criteria JSON --levels LEVEL... --questions JSON\n\
          --schema JSON --minimum 0..100 --max-tokens N --timeout-ms N\n\
-         --max-bytes N --env-file PATH --endpoint URL --fixture PATH\n\
+         --max-bytes N --env-file PATH --endpoint URL --api-key-env NAME\n\
+         --fixture PATH\n\
          --api responses|chat_completions --effort none|low|medium|high|xhigh|max\n\
          --temperature 0..2\n\
 Jev defaults to jev-latest. OpenAI requires --model. Fixture mode never reads\n\
 credentials or contacts a network service. OpenAI output is capped at 512\n\
 tokens unless --max-tokens overrides it. Values beginning with -- cannot be\n\
 used as labels or levels. Set EXECUTE_MODELS_OFFLINE to reject live requests.\n\
-Credentials are optional only for loopback endpoints. No automatic retries are\n\
+Default provider keys go only to the provider default host. A custom endpoint\n\
+gets a key only from --api-key-env NAME; otherwise it gets none. No automatic\n\
+retries are\n\
 performed."
 }
 
@@ -343,6 +352,7 @@ fn parse_args(args: &[String]) -> Result<Options> {
         max_bytes: DEFAULT_MAX_BYTES,
         env_file: None,
         endpoint: None,
+        api_key_env: None,
         fixture: None,
         schema: None,
     };
@@ -411,6 +421,13 @@ fn parse_args(args: &[String]) -> Result<Options> {
             }
             "--env-file" => options.env_file = Some(nonempty(value, "env-file")?),
             "--endpoint" => options.endpoint = Some(nonempty(value, "endpoint")?),
+            "--api-key-env" => {
+                let name = nonempty(value, "api-key-env")?;
+                if !valid_env_name(&name) || is_default_credential_name(&name) {
+                    bail!("api-key-env must name a non-default environment variable");
+                }
+                options.api_key_env = Some(name);
+            }
             "--fixture" => {
                 if value.is_empty() {
                     return Err(failure(FailureClass::Fixture));
@@ -1085,12 +1102,6 @@ fn read_fixture(path: &str, expected: &Value, limit: usize) -> Result<Value> {
     Ok(response)
 }
 
-fn is_failure(error: &anyhow::Error, class: FailureClass) -> bool {
-    error
-        .downcast_ref::<ModelFailure>()
-        .is_some_and(|failure| std::mem::discriminant(&failure.0) == std::mem::discriminant(&class))
-}
-
 /// The URL that receives the provider request. Responses uses `endpoint` as the
 /// full URL; Chat Completions treats it as the base and appends `/chat/completions`.
 fn endpoint_for(options: &Options) -> Result<String> {
@@ -1144,41 +1155,109 @@ fn is_loopback(host: Host<&str>) -> bool {
     }
 }
 
-fn credential(provider: Provider, env_file: Option<&str>) -> Result<String> {
-    let process = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-    let process_value = match provider {
-        Provider::OpenAi => process("OPENAI_API_KEY").or_else(|| process("openai")),
-        Provider::Jev => process("JEV_API_KEY")
-            .or_else(|| process("TYPESAFE_API_KEY"))
-            .or_else(|| process("jev")),
+/// Environment names that carry the provider's default key. They are never
+/// valid for `api_key_env`, and they reach a request only on the default host.
+const DEFAULT_CREDENTIAL_NAMES: [&str; 5] = [
+    "OPENAI_API_KEY",
+    "openai",
+    "JEV_API_KEY",
+    "TYPESAFE_API_KEY",
+    "jev",
+];
+
+fn is_default_credential_name(name: &str) -> bool {
+    DEFAULT_CREDENTIAL_NAMES
+        .iter()
+        .any(|default| default.eq_ignore_ascii_case(name))
+}
+
+/// Default key names in lookup order for one provider.
+fn provider_credential_names(provider: Provider) -> &'static [&'static str] {
+    match provider {
+        Provider::OpenAi => &["OPENAI_API_KEY", "openai"],
+        Provider::Jev => &["JEV_API_KEY", "TYPESAFE_API_KEY", "jev"],
+    }
+}
+
+/// True only for the provider's own HTTPS host on the default port. The host
+/// check is exact, so lookalike or subdomain hosts do not qualify.
+fn is_default_host(provider: Provider, endpoint: &Url) -> bool {
+    let expected = match provider {
+        Provider::Jev => "api.typesafe.ai",
+        Provider::OpenAi => "api.openai.com",
     };
-    let value = if let Some(value) = process_value {
-        value
-    } else {
-        let file_values = match env_file {
-            Some(path) => parse_env_file(path)?,
-            None => BTreeMap::new(),
-        };
-        match provider {
-            Provider::OpenAi => file_values
-                .get("OPENAI_API_KEY")
-                .or_else(|| file_values.get("openai")),
-            Provider::Jev => file_values
-                .get("JEV_API_KEY")
-                .or_else(|| file_values.get("TYPESAFE_API_KEY"))
-                .or_else(|| file_values.get("jev")),
-        }
-        .cloned()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| failure(FailureClass::CredentialsMissing))?
-    };
+    endpoint.scheme() == "https"
+        && endpoint.port().is_none()
+        && endpoint
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case(expected))
+}
+
+fn check_secret(value: &str) -> Result<()> {
     if value.chars().any(char::is_control) {
         return Err(failure(FailureClass::Configuration));
     }
-    Ok(value)
+    Ok(())
 }
 
-fn parse_env_file(path: &str) -> Result<BTreeMap<String, String>> {
+/// Choose the bearer credential for one live request. Its rules are the
+/// security boundary for provider keys:
+///
+/// - `api_key_env` names one explicit variable, read from the process
+///   environment or the explicit env file. It may go to any endpoint.
+/// - Default provider keys (process or env file) are attached only to the
+///   provider's default host. Any other endpoint never receives them.
+/// - A custom endpoint without `api_key_env` gets no `Authorization` header.
+///
+/// `process` supplies process environment values, so tests can inject them.
+fn select_credential(
+    provider: Provider,
+    endpoint: &Url,
+    api_key_env: Option<&str>,
+    env_file: Option<&str>,
+    process: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<String>> {
+    if let Some(name) = api_key_env {
+        let wanted = [name];
+        let file_values = match env_file {
+            Some(path) => parse_env_file(path, &wanted)?,
+            None => BTreeMap::new(),
+        };
+        let value = process(name)
+            .or_else(|| file_values.get(name).cloned())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| failure(FailureClass::CredentialsMissing))?;
+        check_secret(&value)?;
+        return Ok(Some(value));
+    }
+    if !is_default_host(provider, endpoint) {
+        return Ok(None);
+    }
+    let names = provider_credential_names(provider);
+    let value = match names
+        .iter()
+        .find_map(|name| process(name).filter(|v| !v.is_empty()))
+    {
+        Some(value) => value,
+        None => {
+            let file_values = match env_file {
+                Some(path) => parse_env_file(path, names)?,
+                None => BTreeMap::new(),
+            };
+            names
+                .iter()
+                .find_map(|name| file_values.get(*name).cloned())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| failure(FailureClass::CredentialsMissing))?
+        }
+    };
+    check_secret(&value)?;
+    Ok(Some(value))
+}
+
+/// Read only the requested names from an explicit env file. Other entries are
+/// skipped without being parsed, so unrelated lines cannot affect a request.
+fn parse_env_file(path: &str, wanted: &[&str]) -> Result<BTreeMap<String, String>> {
     let mut file = File::open(path).context("opening explicit environment file")?;
     let mut bytes = Vec::new();
     Read::by_ref(&mut file)
@@ -1203,10 +1282,7 @@ fn parse_env_file(path: &str) -> Result<BTreeMap<String, String>> {
         if !valid_env_name(name) {
             bail!("invalid environment file name");
         }
-        if !matches!(
-            name,
-            "openai" | "jev" | "OPENAI_API_KEY" | "JEV_API_KEY" | "TYPESAFE_API_KEY"
-        ) {
+        if !wanted.contains(&name) {
             continue;
         }
         let raw_value = raw_value.trim();
@@ -2635,5 +2711,286 @@ mod unit_tests {
         let error = run(&args, &mut input, &mut output).unwrap_err();
         assert_eq!(diagnostic(&error), "input");
         assert!(output.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod credential_policy_tests {
+    use super::*;
+
+    fn url(text: &str) -> Url {
+        Url::parse(text).unwrap()
+    }
+
+    fn process(values: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name: &str| {
+            values
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        }
+    }
+
+    fn none(_: &str) -> Option<String> {
+        None
+    }
+
+    fn env_file(directory: &tempfile::TempDir, text: &str) -> String {
+        let path = directory.path().join("credentials.env");
+        std::fs::write(&path, text).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn default_openai_key_reaches_only_the_default_host() {
+        let keys = process(&[("OPENAI_API_KEY", "default-test-key")]);
+        for endpoint in [
+            "https://api.openai.com/v1/responses",
+            "https://api.openai.com/v1/chat/completions",
+            "https://API.openai.com/v1",
+            "https://api.openai.com:443/v1",
+        ] {
+            let key =
+                select_credential(Provider::OpenAi, &url(endpoint), None, None, &keys).unwrap();
+            assert_eq!(key.as_deref(), Some("default-test-key"), "{endpoint}");
+        }
+        for endpoint in [
+            "https://api.openai.com.evil.test/v1",
+            "https://evil.test/v1",
+            "https://openai.com/v1",
+            "https://api.openai.com:8443/v1",
+            "http://api.openai.com/v1",
+            "http://127.0.0.1:1/v1",
+            "http://localhost:1/v1",
+            "https://[::1]:1/v1",
+        ] {
+            let key =
+                select_credential(Provider::OpenAi, &url(endpoint), None, None, &keys).unwrap();
+            assert_eq!(key, None, "default key leaked to {endpoint}");
+        }
+    }
+
+    #[test]
+    fn default_jev_key_reaches_only_the_typesafe_host() {
+        let keys = process(&[("JEV_API_KEY", "jev-test-key")]);
+        let key = select_credential(
+            Provider::Jev,
+            &url("https://api.typesafe.ai/v1/systemone"),
+            None,
+            None,
+            &keys,
+        )
+        .unwrap();
+        assert_eq!(key.as_deref(), Some("jev-test-key"));
+        for endpoint in [
+            "https://api.openai.com/v1",
+            "https://api.typesafe.ai.evil.test/v1",
+            "http://127.0.0.1:1/v1",
+        ] {
+            assert_eq!(
+                select_credential(Provider::Jev, &url(endpoint), None, None, &keys).unwrap(),
+                None,
+                "{endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_key_never_satisfies_the_other_provider() {
+        let openai_only = process(&[("OPENAI_API_KEY", "openai-test-key")]);
+        let error = select_credential(
+            Provider::Jev,
+            &url("https://api.typesafe.ai/v1/systemone"),
+            None,
+            None,
+            &openai_only,
+        )
+        .unwrap_err();
+        assert_eq!(diagnostic(&error), "credentials_missing");
+        let jev_only = process(&[("JEV_API_KEY", "jev-test-key")]);
+        let error = select_credential(
+            Provider::OpenAi,
+            &url("https://api.openai.com/v1/responses"),
+            None,
+            None,
+            &jev_only,
+        )
+        .unwrap_err();
+        assert_eq!(diagnostic(&error), "credentials_missing");
+    }
+
+    #[test]
+    fn default_key_in_an_env_file_reaches_only_the_default_host() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = env_file(
+            &directory,
+            "OPENAI_API_KEY=file-default-key\nopenai=alias-key\n",
+        );
+        let key = select_credential(
+            Provider::OpenAi,
+            &url("https://api.openai.com/v1/responses"),
+            None,
+            Some(&file),
+            &none,
+        )
+        .unwrap();
+        assert_eq!(key.as_deref(), Some("file-default-key"));
+        for endpoint in [
+            "http://127.0.0.1:9/v1",
+            "https://models.example.test/v1",
+            "https://api.openai.com.evil.test/v1",
+        ] {
+            let key = select_credential(Provider::OpenAi, &url(endpoint), None, Some(&file), &none)
+                .unwrap();
+            assert_eq!(key, None, "file default key leaked to {endpoint}");
+        }
+    }
+
+    #[test]
+    fn custom_endpoint_never_reads_default_keys_or_the_env_file() {
+        // A nonexistent file proves the custom branch never opens the file.
+        let missing = "does-not-exist-credentials.env";
+        let keys = process(&[
+            ("OPENAI_API_KEY", "default-test-key"),
+            ("openai", "alias-test-key"),
+        ]);
+        for endpoint in ["http://127.0.0.1:9/v1", "https://models.example.test/v1"] {
+            let key =
+                select_credential(Provider::OpenAi, &url(endpoint), None, Some(missing), &keys)
+                    .unwrap();
+            assert_eq!(key, None, "{endpoint}");
+        }
+    }
+
+    #[test]
+    fn api_key_env_names_its_variable_for_any_endpoint() {
+        let keys = process(&[
+            ("LOCAL_MODEL_KEY", "local-test-key"),
+            ("OPENAI_API_KEY", "default-test-key"),
+        ]);
+        for endpoint in [
+            "http://127.0.0.1:9/v1",
+            "https://models.example.test/v1",
+            "https://api.openai.com/v1",
+        ] {
+            let key = select_credential(
+                Provider::OpenAi,
+                &url(endpoint),
+                Some("LOCAL_MODEL_KEY"),
+                None,
+                &keys,
+            )
+            .unwrap();
+            assert_eq!(key.as_deref(), Some("local-test-key"), "{endpoint}");
+        }
+    }
+
+    #[test]
+    fn api_key_env_reads_the_env_file_and_prefers_the_process_value() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = env_file(
+            &directory,
+            "LOCAL_MODEL_KEY=file-local-key\nUNRELATED=ignored\n",
+        );
+        let from_file = select_credential(
+            Provider::OpenAi,
+            &url("http://127.0.0.1:9/v1"),
+            Some("LOCAL_MODEL_KEY"),
+            Some(&file),
+            &none,
+        )
+        .unwrap();
+        assert_eq!(from_file.as_deref(), Some("file-local-key"));
+        let process_first = process(&[("LOCAL_MODEL_KEY", "process-local-key")]);
+        let both = select_credential(
+            Provider::OpenAi,
+            &url("http://127.0.0.1:9/v1"),
+            Some("LOCAL_MODEL_KEY"),
+            Some(&file),
+            &process_first,
+        )
+        .unwrap();
+        assert_eq!(both.as_deref(), Some("process-local-key"));
+    }
+
+    #[test]
+    fn missing_api_key_env_value_fails_before_any_connection() {
+        let error = select_credential(
+            Provider::OpenAi,
+            &url("http://127.0.0.1:9/v1"),
+            Some("LOCAL_MODEL_KEY"),
+            None,
+            &none,
+        )
+        .unwrap_err();
+        assert_eq!(diagnostic(&error), "credentials_missing");
+    }
+
+    #[test]
+    fn default_host_without_any_key_is_credentials_missing() {
+        let error = select_credential(
+            Provider::OpenAi,
+            &url("https://api.openai.com/v1/responses"),
+            None,
+            None,
+            &none,
+        )
+        .unwrap_err();
+        assert_eq!(diagnostic(&error), "credentials_missing");
+    }
+
+    #[test]
+    fn control_characters_in_a_credential_are_configuration_errors() {
+        let keys = process(&[("OPENAI_API_KEY", "bad\u{7}key")]);
+        let error = select_credential(
+            Provider::OpenAi,
+            &url("https://api.openai.com/v1/responses"),
+            None,
+            None,
+            &keys,
+        )
+        .unwrap_err();
+        assert_eq!(diagnostic(&error), "configuration");
+    }
+
+    #[test]
+    fn api_key_env_rejects_default_names_and_invalid_names() {
+        let base = |name: &str| {
+            vec![
+                "generate".to_owned(),
+                "--provider".to_owned(),
+                "openai".to_owned(),
+                "--model".to_owned(),
+                "gpt-6-luna".to_owned(),
+                "--instruction".to_owned(),
+                "x".to_owned(),
+                "--api-key-env".to_owned(),
+                name.to_owned(),
+            ]
+        };
+        for name in [
+            "OPENAI_API_KEY",
+            "openai",
+            "OpenAI",
+            "openai_api_key",
+            "JEV_API_KEY",
+            "TYPESAFE_API_KEY",
+            "jev",
+            "Typesafe_Api_Key",
+            "",
+            "1BAD",
+            "BAD-NAME",
+            "HAS SPACE",
+        ] {
+            assert!(
+                parse_args(&base(name)).is_err(),
+                "accepted api-key-env {name:?}"
+            );
+        }
+        for name in ["LOCAL_MODEL_KEY", "_LOCAL", "lowercase_key"] {
+            let options = parse_args(&base(name))
+                .unwrap_or_else(|error| panic!("rejected {name:?}: {error}"));
+            assert_eq!(options.api_key_env.as_deref(), Some(name));
+        }
     }
 }

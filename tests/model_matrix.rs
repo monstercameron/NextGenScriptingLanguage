@@ -1105,18 +1105,117 @@ fn loopback_endpoint_without_any_key_sends_no_authorization_header() {
 }
 
 #[test]
-fn loopback_endpoint_uses_process_key_then_env_file_key_when_present() {
+fn default_provider_keys_are_never_sent_to_a_custom_loopback_server() {
     let directory = tempfile::tempdir().unwrap();
-    let env_file = directory.path().join("test-credentials.env");
-    std::fs::write(&env_file, "OPENAI_API_KEY=file-test-key\n").unwrap();
+    let env_file = directory.path().join("default-keys.env");
+    std::fs::write(
+        &env_file,
+        "OPENAI_API_KEY=file-default-key\nopenai=file-alias-key\nJEV_API_KEY=file-jev-key\n",
+    )
+    .unwrap();
+    let env_file_text = env_file.to_string_lossy().into_owned();
+    let environment = [
+        ("OPENAI_API_KEY", "process-default-key"),
+        ("openai", "process-alias-key"),
+        ("JEV_API_KEY", "process-jev-key"),
+        ("TYPESAFE_API_KEY", "process-typesafe-key"),
+    ];
+
+    // Process-environment keys first, then env-file keys, both to loopback.
+    let (base, server) = serve(vec![
+        reply(200, &chat_completion(json!("one"))),
+        reply(200, &chat_completion(json!("two"))),
+    ]);
+    let endpoint = chat_base(&base);
+    let process_args = generate(&["--api", "chat_completions", "--endpoint", &endpoint]);
+    json_output(&run(
+        directory.path(),
+        &process_args,
+        b"s",
+        false,
+        &environment,
+    ));
+    let file_args = generate(&[
+        "--api",
+        "chat_completions",
+        "--endpoint",
+        &endpoint,
+        "--env-file",
+        &env_file_text,
+    ]);
+    json_output(&run(directory.path(), &file_args, b"s", false, &[]));
+    for captured in server.join().unwrap() {
+        assert!(
+            !captured.headers.contains("authorization"),
+            "a default provider key reached a custom loopback server: {}",
+            captured.headers
+        );
+    }
+
+    // The Jev default keys have the same boundary on a custom Jev endpoint.
+    let (base, server) = serve(vec![reply(
+        200,
+        &ask_response(json!({
+            "route": route_answer(), "ok": ok_answer(), "rate": rate_answer()
+        })),
+    )]);
+    let mut args = ask_args(&ask_questions_json());
+    args.extend([
+        "--endpoint".into(),
+        format!("{base}/v1/systemone"),
+        "--env-file".into(),
+        env_file_text,
+    ]);
+    json_output(&run(directory.path(), &args, b"", false, &environment));
+    let captured = server.join().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert!(
+        !captured[0].headers.contains("authorization"),
+        "a Jev default key reached a custom loopback server"
+    );
+}
+
+#[test]
+fn api_key_env_names_the_only_key_a_custom_endpoint_receives() {
+    let directory = tempfile::tempdir().unwrap();
+    let env_file = directory.path().join("local-keys.env");
+    std::fs::write(&env_file, "SYNTHETIC_FILE_KEY=file-local-key\n").unwrap();
     let env_file_text = env_file.to_string_lossy().into_owned();
 
-    let (base, server) = serve(vec![reply(200, &chat_completion(json!("one")))]);
+    let (base, server) = serve(vec![reply(200, &chat_completion(json!("process")))]);
     let args = generate(&[
         "--api",
         "chat_completions",
         "--endpoint",
         &chat_base(&base),
+        "--api-key-env",
+        "SYNTHETIC_PROCESS_KEY",
+    ]);
+    json_output(&run(
+        directory.path(),
+        &args,
+        b"s",
+        false,
+        &[
+            ("SYNTHETIC_PROCESS_KEY", "process-local-key"),
+            ("OPENAI_API_KEY", "default-must-not-be-sent"),
+        ],
+    ));
+    let captured = server.join().unwrap();
+    assert!(
+        bearer_present(&captured[0], "process-local-key"),
+        "named process key was not sent"
+    );
+    assert!(!captured[0].headers.contains("default-must-not-be-sent"));
+
+    let (base, server) = serve(vec![reply(200, &chat_completion(json!("file")))]);
+    let args = generate(&[
+        "--api",
+        "chat_completions",
+        "--endpoint",
+        &chat_base(&base),
+        "--api-key-env",
+        "SYNTHETIC_FILE_KEY",
         "--env-file",
         &env_file_text,
     ]);
@@ -1125,42 +1224,73 @@ fn loopback_endpoint_uses_process_key_then_env_file_key_when_present() {
         &args,
         b"s",
         false,
-        &[("OPENAI_API_KEY", "process-test-key")],
+        &[("OPENAI_API_KEY", "default-must-not-be-sent")],
     ));
     let captured = server.join().unwrap();
     assert!(
-        bearer_present(&captured[0], "process-test-key"),
-        "process key did not win"
+        bearer_present(&captured[0], "file-local-key"),
+        "named file key was not sent"
     );
+    assert!(!captured[0].headers.contains("default-must-not-be-sent"));
+}
 
-    let (base, server) = serve(vec![reply(200, &chat_completion(json!("two")))]);
+#[test]
+fn api_key_env_naming_a_default_variable_is_rejected_before_any_request() {
+    let directory = tempfile::tempdir().unwrap();
+    for name in [
+        "OPENAI_API_KEY",
+        "openai",
+        "JEV_API_KEY",
+        "TYPESAFE_API_KEY",
+        "jev",
+        "Openai_Api_Key",
+    ] {
+        let args = generate(&["--api-key-env", name, "--endpoint", "http://127.0.0.1:9/v1"]);
+        let output = run(
+            directory.path(),
+            &args,
+            b"s",
+            true,
+            &[("OPENAI_API_KEY", "default-must-not-be-sent")],
+        );
+        assert_failure_class(&output, "configuration", name);
+    }
+}
+
+#[test]
+fn api_key_env_with_no_value_fails_before_connecting() {
+    let directory = tempfile::tempdir().unwrap();
+    // No replies are queued, so any connection would fail as a transport error
+    // instead of the expected credential class.
+    let (base, server) = serve(Vec::new());
     let args = generate(&[
         "--api",
         "chat_completions",
         "--endpoint",
         &chat_base(&base),
-        "--env-file",
-        &env_file_text,
+        "--api-key-env",
+        "SYNTHETIC_UNSET_KEY",
     ]);
-    json_output(&run(directory.path(), &args, b"s", false, &[]));
-    let captured = server.join().unwrap();
-    assert!(
-        bearer_present(&captured[0], "file-test-key"),
-        "file key was not used"
+    assert_failure_class(
+        &run(directory.path(), &args, b"s", false, &[]),
+        "credentials_missing",
+        "unset named key",
     );
+    assert!(server.join().unwrap().is_empty());
 }
 
 #[test]
-fn remote_endpoint_without_a_key_is_rejected_before_any_connection() {
+fn default_endpoint_without_a_default_key_fails_before_any_connection() {
     let directory = tempfile::tempdir().unwrap();
-    for endpoint in [
-        "https://api.example.test/v1",
-        "https://models.example.test/v1/chat/completions",
-    ] {
-        let args = generate(&["--api", "chat_completions", "--endpoint", endpoint]);
-        let output = run(directory.path(), &args, b"s", false, &[]);
-        assert_failure_class(&output, "credentials_missing", endpoint);
-    }
+    let args = generate(&[]);
+    let output = run(directory.path(), &args, b"s", false, &[]);
+    assert_failure_class(&output, "credentials_missing", "default host without key");
+    let jev = argv(&["judge", "--question", "Ok?"]);
+    assert_failure_class(
+        &run(directory.path(), &jev, b"s", false, &[]),
+        "credentials_missing",
+        "jev default host without key",
+    );
 }
 
 #[test]
@@ -1464,4 +1594,479 @@ take text at "/label" from result as label
         "labels mapping failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+// ---------------------------------------------------------------------------
+// 6. jev.ask: one batched TypeSafe request with named choice, noul and score
+//    questions. Every answer is validated before the call succeeds.
+// ---------------------------------------------------------------------------
+
+fn ask_questions_json() -> String {
+    json!({
+        "route": {"type": "choice", "question": "Route?", "labels": ["billing", "account"], "minimum": 75},
+        "ok": {"type": "noul", "question": "Ok?", "minimum": 80},
+        "rate": {"type": "score", "question": "Rate?", "levels": ["low", "medium", "high"], "minimum": 50}
+    })
+    .to_string()
+}
+
+fn ask_args(questions: &str) -> Vec<String> {
+    argv(&["ask", "--questions", questions])
+}
+
+fn ask_semantic(state: &str) -> Value {
+    json!({
+        "provider": "jev", "kind": "ask", "model": "jev-latest", "state": state,
+        "questions": {
+            "route": {"type": "choice", "question": "Route?", "minimum": 75, "labels": ["billing", "account"]},
+            "ok": {"type": "noul", "question": "Ok?", "minimum": 80},
+            "rate": {"type": "score", "question": "Rate?", "minimum": 50, "levels": ["low", "medium", "high"]}
+        }
+    })
+}
+
+fn route_answer() -> Value {
+    json!({"type": "choice", "choice": "billing", "confidence": 0.8, "probabilities": {"billing": 0.8, "account": 0.2}})
+}
+
+fn ok_answer() -> Value {
+    json!({"type": "noul", "noul": 0.1})
+}
+
+fn rate_answer() -> Value {
+    json!({"type": "score", "score": 1.5, "confidence": 0.6, "legend": {"0": "low", "1": "medium", "2": "high"}, "probabilities": {"0": 0.2, "1": 0.6, "2": 0.2}})
+}
+
+fn ask_response(answers: Value) -> Value {
+    json!({"model": "jev-latest", "answers": answers, "usage": {"input_tokens": 5, "output_tokens": 3}})
+}
+
+fn ask_fixture_run(dir: &Path, answers: Value) -> Output {
+    let fixture = write_fixture(dir, "ask.json", ask_semantic(""), ask_response(answers));
+    let mut args = ask_args(&ask_questions_json());
+    args.extend(["--fixture".into(), fixture]);
+    run(dir, &args, b"", false, &[])
+}
+
+#[test]
+fn batched_ask_returns_one_normalized_answer_per_named_question() {
+    let directory = tempfile::tempdir().unwrap();
+    let result = json_output(&ask_fixture_run(
+        directory.path(),
+        json!({"route": route_answer(), "ok": ok_answer(), "rate": rate_answer()}),
+    ));
+    assert_eq!(result["kind"], "ask");
+    assert_eq!(result["provider"], "jev");
+    assert_eq!(result["transport"], "fixture");
+    assert_eq!(result["usage"]["total_tokens"], 8);
+    assert_eq!(
+        result["answers"],
+        json!({
+            "route": {"label": "billing", "confidence_percent": 80, "accepted": true},
+            "ok": {"decision": false, "confidence_percent": 90, "accepted": true},
+            "rate": {"score": 1.5, "confidence_percent": 60, "accepted": true}
+        })
+    );
+    assert!(
+        result.get("label").is_none(),
+        "batch result leaked a single-question field"
+    );
+}
+
+#[test]
+fn batched_ask_accepted_follows_each_question_minimum_independently() {
+    let directory = tempfile::tempdir().unwrap();
+    let low_route = json!({"type": "choice", "choice": "account", "confidence": 0.7, "probabilities": {"billing": 0.3, "account": 0.7}});
+    let low_ok = json!({"type": "noul", "noul": 0.4});
+    let boundary_rate = json!({"type": "score", "score": 0.0, "confidence": 0.5, "legend": {"0": "low", "1": "medium", "2": "high"}, "probabilities": {"0": 0.5, "1": 0.25, "2": 0.25}});
+    let result = json_output(&ask_fixture_run(
+        directory.path(),
+        json!({"route": low_route, "ok": low_ok, "rate": boundary_rate}),
+    ));
+    // 70 is below 75. Noul 0.4 gives decision false with confidence 60, below 80.
+    // A confidence of exactly 50 meets the minimum of 50.
+    assert_eq!(
+        result["answers"]["route"],
+        json!({"label": "account", "confidence_percent": 70, "accepted": false})
+    );
+    assert_eq!(
+        result["answers"]["ok"],
+        json!({"decision": false, "confidence_percent": 60, "accepted": false})
+    );
+    assert_eq!(
+        result["answers"]["rate"],
+        json!({"score": 0.0, "confidence_percent": 50, "accepted": true})
+    );
+}
+
+#[test]
+fn an_invalid_answer_in_any_question_fails_the_whole_batch() {
+    let directory = tempfile::tempdir().unwrap();
+    let cases: Vec<(&str, Value)> = vec![
+        (
+            "route unknown label",
+            json!({"route": {"type": "choice", "choice": "other", "confidence": 0.8, "probabilities": {"billing": 0.2, "account": 0.8}}, "ok": ok_answer(), "rate": rate_answer()}),
+        ),
+        (
+            "route missing a probability",
+            json!({"route": {"type": "choice", "choice": "billing", "confidence": 0.8, "probabilities": {"billing": 0.8}}, "ok": ok_answer(), "rate": rate_answer()}),
+        ),
+        (
+            "route wrong type",
+            json!({"route": ok_answer(), "ok": ok_answer(), "rate": rate_answer()}),
+        ),
+        (
+            "route confidence above one",
+            json!({"route": {"type": "choice", "choice": "billing", "confidence": 1.2, "probabilities": {"billing": 0.8, "account": 0.2}}, "ok": ok_answer(), "rate": rate_answer()}),
+        ),
+        (
+            "route is not an object",
+            json!({"route": "billing", "ok": ok_answer(), "rate": rate_answer()}),
+        ),
+        (
+            "ok missing noul",
+            json!({"route": route_answer(), "ok": {"type": "noul"}, "rate": rate_answer()}),
+        ),
+        (
+            "ok wrong type",
+            json!({"route": route_answer(), "ok": {"type": "choice", "choice": "billing", "confidence": 0.5, "probabilities": {"billing": 0.5, "account": 0.5}}, "rate": rate_answer()}),
+        ),
+        (
+            "ok noul above one",
+            json!({"route": route_answer(), "ok": {"type": "noul", "noul": 1.5}, "rate": rate_answer()}),
+        ),
+        (
+            "rate score out of range",
+            json!({"route": route_answer(), "ok": ok_answer(), "rate": {"type": "score", "score": 3.0, "confidence": 0.6, "legend": {"0": "low", "1": "medium", "2": "high"}, "probabilities": {"0": 0.2, "1": 0.6, "2": 0.2}}}),
+        ),
+        (
+            "rate legend differs",
+            json!({"route": route_answer(), "ok": ok_answer(), "rate": {"type": "score", "score": 1.0, "confidence": 0.6, "legend": {"0": "bad", "1": "medium", "2": "high"}, "probabilities": {"0": 0.2, "1": 0.6, "2": 0.2}}}),
+        ),
+        (
+            "rate probabilities do not sum to one",
+            json!({"route": route_answer(), "ok": ok_answer(), "rate": {"type": "score", "score": 1.0, "confidence": 0.6, "legend": {"0": "low", "1": "medium", "2": "high"}, "probabilities": {"0": 0.9, "1": 0.9, "2": 0.9}}}),
+        ),
+        (
+            "answers missing a question",
+            json!({"route": route_answer(), "ok": ok_answer()}),
+        ),
+        (
+            "answers with an extra name",
+            json!({"route": route_answer(), "ok": ok_answer(), "rate": rate_answer(), "bonus": ok_answer()}),
+        ),
+        (
+            "answers with a renamed question",
+            json!({"route": route_answer(), "ok": ok_answer(), "scale": rate_answer()}),
+        ),
+    ];
+    for (name, answers) in cases {
+        let output = ask_fixture_run(directory.path(), answers);
+        assert_failure_class(&output, "provider_output", name);
+    }
+    // The untouched batch still passes, so each failure above is attributable.
+    let good = json!({"route": route_answer(), "ok": ok_answer(), "rate": rate_answer()});
+    json_output(&ask_fixture_run(directory.path(), good));
+}
+
+#[test]
+fn batched_ask_caps_and_bounds_are_enforced_before_any_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let noul = |index: usize| {
+        (
+            format!("q{index}"),
+            json!({"type": "noul", "question": "Ok?"}),
+        )
+    };
+    let thirty_two: Value = Value::Object((0..32).map(noul).collect());
+    let thirty_three: Value = Value::Object((0..33).map(noul).collect());
+    let long_name = "n".repeat(128);
+    let too_long_name = "n".repeat(129);
+    let labels_128: Vec<String> = (0..128).map(|index| format!("l{index}")).collect();
+    let labels_129: Vec<String> = (0..129).map(|index| format!("l{index}")).collect();
+
+    let accepted: Vec<(&str, Value)> = vec![
+        ("32 questions", thirty_two),
+        (
+            "name of 128 bytes",
+            json!({ (long_name): {"type": "noul", "question": "Ok?"} }),
+        ),
+        (
+            "minimum 0 and 100",
+            json!({"a": {"type": "noul", "question": "Ok?", "minimum": 0}, "b": {"type": "noul", "question": "Ok?", "minimum": 100}}),
+        ),
+        (
+            "choice with 128 labels",
+            json!({"a": {"type": "choice", "question": "Route?", "labels": labels_128}}),
+        ),
+    ];
+    for (name, questions) in accepted {
+        let args = ask_args(&questions.to_string());
+        assert_failure_class(
+            &run(directory.path(), &args, b"", true, &[]),
+            "offline",
+            name,
+        );
+    }
+
+    let rejected: Vec<(&str, Value)> = vec![
+        ("33 questions", thirty_three),
+        (
+            "name of 129 bytes",
+            json!({ (too_long_name): {"type": "noul", "question": "Ok?"} }),
+        ),
+        (
+            "minimum 101",
+            json!({"a": {"type": "noul", "question": "Ok?", "minimum": 101}}),
+        ),
+        (
+            "minimum fractional",
+            json!({"a": {"type": "noul", "question": "Ok?", "minimum": 50.5}}),
+        ),
+        (
+            "minimum negative",
+            json!({"a": {"type": "noul", "question": "Ok?", "minimum": -1}}),
+        ),
+        (
+            "choice with 129 labels",
+            json!({"a": {"type": "choice", "question": "Route?", "labels": labels_129}}),
+        ),
+    ];
+    for (name, questions) in rejected {
+        let args = ask_args(&questions.to_string());
+        let output = run(directory.path(), &args, b"", true, &[]);
+        assert_failure_class(&output, "configuration", name);
+    }
+}
+
+#[test]
+fn batched_ask_question_shapes_are_validated_before_any_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let cases: Vec<(&str, Value)> = vec![
+        ("missing type", json!({"a": {"question": "Ok?"}})),
+        (
+            "unknown type",
+            json!({"a": {"type": "rank", "question": "Ok?"}}),
+        ),
+        ("missing question text", json!({"a": {"type": "noul"}})),
+        (
+            "blank question text",
+            json!({"a": {"type": "noul", "question": "   "}}),
+        ),
+        ("question not an object", json!({"a": "Ok?"})),
+        (
+            "unknown field",
+            json!({"a": {"type": "noul", "question": "Ok?", "tone": "warm"}}),
+        ),
+        (
+            "choice with labels and criteria",
+            json!({"a": {"type": "choice", "question": "Route?", "labels": ["x", "y"], "criteria": {"x": "p", "y": "q"}}}),
+        ),
+        (
+            "choice with neither",
+            json!({"a": {"type": "choice", "question": "Route?"}}),
+        ),
+        (
+            "choice with levels",
+            json!({"a": {"type": "choice", "question": "Route?", "labels": ["x", "y"], "levels": ["x", "y"]}}),
+        ),
+        (
+            "choice with one label",
+            json!({"a": {"type": "choice", "question": "Route?", "labels": ["x"]}}),
+        ),
+        (
+            "choice with one criterion",
+            json!({"a": {"type": "choice", "question": "Route?", "criteria": {"x": "p"}}}),
+        ),
+        (
+            "criterion description not text",
+            json!({"a": {"type": "choice", "question": "Route?", "criteria": {"x": "p", "y": 3}}}),
+        ),
+        (
+            "criterion description blank",
+            json!({"a": {"type": "choice", "question": "Route?", "criteria": {"x": "", "y": "q"}}}),
+        ),
+        (
+            "label begins with dashes",
+            json!({"a": {"type": "choice", "question": "Route?", "labels": ["--x", "y"]}}),
+        ),
+        (
+            "duplicate labels",
+            json!({"a": {"type": "choice", "question": "Route?", "labels": ["x", "x"]}}),
+        ),
+        (
+            "label not text",
+            json!({"a": {"type": "choice", "question": "Route?", "labels": ["x", 2]}}),
+        ),
+        (
+            "noul with labels",
+            json!({"a": {"type": "noul", "question": "Ok?", "labels": ["x", "y"]}}),
+        ),
+        (
+            "noul with criteria",
+            json!({"a": {"type": "noul", "question": "Ok?", "criteria": {"x": "p", "y": "q"}}}),
+        ),
+        (
+            "score with labels",
+            json!({"a": {"type": "score", "question": "Rate?", "labels": ["x", "y"]}}),
+        ),
+        (
+            "score without levels",
+            json!({"a": {"type": "score", "question": "Rate?"}}),
+        ),
+        (
+            "score with one level",
+            json!({"a": {"type": "score", "question": "Rate?", "levels": ["x"]}}),
+        ),
+        (
+            "score duplicate levels",
+            json!({"a": {"type": "score", "question": "Rate?", "levels": ["x", "x"]}}),
+        ),
+        (
+            "question list instead of object",
+            json!([{"type": "noul", "question": "Ok?"}]),
+        ),
+        (
+            "name is empty",
+            json!({"": {"type": "noul", "question": "Ok?"}}),
+        ),
+    ];
+    for (name, questions) in cases {
+        let args = ask_args(&questions.to_string());
+        assert_failure_class(
+            &run(directory.path(), &args, b"", true, &[]),
+            "configuration",
+            name,
+        );
+    }
+
+    // Duplicate names in the question object are rejected as JSON, not merged.
+    let duplicate =
+        r#"{"a":{"type":"noul","question":"Ok?"},"a":{"type":"noul","question":"Ok?"}}"#;
+    assert_failure_class(
+        &run(directory.path(), &ask_args(duplicate), b"", true, &[]),
+        "configuration",
+        "duplicate names",
+    );
+}
+
+#[test]
+fn batched_ask_mixes_criteria_and_levels_and_sends_one_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let answers = json!({
+        "route": {"type": "choice", "choice": "billing", "confidence": 0.9, "probabilities": {"billing": 0.9, "account": 0.1}},
+        "ok": {"type": "noul", "noul": 0.95},
+        "rate": rate_answer()
+    });
+    let (base, server) = serve(vec![reply(200, &ask_response(answers))]);
+    let questions = json!({
+        "route": {"type": "choice", "question": "Route?", "criteria": {"billing": "invoices and refunds", "account": "login help"}},
+        "ok": {"type": "noul", "question": "Ok?"},
+        "rate": {"type": "score", "question": "Rate?", "levels": ["low", "medium", "high"]}
+    });
+    let mut args = ask_args(&questions.to_string());
+    args.extend(["--endpoint".into(), format!("{base}/v1/systemone")]);
+    let result = json_output(&run(directory.path(), &args, b"", false, &[]));
+    assert_eq!(result["answers"]["route"]["label"], "billing");
+    assert_eq!(
+        result["answers"]["ok"],
+        json!({"decision": true, "confidence_percent": 95, "accepted": true})
+    );
+
+    let captured = server.join().unwrap();
+    assert_eq!(captured.len(), 1, "a batch must be one provider request");
+    assert_eq!(captured[0].path, "/v1/systemone");
+    let body: Value = serde_json::from_slice(&captured[0].body).unwrap();
+    assert_eq!(body["model"], "jev-latest");
+    assert_eq!(body["state"], "");
+    let sent = &body["questions"];
+    assert_eq!(sent["route"]["type"], "choice");
+    assert_eq!(sent["route"]["instructions"], "Route?");
+    assert_eq!(
+        sent["route"]["criteria"],
+        json!({"billing": "invoices and refunds", "account": "login help"})
+    );
+    assert_eq!(sent["ok"]["type"], "noul");
+    assert_eq!(sent["ok"]["instructions"], "Ok?");
+    assert_eq!(sent["rate"]["type"], "score");
+    assert_eq!(sent["rate"]["criteria"], json!(["low", "medium", "high"]));
+    assert!(
+        body.get("minimum").is_none(),
+        "per-question minimum must not reach the provider"
+    );
+}
+
+#[test]
+fn batched_ask_answer_set_must_match_the_request_on_the_wire() {
+    let directory = tempfile::tempdir().unwrap();
+    let answers = json!({"route": route_answer(), "ok": ok_answer()});
+    let (base, server) = serve(vec![reply(200, &ask_response(answers))]);
+    let mut args = ask_args(&ask_questions_json());
+    args.extend(["--endpoint".into(), format!("{base}/v1/systemone")]);
+    assert_failure_class(
+        &run(directory.path(), &args, b"", false, &[]),
+        "provider_output",
+        "missing answer on the wire",
+    );
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+#[test]
+fn batched_ask_branches_a_program_on_two_answers() {
+    let directory = tempfile::tempdir().unwrap();
+    let questions = ask_questions_json();
+    let fixture = write_fixture(
+        directory.path(),
+        "branch.json",
+        ask_semantic(""),
+        ask_response(json!({"route": route_answer(), "ok": ok_answer(), "rate": rate_answer()})),
+    );
+    // Joined lines keep the nested indentation that `if` blocks require.
+    let program = [
+        format!(
+            "jev.ask with questions {questions} and fixture {} as raw",
+            serde_json::to_string(&fixture).unwrap()
+        ),
+        "then parse json as result".to_owned(),
+        "take boolean at \"/answers/ok/accepted\" from result as ok_accepted".to_owned(),
+        "take text at \"/answers/route/label\" from result as route".to_owned(),
+        "if ok_accepted is true".to_owned(),
+        "  if route is \"billing\"".to_owned(),
+        "    then save to \"billing.json\"".to_owned(),
+        "  otherwise".to_owned(),
+        "    then save to \"other.json\"".to_owned(),
+        "otherwise".to_owned(),
+        "  then save to \"review.json\"".to_owned(),
+    ]
+    .join("\n")
+        + "\n";
+    std::fs::write(directory.path().join("branch.program"), program).unwrap();
+    let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+    command
+        .arg("branch.program")
+        .arg("--manifest-dir")
+        .arg(&manifests)
+        .current_dir(directory.path())
+        .env("EXECUTE_MODELS_OFFLINE", "1")
+        .stdin(Stdio::null());
+    for name in CREDENTIAL_VARS.iter().chain(PROXY_VARS.iter()) {
+        command.env_remove(name);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        directory.path().join("billing.json").exists(),
+        "billing branch not taken"
+    );
+    assert!(!directory.path().join("other.json").exists());
+    assert!(!directory.path().join("review.json").exists());
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("billing.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["answers"]["route"]["label"], "billing");
 }

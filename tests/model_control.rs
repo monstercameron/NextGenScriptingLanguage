@@ -323,9 +323,14 @@ fn explicit_dotenv_secret_is_not_echoed_when_owned_server_rejects_request() {
         http_response("401 Unauthorized", error_body.as_bytes(), ""),
     );
     let env_file = directory.path().join("synthetic-provider-credentials");
-    std::fs::write(&env_file, format!("OPENAI_API_KEY={secret}\n")).unwrap();
+    std::fs::write(&env_file, format!("SYNTHETIC_DOTENV_KEY={secret}\n")).unwrap();
     let mut args = openai_args(&endpoint(&listener, "/v1/responses"));
-    args.extend(["--env-file".into(), env_file.to_string_lossy().into_owned()]);
+    args.extend([
+        "--env-file".into(),
+        env_file.to_string_lossy().into_owned(),
+        "--api-key-env".into(),
+        "SYNTHETIC_DOTENV_KEY".into(),
+    ]);
 
     let output = run_helper(&args, b"source text", &[]);
     let diagnostics = format!(
@@ -347,7 +352,7 @@ fn explicit_dotenv_secret_is_not_echoed_when_owned_server_rejects_request() {
 }
 
 #[test]
-fn empty_process_credential_falls_back_to_explicit_file_without_exposing_it() {
+fn custom_key_env_is_read_from_the_file_and_default_keys_are_not_sent() {
     let directory = tempfile::tempdir().unwrap();
     let listener = loopback();
     let endpoint = endpoint(&listener, "/v1/responses");
@@ -369,11 +374,16 @@ fn empty_process_credential_falls_back_to_explicit_file_without_exposing_it() {
     let env_file = directory.path().join("synthetic-credentials");
     std::fs::write(
         &env_file,
-        "OPENAI_API_KEY=synthetic-file-key\nUNRELATED_SETTING=ignored\n",
+        "SYNTHETIC_FILE_KEY=synthetic-file-key\nUNRELATED_SETTING=ignored\n",
     )
     .unwrap();
     let mut args = openai_args(&endpoint);
-    args.extend(["--env-file".into(), env_file.to_string_lossy().into_owned()]);
+    args.extend([
+        "--env-file".into(),
+        env_file.to_string_lossy().into_owned(),
+        "--api-key-env".into(),
+        "SYNTHETIC_FILE_KEY".into(),
+    ]);
     let output = run_helper(&args, b"source", &[("OPENAI_API_KEY", "")]);
     assert!(
         output.status.success(),

@@ -123,6 +123,7 @@ before:
 | Parameter | Values | Wire effect |
 | --- | --- | --- |
 | `endpoint` | URL | Responses: the full URL, default `https://api.openai.com/v1/responses`. Chat Completions: a base URL; the helper posts to `{base}/chat/completions`, default base `https://api.openai.com/v1`. A trailing slash on the base is removed. |
+| `api_key_env` | environment variable name | The only key a custom endpoint can receive. Must not be a default key name. See the credential rule below. |
 | `api` | `responses` (default), `chat_completions` | Selects the OpenAI wire protocol. |
 | `effort` | `none`, `low`, `medium`, `high`, `xhigh`, `max` | Responses: `reasoning.effort`. Chat Completions: `reasoning_effort`. `minimal` and other values are rejected locally. |
 | `temperature` | number from 0 to 2 | Top-level `temperature` in both protocols. Write a JSON number, not text. |
@@ -148,10 +149,29 @@ for loopback hosts (`127.0.0.1`, `::1`, `localhost`). Userinfo, query strings,
 and fragments are rejected. Redirects are never followed. Proxy environment
 variables are ignored; the explicit endpoint is the only destination.
 
-Credentials are optional only for loopback endpoints. A loopback request with
-no key sends no `Authorization` header. A remote endpoint without a key fails as
-`credentials_missing` before any connection. Process environment values still
-take precedence over an `env_file`.
+Credential rule, which is the security boundary for provider keys:
+
+- Default provider keys (`OPENAI_API_KEY`, `openai`, `JEV_API_KEY`,
+  `TYPESAFE_API_KEY`, `jev`) are attached only to the provider's own host on
+  the default port: `api.openai.com` for OpenAI and `api.typesafe.ai` for Jev.
+  That is true whether the key comes from the process environment or an
+  `env_file`. A lookalike host such as `api.openai.com.example.test` does not
+  qualify.
+- `api_key_env NAME` names one explicit variable. The helper reads it from the
+  process environment, or from the explicit `env_file` if the process has no
+  value. It may be sent to any endpoint, and it must not be a default name
+  (case-insensitively), so `api_key_env "OPENAI_API_KEY"` is rejected.
+- A custom endpoint without `api_key_env` gets no `Authorization` header. This
+  covers loopback servers and remote hosts. A remote custom host therefore
+  proceeds without a key, which is correct for open hosts. It never receives the
+  default keys.
+- On the default host with no default key, the request fails as
+  `credentials_missing` before any connection. An `api_key_env` that names an
+  unset variable also fails as `credentials_missing` before connecting.
+
+Process environment values take precedence over an `env_file` for the same name.
+Use `env_file` for the default keys on the default host, and `api_key_env` for
+any other key.
 
 `api`, `effort` and `temperature` are OpenAI-only. Jev rejects them, and the
 helper rejects a duplicate of any of these options. Fixtures record `api`,

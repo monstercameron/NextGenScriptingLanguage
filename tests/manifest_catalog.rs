@@ -59,17 +59,31 @@ fn module_manifest() -> String {
 }
 
 #[test]
-fn packed_catalog_matches_all_75_manifest_specs_and_representative_argv() {
+fn packed_catalog_matches_every_manifest_spec_and_representative_argv() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    // Count the shipped specs from disk so that adding a manifest does not
+    // require editing this test.
+    let expected = std::fs::read_dir(&root)
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .count();
     let temp = tempdir().unwrap();
     let catalog_path = temp.path().join("manifests.catalog");
     let source_paths = write_sorted_catalog_from_directory(&root, &catalog_path);
     let directory = Registry::load(&root).unwrap();
     let packed = Registry::load_catalog(&catalog_path).unwrap();
 
-    assert_eq!(source_paths.len(), 75);
-    assert_eq!(directory.manifests().len(), 75);
-    assert_eq!(packed.manifests().len(), 75);
+    assert!(expected > 0, "manifests directory has no JSON specs");
+    assert_eq!(source_paths.len(), expected);
+    assert_eq!(directory.manifests().len(), expected);
+    assert_eq!(packed.manifests().len(), expected);
     assert_eq!(
         directory
             .manifests()

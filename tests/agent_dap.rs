@@ -1,3 +1,4 @@
+#![cfg(feature = "dap")]
 //! `execute dap`: DAP framing, and a scripted session that launches a program with a
 //! breakpoint, pauses, inspects, steps, continues and terminates.
 

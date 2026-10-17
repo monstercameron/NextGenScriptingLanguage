@@ -1,0 +1,2 @@
+every 1 second
+  run pwd

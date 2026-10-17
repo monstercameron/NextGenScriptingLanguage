@@ -804,7 +804,7 @@ pub(crate) fn result_for_error(error: &anyhow::Error) -> ExecutionResult {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(error) = error.downcast_ref::<crate::remote::RemoteError>() {
+    if let Some(error) = error.downcast_ref::<crate::contracts::RemoteError>() {
         let (kind, message) = remote_error_kind(error);
         return ExecutionResult::runtime_failure(
             kind,
@@ -839,7 +839,7 @@ pub(crate) fn worker_failure(
 /// unknown/not-started stage; it never acquires a fabricated process status.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn remote_failure(
-    error: &crate::remote::RemoteError,
+    error: &crate::contracts::RemoteError,
     line: usize,
     applet: impl Into<String>,
 ) -> ExecutionFailure {
@@ -948,7 +948,7 @@ pub fn effect_certainty(error: &anyhow::Error) -> EffectCertainty {
         }
     } else {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(error) = error.downcast_ref::<crate::remote::RemoteError>() {
+        if let Some(error) = error.downcast_ref::<crate::contracts::RemoteError>() {
             return remote_effect_certainty(error.effect_certainty);
         }
         EffectCertainty::Uncertain
@@ -956,11 +956,11 @@ pub fn effect_certainty(error: &anyhow::Error) -> EffectCertainty {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn remote_effect_certainty(certainty: crate::remote::EffectCertainty) -> EffectCertainty {
+fn remote_effect_certainty(certainty: crate::contracts::EffectCertainty) -> EffectCertainty {
     match certainty {
-        crate::remote::EffectCertainty::NotStarted => EffectCertainty::NotStarted,
-        crate::remote::EffectCertainty::KnownResponse => EffectCertainty::KnownResponse,
-        crate::remote::EffectCertainty::Uncertain => EffectCertainty::Uncertain,
+        crate::contracts::EffectCertainty::NotStarted => EffectCertainty::NotStarted,
+        crate::contracts::EffectCertainty::KnownResponse => EffectCertainty::KnownResponse,
+        crate::contracts::EffectCertainty::Uncertain => EffectCertainty::Uncertain,
     }
 }
 
@@ -1062,8 +1062,8 @@ pub(crate) fn exit_signal(_status: std::process::ExitStatus) -> Option<i32> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn remote_error_kind(error: &crate::remote::RemoteError) -> (ExecutionKind, String) {
-    use crate::remote::RemoteErrorKind;
+fn remote_error_kind(error: &crate::contracts::RemoteError) -> (ExecutionKind, String) {
+    use crate::contracts::RemoteErrorKind;
     let kind = match &error.kind {
         RemoteErrorKind::Cancelled => ExecutionKind::Cancelled,
         RemoteErrorKind::Timeout => ExecutionKind::Timeout,
@@ -1166,9 +1166,9 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn remote_timeout_keeps_backend_effect_certainty_and_timeout_kind() {
-        let error = anyhow::Error::new(crate::remote::RemoteError {
-            kind: crate::remote::RemoteErrorKind::Timeout,
-            effect_certainty: crate::remote::EffectCertainty::Uncertain,
+        let error = anyhow::Error::new(crate::contracts::RemoteError {
+            kind: crate::contracts::RemoteErrorKind::Timeout,
+            effect_certainty: crate::contracts::EffectCertainty::Uncertain,
         });
         let result = fields(error_value(&error));
 
@@ -1184,9 +1184,9 @@ mod tests {
     #[test]
     fn remote_failure_keeps_stage_context_without_inventing_status() {
         let failure = remote_failure(
-            &crate::remote::RemoteError {
-                kind: crate::remote::RemoteErrorKind::Cancelled,
-                effect_certainty: crate::remote::EffectCertainty::Uncertain,
+            &crate::contracts::RemoteError {
+                kind: crate::contracts::RemoteErrorKind::Cancelled,
+                effect_certainty: crate::contracts::EffectCertainty::Uncertain,
             },
             12,
             "fixture.remote",

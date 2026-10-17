@@ -7,17 +7,16 @@
 //! happen after the remote service has performed its effect.
 
 use crate::ast;
-pub use crate::contracts::EffectCertainty;
 use crate::contracts::{
     AppletContract, Outcome, OutcomeKind, OutputType, PortDelivery, RemoteAuthSource,
     RemoteEndpointConfig, ValueSchema,
 };
+pub use crate::contracts::{EffectCertainty, RemoteError, RemoteErrorKind};
 mod transport;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::error::Error as StdError;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{self, BufReader, Read};
@@ -741,85 +740,6 @@ impl RemoteResponse {
         contract.outcome_for(self.status)
     }
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RemoteErrorKind {
-    InvalidConfiguration,
-    CredentialUnavailable,
-    CredentialInvalid,
-    Cancelled,
-    Timeout,
-    Transport,
-    HttpStatus(u16),
-    RequestTooLarge,
-    ResponseTooLarge,
-    UnsupportedProtocolVersion(u32),
-    InvalidDescriptor,
-    IncompatibleContract,
-    DiscoveryNotCached,
-    InvalidRequest,
-    InvalidResponse,
-    RequestIdMismatch,
-    IdempotencyNotDeclared,
-    DescriptorCacheUnavailable,
-    DescriptorCacheHashMismatch,
-    InvalidStream,
-    StreamTooLarge,
-    StreamClosed,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemoteError {
-    pub kind: RemoteErrorKind,
-    pub effect_certainty: EffectCertainty,
-}
-
-impl RemoteError {
-    fn new(kind: RemoteErrorKind, effect_certainty: EffectCertainty) -> Self {
-        Self {
-            kind,
-            effect_certainty,
-        }
-    }
-}
-
-impl fmt::Display for RemoteError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self.kind {
-            RemoteErrorKind::InvalidConfiguration => "invalid_configuration",
-            RemoteErrorKind::CredentialUnavailable => "credential_unavailable",
-            RemoteErrorKind::CredentialInvalid => "credential_invalid",
-            RemoteErrorKind::Cancelled => "cancelled",
-            RemoteErrorKind::Timeout => "timeout",
-            RemoteErrorKind::Transport => "transport",
-            RemoteErrorKind::HttpStatus(_) => "http_status",
-            RemoteErrorKind::RequestTooLarge => "request_too_large",
-            RemoteErrorKind::ResponseTooLarge => "response_too_large",
-            RemoteErrorKind::UnsupportedProtocolVersion(_) => "unsupported_protocol_version",
-            RemoteErrorKind::InvalidDescriptor => "invalid_descriptor",
-            RemoteErrorKind::IncompatibleContract => "incompatible_contract",
-            RemoteErrorKind::DiscoveryNotCached => "discovery_not_cached",
-            RemoteErrorKind::InvalidRequest => "invalid_request",
-            RemoteErrorKind::InvalidResponse => "invalid_response",
-            RemoteErrorKind::RequestIdMismatch => "request_id_mismatch",
-            RemoteErrorKind::IdempotencyNotDeclared => "idempotency_not_declared",
-            RemoteErrorKind::DescriptorCacheUnavailable => "descriptor_cache_unavailable",
-            RemoteErrorKind::DescriptorCacheHashMismatch => "descriptor_cache_hash_mismatch",
-            RemoteErrorKind::InvalidStream => "invalid_stream",
-            RemoteErrorKind::StreamTooLarge => "stream_too_large",
-            RemoteErrorKind::StreamClosed => "stream_closed",
-        };
-        match self.kind {
-            RemoteErrorKind::HttpStatus(status) => write!(formatter, "{name} {status}"),
-            RemoteErrorKind::UnsupportedProtocolVersion(version) => {
-                write!(formatter, "{name} {version}")
-            }
-            _ => formatter.write_str(name),
-        }
-    }
-}
-
-impl StdError for RemoteError {}
 
 /// Authenticated, bounded transport client. Constructing it and checking its
 /// in-memory descriptor cache do not perform network I/O.

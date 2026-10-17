@@ -1,0 +1,5 @@
+# Purpose: Calculate a POSIX checksum and byte count for incoming binary data.
+# Input: Standard input, forwarded directly to the native cksum process.
+# Output: The native checksum and byte count on stdout.
+read from stdin
+pipe to "cksum"

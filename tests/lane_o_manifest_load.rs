@@ -27,7 +27,7 @@ fn directory_origins_are_canonical_files_and_root_is_canonical_directory() {
 
     let registry = Registry::load(&dir).unwrap();
 
-    assert_eq!(registry.manifests().len(), 2);
+    assert_eq!(registry.manifests().unwrap().len(), 2);
     assert_eq!(
         registry.module_root().unwrap(),
         fs::canonicalize(&dir).unwrap()

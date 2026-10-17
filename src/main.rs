@@ -160,7 +160,13 @@ fn report_error(error: &anyhow::Error) -> i32 {
     if flow::agent::errors::enabled() {
         flow::agent::errors::write_stderr(error, interrupted.is_some(), status);
     } else {
-        runtime::write_diagnostic(format!("execute: {error:#}\n").as_bytes());
+        runtime::write_diagnostic(
+            format!(
+                "execute: {}\n",
+                flow::terminal_text::escape_controls(&format!("{error:#}"))
+            )
+            .as_bytes(),
+        );
     }
     status
 }
@@ -330,6 +336,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if arguments.first().is_some_and(|a| a == "attach") {
         std::process::exit(flow::agent::attach::cli(&arguments[1..])?);
     }
+    #[cfg(feature = "dap")]
     if arguments.first().is_some_and(|a| a == "dap") {
         std::process::exit(flow::agent::dap::cli(&arguments[1..])?);
     }
@@ -1976,10 +1983,11 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
             (None, None) => bail!("applets match requires --json or --json-file\n{HELP}"),
             (Some(_), Some(_)) => unreachable!(),
         };
+        let matches = flow::discovery::rank_port_matches(&registry, &request)?;
         return write_json(&serde_json::json!({
             "protocol": "execute.applet-matches/1",
             "validation": "declared_contracts",
-            "matches": flow::discovery::rank_port_matches(&registry, &request)
+            "matches": matches
         }));
     }
     if let Some(name) = name {
@@ -1988,7 +1996,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
             "applet": registry.resolve(name)?.contract()
         }))
     } else {
-        let mut manifests = registry.manifests().iter().collect::<Vec<_>>();
+        let mut manifests = registry.manifests()?;
         manifests.sort_by(|left, right| left.name.cmp(&right.name));
         write_json(&serde_json::json!({
             "protocol": "execute.applets/1", "validation": "manifest_static",
@@ -2432,7 +2440,7 @@ fn load_registry(
             .with_context(|| format!("could not load manifests from {}", path.display())),
         (None, Some(path)) => Registry::load_catalog(&path)
             .with_context(|| format!("could not load packed manifest catalog {}", path.display())),
-        (None, None) => Registry::load_optional(&default_manifest_dir()),
+        (None, None) => Registry::load_default(&default_manifest_dir()),
         (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
     }
 }

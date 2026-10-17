@@ -213,8 +213,14 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                 }
                 None
             }
-            "textDocument/completion" => Some(completion(&params, &documents, &registry)),
-            "textDocument/hover" => Some(hover(&params, &documents, &registry)),
+            "textDocument/completion" => {
+                let manifests = registry.manifests()?;
+                Some(completion(&params, &documents, &registry, &manifests))
+            }
+            "textDocument/hover" => {
+                let manifests = registry.manifests()?;
+                Some(hover(&params, &documents, &manifests))
+            }
             "textDocument/definition" => Some(definition(&params, &documents)),
             "textDocument/references" => Some(references(&params, &documents)),
             "textDocument/prepareRename" => Some(prepare_rename(&params, &documents)),
@@ -522,6 +528,7 @@ fn completion(
     params: &JsonValue,
     documents: &BTreeMap<String, Document>,
     registry: &Registry,
+    manifests: &[&crate::manifest::Manifest],
 ) -> JsonValue {
     let Some((uri, position)) = text_document_position(params) else {
         return json!({ "isIncomplete": false, "items": [] });
@@ -576,7 +583,7 @@ fn completion(
             }
         }
     } else if command_context {
-        for manifest in registry.manifests() {
+        for manifest in manifests {
             items.push(json!({
                 "label": manifest.name,
                 "kind": 3,
@@ -659,7 +666,7 @@ fn operation_prefix(line_prefix: &str) -> Option<&str> {
 fn hover(
     params: &JsonValue,
     documents: &BTreeMap<String, Document>,
-    registry: &Registry,
+    manifests: &[&crate::manifest::Manifest],
 ) -> JsonValue {
     let Some((uri, position)) = text_document_position(params) else {
         return JsonValue::Null;
@@ -673,7 +680,7 @@ fn hover(
     if let Some((name, definition)) = program_symbol_at(&document.text, offset) {
         return json!({ "contents": { "kind": "markdown", "value": format!("Reusable program `{name}` defined at line {}.", definition.line) } });
     }
-    if let Some(manifest) = manifest_at(&document.text, offset, registry) {
+    if let Some(manifest) = manifest_at(&document.text, offset, manifests) {
         let contract = manifest.contract();
         let details = json!({
             "name": contract["name"],
@@ -690,12 +697,12 @@ fn hover(
 fn manifest_at<'a>(
     source: &str,
     offset: usize,
-    registry: &'a Registry,
+    manifests: &[&'a crate::manifest::Manifest],
 ) -> Option<&'a crate::manifest::Manifest> {
     let line = line_for_byte(source, offset)?;
     let current_position = position_for_byte(source, offset);
     let line_abs = line_bounds(source, current_position.line)?.0;
-    registry.manifests().iter().find(|manifest| {
+    manifests.iter().copied().find(|manifest| {
         let contract = manifest.contract();
         std::iter::once(manifest.name.as_str())
             .chain(
@@ -1395,6 +1402,7 @@ mod tests {
             }),
             &documents,
             &registry,
+            &registry.manifests().expect("fixture manifests parse"),
         );
         assert!(command["items"]
             .as_array()
@@ -1409,6 +1417,7 @@ mod tests {
             }),
             &documents,
             &registry,
+            &registry.manifests().expect("fixture manifests parse"),
         );
         assert!(parameter["items"]
             .as_array()

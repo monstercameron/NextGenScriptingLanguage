@@ -1,0 +1,78 @@
+[package]
+name = "execute-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+flow = { package = "execute", path = "..", features = ["fuzzing"] }
+
+# Detached from the parent workspace; the fuzz crate has its own lockfile.
+[workspace]
+
+[[bin]]
+name = "parse_program"
+path = "fuzz_targets/parse_program.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifests"
+path = "fuzz_targets/manifests.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "env_load"
+path = "fuzz_targets/env_load.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "input_values"
+path = "fuzz_targets/input_values.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dap_frame"
+path = "fuzz_targets/dap_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "live_frame"
+path = "fuzz_targets/live_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "checkpoint_journal"
+path = "fuzz_targets/checkpoint_journal.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "graph_journal"
+path = "fuzz_targets/graph_journal.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "record_run"
+path = "fuzz_targets/record_run.rs"
+test = false
+doc = false
+bench = false

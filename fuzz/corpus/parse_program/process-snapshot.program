@@ -1,0 +1,4 @@
+# Purpose: Inspect this user's running processes without changing them.
+# Input: Current user and operating-system process state.
+# Output: PID, parent PID, CPU percentage, and command rows from native ps.
+run "ps" with arguments ["-o", "pid,ppid,pcpu,comm"]

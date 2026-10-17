@@ -3,11 +3,12 @@ pub mod agent;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod applets;
 pub mod ast;
+pub mod bundled_manifests;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capabilities;
 pub mod compile_sh;
 pub mod contracts;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "desktop", not(target_arch = "wasm32")))]
 pub mod desktop;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod diagnostics;
@@ -54,12 +55,16 @@ mod structured;
 pub mod suggest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tasks;
+pub mod terminal_text;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ui;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod live;
+
+#[cfg(all(feature = "fuzzing", not(target_arch = "wasm32")))]
+pub mod fuzz_entry;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod language_server;

@@ -1,0 +1,71 @@
+name: Fuzz
+# Two jobs. `replay` runs on every push and pull request: it replays the seed corpus and
+# every committed crash (fuzz/regressions/<target>/) through the fuzz entry points, so a
+# fixed crash cannot come back. `fuzz` runs nightly: each target runs under libFuzzer
+# for 20 minutes. A crash is uploaded as an artifact. To close it, copy the input into
+# fuzz/regressions/<target>/, fix the code, and confirm `replay` passes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  replay:
+    name: Replay seeds and saved crashes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Replay fuzz inputs
+        run: cargo test --locked --features fuzzing --test fuzz_regressions
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse_program
+          - manifests
+          - env_load
+          - input_values
+          - dap_frame
+          - live_frame
+          - checkpoint_journal
+          - graph_journal
+          - record_run
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install cargo-fuzz
+        run: cargo install --locked --version 0.13.2 cargo-fuzz
+      - name: Fuzz ${{ matrix.target }} for 20 minutes
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=1200 -timeout=10 -rss_limit_mb=2048
+      - name: Keep any crash or timeout input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 30

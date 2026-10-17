@@ -21,6 +21,16 @@ execute applets list --manifest-catalog ./my-applets.catalog
 `--manifest-catalog` explicitly selects one packed catalog file; the selectors
 are mutually exclusive. No catalog is merged or selected automatically.
 
+The default manifest directory is the `manifests` folder beside the installed
+binary, or the system location when there is none. Its bundled applets are
+served from an index compiled into the binary, so a run does not read or
+re-validate each file. The index is used only when the directory holds exactly
+the indexed files, matched by file name and byte size. Any other set falls back
+to the full load, so a changed or broken file reports the same error as before.
+The check does not read file contents, so an edit that keeps a file's byte size
+is not detected. Editing a system-wide directory needs root in any case. An
+explicit `--manifest-dir` or `--manifest-catalog` always gets full validation.
+
 `list` returns protocol `execute.applets/1` with applets sorted by canonical
 name. `inspect` returns `execute.applet/1`; canonical names and phrases resolve
 to the same validated manifest. Discovery validates manifest data without

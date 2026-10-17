@@ -78,7 +78,10 @@ pub fn classify(error: &anyhow::Error) -> (&'static str, &'static str) {
     }
     // RemoteApplicationError has no Display, so anyhow cannot downcast to it.
     // Remote application failures are reported under the generic code.
-    if error.downcast_ref::<crate::remote::RemoteError>().is_some() {
+    if error
+        .downcast_ref::<crate::contracts::RemoteError>()
+        .is_some()
+    {
         return ("remote_failed", "remote");
     }
     if error

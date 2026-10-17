@@ -140,6 +140,20 @@ pub(super) fn ensure_symlink(args: &Map<String, Value>, cwd: &Path) -> Result<Va
             } else {
                 let temp = temporary_link_path(&link);
                 make_link(target, &temp, &link)?;
+                // Recheck the type just before the rename: a regular file or directory that
+                // appeared since the first check must not be replaced.
+                if let Ok(current) = fs::symlink_metadata(&link) {
+                    if !current.file_type().is_symlink() {
+                        let _ = fs::remove_file(&temp);
+                        return Err(io_error(
+                            std::io::Error::new(
+                                ErrorKind::AlreadyExists,
+                                "link path is no longer a symbolic link",
+                            ),
+                            format!("replacing link {}", link.display()),
+                        ));
+                    }
+                }
                 if let Err(error) = fs::rename(&temp, &link) {
                     let _ = fs::remove_file(&temp);
                     return Err(io_error(

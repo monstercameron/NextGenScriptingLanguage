@@ -1,0 +1,37 @@
+{
+  "name": "osd.caps",
+  "binary": "swayosd-client",
+  "accepts_stdin": false,
+  "cacheable": false,
+  "parameters": {},
+  "arguments": [
+    {
+      "literal": "--caps-lock"
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "outcomes": [
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
+    ],
+    "capabilities": [
+      "desktop.osd"
+    ],
+    "effects": [
+      "desktop.osd"
+    ]
+  }
+}

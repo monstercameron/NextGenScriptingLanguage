@@ -8,6 +8,7 @@ pub mod checkpoint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod daemon;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "dap")]
 pub mod dap;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod errors;

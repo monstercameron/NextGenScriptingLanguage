@@ -1244,6 +1244,11 @@ fn environment_name_allowed(
         .is_some_and(|grant| environment_name_granted(grant, variable))
 }
 
+/// Variables the dynamic loader reads before the program runs.
+fn is_loader_variable(name: &str) -> bool {
+    name.starts_with("LD_") || name.starts_with("DYLD_")
+}
+
 fn environment_name_granted(grant: &AppletGrant, variable: &str) -> bool {
     grant.environment.iter().any(|allowed| {
         if cfg!(windows) {
@@ -1272,6 +1277,14 @@ fn authorize_environment_override(
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
+        // Without a policy, every other name is the author's choice (the Bash trust
+        // model). The dynamic loader's variables change code that runs before the
+        // program starts, so a binding or a manifest cannot set them.
+        if is_loader_variable(variable_name) {
+            bail!(
+                "{variable_name} is read by the dynamic loader before the program starts; a program cannot set it"
+            );
+        }
         return Ok(());
     };
     policy.validate()?;

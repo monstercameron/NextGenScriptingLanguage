@@ -32,7 +32,7 @@ fn direct_pipeline_preserves_binary_bytes_without_a_catalog() {
         parser::parse("run \"cat\" with arguments [\"input with spaces\"]\npipe to \"cat\"\n")
             .unwrap();
     let registry = Registry::load_optional(&directory.path().join("absent-catalog")).unwrap();
-    assert!(registry.manifests().is_empty());
+    assert!(registry.manifests().unwrap().is_empty());
     let result = runtime::run(&program, &registry, &options(directory.path())).unwrap();
     assert_eq!(result.output, bytes);
     assert_eq!(result.launched_processes, 2);

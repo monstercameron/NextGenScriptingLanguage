@@ -16,6 +16,7 @@ name = "flow"
 
 [dependencies]
 anyhow = "1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 memchr = "2.8.3"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
@@ -46,11 +47,16 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 # product feature set; shipped binaries, release packages, and the test suite build
 # with `--features full`. Disabling `tui` or `model` drops the code each one selects.
 default = []
-full = ["tui", "model"]
+full = ["tui", "model", "desktop", "dap"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:unicode-width"]
 model = []
+# Quickshell desktop renderer nodes and the DAP adapter. Lean builds refuse both with a clear error.
+desktop = []
+dap = []
 # Test-only fault injection for the crash-consistency tests; never enabled by default.
 failpoints = []
+# Fuzz entry points (src/fuzz_entry.rs) and the regression replay test; never enabled by default.
+fuzzing = ["dap"]
 
 [dev-dependencies]
 tempfile = "3"

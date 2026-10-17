@@ -1,4 +1,5 @@
 use crate::ast::{InputType, Invocation, Value};
+use crate::bundled_manifests;
 pub use crate::contracts::{
     AppletBackend, AppletContract, AppletEnvironment, AppletOutput, AppletPort, AppletPorts,
     Capability, Effect, EffectCertainty, Lifecycle, Outcome, OutcomeKind, OutcomeSpec,
@@ -167,11 +168,73 @@ pub struct Registry {
 
 #[derive(Default)]
 struct RegistryData {
-    manifests: Vec<Manifest>,
+    manifests: Manifests,
     names: BTreeMap<String, usize>,
     module_root: Option<PathBuf>,
     scope_identity: Option<String>,
     host_state: Arc<Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
+}
+
+/// The manifests of one registry, in resolution order. A file load or an extension
+/// keeps them parsed. A bundled registry shares the immutable build-time index and
+/// parses each entry into its own cell on first use, with origin under `root`.
+enum Manifests {
+    Parsed(Vec<Manifest>),
+    Bundled {
+        index: &'static bundled_manifests::BundledIndex,
+        root: PathBuf,
+        cells: Vec<OnceLock<Manifest>>,
+    },
+}
+
+impl Default for Manifests {
+    fn default() -> Self {
+        Self::Parsed(Vec::new())
+    }
+}
+
+impl Manifests {
+    fn len(&self) -> usize {
+        match self {
+            Self::Parsed(list) => list.len(),
+            Self::Bundled { index, .. } => index.entries().len(),
+        }
+    }
+
+    fn get(&self, position: usize) -> Result<&Manifest> {
+        match self {
+            Self::Parsed(list) => list
+                .get(position)
+                .ok_or_else(|| anyhow!("manifest {position} is out of range")),
+            Self::Bundled { index, root, cells } => {
+                let cell = cells
+                    .get(position)
+                    .ok_or_else(|| anyhow!("manifest {position} is out of range"))?;
+                if let Some(manifest) = cell.get() {
+                    return Ok(manifest);
+                }
+                let entry = &index.entries()[position];
+                let mut manifest = parse_manifest(index.body(position)?)
+                    .with_context(|| format!("invalid bundled manifest {}", entry.file()))?;
+                manifest.origin = Some(root.join(entry.file()));
+                // A concurrent first use may have set the cell already; both values are equal.
+                let _ = cell.set(manifest);
+                cell.get()
+                    .ok_or_else(|| anyhow!("bundled manifest {} was not stored", entry.file()))
+            }
+        }
+    }
+
+    fn all(&self) -> Result<Vec<&Manifest>> {
+        (0..self.len()).map(|position| self.get(position)).collect()
+    }
+
+    fn to_parsed(&self) -> Result<Vec<Manifest>> {
+        self.all()?
+            .into_iter()
+            .map(|manifest| Ok(manifest.clone()))
+            .collect()
+    }
 }
 
 const MANIFEST_CATALOG_FORMAT: &str = "execute.manifest-catalog";
@@ -378,8 +441,10 @@ impl Registry {
         let origin = fs::canonicalize(origin).with_context(|| {
             format!("canonicalizing scoped manifest origin {}", origin.display())
         })?;
+        let base_len = self.data.manifests.len();
+        let mut manifests = self.data.manifests.to_parsed()?;
         let mut data = RegistryData {
-            manifests: self.data.manifests.clone(),
+            manifests: Manifests::default(),
             names: self.data.names.clone(),
             module_root: self.data.module_root.clone(),
             scope_identity: None,
@@ -408,22 +473,67 @@ impl Registry {
                     );
                 }
             }
-            let index = data.manifests.len();
+            let index = manifests.len();
             for key in keys {
                 data.names.insert(key, index);
             }
-            data.manifests.push(manifest);
+            manifests.push(manifest);
         }
         data.scope_identity = Some(scoped_registry_identity(
-            &data.manifests[..self.data.manifests.len()],
+            &manifests[..base_len],
             self.data.module_root.as_deref(),
             self.data.scope_identity.as_deref(),
             &origin,
             sources,
         )?);
+        data.manifests = Manifests::Parsed(manifests);
         Ok(Self {
             data: Arc::new(data),
         })
+    }
+
+    /// A registry over the embedded bundled index, with origins under `root`. Each
+    /// manifest is parsed on first use. Clones share the registry's parsed cells, and
+    /// each root gets its own registry.
+    pub fn from_bundled(root: &Path) -> Result<Self> {
+        let index = bundled_manifests::index()?;
+        let root = fs::canonicalize(root)
+            .with_context(|| format!("canonicalizing manifest root {}", root.display()))?;
+        let cells = (0..index.entries().len())
+            .map(|_| OnceLock::new())
+            .collect();
+        Ok(Self {
+            data: Arc::new(RegistryData {
+                manifests: Manifests::Bundled {
+                    index,
+                    root: root.clone(),
+                    cells,
+                },
+                names: index.names().clone(),
+                module_root: Some(root),
+                ..RegistryData::default()
+            }),
+        })
+    }
+
+    /// Load the default manifest directory. When it holds exactly the bundled files by
+    /// name and size, the bundled index serves it. Any other directory takes the full
+    /// load, and a missing directory is an empty registry, as in `load_optional`.
+    pub fn load_default(path: &Path) -> Result<Self> {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => {
+                let index = bundled_manifests::index()?;
+                if matches!(bundled_manifests::directory_matches(path, index), Ok(true)) {
+                    return Self::from_bundled(path);
+                }
+                Self::load(path)
+            }
+            Ok(_) => Self::load(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => {
+                Err(error).with_context(|| format!("reading manifest path {}", path.display()))
+            }
+        }
     }
 
     fn insert_source(data: &mut RegistryData, raw: &str, origin: Option<PathBuf>) -> Result<()> {
@@ -434,30 +544,49 @@ impl Registry {
             bail!("program_module manifests require a file-loaded registry with a module root");
         }
         manifest.origin = origin;
-        let index = data.manifests.len();
+        let Manifests::Parsed(list) = &mut data.manifests else {
+            bail!("internal error: a bundled registry takes no new manifests");
+        };
+        let index = list.len();
         for key in std::iter::once(&manifest.name).chain(manifest.phrases.iter()) {
             if let Some(previous) = data.names.insert(key.clone(), index) {
-                let previous_name = &data.manifests[previous].name;
+                let previous_name = &list[previous].name;
                 bail!(
                     "duplicate manifest name or phrase {key:?} (used by {previous_name:?} and {:?})",
                     manifest.name
                 );
             }
         }
-        data.manifests.push(manifest);
+        list.push(manifest);
         Ok(())
     }
 
     pub fn resolve(&self, name_or_phrase: &str) -> Result<&Manifest> {
-        self.data
+        let &index = self
+            .data
             .names
             .get(name_or_phrase)
-            .map(|&index| &self.data.manifests[index])
-            .ok_or_else(|| anyhow!("unknown applet {name_or_phrase:?}"))
+            .ok_or_else(|| anyhow!("unknown applet {name_or_phrase:?}"))?;
+        self.data.manifests.get(index)
     }
 
-    pub fn manifests(&self) -> &[Manifest] {
-        &self.data.manifests
+    /// Every manifest in resolution order. On a bundled registry this parses any entry
+    /// not yet used, so the first call parses the whole set.
+    pub fn manifests(&self) -> Result<Vec<&Manifest>> {
+        self.data.manifests.all()
+    }
+
+    /// Canonical applet names in resolution order, without parsing any manifest. A
+    /// bundled registry reads them from its index.
+    pub fn applet_names(&self) -> Vec<&str> {
+        match &self.data.manifests {
+            Manifests::Parsed(list) => list.iter().map(|manifest| manifest.name.as_str()).collect(),
+            Manifests::Bundled { index, .. } => index
+                .entries()
+                .iter()
+                .map(bundled_manifests::BundledEntry::name)
+                .collect(),
+        }
     }
 
     /// Canonical filesystem root used to confine file-loaded program modules.
@@ -2612,8 +2741,57 @@ mod tests {
         let registry = Registry::load(dir.path()).unwrap();
         assert_eq!(registry.resolve("say").unwrap().binary, "printf");
         assert_eq!(registry.resolve("say text").unwrap().name, "say");
-        assert_eq!(registry.manifests().len(), 1);
+        assert_eq!(registry.manifests().unwrap().len(), 1);
         assert!(registry.resolve("missing").is_err());
+    }
+
+    #[test]
+    fn bundled_registry_matches_a_full_load() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let full = Registry::load(&dir).unwrap();
+        let bundled = Registry::load_default(&dir).unwrap();
+        assert!(
+            matches!(bundled.data.manifests, Manifests::Bundled { .. }),
+            "the shipped directory should be served by the bundled index"
+        );
+        let full_list = full.manifests().unwrap();
+        let bundled_list = bundled.manifests().unwrap();
+        assert_eq!(full_list.len(), bundled_list.len());
+        for (left, right) in full_list.iter().zip(&bundled_list) {
+            assert_eq!(
+                serde_json::to_value(left).unwrap(),
+                serde_json::to_value(right).unwrap()
+            );
+            assert_eq!(left.origin, right.origin);
+        }
+        assert_eq!(full.applet_names(), bundled.applet_names());
+        for key in full.data.names.keys() {
+            assert_eq!(
+                full.resolve(key).unwrap().name,
+                bundled.resolve(key).unwrap().name,
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_changed_default_directory_takes_the_full_load_and_its_errors() {
+        let dir = tempdir().unwrap();
+        for entry in fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap()
+        {
+            let entry = entry.unwrap();
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                fs::copy(entry.path(), dir.path().join(entry.file_name())).unwrap();
+            }
+        }
+        fs::write(dir.path().join("awk.json"), "{").unwrap();
+        let full_error = format!("{:#}", Registry::load(dir.path()).err().unwrap());
+        let default_error = format!("{:#}", Registry::load_default(dir.path()).err().unwrap());
+        assert_eq!(default_error, full_error);
     }
 
     #[test]

@@ -1,0 +1,7 @@
+# Append a known number of messages to the requested log.
+accept count as integer with default 3
+accept message as text with default "worker ready"
+accept log as text with default "worker.log"
+repeat count times
+  run "printf" with arguments ["%s\n", message]
+  then "tee" with arguments ["-a", log]

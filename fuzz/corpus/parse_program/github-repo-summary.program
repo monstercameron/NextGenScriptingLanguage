@@ -1,0 +1,8 @@
+# Format a saved `gh api repos/OWNER/REPO` response without jq.
+accept path as text
+read path
+then parse json as repository
+take text at "/full_name" from repository as name
+take integer at "/stargazers_count" from repository as stars
+take integer at "/forks_count" from repository as forks
+then "printf" with arguments ["Repository\tStars\tForks\n%s\t%s\t%s\n", name, stars, forks]

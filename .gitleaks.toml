@@ -1,0 +1,17 @@
+# Secret scanning policy for the CI gitleaks job. The default rules stay on. The
+# exceptions below are narrow and reviewed; anything else found is a real finding.
+title = "execute secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Placeholder token that the agent-auth unit tests use (src/live/auth.rs). It is a fixed test value, not a credential."
+regexes = ['''0123456789abcdef0123456789abcdef''']
+
+[[allowlists]]
+description = "Recorded benchmark evidence and validation reports: SHA-256 digests, timings, and fingerprints, which the generic rule matches. These paths are measurement records, not credential stores; provider-specific rules were checked against them and report nothing."
+paths = [
+  '''^benchmarks/''',
+  '''^docs/(utility-validation|validation-v[0-9.]+)\.json$''',
+]

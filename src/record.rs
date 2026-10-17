@@ -377,15 +377,17 @@ pub struct StoredRecord {
 impl StoredRecord {
     pub fn open(directory: &Path) -> Result<Self> {
         let run: Json = serde_json::from_slice(
-            &fs::read(directory.join(RUN_FILE))
+            &read_regular_no_follow(&directory.join(RUN_FILE))
                 .with_context(|| format!("{} is not a run record", directory.display()))?,
         )
         .context("run.json is not valid JSON")?;
         if run["protocol"] != PROTOCOL {
             bail!("unsupported record protocol {}", run["protocol"]);
         }
-        let trace =
-            fs::read_to_string(directory.join(TRACE_FILE)).context("reading trace.jsonl")?;
+        let trace = String::from_utf8(
+            read_regular_no_follow(&directory.join(TRACE_FILE)).context("reading trace.jsonl")?,
+        )
+        .context("reading trace.jsonl")?;
         let mut steps = Vec::new();
         for (number, line) in trace.lines().enumerate() {
             let value: Json = serde_json::from_str(line)
@@ -428,13 +430,64 @@ impl StoredRecord {
             bail!("the record kept no bytes for this output (the record was truncated)");
         };
         let expected = description["sha256"].as_str().unwrap_or_default();
-        let bytes = fs::read(self.directory.join(name))
+        // The name comes from record JSON, which may have been edited. Only the writer's
+        // own `blobs/<sha256>` names are read, so no path can leave the record.
+        if !valid_blob_name(name) {
+            bail!("recorded blob name {name:?} is not a blob of this record");
+        }
+        let bytes = read_regular_no_follow(&self.directory.join(name))
             .with_context(|| format!("reading recorded blob {name}"))?;
         if sha256_hex(&bytes) != expected {
             bail!("recorded blob {name} does not match its hash");
         }
         Ok(bytes)
     }
+}
+
+/// Whether a stored blob name is exactly the writer's `blobs/<64 lowercase hex>` form.
+fn valid_blob_name(name: &str) -> bool {
+    name.strip_prefix(BLOB_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        })
+}
+
+/// Read a record file without following a link in its final component, and require a
+/// regular file. A record is read from its own directory, so a link planted there must
+/// not redirect the read elsewhere.
+fn read_regular_no_follow(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // O_NONBLOCK keeps a FIFO from stalling the open; the regular-file check rejects it.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        if fs::symlink_metadata(path)?.file_type().is_symlink() {
+            return Err(std::io::Error::other(format!(
+                "{} is a link, not a record file",
+                path.display()
+            )));
+        }
+    }
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(format!(
+            "{} is not a regular file",
+            path.display()
+        )));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn strings(value: &Json) -> Vec<String> {
@@ -748,5 +801,41 @@ mod tests {
             !persistence_allowed(&registry, &public, true),
             "declared secret environment is never persisted"
         );
+    }
+}
+
+#[cfg(test)]
+mod blob_name_tests {
+    use super::valid_blob_name;
+
+    #[test]
+    fn only_the_writers_blob_names_are_accepted() {
+        let digest = "a".repeat(64);
+        assert!(valid_blob_name(&format!("blobs/{digest}")));
+        assert!(valid_blob_name(&format!(
+            "blobs/{}",
+            "0123456789abcdef".repeat(4)
+        )));
+        for name in [
+            "",
+            "blobs/",
+            "blobs",
+            "../blobs/x",
+            "/etc/passwd",
+            "blobs/../run.json",
+            "blobs/../../etc/passwd",
+            "blobs/A",
+            "blobs/ABCDEF",
+            "run.json",
+        ] {
+            assert!(!valid_blob_name(name), "{name:?} was accepted");
+        }
+        assert!(!valid_blob_name(&format!("blobs/{}", "a".repeat(63))));
+        assert!(!valid_blob_name(&format!("blobs/{}", "a".repeat(65))));
+        assert!(!valid_blob_name(&format!(
+            "blobs/{}/{}",
+            "a".repeat(32),
+            "b".repeat(31)
+        )));
     }
 }

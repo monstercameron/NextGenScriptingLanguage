@@ -1,0 +1,4 @@
+# Validate stdin JSON and emit compact, deterministically ordered JSON.
+read from stdin
+then parse json as document
+then encode document as json

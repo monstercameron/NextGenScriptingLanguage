@@ -492,8 +492,8 @@ pub fn register_declared_environment_secrets(
     registry: &Registry,
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Result<(), PolicyError> {
-    for manifest in registry.manifests() {
-        capture_declared_environment_secrets(registry, &manifest.name, environment)?;
+    for name in registry.applet_names() {
+        capture_declared_environment_secrets(registry, name, environment)?;
     }
     Ok(())
 }

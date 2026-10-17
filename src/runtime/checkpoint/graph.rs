@@ -245,6 +245,12 @@ impl GraphCheckpointStore for GraphJournal {
 }
 
 /// Read and verify the journal file: its checksum, its kind, and its version.
+/// Fuzz entry: decode a graph checkpoint journal file and discard the parsed data.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_read_disk(path: &Path) -> Result<()> {
+    read_disk(path).map(|_| ())
+}
+
 fn read_disk(path: &Path) -> Result<GraphJournalDisk> {
     let file = open_regular(path, "checkpoint journal", false)
         .context("graph checkpoint journal is missing")?;

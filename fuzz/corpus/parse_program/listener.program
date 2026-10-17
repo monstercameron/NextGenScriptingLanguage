@@ -1,0 +1,3 @@
+listen to stdin
+whenever a line arrives as message
+  then tr with from "[:lower:]" and to "[:upper:]"

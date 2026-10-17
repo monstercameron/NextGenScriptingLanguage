@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) mod elements;
-pub(super) mod graph;
+pub(crate) mod graph;
 #[allow(dead_code)]
 mod leaf_cursor;
 use elements::ElementReplay;
@@ -1184,6 +1184,12 @@ fn read_journal(path: &Path) -> Result<JournalData> {
 struct CompletedLog {
     chain: String,
     bytes: u64,
+}
+
+/// Fuzz entry: decode a checkpoint journal file and discard the parsed data.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_read_journal(path: &Path) -> Result<()> {
+    read_journal_parts(path).map(|_| ())
 }
 
 fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {

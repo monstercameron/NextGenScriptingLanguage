@@ -1,0 +1,14 @@
+# Write a literal-text search report. A grep error leaves the report untouched.
+# Inputs: path, pattern, report path. Outputs: saved report and identical stdout.
+accept path as text
+accept pattern as text
+accept report as text
+run "grep" with arguments ["-n", "-F", "-e", pattern, "--", path] as matches and keep status as search_status
+if search_status is 0
+  run "printf" with arguments ["%s", matches]
+otherwise
+  if search_status is 1
+    run "printf" with arguments ["No matches for %s\n", pattern]
+  otherwise
+    run "false"
+then save to report

@@ -1,0 +1,25 @@
+{
+  "name": "desktop.clock_local",
+  "binary": "python3",
+  "accepts_stdin": false,
+  "parameters": {"pulse": {"type": "integer", "required": true}},
+  "arguments": [{"json_arguments": true}],
+  "contract": {
+    "version": 1,
+    "backend": "json_lines_worker",
+    "lifecycle": {
+      "kind": "json_lines",
+      "startup_arguments": ["-u", "examples/desktop/workers.py", "--worker", "clock_local"],
+      "timeout_ms": 3000,
+      "max_frame_bytes": 1048576,
+      "max_stderr_bytes": 8192
+    },
+    "output": {"type": "integer", "encoding": "json"},
+    "capabilities": ["clock.read"],
+    "effects": ["clock.read"],
+    "ports": {
+      "inputs": {"pulse": {"schema": {"type": "integer"}, "delivery": "events"}},
+      "outputs": {"value": {"schema": {"type": "integer"}, "delivery": "records"}}
+    }
+  }
+}

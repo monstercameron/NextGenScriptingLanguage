@@ -1,0 +1,5 @@
+# Purpose: Report the current repository's branch and changed paths.
+# Input: Git repository in the calling directory; requires git.
+# Output: git status --short --branch on stdout; no repository mutation.
+accept repository as text with default "."
+run "git" with arguments ["-C", repository, "status", "--short", "--branch"]

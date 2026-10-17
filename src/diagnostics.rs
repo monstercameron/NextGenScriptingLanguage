@@ -512,13 +512,7 @@ fn unknown_applet_diagnostic(
     }
 
     if fix.is_none() && token {
-        if let Some(name) = suggest::closest(
-            phrase,
-            registry
-                .manifests()
-                .iter()
-                .map(|manifest| manifest.name.as_str()),
-        ) {
+        if let Some(name) = suggest::closest(phrase, registry.applet_names()) {
             message = format!("unknown applet {phrase:?}; did you mean {name:?}?");
             fix = Some(SuggestedFix::replace(
                 format!("use applet {name:?}"),

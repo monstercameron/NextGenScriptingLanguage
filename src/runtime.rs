@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 mod cache;
 mod calls;
-mod checkpoint;
+pub(crate) mod checkpoint;
 mod control;
 mod control_flow;
 pub mod execution_result;
@@ -1649,6 +1649,57 @@ fn windows_file_info(
 /// Authorize and open one output target of a redirect or a detached launch. Every
 /// output file takes this path: the write grant and the persistence policy are
 /// checked before the hardened open, so no output target has its own rules.
+/// Check that an opened file is the file the authorized, resolved path names. A link
+/// swapped in between the authorization and the open must not change what the grant
+/// covered. Unix compares device and inode; Windows has no equivalent check here yet
+/// (see the threat model).
+fn verify_opened_identity(file: &File, resolved: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata()?;
+        let by_path =
+            fs::metadata(resolved).with_context(|| format!("checking {}", resolved.display()))?;
+        if opened.dev() != by_path.dev() || opened.ino() != by_path.ino() {
+            bail!(
+                "file changed while it was being opened: {}",
+                resolved.display()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (file, resolved);
+    }
+    Ok(())
+}
+
+/// The directory form of `verify_opened_identity`. The check narrows the window in which
+/// the folder can change before the working directory is set. The working directory is
+/// still used by path afterwards, so a later swap is not covered (see the threat model).
+fn verify_directory_identity(folder: &Path, resolved: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let opened = File::open(folder)
+            .with_context(|| format!("opening {}", folder.display()))?
+            .metadata()?;
+        let by_path =
+            fs::metadata(resolved).with_context(|| format!("checking {}", resolved.display()))?;
+        if opened.dev() != by_path.dev() || opened.ino() != by_path.ino() {
+            bail!(
+                "folder changed while it was being opened: {}",
+                resolved.display()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (folder, resolved);
+    }
+    Ok(())
+}
+
 fn open_redirect_target(
     destination: &Path,
     append: bool,
@@ -4896,7 +4947,10 @@ fn run_finite_state(
                 StepKind::UseFolder { path } => {
                     let folder = path_value(path, &bindings, &cwd)?;
                     crate::capabilities::authorize_host_path(registry, &folder, false, &cwd)?;
-                    cwd = fs::canonicalize(folder)?;
+                    let resolved = fs::canonicalize(&folder)?;
+                    crate::capabilities::authorize_host_path(registry, &resolved, false, &cwd)?;
+                    verify_directory_identity(&folder, &resolved)?;
+                    cwd = resolved;
                     if !cwd.is_dir() {
                         bail!("line {}: use folder requires a directory", step.line);
                     }
@@ -4929,9 +4983,18 @@ fn run_finite_state(
                         StepKind::Read { path, .. } => {
                             let path = path_value(path, &bindings, &cwd)?;
                             crate::capabilities::authorize_host_path(registry, &path, false, &cwd)?;
-                            Input::File(File::open(&path).with_context(|| {
+                            let file = File::open(&path).with_context(|| {
                                 format!("line {}: reading {}", step.line, path.display())
-                            })?)
+                            })?;
+                            // The grant covers the file that was opened. Authorize the resolved
+                            // path too, and check that the handle is that file, so a link swapped
+                            // in after the first check cannot redirect the read.
+                            let resolved = fs::canonicalize(&path)?;
+                            crate::capabilities::authorize_host_path(
+                                registry, &resolved, false, &cwd,
+                            )?;
+                            verify_opened_identity(&file, &resolved)?;
+                            Input::File(file)
                         }
                         StepKind::ReadCallInput { .. } => {
                             std::mem::replace(&mut data, Input::Empty)

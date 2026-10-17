@@ -390,6 +390,29 @@ pub(crate) struct RecordedEmit {
     pub sensitivity: SensitivitySet,
 }
 
+/// The executor for a plan with renderer nodes. Only the desktop feature has the
+/// Quickshell renderer; a lean build refuses such a plan before any node runs.
+#[cfg(feature = "desktop")]
+fn renderer_executor(
+    plan: &GraphPlan,
+    registry: crate::manifest::Registry,
+    options: crate::runtime::RunOptions,
+    module_session: Arc<crate::modules::ProgramModuleSession>,
+) -> anyhow::Result<Arc<dyn GraphExecutor>> {
+    crate::desktop::graph_executor_with_module_session(plan, registry, options, module_session)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn renderer_executor(
+    plan: &GraphPlan,
+    registry: crate::manifest::Registry,
+    options: crate::runtime::RunOptions,
+    module_session: Arc<crate::modules::ProgramModuleSession>,
+) -> anyhow::Result<Arc<dyn GraphExecutor>> {
+    drop((plan, registry, options, module_session));
+    anyhow::bail!("graph renderer nodes need the desktop feature; build with --features full")
+}
+
 fn cached_input_names(
     inputs: &BTreeMap<String, Vec<Arc<BoundedQueue>>>,
     initial_inputs: &BTreeMap<String, Value>,
@@ -3093,12 +3116,7 @@ fn run_plan(
         .iter()
         .any(|node| matches!(node.kind, GraphNodeKind::Renderer { .. }))
     {
-        crate::desktop::graph_executor_with_module_session(
-            &plan,
-            registry.clone(),
-            options.clone(),
-            module_session,
-        )?
+        renderer_executor(&plan, registry.clone(), options.clone(), module_session)?
     } else {
         Arc::new(RuntimeGraphExecutor::with_module_session(
             registry.clone(),

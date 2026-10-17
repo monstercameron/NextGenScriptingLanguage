@@ -211,15 +211,21 @@ struct Endpoint {
 /// Delivery must match. Incompatible results include actionable
 /// nested mismatch paths, one-stage converter suggestions, and bounded
 /// multi-stage plans made only from declared contracts.
-pub fn rank_port_matches(registry: &Registry, request: &PortMatchRequest) -> Vec<PortMatch> {
-    let sources = registry
-        .manifests()
+pub fn rank_port_matches(
+    registry: &Registry,
+    request: &PortMatchRequest,
+) -> anyhow::Result<Vec<PortMatch>> {
+    let manifests = registry.manifests()?;
+    Ok(rank_port_matches_in(&manifests, request))
+}
+
+fn rank_port_matches_in(manifests: &[&Manifest], request: &PortMatchRequest) -> Vec<PortMatch> {
+    let sources = manifests
         .iter()
         .flat_map(|manifest| endpoints(manifest, true))
         .filter(|endpoint| endpoint_matches_query(endpoint, request.source.as_ref()))
         .collect::<Vec<_>>();
-    let targets = registry
-        .manifests()
+    let targets = manifests
         .iter()
         .flat_map(|manifest| endpoints(manifest, false))
         .filter(|endpoint| endpoint_matches_query(endpoint, request.target.as_ref()))
@@ -337,7 +343,7 @@ pub fn rank_port_matches(registry: &Registry, request: &PortMatchRequest) -> Vec
         return matches.into_iter().map(|(matched, _, _)| matched).collect();
     }
 
-    let mut converter_graph = ConversionGraph::new(conversion_edges(registry));
+    let mut converter_graph = ConversionGraph::new(conversion_edges(manifests));
     for (matched, source_index, target_index) in &mut matches {
         if matched.compatible {
             continue;
@@ -694,9 +700,9 @@ fn edge_produces(edge: &ConversionEdge, schema: &ValueSchema, delivery: PortDeli
     schemas_compatible(&edge.output_schema, schema) && delivery == edge.output_delivery
 }
 
-fn conversion_edges(registry: &Registry) -> Vec<ConversionEdge> {
+fn conversion_edges(manifests: &[&Manifest]) -> Vec<ConversionEdge> {
     let mut edges = Vec::new();
-    for manifest in registry.manifests() {
+    for manifest in manifests {
         let Some(contract) = manifest.execution_contract() else {
             continue;
         };
@@ -942,6 +948,10 @@ fn schema_from_output(output: &OutputSchema) -> ValueSchema {
 
 #[cfg(test)]
 mod tests {
+    fn ranked_matches(registry: &Registry, request: &PortMatchRequest) -> Vec<PortMatch> {
+        rank_port_matches(registry, request).expect("bundled or fixture manifests parse")
+    }
+
     use super::*;
     use crate::contracts::OutputType;
     #[cfg(unix)]
@@ -1013,7 +1023,7 @@ mod tests {
             ..PortMatchRequest::default()
         };
 
-        let matches = rank_port_matches(&registry, &request);
+        let matches = ranked_matches(&registry, &request);
         assert_eq!(matches.len(), 2);
         assert!(matches[0].compatible, "{matches:#?}");
         assert_eq!(matches[0].target.applet, "fixture.text_target");
@@ -1136,7 +1146,7 @@ mod tests {
             }),
             ..PortMatchRequest::default()
         };
-        let matches = rank_port_matches(&registry, &request);
+        let matches = ranked_matches(&registry, &request);
         assert_eq!(matches.len(), 1);
         assert!(!matches[0].compatible);
         assert_eq!(matches[0].suggested_converters.len(), 1);
@@ -1186,7 +1196,7 @@ mod tests {
             ..PortMatchRequest::default()
         };
 
-        let matches = rank_port_matches(&registry, &request);
+        let matches = ranked_matches(&registry, &request);
         assert_eq!(matches.len(), 1);
         assert!(!matches[0].compatible);
         assert_eq!(matches[0].suggested_converters.len(), 1);
@@ -1244,7 +1254,7 @@ mod tests {
             ..PortMatchRequest::default()
         };
 
-        let matches = rank_port_matches(&registry, &request);
+        let matches = ranked_matches(&registry, &request);
         assert_eq!(matches.len(), 1);
         let matched = &matches[0];
         assert!(!matched.compatible);
@@ -1356,7 +1366,7 @@ mod tests {
             ..PortMatchRequest::default()
         };
 
-        let matches = rank_port_matches(&registry, &request);
+        let matches = ranked_matches(&registry, &request);
         assert_eq!(matches.len(), 1);
         assert!(matches[0].suggested_converters.is_empty());
         assert!(matches[0].suggested_conversion_plans.is_empty());
@@ -1388,7 +1398,7 @@ mod tests {
                 integer_to_boolean.clone(),
             ])
             .unwrap();
-            rank_port_matches(
+            ranked_matches(
                 &registry,
                 &PortMatchRequest {
                     source: Some(EndpointQuery {
@@ -1497,7 +1507,7 @@ mod tests {
             ..PortMatchRequest::default()
         };
 
-        let matches = rank_port_matches(&registry, &request);
+        let matches = ranked_matches(&registry, &request);
         assert_eq!(matches.len(), 1);
         let plans = &matches[0].suggested_conversion_plans;
         assert_eq!(plans.len(), 1);
@@ -1554,7 +1564,7 @@ mod tests {
             .to_string()
         }));
         let registry = Registry::from_sources(&sources).unwrap();
-        let limited = rank_port_matches(
+        let limited = ranked_matches(
             &registry,
             &PortMatchRequest {
                 limit: Some(5),
@@ -1570,7 +1580,7 @@ mod tests {
         );
         let reversed_sources = sources.iter().rev().cloned().collect::<Vec<_>>();
         let reversed_registry = Registry::from_sources(&reversed_sources).unwrap();
-        let reversed_matches = rank_port_matches(
+        let reversed_matches = ranked_matches(
             &reversed_registry,
             &PortMatchRequest {
                 limit: Some(5),
@@ -1646,7 +1656,7 @@ mod tests {
             };
 
             let started = Instant::now();
-            let matches = rank_port_matches(&registry, &request);
+            let matches = ranked_matches(&registry, &request);
             let elapsed = started.elapsed();
             assert_eq!(
                 matches[0].suggested_conversion_plans.len(),
@@ -1702,7 +1712,7 @@ mod tests {
         };
 
         let started = Instant::now();
-        let matches = rank_port_matches(&registry, &request);
+        let matches = ranked_matches(&registry, &request);
         let elapsed = started.elapsed();
 
         assert_eq!(matches.len(), 1_000);
@@ -1747,14 +1757,15 @@ mod tests {
         registry: &Registry,
         request: &PortMatchRequest,
     ) -> Vec<PortMatch> {
-        let sources = registry
+        let manifests = registry
             .manifests()
+            .expect("bundled or fixture manifests parse");
+        let sources = manifests
             .iter()
             .flat_map(|manifest| endpoints(manifest, true))
             .filter(|endpoint| endpoint_matches_query(endpoint, request.source.as_ref()))
             .collect::<Vec<_>>();
-        let targets = registry
-            .manifests()
+        let targets = manifests
             .iter()
             .flat_map(|manifest| endpoints(manifest, false))
             .filter(|endpoint| endpoint_matches_query(endpoint, request.target.as_ref()))

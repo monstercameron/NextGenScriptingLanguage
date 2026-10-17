@@ -43,6 +43,14 @@ impl InputDeclaration {
         // Checked for every value path (CLI, runtime and live edits), before any effect.
         if let (Some(choices), Value::String(text)) = (&self.choices, value) {
             if !choices.contains(text) {
+                if crate::ast::is_sensitive(self) {
+                    bail!(
+                        "line {}: input {:?} must be one of {}; the supplied value is not shown",
+                        self.line,
+                        self.name,
+                        crate::parser::quoted_list(choices)
+                    );
+                }
                 bail!(
                     "line {}: input {:?} must be one of {}; got {text:?}",
                     self.line,

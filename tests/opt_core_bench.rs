@@ -29,8 +29,14 @@ fn core_operations() {
         .map(|path| std::fs::read_to_string(path).unwrap())
         .collect();
     assert_eq!(
-        serde_json::to_vec(Registry::from_sources(&sources).unwrap().manifests()).unwrap(),
-        serde_json::to_vec(registry.manifests()).unwrap()
+        serde_json::to_vec(
+            &Registry::from_sources(&sources)
+                .unwrap()
+                .manifests()
+                .unwrap()
+        )
+        .unwrap(),
+        serde_json::to_vec(&registry.manifests().unwrap()).unwrap()
     );
     let short="run printf with message \"hello\"\npipe to tr with from \"[:lower:]\" and to \"[:upper:]\"\npipe to wc with flags [\"-l\"]\n";
     let long = "run printf with message \"one\"\n".repeat(1000);
@@ -131,7 +137,7 @@ fn core_operations() {
             ..
         }
     ));
-    let report = json!({"version":env!("CARGO_PKG_VERSION"),"mode":"release optimized in-process functions, includes allocation/drop; excludes external commands and CLI startup","warmup_batches":10,"measured_batches":100,"operations":measurements,"catalog_serialized_sha256":format!("{:x}", Sha256::digest(serde_json::to_vec(registry.manifests()).unwrap()))});
+    let report = json!({"version":env!("CARGO_PKG_VERSION"),"mode":"release optimized in-process functions, includes allocation/drop; excludes external commands and CLI startup","warmup_batches":10,"measured_batches":100,"operations":measurements,"catalog_serialized_sha256":format!("{:x}", Sha256::digest(serde_json::to_vec(&registry.manifests().unwrap()).unwrap()))});
     let path = std::env::var("OPT_BENCH_REPORT").expect("set OPT_BENCH_REPORT");
     std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
 }

@@ -8,6 +8,8 @@ use crate::ast::{InputType, Value};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error as StdError;
+use std::fmt;
 use std::path::PathBuf;
 
 /// How a host should connect one standard stream for a manifest's native
@@ -2160,3 +2162,85 @@ mod typed_json_decode_tests {
         result.map_err(|error| format!("{error:#}"))
     }
 }
+
+/// Why a remote applet call failed. Core types, so the runtime can classify the failure
+/// in every build; the remote client that produces them is part of the `remote` feature.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemoteErrorKind {
+    InvalidConfiguration,
+    CredentialUnavailable,
+    CredentialInvalid,
+    Cancelled,
+    Timeout,
+    Transport,
+    HttpStatus(u16),
+    RequestTooLarge,
+    ResponseTooLarge,
+    UnsupportedProtocolVersion(u32),
+    InvalidDescriptor,
+    IncompatibleContract,
+    DiscoveryNotCached,
+    InvalidRequest,
+    InvalidResponse,
+    RequestIdMismatch,
+    IdempotencyNotDeclared,
+    DescriptorCacheUnavailable,
+    DescriptorCacheHashMismatch,
+    InvalidStream,
+    StreamTooLarge,
+    StreamClosed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteError {
+    pub kind: RemoteErrorKind,
+    pub effect_certainty: EffectCertainty,
+}
+
+impl RemoteError {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn new(kind: RemoteErrorKind, effect_certainty: EffectCertainty) -> Self {
+        Self {
+            kind,
+            effect_certainty,
+        }
+    }
+}
+
+impl fmt::Display for RemoteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self.kind {
+            RemoteErrorKind::InvalidConfiguration => "invalid_configuration",
+            RemoteErrorKind::CredentialUnavailable => "credential_unavailable",
+            RemoteErrorKind::CredentialInvalid => "credential_invalid",
+            RemoteErrorKind::Cancelled => "cancelled",
+            RemoteErrorKind::Timeout => "timeout",
+            RemoteErrorKind::Transport => "transport",
+            RemoteErrorKind::HttpStatus(_) => "http_status",
+            RemoteErrorKind::RequestTooLarge => "request_too_large",
+            RemoteErrorKind::ResponseTooLarge => "response_too_large",
+            RemoteErrorKind::UnsupportedProtocolVersion(_) => "unsupported_protocol_version",
+            RemoteErrorKind::InvalidDescriptor => "invalid_descriptor",
+            RemoteErrorKind::IncompatibleContract => "incompatible_contract",
+            RemoteErrorKind::DiscoveryNotCached => "discovery_not_cached",
+            RemoteErrorKind::InvalidRequest => "invalid_request",
+            RemoteErrorKind::InvalidResponse => "invalid_response",
+            RemoteErrorKind::RequestIdMismatch => "request_id_mismatch",
+            RemoteErrorKind::IdempotencyNotDeclared => "idempotency_not_declared",
+            RemoteErrorKind::DescriptorCacheUnavailable => "descriptor_cache_unavailable",
+            RemoteErrorKind::DescriptorCacheHashMismatch => "descriptor_cache_hash_mismatch",
+            RemoteErrorKind::InvalidStream => "invalid_stream",
+            RemoteErrorKind::StreamTooLarge => "stream_too_large",
+            RemoteErrorKind::StreamClosed => "stream_closed",
+        };
+        match self.kind {
+            RemoteErrorKind::HttpStatus(status) => write!(formatter, "{name} {status}"),
+            RemoteErrorKind::UnsupportedProtocolVersion(version) => {
+                write!(formatter, "{name} {version}")
+            }
+            _ => formatter.write_str(name),
+        }
+    }
+}
+
+impl StdError for RemoteError {}

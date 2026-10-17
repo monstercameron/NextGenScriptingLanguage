@@ -1,0 +1,30 @@
+{
+  "name": "cut",
+  "binary": "cut",
+  "accepts_stdin": true,
+  "cacheable": true,
+  "parameters": {
+    "delimiter": {
+      "type": "string",
+      "required": true
+    },
+    "fields": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "-d"
+    },
+    {
+      "parameter": "delimiter"
+    },
+    {
+      "literal": "-f"
+    },
+    {
+      "parameter": "fields"
+    }
+  ]
+}

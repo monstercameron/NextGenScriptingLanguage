@@ -1,0 +1,3 @@
+listen to tail with flags ["-n", "0", "-F"] and path "events.log"
+whenever a line arrives as message
+  then tr with from "[:lower:]" and to "[:upper:]"

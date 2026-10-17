@@ -1,0 +1,32 @@
+{
+  "name": "desktop.quickshell",
+  "binary": "qs",
+  "accepts_stdin": false,
+  "parameters": {
+    "config": {
+      "type": "path",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "--path"
+    },
+    {
+      "parameter": "config"
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "command",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "capabilities": [
+      "desktop.render"
+    ],
+    "effects": [
+      "desktop.render"
+    ]
+  }
+}

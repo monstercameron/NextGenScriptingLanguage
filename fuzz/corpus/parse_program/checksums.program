@@ -1,0 +1,5 @@
+# Purpose: Produce a portable CRC and byte count for a local file.
+# Input: input.txt in the calling directory; replace the path or add more paths.
+# Output: Native cksum rows: CRC, byte count, and filename.
+accept paths as list of text with default ["input.txt"]
+run "cksum" with arguments paths

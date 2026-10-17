@@ -173,10 +173,16 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     let handle = input.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
     let mut mode = 0u32;
     let mut saved = None;
-    if secret
-        && unsafe { GetConsoleMode(handle, &mut mode) } != 0
-        && unsafe { SetConsoleMode(handle, mode & !ENABLE_ECHO_INPUT) } != 0
-    {
+    if secret {
+        // A secret answer is never read with echo on. If the console mode cannot be
+        // changed, refuse the prompt rather than show the answer.
+        if unsafe { GetConsoleMode(handle, &mut mode) } == 0
+            || unsafe { SetConsoleMode(handle, mode & !ENABLE_ECHO_INPUT) } == 0
+        {
+            return Err(anyhow::anyhow!(
+                "refusing a secret prompt: the console would show the answer"
+            ));
+        }
         saved = Some(mode);
     }
     let answer = read_answer(&mut input);

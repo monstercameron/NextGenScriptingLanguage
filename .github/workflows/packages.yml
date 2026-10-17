@@ -197,7 +197,8 @@ jobs:
           sudo apt-get install -y musl-tools
       - name: Build twice from different paths and compare every shipped binary
         run: |
-          export SOURCE_DATE_EPOCH="$(git -C build-a log -1 --format=%ct)"
+          SOURCE_DATE_EPOCH="$(git -C build-a log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
           for side in build-a build-b; do
             (
               cd "$side"

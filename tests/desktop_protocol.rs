@@ -1,3 +1,4 @@
+#![cfg(feature = "desktop")]
 //! In-memory protocol tests for the Quickshell adapter.
 //!
 //! These exercise the host's versioned frame/state machine with synthetic

@@ -82,26 +82,29 @@ fn packed_catalog_matches_every_manifest_spec_and_representative_argv() {
 
     assert!(expected > 0, "manifests directory has no JSON specs");
     assert_eq!(source_paths.len(), expected);
-    assert_eq!(directory.manifests().len(), expected);
-    assert_eq!(packed.manifests().len(), expected);
+    assert_eq!(directory.manifests().unwrap().len(), expected);
+    assert_eq!(packed.manifests().unwrap().len(), expected);
     assert_eq!(
         directory
             .manifests()
+            .unwrap()
             .iter()
             .map(|manifest| manifest.name.as_str())
             .collect::<Vec<_>>(),
         packed
             .manifests()
+            .unwrap()
             .iter()
             .map(|manifest| manifest.name.as_str())
             .collect::<Vec<_>>()
     );
     assert_eq!(
-        serde_json::to_vec(directory.manifests()).unwrap(),
-        serde_json::to_vec(packed.manifests()).unwrap()
+        serde_json::to_vec(&directory.manifests().unwrap()).unwrap(),
+        serde_json::to_vec(&packed.manifests().unwrap()).unwrap()
     );
     assert!(directory
         .manifests()
+        .unwrap()
         .iter()
         .all(|manifest| manifest.execution_backend() != AppletBackend::ProgramModule));
 
@@ -234,7 +237,14 @@ fn packed_envelope_rejects_malformed_unknown_and_unsupported_headers() {
         r#"{"format":"execute.manifest-\u0063atalog","version":1,"manifests":[{"name":"escaped","binary":"fixture","arguments":[]}]}"#,
     )
     .unwrap();
-    assert_eq!(Registry::load_catalog(&path).unwrap().manifests().len(), 1);
+    assert_eq!(
+        Registry::load_catalog(&path)
+            .unwrap()
+            .manifests()
+            .unwrap()
+            .len(),
+        1
+    );
 
     fs::write(&path, r#"{"version":1,"manifests":[]}"#).unwrap();
     let error = Registry::load_catalog(&path)
@@ -342,18 +352,19 @@ fn legacy_directory_and_single_manifest_loaders_keep_their_existing_shape() {
     let directory = Registry::load(&root).unwrap();
     let single = Registry::load(&alpha).unwrap();
     let expected_root = fs::canonicalize(&root).unwrap();
-    assert_eq!(directory.manifests().len(), 2);
+    assert_eq!(directory.manifests().unwrap().len(), 2);
     assert_eq!(directory.module_root(), Some(expected_root.as_path()));
     assert_eq!(single.module_root(), Some(expected_root.as_path()));
     assert_eq!(
         directory
             .manifests()
+            .unwrap()
             .iter()
             .map(|manifest| manifest.name.as_str())
             .collect::<Vec<_>>(),
         ["alpha", "beta"]
     );
-    assert_eq!(single.manifests().len(), 1);
+    assert_eq!(single.manifests().unwrap().len(), 1);
     assert_eq!(single.resolve("alpha").unwrap().name, "alpha");
     assert_eq!(
         serde_json::to_vec(single.resolve("alpha").unwrap()).unwrap(),

@@ -1,0 +1,7 @@
+# Purpose: Forward appended log records with one handler invocation per record.
+# Input: events.log in the calling directory; create it before launching.
+# Output: Each new UTF-8 log line on stdout. Ctrl-C stops and reaps owned tools.
+accept path as text with default "events.log"
+listen to "tail" with arguments ["-n", "0", "-F", path]
+whenever a line arrives as event
+  then "cat"

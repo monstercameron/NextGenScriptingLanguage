@@ -1,0 +1,6 @@
+# Purpose: Forward a file through a bounded live native pipeline.
+# Input: --input path=FILE. Each newline-delimited record must fit the record limit.
+# Output: Exact file bytes on stdout, forwarded as records arrive.
+accept path as text
+stream from "cat" with arguments ["--", path]
+show each line

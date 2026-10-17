@@ -27,3 +27,8 @@ __pycache__/
 /docs/playground/xterm.css
 
 /docs/playground/THIRD_PARTY.txt
+
+# Fuzzing: build output, crash artifacts, and coverage; the seed corpus is tracked
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/coverage/

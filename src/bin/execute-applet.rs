@@ -211,6 +211,11 @@ fn help() -> &'static str {
      number.parse_integer.result, number.to_text, color.rgb_to_hex, color.parse_rgb,\n\
      color.parse_rgb.result, json.parse, json.stringify, json.get, json.set,\n\
      json.map, json.filter, csv.parse, csv.stringify, jsonc.edit_content,\n\
+     text.lines, text.split, text.default_if_empty, text.replace,\n\
+     text.strip_prefix, text.strip_suffix, text.lower, text.upper, text.join,\n\
+     path.join, text.render, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
+     ini.parse, ini.stringify, fs.test, fs.glob, fs.ensure_file, fs.ensure_line,\n\
+     fs.ensure_symlink, fs.ensure_dir,\n\
      fs.read, fs.snapshot,\n\
      fs.write_atomic, fs.unlink_checked, fs.transaction, fs.transaction.recover,\n\
      jsonc.set,\n\

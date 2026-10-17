@@ -1,0 +1,107 @@
+{
+  "name": "fs.ensure_line",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true
+    },
+    "line": {
+      "type": "string",
+      "required": true
+    },
+    "state": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.ensure_line"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "changed": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "changed",
+        "path"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "effects": [
+      "filesystem.write",
+      "filesystem.lock"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "line": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "state": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "present",
+              "absent"
+            ]
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "changed",
+              "path"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

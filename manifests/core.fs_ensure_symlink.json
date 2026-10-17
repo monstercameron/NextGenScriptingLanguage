@@ -1,0 +1,100 @@
+{
+  "name": "fs.ensure_symlink",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true
+    },
+    "target": {
+      "type": "path",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.ensure_symlink"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "changed": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "text"
+        },
+        "target": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "changed",
+        "path",
+        "target"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.write"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "target": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "text"
+              },
+              "target": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "changed",
+              "path",
+              "target"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

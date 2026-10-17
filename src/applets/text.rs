@@ -3,8 +3,12 @@ use serde_json::{Map, Value};
 
 const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MATCHES: usize = 100_000;
+const MAX_LIST_ITEMS: usize = 100_000;
 
-fn text_input<'a>(args: &'a Map<String, Value>, input: &'a [u8]) -> Result<&'a str, AppletError> {
+pub(super) fn text_input<'a>(
+    args: &'a Map<String, Value>,
+    input: &'a [u8],
+) -> Result<&'a str, AppletError> {
     if let Some(value) = args.get("text") {
         return value
             .as_str()
@@ -19,6 +23,88 @@ pub(super) fn trim_final_lf(args: &Map<String, Value>, input: &[u8]) -> Result<V
     Ok(Value::String(
         text.strip_suffix('\n').unwrap_or(text).to_owned(),
     ))
+}
+
+/// Split UTF-8 text into lines. One final LF is a terminator rather than an
+/// empty final line, and one CR before each line break (or at the end of an
+/// unterminated final line) is removed. Empty text gives an empty list.
+pub(super) fn lines(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let text = text_input(args, input)?;
+    check_text_size(text.len())?;
+    if text.is_empty() {
+        return Ok(Value::Array(Vec::new()));
+    }
+    let content = text.strip_suffix('\n').unwrap_or(text);
+    let mut items = Vec::new();
+    for (index, line) in content.split('\n').enumerate() {
+        checkpoint_work(context, index)?;
+        push_list_item(
+            &mut items,
+            line.strip_suffix('\r').unwrap_or(line),
+            "text.lines",
+        )?;
+    }
+    Ok(Value::Array(items))
+}
+
+/// Split text on a literal separator, or on NUL when `nul` is true. One final
+/// separator terminates the last item instead of adding an empty item, so a
+/// NUL-terminated `find -print0` stream yields its paths. Empty text gives an
+/// empty list. The separator cannot be empty.
+pub(super) fn split(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let text = text_input(args, input)?;
+    check_text_size(text.len())?;
+    let nul = match args.get("nul") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(invalid("args.nul must be a boolean")),
+    };
+    let separator = match (args.get("separator"), nul) {
+        (None, true) => "\0",
+        (Some(_), true) => {
+            return Err(invalid(
+                "text.split accepts either args.separator or args.nul true, not both",
+            ))
+        }
+        (Some(Value::String(separator)), false) => separator.as_str(),
+        (Some(_), false) => return Err(invalid("args.separator must be a string")),
+        (None, false) => {
+            return Err(invalid(
+                "text.split requires args.separator or args.nul true",
+            ))
+        }
+    };
+    if separator.is_empty() {
+        return Err(invalid("args.separator cannot be empty"));
+    }
+    if text.is_empty() {
+        return Ok(Value::Array(Vec::new()));
+    }
+    let content = text.strip_suffix(separator).unwrap_or(text);
+    let mut items = Vec::new();
+    for (index, item) in content.split(separator).enumerate() {
+        checkpoint_work(context, index)?;
+        push_list_item(&mut items, item, "text.split")?;
+    }
+    Ok(Value::Array(items))
+}
+
+fn push_list_item(items: &mut Vec<Value>, item: &str, operation: &str) -> Result<(), AppletError> {
+    if items.len() == MAX_LIST_ITEMS {
+        return Err(invalid(format!(
+            "{operation} output exceeds the {MAX_LIST_ITEMS}-item limit"
+        )));
+    }
+    items.push(Value::String(item.to_owned()));
+    Ok(())
 }
 
 pub(super) fn concat(
@@ -153,6 +239,78 @@ fn find_overlapping(
     Ok(())
 }
 
+fn required_text<'a>(args: &'a Map<String, Value>, name: &str) -> Result<&'a str, AppletError> {
+    args.get(name)
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid(format!("args.{name} must be a string")))
+}
+
+fn text_output(value: String) -> Result<Value, AppletError> {
+    check_text_size(value.len())?;
+    Ok(Value::String(value))
+}
+
+/// Return `text`, or `default` when `text` is empty. Empty means zero bytes:
+/// a value of only spaces is not empty.
+pub(super) fn default_if_empty(args: &Map<String, Value>) -> Result<Value, AppletError> {
+    let text = required_text(args, "text")?;
+    let default = required_text(args, "default")?;
+    check_text_size(default.len())?;
+    text_output(if text.is_empty() { default } else { text }.to_owned())
+}
+
+/// Replace every non-overlapping occurrence of `from`, scanning left to right.
+/// `from` cannot be empty, which would otherwise match between every character.
+pub(super) fn replace(
+    args: &Map<String, Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let text = required_text(args, "text")?;
+    let from = required_text(args, "old")?;
+    let to = required_text(args, "new")?;
+    if from.is_empty() {
+        return Err(invalid("args.old cannot be empty"));
+    }
+    check_text_size(text.len())?;
+    check_text_size(to.len())?;
+    let mut result = String::new();
+    let mut copied = 0;
+    for (index, (offset, _)) in text.match_indices(from).enumerate() {
+        checkpoint_work(context, index)?;
+        result.push_str(&text[copied..offset]);
+        result.push_str(to);
+        check_text_size(result.len())?;
+        copied = offset + from.len();
+    }
+    result.push_str(&text[copied..]);
+    text_output(result)
+}
+
+/// Remove `prefix` when the text starts with it; otherwise return the text.
+pub(super) fn strip_prefix(args: &Map<String, Value>) -> Result<Value, AppletError> {
+    let text = required_text(args, "text")?;
+    let prefix = required_text(args, "prefix")?;
+    text_output(text.strip_prefix(prefix).unwrap_or(text).to_owned())
+}
+
+/// Remove `suffix` when the text ends with it; otherwise return the text.
+pub(super) fn strip_suffix(args: &Map<String, Value>) -> Result<Value, AppletError> {
+    let text = required_text(args, "text")?;
+    let suffix = required_text(args, "suffix")?;
+    text_output(text.strip_suffix(suffix).unwrap_or(text).to_owned())
+}
+
+/// Unicode default lowercase mapping. It is locale-independent, so Turkish
+/// dotted and dotless i are not special-cased.
+pub(super) fn lower(args: &Map<String, Value>) -> Result<Value, AppletError> {
+    text_output(required_text(args, "text")?.to_lowercase())
+}
+
+/// Unicode default uppercase mapping. It is locale-independent.
+pub(super) fn upper(args: &Map<String, Value>) -> Result<Value, AppletError> {
+    text_output(required_text(args, "text")?.to_uppercase())
+}
+
 fn tick(context: &ExecutionContext<'_>, work: &mut usize) -> Result<(), AppletError> {
     *work += 1;
     if *work == 256 {
@@ -162,7 +320,7 @@ fn tick(context: &ExecutionContext<'_>, work: &mut usize) -> Result<(), AppletEr
     Ok(())
 }
 
-fn check_text_size(length: usize) -> Result<(), AppletError> {
+pub(super) fn check_text_size(length: usize) -> Result<(), AppletError> {
     if length > MAX_TEXT_BYTES {
         return Err(invalid(format!(
             "text exceeds the {MAX_TEXT_BYTES}-byte limit"

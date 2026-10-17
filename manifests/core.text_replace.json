@@ -1,0 +1,75 @@
+{
+  "name": "text.replace",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true
+    },
+    "old": {
+      "type": "string",
+      "required": true
+    },
+    "new": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "text.replace"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "old": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "new": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

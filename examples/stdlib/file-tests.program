@@ -1,0 +1,18 @@
+# Typed file predicates for conditions. Run with:
+#   execute examples/stdlib/file-tests.program --input target=/some/path
+# fs.test returns a boolean, so `is true` compares it directly; no status capture.
+accept target as text
+
+run fs.test with path target and kind "exists" as present
+if present is true
+  run fs.test with path target and kind "directory" as is_dir
+  if is_dir is true
+    run "printf" with arguments ["%s is a directory\n", target]
+  otherwise
+    run fs.test with path target and kind "symlink" as is_link
+    if is_link is true
+      run "printf" with arguments ["%s is a symbolic link\n", target]
+    otherwise
+      run "printf" with arguments ["%s is a file or other entry\n", target]
+otherwise
+  run "printf" with arguments ["%s does not exist\n", target]

@@ -1,0 +1,99 @@
+{
+  "name": "fs.ensure_dir",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true
+    },
+    "mode": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "fs.ensure_dir"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "record",
+      "encoding": "json",
+      "fields": {
+        "changed": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "text"
+        },
+        "mode_applied": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "changed",
+        "path",
+        "mode_applied"
+      ]
+    },
+    "capabilities": [
+      "filesystem.read",
+      "filesystem.write"
+    ],
+    "effects": [
+      "filesystem.write"
+    ],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": {
+            "type": "path"
+          },
+          "delivery": "single"
+        },
+        "mode": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "record",
+            "fields": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "text"
+              },
+              "mode_applied": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "changed",
+              "path",
+              "mode_applied"
+            ]
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

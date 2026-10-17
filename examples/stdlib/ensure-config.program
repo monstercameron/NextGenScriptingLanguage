@@ -1,0 +1,17 @@
+# Make sure a config directory, file and line exist. Each ensure reports whether it
+# changed anything, so a second run prints "false" everywhere. Run with:
+#   execute examples/stdlib/ensure-config.program --input root=/absolute/owned/dir
+accept root as text
+
+run fs.ensure_dir with path root as made_dir
+take boolean at "/changed" from made_dir as dir_changed
+
+run path.join with parts [root, "theme.conf"] as theme_path
+run fs.ensure_file with path theme_path and content "theme = dark\n" as made_file
+take boolean at "/changed" from made_file as file_changed
+
+run path.join with parts [root, "app.conf"] as config_path
+run fs.ensure_line with path config_path and line "autosave = on" as made_line
+take boolean at "/changed" from made_line as line_changed
+
+run "printf" with arguments ["dir changed: %s, file changed: %s, line changed: %s\n", dir_changed, file_changed, line_changed]

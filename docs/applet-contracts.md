@@ -518,6 +518,217 @@ unavailable backend fails before workflow effects. In-process operations cannot
 use that OS sandbox. See [security boundaries](../SECURITY.md#applet-contracts-and-optional-capability-policy)
 for path rules, platform details and the limits of each mechanism.
 
+## File tests, globs and line lists
+
+These in-process operations answer `if` conditions and feed `for each` without
+a helper process. Each one is a `core.*` manifest and needs no grammar.
+
+```text
+accept target as text
+run fs.test with path target and kind "directory" as is_dir
+if is_dir is true
+  run "printf" with arguments ["%s is a directory\n", target]
+```
+
+`fs.test` takes `path` and a `kind` from `exists`, `file`, `directory`,
+`symlink`, `readable`, `writable`, `executable` and `empty`, and returns a
+boolean. The `kind` port is a text enum, so a misspelled kind fails at
+validation before any effect. An absent path answers `false`. A dangling
+symbolic link does not `exist`. Every kind except `symlink` follows links to
+their targets; `symlink` inspects the entry itself. `empty` means a zero-byte
+regular file or a directory with no entries. On Unix, `readable`, `writable`
+and `executable` call `access(2)` with the real user ID, as `test -r`, `-w` and
+`-x` do. On Windows the approximation is: `readable` opens the file (or lists the
+directory), `writable` checks the read-only attribute, and `executable` checks
+for an `.exe`, `.com`, `.bat` or `.cmd` extension on a regular file. Windows ACLs
+are not evaluated. Other stat failures, such as permission denied while
+searching a parent, are errors rather than `false`.
+
+`fs.glob` takes `pattern` and an optional boolean `include_hidden`, and returns a
+list of text:
+
+```text
+accept pattern as text
+run fs.glob with pattern pattern as files
+for each f in files
+  run "cat" with arguments [f]
+```
+
+Syntax applies one path component at a time. `*` and `?` match within a
+component. `[...]` matches a set, with ranges and `!` or `^` negation, and `]`
+first in a set is literal. An unterminated set is an error. A component that is
+exactly `**` matches zero or more directory levels, does not follow symbolic
+links, and cannot be the last component. Any other character is literal, so
+there is no escape syntax. Wildcards skip names beginning with `.` unless
+`include_hidden` is true or the component starts with a literal dot. `.` and
+`..` are never produced by a wildcard. A leading `~` followed by a separator or
+the end of the pattern expands to `HOME` (`USERPROFILE` on Windows when `HOME`
+is unset); `~user` is not expanded. A pattern ending in a separator matches only
+directories, and each result keeps that trailing separator. Relative patterns
+resolve against the program's working directory and return paths as written.
+Results are unique and sorted by UTF-8 bytes, not by locale. An empty match is an
+empty list, and a missing directory on the path is also an empty match. Other
+directory read errors fail. A result over 100,000 paths, over 1,000,000 examined
+directory entries, a non-UTF-8 name in a scanned directory, or recursion deeper
+than 256 levels fails with an explicit error. Output uses the platform's native
+separator. Under a strict capability policy these two operations are denied, as
+`fs.read` is, because they read the host filesystem.
+
+`text.lines` takes `text` or stdin and returns a list of text split on LF. One
+final LF is a terminator and adds no empty item, and one CR before each LF (or
+at the end of an unterminated final line) is removed. Empty input gives an
+empty list. Lists over 100,000 items fail.
+
+`text.split` takes `text` or stdin and exactly one of `separator` (a nonempty
+text) or `nul: true`, which splits on NUL for `find -print0` style output. One
+final separator terminates the last item, as with `text.lines`. Empty input gives
+an empty list.
+
+A loop keeps only its final iteration's output, as described in the language
+reference. To collect every item, append to a text binding inside the loop with
+`text.concat`, then print once:
+
+```text
+accept listing as text
+accept summary as text with default ""
+run text.lines with text listing as items
+for each item in items
+  run text.concat with parts [summary, "[", item, "]"] as summary
+run "printf" with arguments ["items: %s\n", summary]
+```
+
+The example programs `examples/stdlib/file-tests.program`,
+`glob-files.program` and `lines-to-list.program` use these forms. The
+operations are covered by `tests/lane_a_applets.rs` and `tests/lane_a_cli.rs`.
+
+## Text and path builders
+
+These in-process operations build strings without spawning `jq` or `printf`.
+Every one takes named text arguments and returns one text value.
+
+| Applet | Arguments | Behavior |
+| --- | --- | --- |
+| `text.default_if_empty` | `text`, `default` | Returns `default` only when `text` has zero bytes; spaces are not empty. |
+| `text.replace` | `text`, `old`, `new` | Replaces every non-overlapping literal `old` (nonempty) left to right. No pattern syntax. |
+| `text.strip_prefix`, `text.strip_suffix` | `text` and `prefix` or `suffix` | Removes one matching end; otherwise returns `text` unchanged. |
+| `text.lower`, `text.upper` | `text` | Unicode default case mapping, independent of locale. `straße` upper-cases to `STRASSE`. |
+| `text.join` | `parts`, optional `separator` | Same operation as `text.concat`, named for string building. |
+| `path.join` | `parts` | Joins segments with the platform separator via `Path::push`. Empty segments are skipped and an absolute segment replaces the path so far. Nothing is normalized. |
+
+These results are JSON string values on the in-process path, as the other text
+applets are. Writing them as raw bytes at a pipe or terminal boundary needs a
+runtime change (issue #45). Typed `as name` bindings already receive the exact
+text.
+
+The example `examples/stdlib/text-builders.program` shows the forms together.
+Coverage is in `tests/lane_a_text_path.rs`.
+
+## Template rendering
+
+`text.render` substitutes `{{ name }}` placeholders from a JSON object. It takes
+exactly one of `template` (text) or `template_path` (a path read relative to the
+program directory, at most 16 MiB and UTF-8), plus `values` (a JSON object):
+
+```text
+run text.render with template_path "alacritty.toml.tpl" and values values as rendered
+```
+
+A placeholder is `{{` and `}}` with optional spaces or tabs inside. Its name is
+one to 128 ASCII letters, digits, `_`, `-` or `.`, looked up as an exact key. A
+missing key, a value that is null, an array or an object, an invalid or
+unterminated placeholder, or a non-object `values` fails. Strings are inserted
+verbatim. Numbers and booleans use their JSON text (`42`, `0.5`, `true`). Extra
+keys are ignored. Substituted text is never scanned again. `{{{{` produces a
+literal `{{`, and a `}}` outside a placeholder is literal. There are no
+conditions, loops or expressions, and the output keeps every other byte, with no
+added or removed trailing newline. It is not on the strict capability policy's
+in-process allowlist, so a strict policy denies it for both forms; a policy-aware
+template form would need its own reviewed entry.
+
+The example `examples/stdlib/render-template.program` reads a JSON object with
+`json.parse`. Coverage is in `tests/lane_a_render.rs`. That test uses a fixture
+of the `{{ name }}` form rather than an Omarchy file.
+
+## Strict YAML, TOML and INI subsets
+
+`yaml.parse`, `toml.parse` and `ini.parse` read `text` (or stdin) and return the
+document as a JSON value. `yaml.stringify`, `toml.stringify` and `ini.stringify`
+take `value` (a JSON value) and return text. Each format is a small strict
+subset implemented in the interpreter, so no parser crate is added. Anything
+outside the subset fails with the format name and a line number. Duplicate keys
+fail, nesting is limited to 64 levels, input is limited to 16 MiB, and a document
+may hold at most 1,000,000 values. Output keys are sorted. Comments are not
+preserved, so these operations do not edit a file in place.
+
+YAML supports block mappings and sequences indented with spaces, plain, single-
+and double-quoted scalars, one-line flow collections, literal (`|`) and folded
+(`>`) block scalars with clip, strip and keep chomping, comments, and a single
+leading `---`. A plain scalar resolves to null (`null`, `~`, empty), a boolean
+(`true` or `false` in common capitalizations), an integer or a decimal float.
+Other plain text is a string, so `0x1F` and `1_000` stay strings. Anchors,
+aliases, tags, directives, multiple documents, complex keys, merge keys, tabs in
+indentation, and multi-line plain or quoted scalars fail. Infinite and NaN values
+fail because JSON cannot represent them.
+
+TOML supports bare, quoted and dotted keys, basic, literal and multi-line strings
+with the TOML escapes, integers in decimal, `0x`, `0o` and `0b` forms with
+underscores, decimal floats, booleans, arrays that may span lines with a trailing
+comma, inline tables, `[table]` headers and `[[array]]` headers. Dates, times,
+`inf` and `nan` fail. A header may not repeat a table, and a header may not
+extend a value created by a dotted key or an inline table. `toml.stringify`
+rejects null, because TOML has no null value.
+
+INI supports `[section]` headers, `key = value` and `key: value` entries, and
+comment lines starting with `;` or `#`. Values are the raw text after trimming,
+so every INI value is a string and quotes are not interpreted. Continuation lines,
+duplicate keys or sections, and a section that shares a name with a top-level key
+fail. `ini.stringify` accepts top-level scalars and one level of sections, and it
+rejects text that would change on the next read.
+
+For YAML and TOML, `parse` after `stringify` returns the same JSON value for the
+supported shapes. INI values always come back as text. Coverage is in
+`tests/lane_a_config.rs`.
+
+## Idempotent filesystem ensures
+
+These in-process operations converge a path on a desired state and report whether
+they had to change it. Each returns a record whose `changed` boolean can feed a
+condition after `take boolean at "/changed" from result as name`. When the path
+already matches, nothing is written and no lock file is created. A changed file
+write takes the same sibling advisory lock as `fs.write_atomic` and replaces the
+file with its compare-and-swap, so a concurrent edit makes the call fail with a
+conflict rather than losing that edit.
+
+- `fs.ensure_file` takes `path`, `content` (text) and an optional `mode`. It
+  returns `changed`, `path` and `mode_applied`.
+- `fs.ensure_line` takes `path`, `line` (one line without a line break) and
+  `state` of `"present"` (the default) or `"absent"`. Matching ignores a trailing
+  CR, and other bytes are kept exactly. A missing file is created only for
+  `present`. It returns `changed` and `path`.
+- `fs.ensure_symlink` takes `path` (the link) and `target`. It creates the link,
+  keeps it when it already points at `target`, and replaces an existing link. It
+  refuses to replace a regular file or directory, and it takes no advisory lock.
+  It returns `changed`, `path` and `target`.
+- `fs.ensure_dir` takes `path` and an optional `mode`, creates missing parents
+  (like `mkdir -p`), and refuses an existing non-directory. It returns `changed`,
+  `path` and `mode_applied`.
+
+`mode` is octal text such as `"0644"` or `"600"`, so it reads like `chmod`. It is
+enforced on Unix. On other platforms it is validated, `mode_applied` is `false`,
+and the file mode is left alone. `fs.ensure_file` and `fs.ensure_line` follow an
+existing symbolic link to its target, as `tee` does. Both read at most 16 MiB,
+and `fs.ensure_line` requires UTF-8 text. These operations write host files, so a strict
+capability policy denies them, as it denies `fs.write_atomic`.
+
+```text
+accept root as text
+run fs.ensure_dir with path root as made_dir
+take boolean at "/changed" from made_dir as dir_changed
+```
+
+The example `examples/stdlib/ensure-config.program` combines these with
+`path.join`. Coverage is in `tests/lane_a_ensure.rs`.
+
 ## Benchmark boundary
 
 The [applet boundary harness](../benchmarks/applet_boundaries.py) compares one

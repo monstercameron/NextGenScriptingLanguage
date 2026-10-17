@@ -1,0 +1,61 @@
+{
+  "name": "fs.test",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "path": {
+      "type": "path",
+      "required": true
+    },
+    "kind": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    { "literal": "fs.test" },
+    { "literal": "--args" },
+    { "json_arguments": true }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": { "kind": "oneshot" },
+    "output": {
+      "type": "boolean",
+      "encoding": "json"
+    },
+    "capabilities": ["filesystem.read"],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "path": {
+          "schema": { "type": "path" },
+          "delivery": "single"
+        },
+        "kind": {
+          "schema": {
+            "type": "text",
+            "enum": [
+              "exists",
+              "file",
+              "directory",
+              "symlink",
+              "readable",
+              "writable",
+              "executable",
+              "empty"
+            ]
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": { "type": "boolean" },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

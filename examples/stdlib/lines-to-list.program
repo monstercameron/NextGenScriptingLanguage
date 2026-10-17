@@ -1,0 +1,11 @@
+# Split a text value into lines, then print the items as [item] in order. Run with:
+#   execute examples/stdlib/lines-to-list.program --input "listing=$(printf 'a\r\nb\n')"
+# A trailing LF adds no empty item, and one CR before each LF is removed. A loop
+# keeps only its final iteration's output, so each iteration appends to `summary`.
+accept listing as text
+accept summary as text with default ""
+
+run text.lines with text listing as items
+for each item in items
+  run text.concat with parts [summary, "[", item, "]"] as summary
+run "printf" with arguments ["items: %s\n", summary]

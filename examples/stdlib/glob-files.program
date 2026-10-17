@@ -1,0 +1,12 @@
+# Print the sorted matches of a pattern on one line, separated by spaces. Run with:
+#   execute examples/stdlib/glob-files.program --input pattern="*.txt"
+# Dotfiles are skipped unless the pattern starts with a literal dot. A loop keeps
+# only its final iteration's output, so each iteration appends to `listing`.
+# An empty match runs the loop zero times and prints an empty line.
+accept pattern as text
+accept listing as text with default ""
+
+run fs.glob with pattern pattern as files
+for each f in files
+  run text.concat with parts [listing, f, " "] as listing
+run "printf" with arguments ["matches: %s\n", listing]

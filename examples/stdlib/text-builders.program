@@ -1,0 +1,11 @@
+# Build a theme label and a path without jq or printf for string work. Run with:
+#   execute examples/stdlib/text-builders.program --input name="Dark Mode" --input folder=""
+# Empty text falls back to a default; replacement and case mapping are literal.
+accept name as text
+accept folder as text with default ""
+
+run text.default_if_empty with text name and default "untitled" as label
+run text.replace with text label and old " " and new "-" as slug
+run text.lower with text slug as lower_slug
+run path.join with parts [folder, "themes", lower_slug] as theme_path
+run "printf" with arguments ["theme: %s\n", theme_path]

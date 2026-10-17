@@ -1,0 +1,55 @@
+{
+  "name": "toml.stringify",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "value": {
+      "type": "json",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "toml.stringify"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

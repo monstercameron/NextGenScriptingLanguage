@@ -1,0 +1,55 @@
+{
+  "name": "text.render",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "template": {
+      "type": "string"
+    },
+    "template_path": {
+      "type": "path"
+    },
+    "values": {
+      "type": "json",
+      "required": true
+    }
+  },
+  "arguments": [
+    { "literal": "text.render" },
+    { "literal": "--args" },
+    { "json_arguments": true }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": { "kind": "oneshot" },
+    "output": {
+      "type": "text",
+      "encoding": "json"
+    },
+    "capabilities": ["text.transform", "filesystem.read"],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "template": {
+          "schema": { "type": "text" },
+          "delivery": "single"
+        },
+        "template_path": {
+          "schema": { "type": "path" },
+          "delivery": "single"
+        },
+        "values": {
+          "schema": { "type": "json" },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": { "type": "text" },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

@@ -5,13 +5,21 @@
 //! operation to call.
 
 mod arithmetic;
+mod config;
 mod csv;
+mod ensure;
+mod file_test;
 mod filesystem;
+mod glob;
+mod ini;
 mod jsonc;
 mod path;
 mod structured;
+mod template;
 mod text;
+mod toml;
 mod transaction;
+mod yaml;
 
 use serde_json::{Map, Value};
 use std::fmt;
@@ -204,6 +212,29 @@ pub fn execute_with_context(
         "text.trim_final_lf" | "text.normalize" => text::trim_final_lf(args, input),
         "text.concat" => text::concat(args, context),
         "text.matches" => text::matches(args, input, context),
+        "text.default_if_empty" => text::default_if_empty(args),
+        "text.replace" => text::replace(args, context),
+        "text.strip_prefix" => text::strip_prefix(args),
+        "text.strip_suffix" => text::strip_suffix(args),
+        "text.lower" => text::lower(args),
+        "text.upper" => text::upper(args),
+        "text.join" => text::concat(args, context),
+        "text.render" => template::render(args, cwd, context),
+        "fs.ensure_file" => ensure::ensure_file(args, cwd),
+        "fs.ensure_line" => ensure::ensure_line(args, cwd),
+        "fs.ensure_symlink" => ensure::ensure_symlink(args, cwd),
+        "fs.ensure_dir" => ensure::ensure_dir(args, cwd),
+        "yaml.parse" => yaml::parse(args, input, context),
+        "yaml.stringify" => yaml::stringify(args),
+        "toml.parse" => toml::parse(args, input, context),
+        "toml.stringify" => toml::stringify(args),
+        "ini.parse" => ini::parse(args, input, context),
+        "ini.stringify" => ini::stringify(args),
+        "path.join" => path::join(args),
+        "text.lines" => text::lines(args, input, context),
+        "text.split" => text::split(args, input, context),
+        "fs.test" => file_test::test(args, cwd),
+        "fs.glob" => glob::glob(args, cwd, context),
         "number.add" | "number.subtract" | "number.multiply" | "number.divide"
         | "number.compare" => arithmetic::run(operation, args),
         "number.parse_integer" | "number.parse_integer.result" => {

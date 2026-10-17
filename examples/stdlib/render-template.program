@@ -1,0 +1,9 @@
+# Render a configuration template from a JSON object of theme values. Run with:
+#   execute examples/stdlib/render-template.program --input template_path=alacritty.toml.tpl --input values_json='{"background":"#1e1e2e"}'
+# Every {{ name }} needs a value; a missing key stops the program before any write.
+accept template_path as text
+accept values_json as text
+
+run json.parse with text values_json as values
+run text.render with template_path template_path and values values as rendered
+run "printf" with arguments ["%s", rendered]

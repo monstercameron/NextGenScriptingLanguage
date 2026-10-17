@@ -1,0 +1,49 @@
+{
+  "name": "text.lines",
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "text": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    { "literal": "text.lines" },
+    { "literal": "--args" },
+    { "json_arguments": true }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": { "kind": "oneshot" },
+    "output": {
+      "type": "list",
+      "encoding": "json",
+      "items": { "type": "text" }
+    },
+    "capabilities": ["text.transform"],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": { "type": "text" },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": { "type": "text" },
+          "delivery": "single",
+          "encoding": "raw"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "list",
+            "items": { "type": "text" }
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

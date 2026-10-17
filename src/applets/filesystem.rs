@@ -872,7 +872,7 @@ fn set_mode(file: &File, mode: u32) -> std::io::Result<()> {
     }
 }
 
-fn hash(content: &[u8]) -> String {
+pub(crate) fn hash(content: &[u8]) -> String {
     to_hex(Sha256::digest(content).as_slice())
 }
 

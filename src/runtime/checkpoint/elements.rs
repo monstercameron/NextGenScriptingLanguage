@@ -865,6 +865,33 @@ impl Drop for Journal {
     }
 }
 
+/// Fuzz entry: replay `bytes` as the element log of an in-flight node, in a fresh
+/// `scratch` directory. Only the log's own reader runs, so a bad line must fail there.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_replay_element_log(scratch: &Path, bytes: &[u8]) -> Result<()> {
+    let options = CheckpointOptions {
+        directory: scratch.join("checkpoint"),
+        program_path: scratch.join("flow.txt"),
+        resume: false,
+        retry_uncertain: false,
+    };
+    fs::write(&options.program_path, "workflow")?;
+    let cwd = scratch.join("work");
+    fs::create_dir_all(&cwd)?;
+    let mut journal = Journal::open_with_inputs(&options, &cwd, "finite", 1024, None)?;
+    journal.begin_node_record(NodeBegin {
+        fingerprint: "fuzz-node",
+        start: 0,
+        end: 2,
+        line: 1,
+        cwd_before: &cwd,
+        retry_safe: true,
+        step_id: None,
+    })?;
+    fs::write(options.directory.join(ELEMENT_LOG), bytes)?;
+    journal.load_elements()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

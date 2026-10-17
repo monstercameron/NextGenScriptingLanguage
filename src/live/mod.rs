@@ -2,12 +2,10 @@
 pub(crate) mod auth;
 mod debug;
 pub(crate) mod state;
-pub(crate) mod transport;
-#[cfg(windows)]
-mod windows_transport;
 mod worker;
-#[cfg(windows)]
-use windows_transport::{Listener as UnixListener, Stream as UnixStream};
+use crate::ipc::peer::peer_is_owner;
+use crate::ipc::transport;
+use crate::ipc::{UnixListener, UnixStream};
 
 use self::auth::{AgentAuthPolicy, AgentCredential, RequestAuth};
 use self::state::*;
@@ -23,8 +21,6 @@ use std::io::{IsTerminal, Read, Write};
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-#[cfg(unix)]
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -807,6 +803,10 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
                     events: libc::POLLIN,
                     revents: 0,
                 };
+                // SAFETY: `listener` is a UnixListener bound earlier in `serve` and borrowed
+                // by this loop, so its fd is open. `poll` is an initialised pollfd local to
+                // this block, and nfds is 1 to match that one entry. The 20 ms timeout is a
+                // non-negative c_int.
                 let ready = unsafe { libc::poll(&mut poll, 1, 20) };
                 if ready < 0 {
                     if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
@@ -918,43 +918,6 @@ fn run_outcome(shared: &Shared) -> Option<RunEnd> {
             })
         }
         _ => None,
-    }
-}
-pub(crate) fn peer_is_owner(stream: &UnixStream) -> bool {
-    #[cfg(unix)]
-    {
-        peer_has_uid(stream, unsafe { libc::geteuid() })
-    }
-    #[cfg(windows)]
-    {
-        stream.peer_is_owner()
-    }
-}
-#[cfg(unix)]
-fn peer_has_uid(stream: &UnixStream, owner: libc::uid_t) -> bool {
-    #[cfg(target_os = "macos")]
-    unsafe {
-        let mut uid = 0;
-        let mut gid = 0;
-        libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) == 0 && uid == owner
-    }
-    #[cfg(target_os = "linux")]
-    unsafe {
-        let mut credentials: libc::ucred = std::mem::zeroed();
-        let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut credentials as *mut libc::ucred).cast(),
-            &mut length,
-        ) == 0
-            && credentials.uid == owner
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        let _ = (stream, owner);
-        false
     }
 }
 fn handle(mut stream: UnixStream, shared: &Shared) {
@@ -1080,10 +1043,13 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
 #[cfg(all(test, unix))]
 mod peer_tests {
     use super::*;
+    use crate::ipc::peer::peer_has_uid;
 
     #[test]
     fn real_socket_credentials_are_checked_in_both_directions() {
         let (left, right) = UnixStream::pair().unwrap();
+        // SAFETY: geteuid takes no arguments, cannot fail, and reads no memory, so the
+        // call has no pointer, lifetime or alignment requirement to uphold.
         let owner = unsafe { libc::geteuid() };
         for peer in [&left, &right] {
             assert!(peer_has_uid(peer, owner));

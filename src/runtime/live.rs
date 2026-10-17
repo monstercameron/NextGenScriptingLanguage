@@ -1,9 +1,13 @@
 //! Opt-in execution adapter for live control. Ordinary runs retain their fast path.
+#[cfg(feature = "live")]
 use super::*;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "live"))]
 mod tests;
 
+/// The state a live session resumes from. Only the live control plane reads or writes it;
+/// a build without `live` carries an empty placeholder so the runtime signature is unchanged.
+#[cfg(feature = "live")]
 #[derive(Clone)]
 pub(crate) struct NodeState {
     pub cwd: PathBuf,
@@ -11,10 +15,16 @@ pub(crate) struct NodeState {
     pub data: Vec<u8>,
 }
 
+#[cfg(not(feature = "live"))]
+#[derive(Clone)]
+pub(crate) struct NodeState;
+
+#[cfg(feature = "live")]
 pub(crate) fn node_end(program: &Program, index: usize) -> usize {
     resume::node_end(program, index)
 }
 
+#[cfg(feature = "live")]
 pub(crate) fn execute_node(
     node: &Program,
     registry: &Registry,
@@ -59,6 +69,7 @@ pub(crate) fn execute_node(
     Ok((result, final_state))
 }
 
+#[cfg(feature = "live")]
 pub(crate) fn producer(
     invocation: &Invocation,
     registry: &Registry,
@@ -83,7 +94,7 @@ pub(crate) fn producer(
         Input::Empty,
         None,
         bindings,
-        &options.working_directory,
+        &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
         options,
         &mut launched,
         &signals,
@@ -92,6 +103,7 @@ pub(crate) fn producer(
     Ok(launched)
 }
 
+#[cfg(feature = "live")]
 pub(crate) fn stream(
     stream: &crate::stream::StreamProgram,
     registry: &Registry,
@@ -125,7 +137,7 @@ pub(crate) fn stream(
         Input::Empty,
         None,
         bindings,
-        &options.working_directory,
+        &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
         options,
         &mut launched,
         &signals,

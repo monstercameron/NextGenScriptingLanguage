@@ -1478,6 +1478,8 @@ fn restrict_file(file: &File) -> Result<(), AppletError> {
 
 fn check_private_metadata(metadata: &fs::Metadata, label: &str) -> Result<(), AppletError> {
     #[cfg(unix)]
+    // SAFETY: geteuid(2) takes no arguments, cannot fail (POSIX), and has no memory preconditions.
+    // Its result is compared with the owner uid in `metadata`.
     if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
         return Err(failed(
             "journal_untrusted",

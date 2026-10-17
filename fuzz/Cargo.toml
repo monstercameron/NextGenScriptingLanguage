@@ -76,3 +76,17 @@ path = "fuzz_targets/record_run.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "element_log"
+path = "fuzz_targets/element_log.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "completed_log"
+path = "fuzz_targets/completed_log.rs"
+test = false
+doc = false
+bench = false

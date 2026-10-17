@@ -2311,6 +2311,7 @@ impl RuntimeGraphExecutor {
         }
     }
 
+    #[cfg(feature = "remote")]
     fn run_remote_listener(
         &self,
         node: &GraphNode,
@@ -2542,8 +2543,24 @@ impl RuntimeGraphExecutor {
         scope.join_all()?;
         Ok(())
     }
+
+    #[cfg(not(feature = "remote"))]
+    fn run_remote_listener(
+        &self,
+        node: &GraphNode,
+        call: &Invocation,
+        _io: &mut NodeIo,
+        _context: &GraphContext,
+    ) -> Result<()> {
+        let _ = call;
+        bail!(
+            "remote event listener {:?} needs a remote backend, and this build has none; use the full build",
+            node.id
+        )
+    }
 }
 
+#[cfg(feature = "remote")]
 enum RemoteListenerMessage {
     Event {
         port: String,
@@ -2555,6 +2572,7 @@ enum RemoteListenerMessage {
     },
 }
 
+#[cfg(feature = "remote")]
 fn pump_remote_event_port(
     client: &crate::remote::RemoteClient,
     descriptor: &crate::remote::RemoteAppletDescriptor,
@@ -2598,6 +2616,7 @@ fn pump_remote_event_port(
     }
 }
 
+#[cfg(feature = "remote")]
 fn send_remote_listener_message(
     sender: &std::sync::mpsc::SyncSender<RemoteListenerMessage>,
     mut message: RemoteListenerMessage,
@@ -2619,6 +2638,7 @@ fn send_remote_listener_message(
     }
 }
 
+#[cfg(feature = "remote")]
 fn check_remote_listener_budget(cancelled: &AtomicBool, deadline: Option<Instant>) -> Result<()> {
     if cancelled.load(Ordering::Acquire) {
         bail!("remote event listener cancelled");

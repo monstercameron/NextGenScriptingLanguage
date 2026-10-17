@@ -72,6 +72,10 @@ impl Drop for SecretToken {
     fn drop(&mut self) {
         // Best-effort clearing for this owned copy. The HTTP library may keep
         // its own header copy until the request is dropped.
+        // SAFETY: `as_mut_vec` lets the caller break the String's UTF-8 invariant, so the loop
+        // must write only bytes that keep it valid: 0 is ASCII, and the length is not changed.
+        // `self` is `&mut`, so the buffer has no other reference, and each `byte` comes from
+        // iterating the Vec's initialized elements, so each write is in bounds.
         unsafe {
             let bytes = self.0.as_mut_vec();
             for byte in bytes {
@@ -92,6 +96,10 @@ impl SecretHeader {
 
 impl Drop for SecretHeader {
     fn drop(&mut self) {
+        // SAFETY: `as_mut_vec` lets the caller break the String's UTF-8 invariant, so the loop
+        // must write only bytes that keep it valid: 0 is ASCII, and the length is not changed.
+        // `self` is `&mut`, so the buffer has no other reference, and each `byte` comes from
+        // iterating the Vec's initialized elements, so each write is in bounds.
         unsafe {
             let bytes = self.0.as_mut_vec();
             for byte in bytes {
@@ -169,6 +177,9 @@ fn read_auth_token(
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::MetadataExt;
+                    // SAFETY: geteuid(2) takes no arguments, cannot fail (POSIX), and has no
+                    // memory preconditions. Its result is compared with the owner uid in
+                    // `metadata`.
                     if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0
                     {
                         return Err(RemoteError::new(

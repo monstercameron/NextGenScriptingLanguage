@@ -69,6 +69,10 @@ pub(crate) fn signals(
 
 pub(crate) fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
     let (source, target) = (wide(source.as_os_str()), wide(target.as_os_str()));
+    // SAFETY: MoveFileExW reads two NUL-terminated UTF-16 paths. `wide` appends the NUL,
+    // and `source` and `target` are locals in this frame that live until the call
+    // returns, so both pointers are valid for the whole call. The result is checked
+    // on the following lines.
     // Both buffers remain alive and NUL-terminated for this call.
     if unsafe {
         MoveFileExW(
@@ -86,13 +90,24 @@ pub(crate) fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> 
 pub(crate) struct Job(OwnedHandle);
 impl Job {
     fn new() -> Result<Self> {
+        // SAFETY: both arguments are null, which asks for default security and an unnamed
+        // job. The returned handle is compared with null on the next line before use.
         let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if raw.is_null() {
             return Err(std::io::Error::last_os_error()).context("creating child job");
         }
+        // SAFETY: `raw` is a non-null job handle that this function just created and checked,
+        // and nothing else holds it, so OwnedHandle takes sole ownership and closes it once.
         let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        // SAFETY: JOBOBJECT_EXTENDED_LIMIT_INFORMATION is a plain C struct of integers and
+        // pointer-sized fields, so the all-zero bit pattern is a valid value. Only LimitFlags
+        // is set below; the other limits stay zero, which means none.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: `handle` owns the live job created above. The info class matches the struct
+        // type, and `limits` is a local whose address and size_of_val are passed together, so
+        // the kernel reads exactly one JOBOBJECT_EXTENDED_LIMIT_INFORMATION. Failure is
+        // checked by the `== 0` test.
         if unsafe {
             SetInformationJobObject(
                 handle.as_raw_handle(),
@@ -107,6 +122,10 @@ impl Job {
         Ok(Self(handle))
     }
     pub(crate) fn terminate(&self) {
+        // SAFETY: self.0 is the job handle owned by this Job. It stays open until Drop and
+        // was created with full access, which includes JOB_OBJECT_TERMINATE. The return
+        // value is ignored on purpose: if termination fails, the job still closes on drop
+        // with KILL_ON_JOB_CLOSE (set in `new`), which ends the children.
         unsafe {
             TerminateJobObject(self.0.as_raw_handle(), 1);
         }
@@ -120,12 +139,18 @@ impl Job {
             .spawn()
             .context("spawning native Windows child")?;
         let setup = (|| -> Result<()> {
+            // SAFETY: `job` and `child` are live for the whole closure. The child was created
+            // suspended (CREATE_SUSPENDED above), so none of its code has run before it joins
+            // the job, and the process handle from CreateProcess has the access this call needs.
             if unsafe { AssignProcessToJobObject(job.0.as_raw_handle(), child.as_raw_handle()) }
                 == 0
             {
                 return Err(std::io::Error::last_os_error()).context("assigning child job");
             }
             let thread = suspended_primary_thread(&child)?;
+            // SAFETY: `thread` is the suspended primary thread of `child`, as returned by
+            // suspended_primary_thread. It was opened with THREAD_SUSPEND_RESUME and stays open
+            // for this call. ResumeThread reports failure as u32::MAX, which the test checks.
             if unsafe { ResumeThread(thread.as_raw_handle()) } == u32::MAX {
                 return Err(std::io::Error::last_os_error()).context("resuming child");
             }
@@ -175,6 +200,10 @@ fn process_only_primary_thread(process: HANDLE, pid: u32) -> Option<OwnedHandle>
     // SAFETY: the process handle is owned by the live child; the output
     // pointer refers to a local handle slot.
     let status =
+        // SAFETY: `process` is the live child process handle, and a null thread argument asks
+        // NtGetNextThread for the first thread of that process. `&mut first` is a local output
+        // slot. NtGetNextThread is undocumented, so this relies on its observed behaviour, not
+        // a published contract; the status and null checks below guard the returned handle.
         unsafe { NtGetNextThread(process, std::ptr::null_mut(), access, 0, 0, &mut first) };
     if status != 0 || first.is_null() {
         return None;
@@ -184,6 +213,9 @@ fn process_only_primary_thread(process: HANDLE, pid: u32) -> Option<OwnedHandle>
     let mut second: HANDLE = std::ptr::null_mut();
     // SAFETY: `first` is an open thread handle with the access requested above.
     let next =
+        // SAFETY: `first` is the thread handle returned by the call above (checked non-null),
+        // used as the start point of the enumeration. `&mut second` is a local output slot.
+        // The same undocumented-API caveat as the call above applies.
         unsafe { NtGetNextThread(process, first.as_raw_handle(), access, 0, 0, &mut second) };
     if next == 0 {
         // SAFETY: a successful call transferred a second owned handle.
@@ -201,24 +233,38 @@ fn process_only_primary_thread(process: HANDLE, pid: u32) -> Option<OwnedHandle>
 }
 
 fn snapshot_primary_thread(pid: u32) -> Result<OwnedHandle> {
+    // SAFETY: a thread snapshot takes no process argument (0 is ignored), and the returned
+    // handle is compared with INVALID_HANDLE_VALUE on the next line before use.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
     if snapshot == INVALID_HANDLE_VALUE {
         return Err(std::io::Error::last_os_error())
             .context("enumerating suspended primary thread");
     }
+    // SAFETY: the snapshot is not INVALID_HANDLE_VALUE (the early return above handles
+    // that), so it is an open handle. OwnedHandle takes sole ownership and closes it once.
     let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
+    // SAFETY: THREADENTRY32 is a plain struct of u32 fields, so all zeroes is a valid value.
+    // dwSize is set on the next line, which Toolhelp requires before enumerating.
     let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
     entry.dwSize = std::mem::size_of_val(&entry) as u32;
+    // SAFETY: `snapshot` is the open snapshot handle owned above, and `entry` is a writable
+    // THREADENTRY32 whose dwSize was set just before this call.
     let mut available = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) };
     while available != 0 {
         if entry.th32OwnerProcessID == pid {
+            // SAFETY: OpenThread takes a plain access mask, no inheritance and a thread id copied
+            // from the snapshot entry. A null result (the thread has already exited) is checked.
             let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
             if thread.is_null() {
                 return Err(std::io::Error::last_os_error())
                     .context("opening suspended child thread");
             }
+            // SAFETY: `thread` is non-null, since the branch above returned on null, so it is an
+            // open handle that OpenThread created and OwnedHandle now owns.
             return Ok(unsafe { OwnedHandle::from_raw_handle(thread) });
         }
+        // SAFETY: the same open snapshot and the entry initialised before the loop, which
+        // Thread32Next updates in place. The loop continues only while `available` is nonzero.
         available = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
     }
     bail!("suspended primary thread not found")
@@ -228,6 +274,9 @@ fn snapshot_primary_thread(pid: u32) -> Result<OwnedHandle> {
 /// this many bytes cannot block; BrokenPipe is an ordinary EOF.
 pub(crate) fn available(handle: HANDLE) -> std::io::Result<Option<usize>> {
     let mut bytes = 0;
+    // SAFETY: `handle` must be an owned pipe handle (see the doc comment above).
+    // PeekNamedPipe with a null buffer and size 0 copies nothing and does not block, and
+    // `&mut bytes` is a valid u32 out-slot. An invalid handle makes it fail, not misbehave.
     if unsafe {
         PeekNamedPipe(
             handle,
@@ -254,8 +303,14 @@ pub(crate) fn available(handle: HANDLE) -> std::io::Result<Option<usize>> {
 /// Duplicate a synchronous pipe handle for one bounded I/O operation. The
 /// caller owns and joins any thread using the duplicate before returning.
 pub(crate) fn duplicate_handle_file(handle: HANDLE) -> Result<File> {
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that is always valid and needs no
+    // closing. The source `handle` must stay open in this process for the whole call. The
+    // function does not check that itself; its callers keep the handle alive.
     let process = unsafe { GetCurrentProcess() };
     let mut duplicate = std::ptr::null_mut();
+    // SAFETY: `process` is the current-process pseudo-handle, `handle` is open as described
+    // above, and `&mut duplicate` is a valid out-slot. DUPLICATE_SAME_ACCESS keeps the
+    // source access. The BOOL result is checked for zero below before `duplicate` is used.
     if unsafe {
         DuplicateHandle(
             process,
@@ -271,12 +326,17 @@ pub(crate) fn duplicate_handle_file(handle: HANDLE) -> Result<File> {
         return Err(std::io::Error::last_os_error())
             .context("duplicating synchronous worker pipe handle");
     }
+    // SAFETY: DuplicateHandle succeeded (the early return above handles failure), so
+    // `duplicate` is a new open handle that nothing else owns. File takes sole ownership.
     Ok(unsafe { File::from_raw_handle(duplicate) })
 }
 
 /// Request cancellation of a blocking synchronous OS call on an owned thread.
 /// The caller remains responsible for joining the thread.
 pub(crate) fn cancel_synchronous_io<T>(worker: &std::thread::JoinHandle<T>) {
+    // SAFETY: `worker` is a live JoinHandle, so its native thread handle stays valid until
+    // the caller joins it. CancelSynchronousIo only requests cancellation of that thread's
+    // pending synchronous I/O; it does not free or close anything.
     unsafe {
         CancelSynchronousIo(worker.as_raw_handle());
     }
@@ -284,11 +344,19 @@ pub(crate) fn cancel_synchronous_io<T>(worker: &std::thread::JoinHandle<T>) {
 
 pub(crate) fn user_sid(process: HANDLE) -> Result<Vec<u8>> {
     let mut token = std::ptr::null_mut();
+    // SAFETY: `process` must be an open process handle that allows TOKEN_QUERY. The function
+    // does not check that, and a bad handle only yields the error path. `token` is a local
+    // out-slot, and the failure branch returns before the handle is used.
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
         return Err(std::io::Error::last_os_error()).context("reading process user");
     }
+    // SAFETY: OpenProcessToken succeeded (the failure branch returned above), so `token` is a
+    // new open handle that nothing else owns. OwnedHandle closes it once on drop.
     let token = unsafe { OwnedHandle::from_raw_handle(token) };
     let mut size = 0;
+    // SAFETY: a null buffer with length 0 is the documented size query. The call fails with
+    // ERROR_INSUFFICIENT_BUFFER and writes the required length to `size`, which the next
+    // call uses. The return value is intentionally not checked here; the second call is.
     unsafe {
         GetTokenInformation(
             token.as_raw_handle(),
@@ -299,6 +367,9 @@ pub(crate) fn user_sid(process: HANDLE) -> Result<Vec<u8>> {
         );
     }
     let mut data = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+    // SAFETY: `data` holds at least `size` bytes (div_ceil rounds up to whole usize units),
+    // and a Vec<usize> is aligned for TOKEN_USER. `size` is the length the query reported,
+    // so the call writes only inside the buffer; `token` is still open here.
     if unsafe {
         GetTokenInformation(
             token.as_raw_handle(),
@@ -311,9 +382,16 @@ pub(crate) fn user_sid(process: HANDLE) -> Result<Vec<u8>> {
     {
         return Err(std::io::Error::last_os_error()).context("reading process user SID");
     }
+    // SAFETY: the successful TokenUser query above wrote a TOKEN_USER at the start of `data`,
+    // which is usize-aligned. The reference borrows `data`, and `data` is neither moved nor
+    // resized while it is used.
     let user = unsafe { &*(data.as_ptr().cast::<TOKEN_USER>()) };
+    // SAFETY: `User.Sid` points at the SID that GetTokenInformation wrote into `data`, which
+    // is still alive, so GetLengthSid reads only memory that the query filled.
     let length = unsafe { GetLengthSid(user.User.Sid) };
     let mut sid = vec![0u8; length as usize];
+    // SAFETY: `sid` has exactly `length` bytes, the size GetLengthSid reported for the source
+    // SID in the live `data` buffer. The two allocations do not overlap.
     if unsafe { CopySid(length, sid.as_mut_ptr().cast(), user.User.Sid) } == 0 {
         return Err(std::io::Error::last_os_error()).context("copying user SID");
     }
@@ -324,16 +402,27 @@ pub(crate) struct PrivateSecurity {
 }
 impl PrivateSecurity {
     pub(crate) fn new() -> Result<Self> {
+        // SAFETY: GetCurrentProcess returns the current-process pseudo-handle, which is always
+        // valid and needs no closing. user_sid only queries that process's token.
         let sid = user_sid(unsafe { GetCurrentProcess() })?;
         let mut text = std::ptr::null_mut();
+        // SAFETY: `sid` is the valid SID copied by user_sid and is still alive during the call.
+        // On success `text` is a LocalAlloc'd, NUL-terminated string that is freed below; the
+        // failure case is the `== 0` branch.
         if unsafe { ConvertSidToStringSidW(sid.as_ptr().cast_mut().cast(), &mut text) } == 0 {
             return Err(std::io::Error::last_os_error()).context("encoding user SID");
         }
         let mut length = 0;
+        // SAFETY: `text` is the non-null NUL-terminated string from ConvertSidToStringSidW, so
+        // every index before the terminator is inside its allocation.
         while unsafe { *text.add(length) } != 0 {
             length += 1;
         }
+        // SAFETY: the `length` units before the terminator lie inside the string allocation, and
+        // the slice is copied into an owned String before LocalFree runs below.
         let sid_text = String::from_utf16(unsafe { std::slice::from_raw_parts(text, length) })?;
+        // SAFETY: `text` came from ConvertSidToStringSidW, which allocates it with LocalAlloc, so
+        // LocalFree is its matching release. It is freed once and not read afterwards.
         unsafe {
             LocalFree(text.cast());
         }
@@ -341,6 +430,9 @@ impl PrivateSecurity {
             "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;{sid_text})"
         )));
         let mut descriptor = std::ptr::null_mut();
+        // SAFETY: `sddl` is the NUL-terminated UTF-16 string built by `wide` above, and
+        // SDDL_REVISION_1 is the only defined revision. On success `descriptor` is a LocalAlloc'd
+        // security descriptor that PrivateSecurity owns and frees in Drop.
         if unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 sddl.as_ptr(),
@@ -355,6 +447,7 @@ impl PrivateSecurity {
         }
         Ok(Self { descriptor })
     }
+    #[cfg(feature = "live")]
     pub(crate) fn attributes(&self) -> SECURITY_ATTRIBUTES {
         SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -364,6 +457,9 @@ impl PrivateSecurity {
     }
     fn apply(&self, file: &File) -> Result<()> {
         let (mut present, mut defaulted, mut dacl) = (0, 0, std::ptr::null_mut());
+        // SAFETY: `self.descriptor` is the live descriptor from `new`, freed only in Drop, so it
+        // outlives this call. The DACL pointer is an output into that descriptor and is used only
+        // while `self` is borrowed; `present` is checked before the DACL is used.
         if unsafe {
             GetSecurityDescriptorDacl(self.descriptor, &mut present, &mut dacl, &mut defaulted)
         } == 0
@@ -371,6 +467,9 @@ impl PrivateSecurity {
         {
             bail!("private DACL is unavailable");
         }
+        // SAFETY: `file` is a live File, so its handle is a valid file object for SE_FILE_OBJECT.
+        // `dacl` points into the live descriptor (see above) and SetSecurityInfo only reads it.
+        // Missing WRITE_DAC access returns an error code, which is checked below.
         let error = unsafe {
             SetSecurityInfo(
                 file.as_raw_handle(),
@@ -391,6 +490,9 @@ impl PrivateSecurity {
 }
 impl Drop for PrivateSecurity {
     fn drop(&mut self) {
+        // SAFETY: `descriptor` was allocated with LocalAlloc by the conversion in `new` and is
+        // freed only here. PrivateSecurity is not Clone and is dropped once, so no other owner
+        // exists. Copies handed out by `attributes` must not be used after this point.
         unsafe {
             LocalFree(self.descriptor);
         }
@@ -419,7 +521,12 @@ pub(crate) fn directory_identity(path: &Path) -> Result<(u32, u64)> {
         .access_mode(FILE_READ_ATTRIBUTES)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
+    // SAFETY: BY_HANDLE_FILE_INFORMATION is a plain struct of integer fields, so the all-zero
+    // bit pattern is valid. GetFileInformationByHandle fills it in before any field is read.
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` is alive for this call and was opened with FILE_READ_ATTRIBUTES, and
+    // `info` is a writable out-struct of the type the API fills. The file was opened with
+    // FILE_FLAG_OPEN_REPARSE_POINT, so the attributes describe the link itself.
     if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
         return Err(std::io::Error::last_os_error()).context("reading directory identity");
     }
@@ -432,7 +539,12 @@ pub(crate) fn directory_identity(path: &Path) -> Result<(u32, u64)> {
     ))
 }
 pub(crate) fn lock(file: &File) -> Result<()> {
+    // SAFETY: OVERLAPPED is a plain C struct, so the all-zero bit pattern is valid. A zero
+    // offset is the start of the file, which the whole-file range below begins from.
     let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` is a live File, and `overlapped` is a local that stays in scope for this
+    // synchronous call. The range u32::MAX..u32::MAX locks the whole file. LockFileEx needs
+    // a handle with GENERIC_READ or GENERIC_WRITE; otherwise it fails and the error returns.
     if unsafe {
         LockFileEx(
             file.as_raw_handle(),
@@ -579,6 +691,9 @@ impl Pump {
         drop(self.receiver.take());
         if let Some(worker) = self.worker.take() {
             while !worker.is_finished() {
+                // SAFETY: `worker` is not joined until after this loop, so its handle is valid.
+                // Cancel repeats each millisecond until the thread ends, which also covers an I/O
+                // call that starts after an earlier cancel.
                 unsafe {
                     CancelSynchronousIo(worker.as_raw_handle());
                 }
@@ -600,17 +715,27 @@ mod tests {
     use std::os::windows::process::CommandExt;
 
     fn snapshot_owned_thread_ids(pid: u32) -> Vec<u32> {
+        // SAFETY: a thread snapshot takes no process argument (0 is ignored), and the handle is
+        // checked against INVALID_HANDLE_VALUE by the assert on the next line.
         let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
         assert_ne!(snapshot, INVALID_HANDLE_VALUE);
+        // SAFETY: the assert above panics unless `snapshot` is valid, so OwnedHandle owns an
+        // open handle and closes it once.
         let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
+        // SAFETY: THREADENTRY32 is a plain u32 struct, so all zeroes is a valid value. dwSize is
+        // set on the next line, as Toolhelp requires before enumeration.
         let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
         entry.dwSize = std::mem::size_of_val(&entry) as u32;
         let mut ids = Vec::new();
+        // SAFETY: `snapshot` is open and `entry` is writable, with dwSize set above as Toolhelp
+        // requires before the first Thread32First call.
         let mut more = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) };
         while more != 0 {
             if entry.th32OwnerProcessID == pid {
                 ids.push(entry.th32ThreadID);
             }
+            // SAFETY: the same open snapshot and initialised entry as the Thread32First call
+            // above; the loop continues only while the previous call returned nonzero.
             more = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
         }
         ids
@@ -629,10 +754,14 @@ mod tests {
         let owned = snapshot_owned_thread_ids(child.id());
         assert_eq!(owned.len(), 1, "a suspended child has one thread");
         assert_eq!(
+            // SAFETY: `fast` is the thread handle from process_only_primary_thread, which
+            // requested THREAD_QUERY_LIMITED_INFORMATION, the access GetThreadId needs.
             unsafe { GetThreadId(fast.as_raw_handle()) },
             owned[0],
             "per-process lookup must name the suspended primary thread"
         );
+        // SAFETY: `fast` was opened with THREAD_SUSPEND_RESUME by the lookup under test, and the
+        // child was created with CREATE_SUSPENDED, so the previous suspend count is 1.
         assert_eq!(unsafe { ResumeThread(fast.as_raw_handle()) }, 1);
         assert!(child.wait().expect("waiting for child").success());
     }

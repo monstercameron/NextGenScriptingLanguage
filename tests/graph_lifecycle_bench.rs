@@ -294,7 +294,11 @@ fn proc_snapshot() -> ProcSnapshot {
 
 #[cfg(target_os = "linux")]
 fn cpu_time_us() -> u64 {
+    // SAFETY: `libc::rusage` is a plain C struct of integers and `timeval`s, for which the
+    // all-zero bit pattern is valid. It is overwritten by `getrusage` on the next line.
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: `RUSAGE_SELF` is a valid `who` value and `&mut usage` points to a live,
+    // initialised `rusage` that the kernel fills in. The pointer is not retained.
     let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
     assert_eq!(result, 0, "getrusage");
     let time = |value: libc::timeval| value.tv_sec as u64 * 1_000_000 + value.tv_usec as u64;

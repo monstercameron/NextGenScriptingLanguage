@@ -1006,7 +1006,7 @@ pub fn command_for<I, S>(
     arguments: I,
     registry: &Registry,
     applet_name: &str,
-    cwd: &Path,
+    cwd: &crate::working_dir::WorkingDirectory,
 ) -> Result<Command>
 where
     I: IntoIterator<Item = S>,
@@ -1036,11 +1036,8 @@ where
             )
             .map_err(|_| anyhow!("could not register declared child environment secrets"))?;
             let mut command = Command::new(binary);
-            command
-                .args(arguments)
-                .env_clear()
-                .envs(environment)
-                .current_dir(cwd);
+            command.args(arguments).env_clear().envs(environment);
+            cwd.apply(&mut command);
             return Ok(command);
         }
         Err(error) => {
@@ -1060,11 +1057,8 @@ where
         crate::security::capture_declared_environment_secrets(registry, applet_name, &environment)
             .map_err(|_| anyhow!("could not register declared child environment secrets"))?;
         let mut command = Command::new(binary);
-        command
-            .args(arguments)
-            .env_clear()
-            .envs(environment)
-            .current_dir(cwd);
+        command.args(arguments).env_clear().envs(environment);
+        cwd.apply(&mut command);
         return Ok(command);
     };
     policy.validate()?;
@@ -1108,7 +1102,7 @@ where
         command
     };
     command.env_clear().envs(environment);
-    command.current_dir(cwd);
+    cwd.apply(&mut command);
     Ok(command)
 }
 

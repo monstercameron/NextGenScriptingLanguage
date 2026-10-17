@@ -1,3 +1,4 @@
+#![cfg(feature = "remote")]
 use flow::ast::Value;
 use flow::contracts::{
     AppletBackend, AppletContract, AppletPort, AppletPorts, EffectCertainty, Lifecycle,

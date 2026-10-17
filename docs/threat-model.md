@@ -104,6 +104,24 @@ Severity scale: **High** breaks a documented guarantee for a supported configura
 | H8 | The macOS sandbox uses the deprecated, undocumented `sandbox-exec` interface. | Low | *From SECURITY.md* |
 | H9 | Live control is a same-user plane that grants native execution as that user. | Informational | *From SECURITY.md* |
 | H10 | Explicit paths follow symbolic links and `..` by design under Bash's trust model. | Informational | *From SECURITY.md* |
+| H11 | Checkpoint input digests were unkeyed SHA-256, so low-entropy inputs could be guessed from a journal. **Fixed:** new checkpoints record an HMAC under the per-user key. Journals written before the switch match the legacy digest once, and the resume rewrites them with the keyed digest. A marked journal never matches the legacy digest. Journals from before the switch also lack the keyed marker, so the rule is version-gated by that marker. A newer build's journals are refused by older builds. | Medium, fixed | *audit* |
+| H12 | The working directory set by `use folder` was re-resolved by path. **Narrowed:** the folder is opened first, the authorized path is the one the handle names, and launched children enter the opened directory with `fchdir` before `exec`. Still path-based: sandboxed children (the sandbox sets its own directory), the `cd` builtin, and the runtime's own relative file operations, which are checked on their resolved targets when they open. | Low, narrowed from Medium | *audit* |
+| H13 | Read and use-folder identity checks use device and inode on Unix only. Windows has no equivalent check. | Low | *audit* |
+| H14 | Redaction matches exact secret values only; a derived value (a substring, an encoding, a case change) is not redacted. | Low | *audit* |
+| H15 | Relative `PATH` entries resolve against the working directory, as in Bash. A program that chooses both the directory and `PATH` from data can run an executable from that directory. | Low, Bash-model | *audit* |
+| H16 | With no policy, a child inherits the caller's full environment, except that the dynamic loader's variables (`LD_*`, `DYLD_*`) cannot be set from a program or manifest. | Informational, Bash-model | *audit* |
+| H17 | Applet stdout is passed through raw so Unix pipes keep their bytes. Terminal control bytes in error text and diagnostics are escaped; streamed stdout is not. | Informational | *audit* |
+| H18 | Background jobs, listeners and persistent workers launch with a path-based working directory, not the run's directory handle. A link swapped in after the run's `use folder` check can move them. | Low, follow-up | *audit* |
 
-Audit findings are listed here with an ID, a severity and the test that shows them,
-once confirmed. Until then, no audit finding is claimed.
+Fixed in the audit, with the test that shows each fix:
+
+- Error text reaching stderr escapes control bytes (`terminal_text::escape_controls`, unit test).
+- `and environment` refuses `LD_*` and `DYLD_*` without a policy (`tests/security_fixes.rs`).
+- A one-of input error does not echo a sensitive value (`tests/security_fixes.rs`).
+- `Read` and `use folder` authorize the resolved path and check identity against the opened file (`tests/security_fixes.rs`, Unix links module).
+- Record blob names must be the writer's `blobs/<sha256>` form, and record files are read without following links (unit tests in `src/record.rs`).
+- A journal written before the keyed digest matches its legacy digest once and is rewritten with the keyed digest; a keyed journal never matches the legacy digest (unit tests `a_legacy_journal_matches_its_unkeyed_digest_once_and_migrates_to_the_keyed_form` and `a_legacy_digest_is_refused_for_a_keyed_journal_and_for_changed_inputs` in `src/runtime/checkpoint.rs`, Unix-only).
+- A secret prompt on Windows refuses to run if echo cannot be turned off.
+- `ensure` rechecks the link type just before it renames a replacement link (narrow window remains).
+
+The checks in `tests/security_fixes.rs` marked Unix run on Linux and macOS in CI.

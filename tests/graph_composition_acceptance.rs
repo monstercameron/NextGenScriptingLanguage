@@ -792,6 +792,8 @@ fn wait_for_metric(metric: impl Fn() -> usize, count: usize, timeout: Duration) 
 fn assert_process_reaped(pid: i32) {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
+        // SAFETY: signal 0 delivers no signal; it only asks the kernel whether `pid` names a
+        // process. A zombie still answers the probe, so ESRCH means `pid` has been reaped.
         let result = unsafe { libc::kill(pid, 0) };
         if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
             return;

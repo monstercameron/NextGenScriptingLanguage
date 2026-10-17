@@ -23,6 +23,8 @@ pub const TARGETS: &[&str] = &[
     "checkpoint_journal",
     "graph_journal",
     "record_run",
+    "element_log",
+    "completed_log",
 ];
 
 /// Feed one input to a named target. Malformed input returns an error, which is the
@@ -51,6 +53,8 @@ pub fn run(target: &str, data: &[u8]) {
         "checkpoint_journal" => checkpoint_journal(data),
         "graph_journal" => graph_journal(data),
         "record_run" => record_run(data),
+        "element_log" => element_log(data),
+        "completed_log" => completed_log(data),
         other => panic!("unknown fuzz target {other:?}"),
     }
 }
@@ -99,7 +103,7 @@ fn live_frame(data: &[u8]) {
     let _ = writer.write_all(data);
     drop(writer);
     if let Ok(bytes) =
-        crate::live::transport::read_message(&mut reader, LIVE_FRAME_LIMIT, Duration::from_secs(1))
+        crate::ipc::transport::read_message(&mut reader, LIVE_FRAME_LIMIT, Duration::from_secs(1))
     {
         let _ = serde_json::from_slice::<serde_json::Value>(&bytes);
     }
@@ -144,6 +148,22 @@ fn record_run(data: &[u8]) {
     if write_private(&run_path, run).is_ok() && write_private(&trace_path, trace).is_ok() {
         let _ = crate::record::StoredRecord::open(scratch.path());
     }
+}
+
+/// The per-element checkpoint log of an in-flight `for each` node.
+fn element_log(data: &[u8]) {
+    let Some(scratch) = Scratch::new("elements") else {
+        return;
+    };
+    let _ = crate::runtime::checkpoint::fuzz_replay_element_log(scratch.path(), data);
+}
+
+/// The append-only completed-node log of a checkpoint.
+fn completed_log(data: &[u8]) {
+    let Some(scratch) = Scratch::new("completed") else {
+        return;
+    };
+    let _ = crate::runtime::checkpoint::fuzz_read_completed_log(scratch.path(), data);
 }
 
 /// A directory for one fuzz iteration, removed when dropped.

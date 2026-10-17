@@ -1,5 +1,6 @@
 {
   "name": "desktop.quickshell",
+  "build_feature": "desktop",
   "binary": "qs",
   "accepts_stdin": false,
   "parameters": {

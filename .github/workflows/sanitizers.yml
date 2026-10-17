@@ -1,0 +1,77 @@
+name: Sanitizers
+# Nightly runs of the unit tests under Miri (pure modules only) and under AddressSanitizer
+# and ThreadSanitizer (Linux, nightly, -Zbuild-std). Miri cannot run file-system or
+# process code, so it runs only the modules that are pure: the parser, diagnostics,
+# contracts, and the env-file applet. Sanitizer jobs run the library's unit tests.
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sanitizers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  miri:
+    name: Miri (pure modules)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: nightly
+          components: miri, rust-src
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Set up the Miri sysroot
+        run: cargo +nightly miri setup
+      - name: Run pure-module unit tests under Miri
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+        run: |
+          for filter in parser:: diagnostics:: contracts:: applets::env_file::; do
+            cargo +nightly miri test --locked --lib "$filter"
+          done
+  asan:
+    name: AddressSanitizer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      RUSTFLAGS: -Zsanitizer=address
+      RUSTDOCFLAGS: -Zsanitizer=address
+      # Leak detection is off until the existing leak baseline is triaged; memory errors
+      # still abort the test run.
+      ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: nightly
+          components: rust-src
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Run library unit tests under AddressSanitizer
+        run: cargo +nightly test -Zbuild-std --locked --target x86_64-unknown-linux-gnu --lib
+  tsan:
+    name: ThreadSanitizer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      RUSTFLAGS: -Zsanitizer=thread
+      RUSTDOCFLAGS: -Zsanitizer=thread
+      TSAN_OPTIONS: halt_on_error=1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: nightly
+          components: rust-src
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Run library unit tests under ThreadSanitizer
+        run: cargo +nightly test -Zbuild-std --locked --target x86_64-unknown-linux-gnu --lib

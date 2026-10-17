@@ -176,7 +176,13 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     if secret {
         // A secret answer is never read with echo on. If the console mode cannot be
         // changed, refuse the prompt rather than show the answer.
+        // SAFETY: `handle` is the raw handle of `input`, a File this function owns and keeps alive
+        // until after the mode calls. `&mut mode` is a valid, exclusive pointer to a local u32
+        // that GetConsoleMode writes through. A zero return is checked before `mode`.
         if unsafe { GetConsoleMode(handle, &mut mode) } == 0
+            // SAFETY: this call runs only when GetConsoleMode above returned nonzero, so `mode`
+            // holds a console mode the API returned. Clearing ENABLE_ECHO_INPUT changes only that
+            // flag.
             || unsafe { SetConsoleMode(handle, mode & !ENABLE_ECHO_INPUT) } == 0
         {
             return Err(anyhow::anyhow!(
@@ -187,6 +193,9 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     }
     let answer = read_answer(&mut input);
     if let Some(mode) = saved {
+        // SAFETY: `handle` is still the live handle of `input`, which is in scope here, and `mode`
+        // is the value GetConsoleMode returned (`saved` is set only after that call succeeded).
+        // The return value is ignored, so the restore is not confirmed.
         unsafe { SetConsoleMode(handle, mode) };
         writeln!(output).ok();
     }
@@ -217,11 +226,16 @@ impl EchoOff {
     fn new(fd: std::os::unix::io::RawFd) -> Result<Self> {
         // SAFETY: termios is plain data, and tcgetattr fills it in for a valid fd.
         let mut saved: libc::termios = unsafe { std::mem::zeroed() };
+        // SAFETY: `saved` is a live, zero-initialized termios, and tcgetattr writes only through
+        // the pointer. A bad or non-terminal descriptor makes it return -1, which is checked.
         if unsafe { libc::tcgetattr(fd, &mut saved) } != 0 {
             return Err(std::io::Error::last_os_error()).context("reading terminal settings");
         }
         let mut quiet = saved;
         quiet.c_lflag &= !libc::ECHO;
+        // SAFETY: `quiet` is a copy of `saved` that tcgetattr filled in, with ECHO cleared, and fd
+        // is the descriptor that call accepted. TCSANOW only reads `quiet`. The caller keeps fd
+        // open for this value's lifetime (`tty` in terminal_ask outlives `echo`).
         if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &quiet) } != 0 {
             return Err(std::io::Error::last_os_error()).context("turning echo off");
         }

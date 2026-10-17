@@ -84,6 +84,7 @@ pub fn classify(error: &anyhow::Error) -> (&'static str, &'static str) {
     {
         return ("remote_failed", "remote");
     }
+    #[cfg(feature = "live")]
     if error
         .downcast_ref::<crate::live::auth::AuthError>()
         .is_some()

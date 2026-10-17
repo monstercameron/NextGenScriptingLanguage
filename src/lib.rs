@@ -33,7 +33,7 @@ pub mod program_files;
 pub mod prompt;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod record;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "remote", not(target_arch = "wasm32")))]
 pub mod remote;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repair;
@@ -56,11 +56,14 @@ pub mod suggest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tasks;
 pub mod terminal_text;
+pub mod working_dir;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ui;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod ipc;
+#[cfg(all(feature = "live", not(target_arch = "wasm32")))]
 pub mod live;
 
 #[cfg(all(feature = "fuzzing", not(target_arch = "wasm32")))]

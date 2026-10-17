@@ -1,3 +1,4 @@
+#![cfg(feature = "remote")]
 use flow::contracts::{
     AppletBackend, AppletContract, AppletPort, AppletPorts, EffectCertainty, Lifecycle,
     OutcomeKind, OutcomeSpec, OutputEncoding, OutputType, PortDelivery, RemoteAuthSource,
@@ -857,6 +858,8 @@ fn cancellation_kills_and_reaps_the_supervised_dns_helper() {
         .unwrap()
         .parse::<i32>()
         .unwrap();
+    // SAFETY: signal 0 sends nothing and takes only an integer. `pid` is the resolver
+    // helper's PID that it published to `pid_path` (parsed just above) for this test.
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(
         std::io::Error::last_os_error().raw_os_error(),
@@ -1030,6 +1033,8 @@ fn bearer_file_requires_owner_private_regular_file_and_resolves_relative_to_base
     let client = RemoteClient::new_with_credential_base(config.clone(), directory.path()).unwrap();
     assert_eq!(client.bearer_file_path().unwrap(), credential);
     let metadata = std::fs::metadata(&credential).unwrap();
+    // SAFETY: geteuid takes no arguments, cannot fail, and only reports the calling process's
+    // effective uid; no memory is touched.
     assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
     server.join().unwrap();
 
@@ -1042,6 +1047,9 @@ fn bearer_file_requires_owner_private_regular_file_and_resolves_relative_to_base
 
     let fifo = directory.path().join("credential.fifo");
     let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: `fifo_name` is a CString built just above from the path, so it is NUL-terminated
+    // and outlives the call. mkfifo only reads the path, and the fifo path is new in this
+    // fresh tempdir.
     assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
     config.auth = Some(RemoteAuthSource::BearerFile { path: fifo });
     let error = RemoteClient::new_with_credential_base(config, directory.path())

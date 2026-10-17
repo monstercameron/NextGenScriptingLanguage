@@ -17,9 +17,10 @@ pub extern "C" fn allocate(length: usize) -> *mut u8 {
 /// `pointer,length` must be an unfreed allocation returned by allocate or execute.
 #[no_mangle]
 pub unsafe extern "C" fn release(pointer: *mut u8, length: usize) {
-    drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
-        pointer, length,
-    )));
+    // SAFETY: the `# Safety` contract above makes `pointer,length` an unfreed allocation that
+    // allocate or execute returned as a boxed slice of exactly `length` bytes, so reclaiming it
+    // as a Box<[u8]> here is the matching free and happens once.
+    drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(pointer, length)) });
 }
 
 /// Consumes its input allocation and returns an owned output (pointer << 32 | length).
@@ -27,7 +28,10 @@ pub unsafe extern "C" fn release(pointer: *mut u8, length: usize) {
 /// Input must be an initialized allocation returned by allocate, used once.
 #[no_mangle]
 pub unsafe extern "C" fn execute(pointer: *mut u8, length: usize) -> u64 {
-    let bytes = Box::from_raw(std::ptr::slice_from_raw_parts_mut(pointer, length));
+    // SAFETY: the `# Safety` contract above makes `pointer,length` an initialized allocation
+    // that allocate returned, and it is used once, so taking ownership of it as a Box<[u8]>
+    // is sound and the input buffer is freed when `bytes` drops.
+    let bytes = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(pointer, length)) };
     let result = match serde_json::from_slice::<Request>(&bytes) {
         Ok(request) => SESSION
             .with(|session| serde_json::to_vec(&session.borrow_mut().handle(request)).unwrap()),

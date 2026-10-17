@@ -422,6 +422,8 @@ fn a_forwarded_run_creates_files_with_the_clients_umask() {
         let work = tempfile::tempdir().unwrap();
         // SAFETY: umask is safe between fork and exec.
         let output = run_source_with(runtime.path(), work.path(), source, &extra, || {
+            // SAFETY: this closure is the `pre_exec` hook, so it runs in the forked child before
+            // exec. `umask` is async-signal-safe, cannot fail, and changes only that child's mask.
             unsafe { libc::umask(0o077) };
             Ok(())
         });

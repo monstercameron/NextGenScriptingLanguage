@@ -11,6 +11,11 @@ on:
   schedule:
     - cron: '23 2 * * *'
   workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds each target runs (a short value confirms the workflow cheaply)'
+        required: false
+        default: '1200'
 permissions:
   contents: read
 concurrency:
@@ -49,6 +54,8 @@ jobs:
           - checkpoint_journal
           - graph_journal
           - record_run
+          - element_log
+          - completed_log
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,7 +67,7 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install --locked --version 0.13.2 cargo-fuzz
       - name: Fuzz ${{ matrix.target }} for 20 minutes
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=1200 -timeout=10 -rss_limit_mb=2048
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=${{ github.event.inputs.seconds || 1200 }} -timeout=10 -rss_limit_mb=2048
       - name: Keep any crash or timeout input
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

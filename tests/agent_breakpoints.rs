@@ -1,3 +1,4 @@
+#![cfg(feature = "live")]
 //! Breakpoints and statement stepping on a hosted run (`execute run FILE --control`).
 //! The program sleeps first so the breakpoint is set before the loop starts.
 

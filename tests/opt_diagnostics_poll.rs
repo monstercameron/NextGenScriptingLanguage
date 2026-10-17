@@ -157,6 +157,9 @@ fn assert_worker_reaped(directory: &Path) {
         .unwrap()
         .parse()
         .unwrap();
+    // SAFETY: signal 0 delivers nothing. `pid` is the worker shell's PID, written to the `pid`
+    // file before the worker runs `exec sleep 30`; exec keeps the PID, so the probe names the
+    // worker process itself.
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(
         std::io::Error::last_os_error().raw_os_error(),

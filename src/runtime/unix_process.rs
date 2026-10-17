@@ -11,6 +11,9 @@ struct Children(Vec<ManagedChild>, Option<Arc<Mutex<Vec<bool>>>>);
 fn kill_group(child: &Child) {
     // Each applet starts its own group. A negative PID addresses descendants
     // that retain that group, without touching the runner or its terminal.
+    // SAFETY: kill(2) takes no pointers. `child` was spawned with process_group(0), so its
+    // pid is its process group id, and -pid names that group. When `listen` calls this after
+    // reaping, the id is valid only while the group still has members.
     unsafe {
         libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
     }
@@ -92,7 +95,11 @@ fn write_input(
     // This is the newly created pipe's private write end, owned by this worker.
     // It must not hold the global stdout/trace lock while feeding native stdin.
     let fd = sink.as_raw_fd();
+    // SAFETY: `fd` is the write end of the pipe owned by `sink`, which is borrowed for the
+    // whole call and so stays open. F_GETFL only reads the file status flags.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    // SAFETY: the `||` short-circuits unless F_GETFL succeeded, so `flags` is a valid word.
+    // F_SETFL on the same open descriptor only adds O_NONBLOCK to those flags.
     if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
         return Err(std::io::Error::last_os_error()).context("setting applet input nonblocking");
     }
@@ -117,6 +124,8 @@ fn write_input(
                     revents: 0,
                 };
                 let ready =
+                    // SAFETY: `descriptor` is a live local pollfd and the count is 1, so poll
+                    // reads and sets only that entry. Its fd is `sink`'s open pipe.
                     unsafe { libc::poll(&mut descriptor, 1, deadline_poll_timeout(deadline, 20)) };
                 if ready < 0 {
                     let error = std::io::Error::last_os_error();
@@ -135,10 +144,14 @@ type StdinRemainder = (std::io::PipeWriter, Vec<u8>, usize);
 fn prefill_stdin_pipe(data: Vec<u8>) -> Result<(std::io::PipeReader, Option<StdinRemainder>)> {
     let (reader, mut pipe_writer) = std::io::pipe().context("creating applet stdin pipe")?;
     let fd = pipe_writer.as_raw_fd();
+    // SAFETY: `fd` is the write end of the pipe created above, owned by `pipe_writer`, which
+    // is still alive here. F_GETFL only reads its status flags.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags == -1 {
         return Err(std::io::Error::last_os_error()).context("getting applet stdin pipe flags");
     }
+    // SAFETY: `flags` was checked against -1 just above, so it is a valid flag word. F_SETFL
+    // on the still-open pipe only adds O_NONBLOCK to it.
     if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
         return Err(std::io::Error::last_os_error())
             .context("setting applet stdin pipe nonblocking");
@@ -147,6 +160,8 @@ fn prefill_stdin_pipe(data: Vec<u8>) -> Result<(std::io::PipeReader, Option<Stdi
     // Exactly one nonblocking write is attempted. EINTR and WouldBlock leave
     // the unaccepted suffix for the post-spawn writer thread.
     let write_result = pipe_writer.write(&data);
+    // SAFETY: `flags` is the word read above and checked there, and `fd` is still the open
+    // pipe writer. This restores the blocking mode saved before the write.
     if unsafe { libc::fcntl(fd, libc::F_SETFL, flags) } == -1 {
         return Err(std::io::Error::last_os_error()).context("restoring applet stdin pipe flags");
     }
@@ -183,6 +198,8 @@ struct ChildObserver {
 impl ChildObserver {
     #[cfg(target_os = "macos")]
     fn new() -> Option<Self> {
+        // SAFETY: kqueue takes no arguments and no pointers. A -1 result returns None just
+        // below, so a non-negative `fd` is a new descriptor with no other owner.
         let fd = unsafe { libc::kqueue() };
         if fd == -1 {
             return None;
@@ -190,6 +207,8 @@ impl ChildObserver {
         // Darwin installs close-on-exec and close-on-fork before publishing
         // kqueue descriptors (XNU kqueue creation); no fcntl race or extra
         // descriptor configuration is needed here.
+        // SAFETY: `fd` is a new kqueue descriptor, checked against -1 just above and not
+        // shared, so OwnedFd becomes its only owner and closes it exactly once.
         let queue = unsafe { OwnedFd::from_raw_fd(fd) };
         Some(Self { queue })
     }
@@ -225,6 +244,8 @@ impl ChildObserver {
                 tv_sec: 0,
                 tv_nsec: 0,
             };
+            // SAFETY: `change` and `no_wait` are live locals passed by pointer, with a change
+            // count of 1 and no event buffer (null, 0). `self.queue` is the open kqueue.
             let result = unsafe {
                 libc::kevent(
                     self.queue.as_raw_fd(),
@@ -248,12 +269,17 @@ impl ChildObserver {
     fn drain(&self) -> std::io::Result<()> {
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: kevent is a C struct of integers and pointers, so the all-zero bit
+            // pattern is a valid value.
             let mut events: [libc::kevent; 16] = unsafe { std::mem::zeroed() };
             let no_wait = libc::timespec {
                 tv_sec: 0,
                 tv_nsec: 0,
             };
             loop {
+                // SAFETY: no changes are submitted (null, 0). `events` has 16 entries and
+                // `events.len()` is 16, so the kernel writes only inside the array. `no_wait`
+                // is a live zero timeout, so the call does not block.
                 let ready = unsafe {
                     libc::kevent(
                         self.queue.as_raw_fd(),
@@ -288,11 +314,15 @@ impl ChildObserver {
     // An epoll set of pidfds: the set becomes readable as soon as any observed
     // child exits, so the wait loop wakes on the exit itself, not on a timer.
     fn new() -> Option<Self> {
+        // SAFETY: epoll_create1 takes only flags, and EPOLL_CLOEXEC keeps the descriptor out
+        // of child processes. A -1 result returns None just below, so `fd` is a new one.
         let fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
         if fd == -1 {
             return None;
         }
         Some(Self {
+            // SAFETY: `fd` is a new epoll descriptor, checked against -1 just above and not
+            // shared, so OwnedFd becomes its only owner and closes it exactly once.
             epoll: unsafe { OwnedFd::from_raw_fd(fd) },
             pidfds: Mutex::new(Vec::new()),
         })
@@ -306,15 +336,22 @@ impl ChildObserver {
         // pidfd_open needs Linux 5.3. Older kernels fail with ENOSYS and the
         // caller falls back to timed polling; ESRCH means the child is gone.
         let raw =
+            // SAFETY: pidfd_open takes a pid and a flags word, and no pointers. Flags is 0,
+            // the default blocking mode. A -1 result is returned as an error just below.
             unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0 as libc::c_uint) };
         if raw == -1 {
             return Err(std::io::Error::last_os_error());
         }
+        // SAFETY: `raw` is a descriptor number returned by pidfd_open and checked against -1
+        // earlier in this function. Nothing else holds it, so OwnedFd becomes its only owner.
         let pidfd = unsafe { OwnedFd::from_raw_fd(raw as libc::c_int) };
         let mut event = libc::epoll_event {
             events: libc::EPOLLIN as u32,
             u64: raw as u64,
         };
+        // SAFETY: `self.epoll` is the open epoll set, and `pidfd` is a live descriptor that
+        // this frame owns until it is stored in `pidfds`. `event` is a live local that the
+        // kernel only reads for EPOLL_CTL_ADD. On failure, dropping `pidfd` unregisters it.
         let added = unsafe {
             libc::epoll_ctl(
                 self.epoll.as_raw_fd(),
@@ -334,8 +371,12 @@ impl ChildObserver {
     }
 
     fn drain(&self) -> std::io::Result<()> {
+        // SAFETY: epoll_event is a C struct of integers, so the all-zero bit pattern is valid.
         let mut events: [libc::epoll_event; 16] = unsafe { std::mem::zeroed() };
         loop {
+            // SAFETY: `self.epoll` is the open epoll set. `events` has 16 entries and 16 is
+            // passed as maxevents, so the kernel writes only inside the array. A zero timeout
+            // means the call does not block.
             let ready = unsafe {
                 libc::epoll_wait(
                     self.epoll.as_raw_fd(),
@@ -361,6 +402,9 @@ impl ChildObserver {
             for event in &events[..ready as usize] {
                 // Each registration stores its pidfd number in `u64`.
                 let fd = event.u64 as libc::c_int;
+                // SAFETY: `self.epoll` is open. `fd` is a pidfd still held in `pidfds`, which
+                // this loop has locked. It is closed only after this DEL, so it is still open.
+                // DEL ignores the event argument, so the null pointer is never read.
                 unsafe {
                     libc::epoll_ctl(
                         self.epoll.as_raw_fd(),
@@ -401,6 +445,8 @@ mod pidfd_observer_tests {
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: `descriptor` is a live pollfd and the count is 1. Its fd is the epoll set
+        // owned by `observer`, which lives until the end of this test.
         assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 10_000) }, 1);
         observer.drain().expect("draining exit notification");
         let mut quiet = libc::pollfd {
@@ -409,6 +455,8 @@ mod pidfd_observer_tests {
             revents: 0,
         };
         assert_eq!(
+            // SAFETY: `quiet` is a live pollfd on the epoll set owned by `observer`, with a
+            // count of 1 and a zero timeout, so the call returns without blocking.
             unsafe { libc::poll(&mut quiet, 1, 0) },
             0,
             "a drained observer must not stay readable"

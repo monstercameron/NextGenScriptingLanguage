@@ -1,5 +1,6 @@
 {
   "name": "desktop.fixture_sync",
+  "build_feature": "remote",
   "binary": "@remote-applet",
   "accepts_stdin": false,
   "parameters": {"click": {"type": "record", "fields": {}, "required": true}},

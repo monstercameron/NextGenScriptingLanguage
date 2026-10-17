@@ -446,7 +446,7 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
         ["ipc", "call", "executeDesktop-test", "request", "{}"],
         &registry,
         "desktop.quickshell",
-        &cwd,
+        &flow::working_dir::WorkingDirectory::plain(&cwd),
     )
     .unwrap();
     assert_eq!(command.get_args().count(), 5);
@@ -466,7 +466,7 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
         ["--path", "config.qml"],
         &denied_registry,
         "desktop.quickshell",
-        &cwd,
+        &flow::working_dir::WorkingDirectory::plain(&cwd),
     )
     .is_err());
 }

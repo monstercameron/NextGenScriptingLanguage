@@ -6,8 +6,10 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
-pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(2);
-pub(super) const RESPONSE_TIMEOUT: Duration = Duration::from_secs(12);
+#[cfg(feature = "live")]
+pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(feature = "live")]
+pub(crate) const RESPONSE_TIMEOUT: Duration = Duration::from_secs(12);
 
 struct DeadlineIo<'a> {
     stream: &'a mut UnixStream,
@@ -23,11 +25,16 @@ impl<'a> DeadlineIo<'a> {
         #[cfg(unix)]
         let original_flags = {
             let fd = stream.as_raw_fd();
+            // SAFETY: fd is the descriptor of *stream, which is exclusively borrowed for 'a,
+            // so it stays open for the life of this DeadlineIo. F_GETFL takes no pointer.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
             if flags < 0 {
                 return Err(io::Error::last_os_error());
             }
             if flags & libc::O_NONBLOCK == 0
+                // SAFETY: fd is the borrowed stream's descriptor. flags is the F_GETFL result,
+                // checked non-negative above. F_SETFL takes an int and no pointers.
+                // The && sets O_NONBLOCK only when clear, so Drop restores the original flags.
                 && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
             {
                 return Err(io::Error::last_os_error());
@@ -76,6 +83,10 @@ impl<'a> DeadlineIo<'a> {
                         events,
                         revents: 0,
                     };
+                    // SAFETY: descriptor is a live local pollfd; nfds 1 matches it.
+                    // fd is the borrowed stream's descriptor. remaining() is non-zero, so the
+                    // rounded-up timeout is at least 1 ms, and it is at most c_int::MAX.
+                    // It is never 0 (non-blocking) or -1 (infinite).
                     let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
                     if ready < 0 {
                         let error = io::Error::last_os_error();
@@ -108,6 +119,9 @@ impl Drop for DeadlineIo<'_> {
     fn drop(&mut self) {
         if self.original_flags & libc::O_NONBLOCK == 0 {
             loop {
+                // SAFETY: self.stream is still borrowed, so fd is open. F_SETFL takes an int.
+                // original_flags is the F_GETFL snapshot from new(). This loop runs only when
+                // O_NONBLOCK was clear in that snapshot (see the guard above).
                 let result = unsafe {
                     libc::fcntl(self.stream.as_raw_fd(), libc::F_SETFL, self.original_flags)
                 };
@@ -262,6 +276,8 @@ mod tests {
     fn progressing_writes_do_not_renew_the_wire_deadline_or_change_flags() {
         let (mut client, mut peer) = UnixStream::pair().unwrap();
         let fd = client.as_raw_fd();
+        // SAFETY: fd is the descriptor of client, which is alive for this whole test.
+        // F_GETFL takes no pointer argument.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         assert!(flags >= 0);
         let quit = Arc::new(AtomicBool::new(false));
@@ -294,6 +310,8 @@ mod tests {
         );
         quit.store(true, Ordering::Relaxed);
         let elapsed = started.elapsed();
+        // SAFETY: client is dropped only on the next line, so fd is still open.
+        // F_GETFL takes no pointer argument.
         let after = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         drop(client);
         let progress = receiver.join().unwrap();

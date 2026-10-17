@@ -367,7 +367,7 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
         ["argument with spaces", "semi;colon"],
         &registry,
         "fixture.env",
-        Path::new("."),
+        &flow::working_dir::WorkingDirectory::plain("."),
     )
     .unwrap();
     assert_eq!(

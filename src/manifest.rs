@@ -35,6 +35,10 @@ pub struct Manifest {
     pub uncertain_on_failure: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     contract: Option<AppletContract>,
+    /// The gated build feature this applet needs, when its backend alone does not say so.
+    /// Remote-backed applets need `remote` whether or not they declare it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build_feature: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stdio: Option<StdioContract>,
     /// Canonical source path for file-loaded manifests; embedded manifests
@@ -237,6 +241,9 @@ impl Manifests {
     }
 }
 
+/// Gated build features a manifest may declare. Each names a Cargo feature.
+const KNOWN_BUILD_FEATURES: &[&str] = &["desktop", "remote"];
+
 const MANIFEST_CATALOG_FORMAT: &str = "execute.manifest-catalog";
 const MANIFEST_CATALOG_VERSION: u32 = 1;
 
@@ -281,6 +288,7 @@ impl Registry {
             contract: None,
             stdio: None,
             origin: None,
+            build_feature: None,
             phrases: Vec::new(),
             parameters: BTreeMap::from([(
                 "arguments".into(),
@@ -886,6 +894,39 @@ impl Manifest {
             .decode_json_output_value(value, bytes, status)
     }
 
+    /// The gated build feature this applet needs. Remote-backed applets need `remote`
+    /// regardless of what they declare; any other applet declares its own.
+    pub fn required_build_feature(&self) -> Option<&str> {
+        if self.execution_backend() == AppletBackend::Remote {
+            return Some("remote");
+        }
+        self.build_feature.as_deref()
+    }
+
+    /// Whether this build includes the applet's gated feature. An applet with no
+    /// requirement is always available.
+    pub fn build_available(&self) -> bool {
+        self.required_build_feature()
+            .is_none_or(build_feature_enabled)
+    }
+
+    /// The refusal for an applet this build cannot run, or `None` when it can.
+    pub fn build_unavailable_message(&self) -> Option<String> {
+        let feature = self.required_build_feature()?;
+        if build_feature_enabled(feature) {
+            return None;
+        }
+        let capability = match feature {
+            "remote" => "remote backend",
+            "desktop" => "desktop renderer",
+            _ => "gated feature",
+        };
+        Some(format!(
+            "applet {} requires the full build: this build has no {capability}; use the full build",
+            self.name
+        ))
+    }
+
     /// Describe the validated callable interface without executing or locating
     /// its binary. This is deliberately separate from Serialize: checkpoint
     /// identities retain their existing representation.
@@ -928,13 +969,16 @@ impl Manifest {
             },
             "execution": {
                 "shell_expansion": false,
-                "availability": if self.builtin.is_some() { "runtime_builtin" } else { "not_checked" },
+                "availability": if self.builtin.is_some() { "runtime_builtin" } else if self.build_available() { "not_checked" } else { "requires_full_build" },
                 "sandbox": "not_enforced",
                 "cacheable": self.cacheable,
                 "uncertain_on_failure": self.uncertain_on_failure,
                 "effect": if self.builtin.is_some() { "working_directory" } else { "native_command" }
             }
         });
+        if let Some(feature) = self.required_build_feature() {
+            projection["execution"]["build_feature"] = feature.into();
+        }
         if let Some(contract) = &self.contract {
             projection["contract_version"] = contract.version.into();
             projection["io"]["output_schema"] = contract
@@ -1890,6 +1934,8 @@ struct RawManifest {
     uncertain_on_failure: bool,
     #[serde(default, deserialize_with = "crate::contracts::deserialize_present")]
     contract: Option<AppletContract>,
+    #[serde(default)]
+    build_feature: Option<String>,
     #[serde(default, deserialize_with = "crate::contracts::deserialize_present")]
     stdio: Option<StdioContract>,
     #[serde(default)]
@@ -2056,6 +2102,12 @@ impl<'de> Deserialize<'de> for RawArgument {
     }
 }
 
+/// Whether this build was compiled with the named gated feature.
+fn build_feature_enabled(feature: &str) -> bool {
+    (feature == "remote" && cfg!(feature = "remote"))
+        || (feature == "desktop" && cfg!(feature = "desktop"))
+}
+
 fn parse_manifest(raw: &str) -> Result<Manifest> {
     let raw: RawManifest = serde_json::from_str(raw)?;
     if raw.name.trim().is_empty() || raw.binary.trim().is_empty() {
@@ -2069,6 +2121,14 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         if phrase.trim().is_empty() || phrase == &raw.name || !phrases.insert(phrase) {
             bail!(
                 "manifest {:?} has an empty or duplicate phrase {phrase:?}",
+                raw.name
+            );
+        }
+    }
+    if let Some(feature) = &raw.build_feature {
+        if !KNOWN_BUILD_FEATURES.contains(&feature.as_str()) {
+            bail!(
+                "manifest {:?} declares unknown build_feature {feature:?}; expected one of {KNOWN_BUILD_FEATURES:?}",
                 raw.name
             );
         }
@@ -2152,6 +2212,7 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         cache_dependencies: raw.cache_dependencies,
         uncertain_on_failure: raw.uncertain_on_failure,
         contract: raw.contract,
+        build_feature: raw.build_feature,
         stdio: raw.stdio,
         origin: None,
         parameters,
@@ -2743,6 +2804,69 @@ mod tests {
         assert_eq!(registry.resolve("say text").unwrap().name, "say");
         assert_eq!(registry.manifests().unwrap().len(), 1);
         assert!(registry.resolve("missing").is_err());
+    }
+
+    /// Applets that need a gated build feature whose backend alone does not say so.
+    /// Add an entry here when a gated applet is added; the remote backend is covered
+    /// without a list entry.
+    const GATED_APPLETS: &[(&str, &str)] = &[("desktop.quickshell", "desktop")];
+
+    /// Every manifest that needs a gated feature must declare it as `build_feature`, so
+    /// a new remote or renderer applet cannot reach a lean build without the marker.
+    /// Reads the shipped JSON directly, so the test does not depend on the registry.
+    #[test]
+    fn every_gated_manifest_declares_its_build_feature() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let mut checked = 0;
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let value: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let name = value["name"].as_str().unwrap_or_default().to_owned();
+            let backend = value["contract"]["backend"].as_str().unwrap_or("command");
+            let needed = if backend == "remote" {
+                Some("remote")
+            } else {
+                GATED_APPLETS
+                    .iter()
+                    .find(|(gated, _)| *gated == name)
+                    .map(|(_, feature)| *feature)
+            };
+            let Some(needed) = needed else {
+                continue;
+            };
+            checked += 1;
+            assert_eq!(
+                value["build_feature"].as_str(),
+                Some(needed),
+                "{} needs the `{needed}` build feature and must declare \"build_feature\": \"{needed}\"",
+                path.display()
+            );
+        }
+        assert!(
+            checked >= 3,
+            "expected the remote and renderer applets to be checked, saw {checked}"
+        );
+    }
+
+    /// Gated applets are available exactly when this build compiled their feature, and
+    /// unavailable applets carry the full-build refusal.
+    #[test]
+    fn gated_applets_report_availability_for_this_build() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let registry = Registry::load_default(&dir).unwrap();
+        let quickshell = registry.resolve("desktop.quickshell").unwrap();
+        assert_eq!(quickshell.build_available(), cfg!(feature = "desktop"));
+        let remote = registry.resolve("desktop.clock_remote").unwrap();
+        assert_eq!(remote.build_available(), cfg!(feature = "remote"));
+        assert_eq!(
+            remote.build_unavailable_message().is_some(),
+            !cfg!(feature = "remote")
+        );
+        assert!(registry.resolve("printf").unwrap().build_available());
     }
 
     #[test]

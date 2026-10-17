@@ -78,6 +78,7 @@ pub(super) struct LineSink<'a> {
 }
 
 impl<'a> LineSink<'a> {
+    #[cfg(any(feature = "live", test))]
     pub(super) fn new(
         emit: &'a mut Emit<'a>,
         limit: Option<usize>,
@@ -306,7 +307,7 @@ pub(crate) fn run_stream_with_context_and_process_observer(
             Input::Empty,
             None,
             &options.inputs,
-            &options.working_directory,
+            &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
             options,
             &mut launched,
             &signals,
@@ -495,7 +496,13 @@ mod tests {
                 .unwrap();
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
+                // SAFETY: siginfo_t is a plain C struct whose fields are integers and a union of
+                // integers and pointers. The all-zero bit pattern is valid for every member.
                 let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                // SAFETY: `info` is a live, writable siginfo_t, as waitid requires. The pid is the
+                // fixture's own `$$`, the direct child that run_stream spawned, so it is a child
+                // of this process. WNOWAIT keeps the child unreaped for the runtime, and WNOHANG
+                // means the call does not block.
                 let result = unsafe {
                     libc::waitid(
                         libc::P_PID,

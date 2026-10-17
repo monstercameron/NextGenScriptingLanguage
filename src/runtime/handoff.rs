@@ -122,6 +122,7 @@ fn detached_stdio(output: Option<File>) -> Result<(Stdio, Stdio, Stdio)> {
 /// Refuse hand-over and detached launch anywhere in a program that runs live, where a
 /// process cannot take over or outlive the live session. Checks the whole program,
 /// including statements before a live cursor, so an edit cannot hide a marker there.
+#[cfg(feature = "live")]
 pub(crate) fn reject_in_live(program: &Program) -> Result<()> {
     if let Some(step) = program.steps.iter().find(|step| {
         matches!(
@@ -297,6 +298,7 @@ mod tests {
         assert_eq!(hand_over(command).unwrap(), 7);
     }
 
+    #[cfg(feature = "live")]
     #[test]
     fn live_refusal_covers_markers_before_a_cursor() {
         let program =

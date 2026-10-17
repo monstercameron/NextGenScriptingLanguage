@@ -1,3 +1,4 @@
+#![cfg(feature = "live")]
 //! `execute attach SOCKET [--control ACTION]`: argument checks and a missing socket
 //! are portable. The live-server round trip uses a unix socket path, so it is
 //! unix-only.

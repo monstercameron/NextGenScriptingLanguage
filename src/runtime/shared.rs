@@ -679,7 +679,7 @@ pub fn validate_with_inputs(
     validate_inputs(program, registry, names, has_data, false)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "live", not(target_arch = "wasm32")))]
 pub(crate) fn validate_live(
     program: &Program,
     registry: &Registry,

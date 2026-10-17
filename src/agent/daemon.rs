@@ -136,8 +136,8 @@ mod imp {
     use super::{
         not_running, Forwarding, Path, PathBuf, Result, RunCallback, RunContext, Value, PROTOCOL,
     };
-    use crate::live::peer_is_owner;
-    use crate::live::transport::{read_message, write_message};
+    use crate::ipc::peer::peer_is_owner;
+    use crate::ipc::transport::{read_message, write_message};
     use anyhow::{anyhow, bail, Context};
     use serde_json::json;
     use std::ffi::OsString;

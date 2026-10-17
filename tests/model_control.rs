@@ -154,6 +154,9 @@ fn invoke_execute(directory: &Path, manifests: &Path, args: &[&str]) -> Output {
         .spawn()
         .expect("start execute");
     let status = wait_bounded(&mut child, Duration::from_secs(5)).unwrap_or_else(|| {
+        // SAFETY: `wait_bounded` returned `None`, so `try_wait` reported the child as still
+        // running, or failed, without reaping it. `child` is therefore this process's
+        // unreaped child and `child.id()` names it. SIGTERM is a valid signal number.
         unsafe {
             libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
         }
@@ -1162,6 +1165,8 @@ fn cancelled_native_model_call_closes_socket_requires_retry_and_completed_resume
         .recv_timeout(Duration::from_secs(4))
         .expect("native execute-model child never sent its local request");
     assert_eq!(accepted, Event::Accepted(1));
+    // SAFETY: nothing has waited on or reaped `child` since `spawn`, so `child.id()` still
+    // names this process's own unreaped child. SIGTERM is a valid signal number.
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
     }

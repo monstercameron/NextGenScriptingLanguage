@@ -201,9 +201,14 @@ fn process_alive(pid: u32) -> bool {
     // handle is closed exactly once below.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if handle.is_null() {
+        // SAFETY: GetLastError reads this thread's last-error value, which OpenProcess set when it
+        // returned NULL. The is_null check is plain Rust and makes no Win32 call, so no later call
+        // has overwritten that value before GetLastError runs.
         // Access denied means the process exists.
         return unsafe { GetLastError() } == ERROR_ACCESS_DENIED;
     }
+    // SAFETY: handle is non-null, so OpenProcess succeeded and returned a handle that this
+    // function owns. It is closed exactly once here and not used after this call.
     unsafe { CloseHandle(handle) };
     true
 }

@@ -633,6 +633,11 @@ mod process_group_tests {
             }
             for group_id_file in &self.group_id_files {
                 if let Some(group_id) = read_pid(group_id_file) {
+                    // SAFETY: kill takes only integers and touches no memory. `group_id` is the
+                    // pid the applet shell wrote with `echo $$` (see start_runner). The runner
+                    // starts applets with setpgid(0, 0) in src/runtime/unix_process.rs, so
+                    // -group_id names that group. read_pid does not reject 0 or negative
+                    // values; a 0 here would signal the test's own process group.
                     unsafe {
                         libc::kill(-(group_id as libc::pid_t), libc::SIGKILL);
                     }
@@ -674,6 +679,9 @@ mod process_group_tests {
     }
 
     fn process_exists(pid: i32) -> bool {
+        // SAFETY: kill with signal 0 sends nothing; it only checks whether `pid` exists and
+        // takes no pointers. `pid` is read from a pid file that this test's own shell script
+        // wrote with `echo $$`, so it is an integer naming one process.
         let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
         result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
@@ -681,6 +689,10 @@ mod process_group_tests {
     fn wait_for_group_exit(group_id: i32, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         loop {
+            // SAFETY: signal 0 to a negative pid probes the process group `group_id` and
+            // delivers nothing; the call only takes integers. `group_id` comes from a file the
+            // test's script wrote with `echo $$`, the applet shell that leads its own group.
+            // read_pid does not check that the value is positive.
             let result = unsafe { libc::kill(-(group_id as libc::pid_t), 0) };
             if result == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
                 return true;
@@ -1172,6 +1184,9 @@ mod process_group_tests {
         );
 
         let runner_pid = cleanup.runner.as_ref().unwrap().id() as libc::pid_t;
+        // SAFETY: kill takes only integers. `runner_pid` is the id of the runner spawned in
+        // start_listener_service (line 885) and nothing has waited on it yet, so the pid still
+        // names that child and has not been reused for another process.
         assert_eq!(unsafe { libc::kill(runner_pid, libc::SIGTERM) }, 0);
         let status = wait_runner(cleanup.runner.as_mut().unwrap(), Duration::from_secs(5));
         assert!(
@@ -1249,6 +1264,9 @@ mod process_group_tests {
         );
 
         let runner_pid = cleanup.runner.as_ref().unwrap().id() as libc::pid_t;
+        // SAFETY: kill takes only integers. `runner_pid` is the id of the runner spawned at
+        // line 1246; the try_wait at lines 1255-1264 returned None, so the child has not
+        // exited or been reaped and the pid still names it.
         assert_eq!(unsafe { libc::kill(runner_pid, libc::SIGTERM) }, 0);
         let status = wait_runner(cleanup.runner.as_mut().unwrap(), Duration::from_secs(3));
         assert!(
@@ -1296,6 +1314,8 @@ mod process_group_tests {
         );
 
         let runner_pid = cleanup.runner.as_ref().unwrap().id() as libc::pid_t;
+        // SAFETY: kill takes only integers. `runner_pid` is the id of the runner spawned by
+        // start_runner (line 774), which has not been waited on, so the pid still names it.
         let signal_result = unsafe { libc::kill(runner_pid, libc::SIGTERM) };
         assert_eq!(signal_result, 0, "sending SIGTERM to flow runner");
 
@@ -1347,6 +1367,9 @@ mod process_group_tests {
         );
 
         let runner_pid = cleanup.runner.as_ref().unwrap().id() as libc::pid_t;
+        // SAFETY: kill takes only integers. `runner_pid` is the id of the runner spawned at
+        // line 1350; the try_wait at lines 1358-1367 returned None, so the child has not
+        // exited or been reaped and the pid still names it.
         assert_eq!(unsafe { libc::kill(runner_pid, libc::SIGTERM) }, 0);
         let status = wait_runner(cleanup.runner.as_mut().unwrap(), Duration::from_secs(3));
         assert!(

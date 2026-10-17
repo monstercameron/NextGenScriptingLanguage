@@ -13,7 +13,7 @@ fn manifests() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
 }
 
-const PROGRAM: &str = "on interrupt\n  run printf with message \"drained\"\n  then save to file \"drained.txt\"\nrun sleep with arguments [\"1\"]\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
+const PROGRAM: &str = "on interrupt\n  run printf with message \"drained\"\n  then save to file \"drained.txt\"\nrun \"sleep\" with arguments [\"1\"]\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
 
 fn spawn(directory: &Path) -> Child {
     fs::write(directory.join("drain.program"), PROGRAM).unwrap();

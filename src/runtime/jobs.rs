@@ -375,7 +375,7 @@ impl Supervisor {
                 argv.iter().map(|argument| OsStr::new(argument.as_str())),
                 registry,
                 &manifest.name,
-                &cwd,
+                &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
             )
             .with_context(|| format!("line {}: preflighting job command", stage.line))?;
             prepared.push((binary, argv));
@@ -453,7 +453,7 @@ impl Supervisor {
                         Input::Empty,
                         None,
                         &BTreeMap::new(),
-                        &cwd,
+                        &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
                         &options,
                         &mut launched,
                         &signals,
@@ -1079,6 +1079,9 @@ mod tests {
         let mut gone = false;
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
+            // SAFETY: signal 0 sends nothing and only tests whether the pid exists. pids[0] is in
+            // range because the assert_eq! above requires exactly one launched pid, and that pid
+            // was recorded from the real spawn this test drives.
             let status = unsafe { libc::kill(pids[0] as libc::pid_t, 0) };
             if status == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
                 gone = true;

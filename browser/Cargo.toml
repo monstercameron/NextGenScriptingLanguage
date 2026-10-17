@@ -19,3 +19,10 @@ strip = true
 panic = "abort"
 
 [workspace]
+
+# Unsafe policy, as in the main crate: documented blocks and explicit unsafe operations.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

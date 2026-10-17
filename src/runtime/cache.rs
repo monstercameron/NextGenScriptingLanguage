@@ -45,6 +45,8 @@ fn directory(path: &Path, create: bool) -> Result<Option<PathBuf>> {
 fn check_permissions(metadata: &fs::Metadata, label: &str) -> Result<()> {
     #[cfg(unix)]
     {
+        // SAFETY: geteuid takes no arguments, has no preconditions and cannot fail, so the
+        // comparison is against this process's effective uid.
         if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
             bail!("{label} must be owned by the current user and private");
         }
@@ -370,6 +372,9 @@ struct CacheLock(File);
 impl Drop for CacheLock {
     fn drop(&mut self) {
         #[cfg(unix)]
+        // SAFETY: self.0 is the File this lock holds. Drop::drop runs before the fields are
+        // dropped, so the descriptor is still open. flock only changes the lock state of that
+        // descriptor and touches no memory.
         unsafe {
             libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
         }
@@ -400,6 +405,9 @@ fn maintenance_lock(directory: &Path, shared: bool) -> Result<CacheLock> {
     #[cfg(unix)]
     loop {
         let lock_kind = if shared { libc::LOCK_SH } else { libc::LOCK_EX };
+        // SAFETY: file is the regular maintenance lock file opened and checked above, so its
+        // descriptor is open for this call. lock_kind is LOCK_SH or LOCK_EX, combined with
+        // LOCK_NB. flock touches no memory.
         if unsafe { libc::flock(file.as_raw_fd(), lock_kind | libc::LOCK_NB) } == 0 {
             break;
         }
@@ -613,6 +621,9 @@ mod tests {
         fs::create_dir(&cache).unwrap();
         let path = entry(&cache, KEY);
         let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: name is a NUL-terminated CString that outlives the call, and mkfifo reads the
+        // path through it. The entry path does not exist yet, since nothing has written it, so
+        // this call creates the FIFO. The assert checks the result.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         assert!(open(&cache, KEY).is_err());
         assert!(write(&cache, KEY, b"replacement").is_err());

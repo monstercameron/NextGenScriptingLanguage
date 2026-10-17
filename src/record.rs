@@ -839,3 +839,24 @@ mod blob_name_tests {
         )));
     }
 }
+
+#[cfg(all(test, unix))]
+mod no_follow_tests {
+    #[test]
+    fn record_reads_refuse_a_link_in_the_final_component() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("target.json"), b"secret").unwrap();
+        symlink(
+            directory.path().join("target.json"),
+            directory.path().join("run.json"),
+        )
+        .unwrap();
+        assert!(super::read_regular_no_follow(&directory.path().join("run.json")).is_err());
+        std::fs::write(directory.path().join("plain.json"), b"ok").unwrap();
+        assert_eq!(
+            super::read_regular_no_follow(&directory.path().join("plain.json")).unwrap(),
+            b"ok"
+        );
+    }
+}

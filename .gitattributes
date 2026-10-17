@@ -60,3 +60,6 @@ benchmarks/line-framing-memchr-macos-arm64-20261016/**/*.diff binary
 benchmarks/text-json-decoder-macos-arm64-20261016/** -text
 benchmarks/text-json-decoder-macos-arm64-20261016/**/*.log binary
 benchmarks/text-json-decoder-macos-arm64-20261016/**/*.diff binary
+# Bundled manifest index: text with LF endings, and a binary compressed body blob.
+src/bundled_manifests/index.tsv text eol=lf
+src/bundled_manifests/bodies.bin binary

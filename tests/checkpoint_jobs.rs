@@ -89,6 +89,9 @@ fn wait_for(path: &Path, limit: Duration) -> bool {
 
 fn interrupt(child: &mut Child) {
     #[cfg(unix)]
+    // SAFETY: `child` is the `Cleanup`-owned child the test spawned. Nothing has reaped it, since
+    // `wait_for` only polls a marker file, so `child.id()` still names this child. SIGTERM is a
+    // valid signal number.
     unsafe {
         libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
     }

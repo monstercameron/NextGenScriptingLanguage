@@ -24,8 +24,12 @@ struct Nonblocking {
 }
 impl Nonblocking {
     fn set(fd: RawFd) -> Result<Self> {
+        // SAFETY: `set` gets the descriptor of the `reader` that `listen` owns. That reader is
+        // declared before the guard, so the fd stays open. F_GETFL only reads the flags.
         let original = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         if original == -1
+            // SAFETY: the `||` short-circuits unless F_GETFL succeeded, so `original` is a
+            // valid flag word. F_SETFL on the same open descriptor adds O_NONBLOCK to it.
             || unsafe { libc::fcntl(fd, libc::F_SETFL, original | libc::O_NONBLOCK) } == -1
         {
             return Err(std::io::Error::last_os_error()).context("setting listener nonblocking");
@@ -35,6 +39,9 @@ impl Nonblocking {
 }
 impl Drop for Nonblocking {
     fn drop(&mut self) {
+        // SAFETY: `self.fd` is the descriptor given to `set`. Its owner, `reader`, is declared
+        // before this guard and so is dropped after it, leaving the fd open. F_SETFL restores
+        // the flags that F_GETFL saved.
         unsafe {
             libc::fcntl(self.fd, libc::F_SETFL, self.original);
         }
@@ -74,7 +81,7 @@ fn listen(
                 argv,
                 registry,
                 &manifest.name,
-                &options.working_directory,
+                &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
             )?;
             let mut child = command
                 .current_dir(&options.working_directory)
@@ -185,6 +192,8 @@ fn listen(
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: `descriptor` is one live pollfd and nfds is 0 or 1, so poll reads at most
+        // that entry. `fd` is the open descriptor of `reader`, which is alive in this loop.
         let ready = unsafe { libc::poll(&mut descriptor, if eof { 0 } else { 1 }, 20) };
         if ready == -1 {
             let error = std::io::Error::last_os_error();

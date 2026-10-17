@@ -100,11 +100,16 @@ struct SelfUsage {
 fn self_usage() -> SelfUsage {
     let mut raw = std::mem::MaybeUninit::<libc::rusage>::uninit();
     assert_eq!(
+        // SAFETY: `raw.as_mut_ptr()` points to the local MaybeUninit<rusage> above, which is
+        // correctly sized and aligned for libc::rusage and writable. RUSAGE_SELF is a valid
+        // who-argument, and getrusage only writes through the pointer.
         unsafe { libc::getrusage(libc::RUSAGE_SELF, raw.as_mut_ptr()) },
         0,
         "getrusage(RUSAGE_SELF) failed: {}",
         std::io::Error::last_os_error()
     );
+    // SAFETY: the assert above panics unless getrusage returned 0, and a 0 return means the
+    // kernel filled the rusage at `raw`, so the MaybeUninit is fully initialized here.
     let raw = unsafe { raw.assume_init() };
     let timeval_ns = |value: &libc::timeval| {
         (value.tv_sec as u64)
@@ -217,6 +222,8 @@ fn assert_worker_reaped(directory: &Path) {
         .parse()
         .unwrap();
     assert_eq!(
+        // SAFETY: signal 0 sends nothing and takes only an integer. `pid` is the worker's `$$`
+        // that the test's own shell script wrote to the `pid` file, parsed above.
         unsafe { libc::kill(pid, 0) },
         -1,
         "worker leaked after stdin handling"

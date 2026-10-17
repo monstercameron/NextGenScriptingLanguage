@@ -82,6 +82,8 @@ fn assert_observed_children_reaped(output: &Output) {
         }
         let pid: i32 = event["pid"].as_u64().unwrap().try_into().unwrap();
         assert_eq!(
+            // SAFETY: signal 0 delivers nothing. `pid` comes from a completed `spawn` event that
+            // the interpreter logged for a child it started, so it names an interpreter child.
             unsafe { libc::kill(pid, 0) },
             -1,
             "owned child {pid} leaked"

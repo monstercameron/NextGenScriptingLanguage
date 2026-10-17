@@ -31,6 +31,9 @@ fn invoke(directory: &Path, manifests: &Path, args: &[&str]) -> Output {
         .spawn()
         .unwrap();
     let status = wait_bounded(&mut child, Duration::from_secs(5)).unwrap_or_else(|| {
+        // SAFETY: kill takes only integers and touches no memory. `wait_bounded` returned
+        // None, which happens only when try_wait reported the child still running or failed,
+        // never Ok(Some); so the child has not been reaped and `child.id()` still names it.
         unsafe {
             libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
         }
@@ -91,6 +94,9 @@ struct ChildCleanup(Child);
 impl Drop for ChildCleanup {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
+            // SAFETY: kill takes only integers. The try_wait above returned Ok(None) or an
+            // error (both map to is_none), never Ok(Some), so the child has not been reaped
+            // and `self.0.id()` still names it.
             unsafe {
                 libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM);
             }
@@ -692,6 +698,9 @@ fn active_checkpoint_is_exclusively_locked() {
     );
 
     // Ensure the still-running scheduled service is cleaned up promptly.
+    // SAFETY: kill takes only integers. `child` was spawned at line 669 and has only been
+    // checked for its journal file, never through try_wait or wait, so it has not been
+    // reaped and `child.0.id()` still names the running scheduled service.
     unsafe {
         libc::kill(child.0.id() as libc::pid_t, libc::SIGTERM);
     }
@@ -755,6 +764,10 @@ fn uncertain_in_flight_invocation_requires_explicit_retry() {
         "controlled applet never reached its uncertain side effect"
     );
 
+    // SAFETY: kill takes only integers. The pid names the runner spawned at line 742 only
+    // while that child is unreaped. The loop at lines 756-761 can exit through the try_wait
+    // Ok(Some) break at line 758, which reaps the child; nothing here rules that out, so this
+    // relies on the child still running, which the loop does not verify.
     unsafe {
         libc::kill(child.0.id() as libc::pid_t, libc::SIGTERM);
     }
@@ -854,6 +867,10 @@ fn scheduled_pending_tick_is_resumed_before_waiting_for_a_new_interval() {
     }
     assert!(marker.exists(), "scheduled tick never launched its applet");
 
+    // SAFETY: kill takes only integers. The pid names the runner spawned at line 848 only
+    // while that child is unreaped. The loop at lines 862-867 can exit through the try_wait
+    // Ok(Some) break at line 864, which reaps the child; nothing here rules that out, so this
+    // relies on the child still running, which the loop does not verify.
     unsafe {
         libc::kill(child.0.id() as libc::pid_t, libc::SIGTERM);
     }
@@ -922,6 +939,9 @@ fn checkpointed_listener_replays_failed_record_before_reopening_stdin() {
         .unwrap();
     drop(first.stdin.take());
     let first_status = wait_bounded(&mut first, Duration::from_secs(5)).unwrap_or_else(|| {
+        // SAFETY: kill takes only integers. `wait_bounded` returned None, which happens only
+        // when try_wait reported the child still running or failed, never Ok(Some); so the
+        // child has not been reaped and `first.id()` still names it.
         unsafe {
             libc::kill(first.id() as libc::pid_t, libc::SIGTERM);
         }

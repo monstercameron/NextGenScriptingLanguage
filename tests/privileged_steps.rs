@@ -418,7 +418,7 @@ fn command_for_refuses_a_privileged_launch_before_any_command_is_built() {
         ["true"],
         &registry,
         "elevated.run",
-        directory.path(),
+        &flow::working_dir::WorkingDirectory::plain(directory.path()),
     );
     let error = format!("{:#}", registered.unwrap_err());
     assert!(error.contains("denies privileged steps"), "{error}");
@@ -428,7 +428,7 @@ fn command_for_refuses_a_privileged_launch_before_any_command_is_built() {
         ["true"],
         &registry,
         "sudo",
-        directory.path(),
+        &flow::working_dir::WorkingDirectory::plain(directory.path()),
     );
     let error = format!("{:#}", direct.unwrap_err());
     assert!(error.contains("denies privileged steps"), "{error}");
@@ -440,7 +440,7 @@ fn command_for_refuses_a_privileged_launch_before_any_command_is_built() {
         std::iter::empty::<&str>(),
         &registry,
         "tool",
-        directory.path(),
+        &flow::working_dir::WorkingDirectory::plain(directory.path()),
     );
     let error = format!("{:#}", renamed_refused.unwrap_err());
     assert!(error.contains("denies privileged steps"), "{error}");

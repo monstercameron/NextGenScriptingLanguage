@@ -58,6 +58,7 @@ pub use streaming::{
 };
 #[cfg_attr(windows, path = "runtime/windows_stdio.rs")]
 mod stdio;
+#[cfg(feature = "live")]
 pub(crate) use service::next_interval;
 pub(crate) use service::{run_program_module_service, ProgramServiceContext};
 pub use service::{
@@ -279,25 +280,25 @@ fn configured_inputs<'a>(
     Ok(Cow::Owned(configured))
 }
 
-fn input_signature(program: &Program, values: &BTreeMap<String, Value>) -> Result<Option<String>> {
+/// The two signatures of a program's inputs. New checkpoints record the keyed form, which
+/// only the per-user key can reproduce. The legacy unkeyed digest exists only to recognize
+/// journals that were written before the switch.
+struct InputSignatures {
+    keyed: String,
+    legacy: String,
+}
+
+fn input_signature(
+    program: &Program,
+    values: &BTreeMap<String, Value>,
+) -> Result<Option<InputSignatures>> {
     if program.inputs.is_empty() {
         return Ok(None);
     }
-    // A secret prompt's answer is a candidate password, so the journal records it only
-    // under the per-user key. An unkeyed hash could be guessed offline from the journal.
-    // Environment inputs keep their checkpoint behaviour; the persistence gate governs them.
-    let secret_key = if program.inputs.iter().any(|d| {
-        matches!(
-            d.source,
-            Some(crate::ast::InputSource::Prompt { secret: true, .. })
-        )
-    }) {
-        Some(crate::agent::what_if_key::load_or_create().context(
-            "a secret prompt input needs the private key before its checkpoint can be written",
-        )?)
-    } else {
-        None
-    };
+    // The digest is keyed with the per-user key. An unkeyed hash of input values could be
+    // guessed offline from the checkpoint's own journal, so every input is covered by the key.
+    let key = crate::agent::what_if_key::load_or_create()
+        .context("a checkpoint with inputs needs the per-user key")?;
     let signature = program
         .inputs
         .iter()
@@ -307,26 +308,36 @@ fn input_signature(program: &Program, values: &BTreeMap<String, Value>) -> Resul
                 d.source,
                 Some(crate::ast::InputSource::Prompt { secret: true, .. })
             );
-            let shown = match (&secret_key, secret, value) {
-                (Some(key), true, Some(value)) => {
+            let shown = match (secret, value) {
+                (true, Some(value)) => {
                     let mut message = d.name.as_bytes().to_vec();
                     message.push(0);
                     message.extend(serde_json::to_vec(value)?);
                     serde_json::json!({
-                        "secret_hmac_sha256": crate::agent::what_if_key::hmac_sha256(key, &message)
+                        "secret_hmac_sha256": crate::agent::what_if_key::hmac_sha256(&key, &message)
                             .iter()
                             .map(|byte| format!("{byte:02x}"))
                             .collect::<String>()
                     })
                 }
-                (_, _, Some(value)) => serde_json::to_value(value)?,
-                (_, _, None) => serde_json::Value::Null,
+                (_, Some(value)) => serde_json::to_value(value)?,
+                (_, None) => serde_json::Value::Null,
             };
             Ok((d.name.clone(), (d.kind, shown)))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
-    let digest = Sha256::digest(serde_json::to_vec(&signature)?);
-    Ok(Some(format!("inputs-v1:{digest:x}")))
+    let plain = serde_json::to_vec(&signature)?;
+    let keyed = crate::agent::what_if_key::hmac_sha256(&key, &plain);
+    Ok(Some(InputSignatures {
+        keyed: format!(
+            "inputs-v2:{}",
+            keyed
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        ),
+        legacy: format!("inputs-v1:{:x}", Sha256::digest(&plain)),
+    }))
 }
 include!("runtime/shared.rs");
 
@@ -841,6 +852,7 @@ impl Signals {
         self.process_launches.load(Ordering::Relaxed)
     }
 
+    #[cfg(feature = "remote")]
     fn process_launch_callback(&self) -> ProcessObserver {
         let process_launches = Arc::clone(&self.process_launches);
         let process_observer = Arc::clone(&self.process_observer);
@@ -1637,6 +1649,8 @@ fn windows_file_info(
     use windows_sys::Win32::Storage::FileSystem::{
         GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
     };
+    // SAFETY: BY_HANDLE_FILE_INFORMATION is a plain C struct of integers and FILETIME values, for
+    // which the all-zero bit pattern is valid. The call below fills it in on success.
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
     // SAFETY: the handle belongs to `file`, which outlives this call, and
     // `info` is a valid, writable structure of the size the API expects.
@@ -1670,32 +1684,6 @@ fn verify_opened_identity(file: &File, resolved: &Path) -> Result<()> {
     #[cfg(not(unix))]
     {
         let _ = (file, resolved);
-    }
-    Ok(())
-}
-
-/// The directory form of `verify_opened_identity`. The check narrows the window in which
-/// the folder can change before the working directory is set. The working directory is
-/// still used by path afterwards, so a later swap is not covered (see the threat model).
-fn verify_directory_identity(folder: &Path, resolved: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let opened = File::open(folder)
-            .with_context(|| format!("opening {}", folder.display()))?
-            .metadata()?;
-        let by_path =
-            fs::metadata(resolved).with_context(|| format!("checking {}", resolved.display()))?;
-        if opened.dev() != by_path.dev() || opened.ino() != by_path.ino() {
-            bail!(
-                "folder changed while it was being opened: {}",
-                resolved.display()
-            );
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (folder, resolved);
     }
     Ok(())
 }
@@ -2032,7 +2020,7 @@ fn execute_group(
     input: Input,
     prepared_first_call: Option<(PathBuf, Vec<String>)>,
     bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
+    cwd: &crate::working_dir::WorkingDirectory,
     options: &RunOptions,
     launched: &mut usize,
     signals: &Signals,
@@ -2072,7 +2060,7 @@ fn execute_group_with_sink(
     input: Input,
     prepared_first_call: Option<(PathBuf, Vec<String>)>,
     bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
+    cwd: &crate::working_dir::WorkingDirectory,
     options: &RunOptions,
     launched: &mut usize,
     signals: &Signals,
@@ -2224,7 +2212,6 @@ fn execute_group_with_sink(
         let resolved_io = resolved_call_stdio(call, manifest, signals);
         let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
         command
-            .current_dir(cwd)
             .stdout(invocation_io::process_stdio(stdout_disposition))
             .stderr(invocation_io::process_stdio(resolved_io.stderr));
         terminal_foreground = terminal::requested()
@@ -2333,8 +2320,13 @@ fn execute_group_with_sink(
         }
         if let Some(stderr) = &children.0.last().unwrap().stderr {
             let fd = stderr.as_raw_fd();
+            // SAFETY: `fd` is the stderr pipe of the child at the end of `children`. `stderr`
+            // borrows that pipe from `children`, and nothing is removed from `children` before
+            // these calls, so the descriptor is open. F_GETFL only reads the status flags.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
             if flags == -1
+                // SAFETY: same descriptor as above. F_SETFL runs only when `flags` is not -1, so
+                // it adds O_NONBLOCK to the status flags of an open pipe.
                 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
             {
                 return Err(std::io::Error::last_os_error())
@@ -2368,7 +2360,11 @@ fn execute_group_with_sink(
     // directly between child descriptors; the interpreter never copies them.
     let (fd, mut eof) = if let Some(stdout) = stdout.as_ref() {
         let fd = stdout.as_raw_fd();
+        // SAFETY: `fd` is the stdout pipe of the previous stage. It is held in `stdout` for the
+        // whole loop, so it is open. F_GETFL only reads the status flags.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        // SAFETY: `fd` is still open. F_SETFL runs only when `flags` is not -1, because the `||`
+        // short-circuits, so it adds O_NONBLOCK to the status flags.
         if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
         {
             return Err(std::io::Error::last_os_error())
@@ -2539,6 +2535,10 @@ fn execute_group_with_sink(
                 descriptor.revents = 0;
             }
             let ready =
+                // SAFETY: `descriptors` is a Vec of pollfd whose length was set before the loop to
+                // children + 2, and poll writes only revents within it. Each fd is -1, which poll
+                // ignores, or a pipe held open by `stdout`, `children` or `child_observer` for
+                // this iteration.
                 unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout_ms) };
             observer_notified = ready > 0 && descriptors[1].revents != 0;
             ready
@@ -2555,6 +2555,9 @@ fn execute_group_with_sink(
                     revents: 0,
                 },
             ];
+            // SAFETY: `descriptors` is a live array of two pollfd, and the count 2 matches it.
+            // Entry 0 is the stdout pipe or -1, and entry 1 is the observer or -1. poll ignores
+            // entries with a negative fd, as POSIX specifies.
             let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, timeout_ms) };
             observer_notified = ready > 0 && descriptors[1].revents != 0;
             ready
@@ -3356,7 +3359,7 @@ fn run_command_condition(
     call: &Invocation,
     expect_success: bool,
     bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
+    cwd: &crate::working_dir::WorkingDirectory,
     options: &RunOptions,
     launched: &mut usize,
     signals: &Signals,
@@ -3397,7 +3400,7 @@ fn execute_call_group_unobserved(
     input: Input,
     prepared_first_call: Option<(PathBuf, Vec<String>)>,
     bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
+    cwd: &crate::working_dir::WorkingDirectory,
     options: &RunOptions,
     launched: &mut usize,
     signals: &Signals,
@@ -3406,6 +3409,12 @@ fn execute_call_group_unobserved(
     let Some((call, manifest, line)) = calls.first().copied() else {
         bail!("cannot execute an empty applet group");
     };
+    // A build without an applet's gated feature refuses it before anything launches.
+    for (_, stage, stage_line) in calls {
+        if let Some(message) = stage.build_unavailable_message() {
+            bail!("line {stage_line}: {message}");
+        }
+    }
     let backend = manifest.execution_backend();
     if backend == AppletBackend::Command {
         if calls.iter().any(|(_, stage_manifest, _)| {
@@ -3505,6 +3514,7 @@ fn execute_call_group_unobserved(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "remote")]
 fn execute_remote_applet(
     call: &Invocation,
     manifest: &Manifest,
@@ -3695,6 +3705,26 @@ fn execute_remote_applet(
             Some(diagnostic_bytes),
         )],
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(not(feature = "remote"))]
+fn execute_remote_applet(
+    call: &Invocation,
+    manifest: &Manifest,
+    line: usize,
+    input: Input,
+    bindings: &BTreeMap<String, Value>,
+    cwd: &Path,
+    options: &RunOptions,
+    signals: &Signals,
+    registry: &Registry,
+) -> Result<GroupOutput> {
+    let _ = (call, input, bindings, cwd, options, signals, registry);
+    bail!(
+        "line {line}: applet {} is remote-backed, and this build has no remote backend; use the full build",
+        manifest.name
+    )
 }
 
 fn value_contains_reference(value: &Value) -> bool {
@@ -4165,7 +4195,9 @@ pub(crate) fn invoke_call_with_context(
             Input::Bytes(input),
             None,
             &bindings,
-            &invocation_options.working_directory,
+            &crate::working_dir::WorkingDirectory::plain(
+                invocation_options.working_directory.clone(),
+            ),
             &invocation_options,
             &mut launched,
             &signals,
@@ -4313,7 +4345,8 @@ fn run_finite_state(
     // keep capturing, because their callers consume the bytes.
     let stream_top = depth == 0 && STREAM_REQUEST.with(|request| request.get());
     let _job_run = signals.begin_job_run(options.max_output_bytes)?;
-    let mut cwd = fs::canonicalize(&options.working_directory)?;
+    let mut cwd =
+        crate::working_dir::WorkingDirectory::plain(fs::canonicalize(&options.working_directory)?);
     let module_session = preload_program_modules(program, registry, signals, &cwd)?;
     // A fresh run resolves its native commands before any of them can start. A
     // restore does not, since completed nodes may no longer need every tool.
@@ -4395,7 +4428,7 @@ fn run_finite_state(
                 )?;
                 state = resumed.state;
             }
-            cwd = state.cwd;
+            cwd = crate::working_dir::WorkingDirectory::plain(state.cwd);
             bindings = state.bindings;
             data = Input::Bytes(state.output);
             // A completed exit or fail is a terminal node: nothing after it ran,
@@ -4418,7 +4451,7 @@ fn run_finite_state(
             }
         } else {
             // The service just committed this exact path with the event snapshot.
-            cwd = options.working_directory.clone();
+            cwd = crate::working_dir::WorkingDirectory::plain(options.working_directory.clone());
         }
         if !cwd.is_dir() {
             bail!("checkpoint working directory no longer exists");
@@ -4772,7 +4805,7 @@ fn run_finite_state(
                         binding: call.binding.as_deref(),
                         job_scope,
                         bindings: std::mem::replace(&mut bindings, child),
-                        cwd: cwd.clone(),
+                        cwd: cwd.to_path_buf(),
                     });
                     if *connection == Connection::Start {
                         data = Input::Empty;
@@ -4794,7 +4827,7 @@ fn run_finite_state(
                     control_state.leave_call(index + 1)?;
                     let frame = call_frames.pop().context("program return without call")?;
                     bindings = frame.bindings;
-                    cwd = frame.cwd;
+                    cwd = crate::working_dir::WorkingDirectory::plain(frame.cwd);
                     if let Some(name) = frame.binding {
                         let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                             options.max_output_bytes,
@@ -4947,10 +4980,18 @@ fn run_finite_state(
                 StepKind::UseFolder { path } => {
                     let folder = path_value(path, &bindings, &cwd)?;
                     crate::capabilities::authorize_host_path(registry, &folder, false, &cwd)?;
-                    let resolved = fs::canonicalize(&folder)?;
+                    // Open first, then authorize the path the handle names. The directory that
+                    // was checked is then the directory the children enter.
+                    let opened = crate::working_dir::WorkingDirectory::open(&folder)?;
+                    let resolved = opened.resolved_path()?;
                     crate::capabilities::authorize_host_path(registry, &resolved, false, &cwd)?;
-                    verify_directory_identity(&folder, &resolved)?;
-                    cwd = resolved;
+                    if !opened.same_directory_as(&resolved)? {
+                        bail!(
+                            "line {}: folder changed while it was being opened",
+                            step.line
+                        );
+                    }
+                    cwd = opened;
                     if !cwd.is_dir() {
                         bail!("line {}: use folder requires a directory", step.line);
                     }
@@ -5437,7 +5478,7 @@ fn run_finite_state(
                             argv.iter().map(|argument| OsStr::new(argument.as_str())),
                             registry,
                             &manifest.name,
-                            &cwd,
+                            &crate::working_dir::WorkingDirectory::plain(cwd.to_path_buf()),
                         )?;
                         match request {
                             handoff::ProcessRequest::HandOver => {
@@ -5512,8 +5553,11 @@ fn run_finite_state(
                             false,
                             &cwd,
                         )?;
-                        cwd = fs::canonicalize(destination)
-                            .with_context(|| format!("line {}: cd to {:?}", step.line, args[0]))?;
+                        cwd = crate::working_dir::WorkingDirectory::plain(
+                            fs::canonicalize(destination).with_context(|| {
+                                format!("line {}: cd to {:?}", step.line, args[0])
+                            })?,
+                        );
                         if !cwd.is_dir() {
                             bail!("line {}: cd requires a directory", step.line);
                         }
@@ -6062,9 +6106,10 @@ fn run_finite_state(
         signals,
         options.command_timeout,
     )?;
+    #[cfg(feature = "live")]
     if let Some(state) = state_out {
         *state = live::NodeState {
-            cwd,
+            cwd: cwd.to_path_buf(),
             bindings,
             data: result.output.clone(),
         };
@@ -6087,7 +6132,7 @@ struct ControlContext<'program, 'frames> {
     call_frames: &'program mut Vec<calls::Frame<'frames>>,
     loop_frames: &'program mut loops::LoopStack,
     bindings: &'program mut BTreeMap<String, Value>,
-    cwd: &'program mut PathBuf,
+    cwd: &'program mut crate::working_dir::WorkingDirectory,
     job_supervisor: &'program mut jobs::Supervisor,
 }
 
@@ -6115,7 +6160,7 @@ fn apply_control_action<'a>(
         call_frames: &mut Vec<calls::Frame<'_>>,
         loop_frames: &mut loops::LoopStack,
         bindings: &mut BTreeMap<String, Value>,
-        cwd: &mut PathBuf,
+        cwd: &mut crate::working_dir::WorkingDirectory,
         job_supervisor: &mut jobs::Supervisor,
     ) -> Result<()> {
         let control_flow::UnwindTo {
@@ -6136,7 +6181,7 @@ fn apply_control_action<'a>(
                 .context("cancelling background jobs during reusable-program unwind")?;
             let frame = call_frames.pop().expect("call depth checked");
             *bindings = frame.bindings;
-            *cwd = frame.cwd;
+            *cwd = crate::working_dir::WorkingDirectory::plain(frame.cwd);
         }
         loop_frames.unwind_to(loop_depth, bindings)?;
         remove_bindings(bindings, drop_bindings);
@@ -6306,6 +6351,8 @@ mod child_observer_tests {
     #[test]
     fn kernel_creates_kqueue_close_on_exec() {
         let observer = ChildObserver::new().expect("creating test kqueue");
+        // SAFETY: `observer` owns the kqueue descriptor that raw_fd returns, and it stays open for
+        // this call. F_GETFD only reads the descriptor flags.
         let flags = unsafe { libc::fcntl(observer.raw_fd(), libc::F_GETFD) };
         assert_ne!(flags, -1);
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
@@ -6314,6 +6361,9 @@ mod child_observer_tests {
     struct RestoreSigchld(libc::sigaction);
     impl Drop for RestoreSigchld {
         fn drop(&mut self) {
+            // SAFETY: `self.0` is the sigaction saved by this test's SIGCHLD query, a fully
+            // initialized struct. It is passed by const pointer, and the null old-action pointer
+            // is allowed.
             unsafe {
                 libc::sigaction(libc::SIGCHLD, &self.0, std::ptr::null_mut());
             }
@@ -6323,8 +6373,15 @@ mod child_observer_tests {
     #[test]
     #[ignore = "isolated process-wide SIGCHLD disposition check"]
     fn runtime_observer_preserves_host_sigchld_ignore() {
+        // SAFETY: sigaction is a plain C struct of integers, a handler union and a signal mask, so
+        // the all-zero bit pattern is valid. The query below overwrites it before any read.
         let mut previous = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        // SAFETY: all-zero is a valid sigaction, as above. The handler and mask are set explicitly
+        // before the install call uses them.
         let mut ignored = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        // SAFETY: `previous` and `ignored` are live locals. The first call only queries SIGCHLD
+        // into `previous`, since its new-action pointer is null. The second installs `ignored`,
+        // whose mask was emptied by sigemptyset, and passes a null old-action pointer.
         unsafe {
             assert_eq!(
                 libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut previous),
@@ -6345,7 +6402,10 @@ mod child_observer_tests {
             let _observer = ChildObserver::new();
         }
 
+        // SAFETY: all-zero is a valid sigaction, and the query below overwrites it before use.
         let mut observed = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        // SAFETY: `observed` is a live, writable sigaction, and a null new-action pointer makes
+        // this call a read-only query of the SIGCHLD disposition.
         unsafe {
             assert_eq!(
                 libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut observed),
@@ -7038,9 +7098,13 @@ mod input_writer_drop_tests {
 
     fn fill_pipe(writer: &mut PipeWriter) {
         let fd = writer.as_raw_fd();
+        // SAFETY: `fd` is the descriptor of `writer`, which is borrowed for the whole function, so
+        // it stays open. F_GETFL only reads the status flags.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         assert_ne!(flags, -1);
         assert_eq!(
+            // SAFETY: `fd` is still open, and `flags` was checked not to be -1 above. F_SETFL only
+            // adds O_NONBLOCK to the status flags.
             unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
             0
         );
@@ -7056,6 +7120,8 @@ mod input_writer_drop_tests {
             }
         }
 
+        // SAFETY: `fd` is still open, and `flags` is the status-flag value read at the start of
+        // this function, so F_SETFL restores the pipe to its original mode.
         assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, flags) }, 0);
     }
 

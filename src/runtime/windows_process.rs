@@ -279,14 +279,14 @@ fn execute_group_with_sink(
                     argv.iter().map(|argument| OsStr::new(argument.as_str())),
                     registry,
                     &manifest.name,
-                    cwd,
+                    &crate::working_dir::WorkingDirectory::plain(cwd.to_path_buf()),
                 )?,
                 GroupArguments::Borrowed(argv) => crate::capabilities::command_for(
                     &binary,
                     argv.iter().map(|argument| OsStr::new(argument.as_ref())),
                     registry,
                     &manifest.name,
-                    cwd,
+                    &crate::working_dir::WorkingDirectory::plain(cwd.to_path_buf()),
                 )?,
             };
             let resolved_io = resolved_call_stdio(call, manifest, signals);

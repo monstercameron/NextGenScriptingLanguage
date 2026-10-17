@@ -17,13 +17,14 @@ pub fn run(
 
 #[cfg(feature = "tui")]
 pub(crate) use app::live::run as run_live;
+#[cfg(feature = "live")]
 pub(crate) use app::live::{
     initial_state as initial_live_state, normalize_state as normalize_live_state,
     validate_state as validate_live_state,
 };
 
 /// Without the `tui` feature, live screens cannot run interactively.
-#[cfg(not(feature = "tui"))]
+#[cfg(all(feature = "live", not(feature = "tui")))]
 pub(crate) fn run_live(
     _shared: std::sync::Arc<crate::live::state::Shared>,
     _options: &crate::runtime::RunOptions,

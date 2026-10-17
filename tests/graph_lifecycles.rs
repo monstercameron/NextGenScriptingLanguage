@@ -338,10 +338,16 @@ fn cancelled_native_stream_accounts_and_reaps_its_spawned_process() {
     assert_eq!(session.context().metrics.launched_processes(), 1);
 
     let started = Instant::now();
+    // SAFETY: `pid` was parsed from the pid file the fixture child wrote before its readiness
+    // record. Signal 0 delivers nothing and only probes for existence. A zombie still answers
+    // the probe, so this loop keeps polling until the child is reaped or 2 s pass.
     while unsafe { libc::kill(pid, 0) } == 0 && started.elapsed() < Duration::from_secs(2) {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(
+        // SAFETY: signal 0 delivers nothing; it checks that `pid`, the child PID read above,
+        // no longer exists. The assertion requires the probe to fail, meaning the child
+        // was reaped after `cancel_and_join`.
         unsafe { libc::kill(pid, 0) },
         -1,
         "cancelled stream child was reaped"

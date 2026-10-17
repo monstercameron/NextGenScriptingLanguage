@@ -107,9 +107,17 @@ enum Status {
 struct Identity {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     input_signature: Option<String>,
+    /// Set when the input signature is the keyed form. A journal without the marker predates
+    /// the keyed form and may match the legacy unkeyed digest once; a marked journal never may.
+    #[serde(default, skip_serializing_if = "is_false")]
+    keyed_inputs: bool,
     program_path: EncodedPath,
     initial_cwd: EncodedPath,
     mode: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -359,7 +367,7 @@ impl Journal {
         initial_cwd: &Path,
         mode: &str,
         max_output_bytes: usize,
-        input_signature: Option<String>,
+        input_signature: Option<super::InputSignatures>,
     ) -> Result<Self> {
         validate_mode(mode)?;
         let program_path = fs::canonicalize(&options.program_path)
@@ -415,12 +423,32 @@ impl Journal {
                 program_path: EncodedPath::from_path(&program_path),
                 initial_cwd: EncodedPath::from_path(&initial_cwd),
                 mode: mode.to_owned(),
-                input_signature: input_signature.clone(),
+                input_signature: input_signature.as_ref().map(|s| s.keyed.clone()),
+                keyed_inputs: input_signature.is_some(),
             };
-            if data.identity != expected {
+            let stored = &mut data.identity;
+            let same_place = stored.program_path == expected.program_path
+                && stored.initial_cwd == expected.initial_cwd
+                && stored.mode == expected.mode;
+            // A journal without the keyed marker may match the legacy digest, and the resume
+            // rewrites it with the keyed digest. A marked journal never matches the legacy one.
+            let legacy_match = match (&input_signature, stored.keyed_inputs) {
+                (Some(signatures), false) => {
+                    stored.input_signature.as_deref() == Some(signatures.legacy.as_str())
+                }
+                _ => false,
+            };
+            let inputs_match = (stored.input_signature == expected.input_signature
+                && stored.keyed_inputs == expected.keyed_inputs)
+                || legacy_match;
+            if !same_place || !inputs_match {
                 bail!(
                     "checkpoint belongs to a different program, directory, execution mode, or program inputs"
                 );
+            }
+            if legacy_match {
+                stored.input_signature = expected.input_signature.clone();
+                stored.keyed_inputs = true;
             }
             // Versions 1 and 2 keep completed nodes inline; this resume moves them to the log.
             // Version 3 only needs its version rewritten, since its log already exists.
@@ -482,7 +510,8 @@ impl Journal {
                 program_path: EncodedPath::from_path(&program_path),
                 initial_cwd: EncodedPath::from_path(&initial_cwd),
                 mode: mode.to_owned(),
-                input_signature: input_signature.clone(),
+                input_signature: input_signature.as_ref().map(|s| s.keyed.clone()),
+                keyed_inputs: input_signature.is_some(),
             };
             let initial = ExecutionState {
                 cwd: initial_cwd,
@@ -1045,6 +1074,9 @@ fn lock_directory(directory: &Path) -> Result<File> {
     #[cfg(windows)]
     crate::platform::windows::lock(&lock)?;
     #[cfg(unix)]
+    // SAFETY: `lock` is an open File that this function keeps alive and returns on success, so the
+    // descriptor is valid for the call. flock takes only an fd and flags, with no pointers, and
+    // its result is checked on the next lines.
     let lock_result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     #[cfg(unix)]
     if lock_result == -1 {
@@ -1324,6 +1356,18 @@ fn encode_completed_log(nodes: &[CompletedNode]) -> Result<(Vec<u8>, CompletedLo
 
 /// Read the committed prefix of the log. Lines past `count` are uncommitted and
 /// ignored; the prefix must match the journal's chain exactly.
+/// Fuzz entry: write `bytes` as the completed-node log in `directory` and decode it as
+/// the lines it holds. The chain check runs after every line is parsed.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_read_completed_log(directory: &Path, bytes: &[u8]) -> Result<()> {
+    fs::write(directory.join(COMPLETED_LOG), bytes)?;
+    let count = bytes.iter().filter(|byte| **byte == b'\n').count();
+    read_completed_log(directory, count, &chain_start()).map(|_| ())
+}
+
+#[cfg(feature = "fuzzing")]
+pub(crate) use elements::fuzz_replay_element_log;
+
 fn read_completed_log(
     directory: &Path,
     count: usize,
@@ -1696,6 +1740,9 @@ mod tests {
         assert_eq!(fs::read(&target).unwrap(), b"unchanged");
         let fifo = temp.path().join("fifo");
         let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `name` is a NUL-terminated CString that lives through the call, so `as_ptr` is a
+        // valid path. mkfifo only reads the path. `fifo` is a new name inside the private temp
+        // directory created above, and the result is asserted.
         assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
         assert!(open_regular(&fifo, "checkpoint file", true).is_err());
         assert!(open_regular(temp.path(), "checkpoint file", false).is_err());
@@ -1885,6 +1932,103 @@ mod tests {
     fn write_inline_journal(path: &Path, data: &JournalData) {
         let body = serde_json::to_vec(data).unwrap();
         fs::write(path, encode_envelope(&hex_digest(&body), &body)).unwrap();
+    }
+
+    fn input_signatures(keyed: &str, legacy: &str) -> super::super::InputSignatures {
+        super::super::InputSignatures {
+            keyed: keyed.to_owned(),
+            legacy: legacy.to_owned(),
+        }
+    }
+
+    /// A journal as the previous build wrote it: the unkeyed digest and no keyed marker.
+    /// It goes through the journal's own writer, `persist`, like every other journal.
+    fn write_legacy_journal(options: &CheckpointOptions, cwd: &Path) {
+        let mut journal = Journal::open_with_inputs(
+            options,
+            cwd,
+            "finite",
+            1024,
+            Some(input_signatures(
+                "inputs-v2:keyed-now",
+                "inputs-v1:unkeyed-then",
+            )),
+        )
+        .unwrap();
+        journal.data.identity.input_signature = Some("inputs-v1:unkeyed-then".to_owned());
+        journal.data.identity.keyed_inputs = false;
+        journal.persist().unwrap();
+    }
+
+    #[test]
+    fn a_legacy_journal_matches_its_unkeyed_digest_once_and_migrates_to_the_keyed_form() {
+        let (_temp, mut options, cwd) = setup();
+        write_legacy_journal(&options, &cwd);
+
+        options.resume = true;
+        let journal = Journal::open_with_inputs(
+            &options,
+            &cwd,
+            "finite",
+            1024,
+            Some(input_signatures(
+                "inputs-v2:keyed-now",
+                "inputs-v1:unkeyed-then",
+            )),
+        )
+        .unwrap();
+        drop(journal);
+        let persisted = read_journal(&options.directory.join("journal.json")).unwrap();
+        assert_eq!(
+            persisted.identity.input_signature.as_deref(),
+            Some("inputs-v2:keyed-now")
+        );
+        assert!(persisted.identity.keyed_inputs);
+    }
+
+    #[test]
+    fn a_legacy_digest_is_refused_for_a_keyed_journal_and_for_changed_inputs() {
+        // A journal that is marked keyed never matches the legacy digest, even if it carries it.
+        let (_temp, mut options, cwd) = setup();
+        let mut journal = Journal::open_with_inputs(
+            &options,
+            &cwd,
+            "finite",
+            1024,
+            Some(input_signatures(
+                "inputs-v2:keyed-now",
+                "inputs-v1:unkeyed-then",
+            )),
+        )
+        .unwrap();
+        journal.data.identity.input_signature = Some("inputs-v1:unkeyed-then".to_owned());
+        journal.persist().unwrap();
+        drop(journal);
+        options.resume = true;
+        assert!(Journal::open_with_inputs(
+            &options,
+            &cwd,
+            "finite",
+            1024,
+            Some(input_signatures(
+                "inputs-v2:keyed-now",
+                "inputs-v1:unkeyed-then"
+            )),
+        )
+        .is_err());
+
+        // An unmarked legacy journal does not match changed inputs either.
+        let (_temp, mut options, cwd) = setup();
+        write_legacy_journal(&options, &cwd);
+        options.resume = true;
+        assert!(Journal::open_with_inputs(
+            &options,
+            &cwd,
+            "finite",
+            1024,
+            Some(input_signatures("inputs-v2:other", "inputs-v1:other")),
+        )
+        .is_err());
     }
 
     #[test]

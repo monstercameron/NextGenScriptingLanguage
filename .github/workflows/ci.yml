@@ -23,6 +23,8 @@ jobs:
           persist-credentials: false
       - run: python3 tests/releases.py
       - run: python3 -O tests/releases.py
+      - name: Every unsafe block and impl has a SAFETY comment, on every platform
+        run: python3 tools/check_unsafe.py
       - name: Install pinned workflow validator
         run: GOBIN="$RUNNER_TEMP/actionlint" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - run: '"$RUNNER_TEMP/actionlint/actionlint" -color'

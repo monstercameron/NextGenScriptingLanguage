@@ -20,10 +20,16 @@ fn io_error(error: anyhow::Error) -> io::Error {
     io::Error::other(error.to_string())
 }
 fn event() -> io::Result<OwnedHandle> {
+    // SAFETY: null security attributes and a null name give a default, unnamed event.
+    // The manual-reset flag is 1 and the initial state is non-signalled.
+    // Only null pointers are passed, so no buffer must stay alive.
+    // A NULL return is checked below before the handle is adopted.
     let raw = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
     if raw.is_null() {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: raw is non-null (checked above) and was just returned by CreateEventW,
+    // so nothing else owns it. The OwnedHandle becomes the sole owner.
     Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
 }
 fn name(path: &Path) -> io::Result<Vec<u16>> {
@@ -32,6 +38,8 @@ fn name(path: &Path) -> io::Result<Vec<u16>> {
     } else {
         std::env::current_dir()?.join(path)
     };
+    // SAFETY: GetCurrentProcess has no preconditions. It returns the pseudo-handle
+    // for this process, which is always valid and needs no CloseHandle.
     let sid = user_sid(unsafe { GetCurrentProcess() }).map_err(io_error)?;
     let mut hash = Sha256::new();
     hash.update(sid);
@@ -56,9 +64,13 @@ impl Stream {
             write_timeout: AtomicU64::new(2000),
         }
     }
-    pub(super) fn connect(path: &Path) -> io::Result<Self> {
+    pub(crate) fn connect(path: &Path) -> io::Result<Self> {
         let name = name(path)?;
         for attempt in 0..2 {
+            // SAFETY: name is the NUL-terminated wide path from name(), owned by this frame
+            // and alive for the call. Share mode 0 and null security attributes are valid.
+            // FILE_FLAG_OVERLAPPED is required by transfer(). INVALID_HANDLE_VALUE is checked
+            // (raw != INVALID_HANDLE_VALUE) before the handle is adopted.
             let raw = unsafe {
                 CreateFileW(
                     name.as_ptr(),
@@ -72,12 +84,17 @@ impl Stream {
             };
             if raw != INVALID_HANDLE_VALUE {
                 return Ok(Self::new(
+                    // SAFETY: raw passed the raw != INVALID_HANDLE_VALUE check above and is not
+                    // stored anywhere else, so this OwnedHandle is its only owner.
                     unsafe { OwnedHandle::from_raw_handle(raw) },
                     false,
                 ));
             }
             let error = io::Error::last_os_error();
             if attempt == 0 && error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) {
+                // SAFETY: name is the NUL-terminated pipe path, still owned by this frame.
+                // WaitNamedPipeW blocks for at most 2000 ms waiting for an instance. Its
+                // return value is ignored because the loop retries CreateFileW once.
                 unsafe {
                     WaitNamedPipeW(name.as_ptr(), 2000);
                 }
@@ -87,10 +104,10 @@ impl Stream {
         }
         unreachable!()
     }
-    pub(super) fn set_read_timeout(&self, value: Option<Duration>) -> io::Result<()> {
+    pub(crate) fn set_read_timeout(&self, value: Option<Duration>) -> io::Result<()> {
         Self::timeout(&self.read_timeout, value)
     }
-    pub(super) fn set_write_timeout(&self, value: Option<Duration>) -> io::Result<()> {
+    pub(crate) fn set_write_timeout(&self, value: Option<Duration>) -> io::Result<()> {
         Self::timeout(&self.write_timeout, value)
     }
     fn timeout(target: &AtomicU64, value: Option<Duration>) -> io::Result<()> {
@@ -103,15 +120,18 @@ impl Stream {
         );
         Ok(())
     }
-    pub(super) fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
+    pub(crate) fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
         if enabled {
             Err(io::ErrorKind::Unsupported.into())
         } else {
             Ok(())
         }
     }
-    pub(super) fn peer_is_owner(&self) -> bool {
+    pub(crate) fn peer_is_owner(&self) -> bool {
         let mut pid = 0;
+        // SAFETY: self.handle is a named-pipe handle: a server instance from Pending::new
+        // when self.server is set, otherwise a client handle from connect().
+        // Each end gets the matching query. pid is a live local u32, read only when ok != 0.
         let ok = unsafe {
             if self.server {
                 GetNamedPipeClientProcessId(self.handle.as_raw_handle(), &mut pid)
@@ -122,22 +142,37 @@ impl Stream {
         if ok == 0 {
             return false;
         }
+        // SAFETY: PROCESS_QUERY_LIMITED_INFORMATION is enough for OpenProcessToken with
+        // TOKEN_QUERY in user_sid(). bInheritHandle is 0. pid is the peer reported by the
+        // pipe query above. A NULL result, for example after the peer exited, is checked
+        // below.
         let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
         if raw.is_null() {
             return false;
         }
+        // SAFETY: raw is non-null (checked above) and was just returned by OpenProcess,
+        // so this OwnedHandle is its only owner and closes it when process is dropped.
         let process = unsafe { OwnedHandle::from_raw_handle(raw) };
         let users = (
             user_sid(process.as_raw_handle()),
+            // SAFETY: GetCurrentProcess returns the always-valid pseudo-handle for this process.
             user_sid(unsafe { GetCurrentProcess() }),
         );
         matches!(users,(Ok(peer),Ok(ours)) if peer==ours)
     }
     fn transfer(&self, buffer: *mut u8, length: usize, write: bool) -> io::Result<usize> {
         let event = event()?;
+        // SAFETY: OVERLAPPED is plain C data (integers, pointers and a union), and an
+        // all-zero bit pattern is valid. hEvent is set on the next line, before any use.
         let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
         overlapped.hEvent = event.as_raw_handle();
         let mut count = 0;
+        // SAFETY: self.handle is a pipe opened with FILE_FLAG_OVERLAPPED. buffer addresses
+        // a live allocation of at least length bytes; length is the caller's slice length
+        // capped at u32::MAX. On writes the buffer is only read. count and overlapped are
+        // live locals. A pending request is either waited on for the event, or cancelled
+        // and waited on in GetOverlappedResult below, so the kernel never touches buffer
+        // or overlapped after transfer() returns.
         let ready = unsafe {
             if write {
                 WriteFile(
@@ -170,6 +205,10 @@ impl Stream {
             } else {
                 self.read_timeout.load(Ordering::Relaxed)
             };
+            // SAFETY: event is the live manual-reset event named by overlapped.hEvent, so the
+            // wait observes this request. The argument is INFINITE only when the stored
+            // timeout is 0. Any other value is clamped to at most INFINITE - 1, so a finite
+            // budget never becomes an infinite wait.
             let wait = unsafe {
                 WaitForSingleObject(
                     event.as_raw_handle(),
@@ -181,6 +220,11 @@ impl Stream {
                 )
             };
             if wait != WAIT_OBJECT_0 {
+                // SAFETY: the wait did not signal, so the request is still pending. CancelIoEx
+                // cancels only this request on this handle, and GetOverlappedResult with bWait
+                // set blocks until the kernel has completed it. After this block the kernel no
+                // longer references overlapped or buffer. Both return values are ignored; the
+                // error returned comes from wait.
                 // An OVERLAPPED and its buffer must outlive cancellation completion.
                 unsafe {
                     CancelIoEx(self.handle.as_raw_handle(), &overlapped);
@@ -192,6 +236,10 @@ impl Stream {
                     io::Error::last_os_error()
                 });
             }
+            // SAFETY: reached only when the wait returned WAIT_OBJECT_0 (the early return
+            // above handles the others), so the event is signalled and the request has
+            // completed. bWait is 0, so the call does not block. overlapped and count are
+            // still live.
             if unsafe {
                 GetOverlappedResult(self.handle.as_raw_handle(), &overlapped, &mut count, 0)
             } == 0
@@ -238,6 +286,10 @@ struct Pending {
     overlapped: Box<OVERLAPPED>,
     waiting: bool,
 }
+// SAFETY: every field is Send except the raw HANDLE inside the boxed OVERLAPPED,
+// which names the event owned by _event in the same struct. Kernel handles are
+// not thread-affine. CancelIoEx and GetOverlappedResult, used in Drop and ready(),
+// act on a request from any thread, unlike CancelIo.
 // The kernel references the stable boxed OVERLAPPED and the owned event, never
 // the surrounding Rust struct. Access is serialized by Listener's mutex.
 unsafe impl Send for Pending {}
@@ -245,6 +297,11 @@ impl Pending {
     fn new(name: &[u16], first: bool) -> io::Result<Self> {
         let security = PrivateSecurity::new().map_err(io_error)?;
         let attributes = security.attributes();
+        // SAFETY: name is the NUL-terminated wide pipe name from name(), alive for the call.
+        // attributes points at the descriptor owned by security, which lives until the end
+        // of this function; the descriptor only has to outlive the call. Buffer sizes and
+        // nMaxInstances are advisory. FILE_FLAG_OVERLAPPED is set for the ConnectNamedPipe
+        // below. INVALID_HANDLE_VALUE is checked before the handle is adopted.
         let raw = unsafe {
             CreateNamedPipeW(
                 name.as_ptr(),
@@ -266,10 +323,18 @@ impl Pending {
         if raw == INVALID_HANDLE_VALUE {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: raw is a pipe handle returned by CreateNamedPipeW, checked against
+        // INVALID_HANDLE_VALUE above and held nowhere else; this OwnedHandle is the sole owner.
         let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
         let event = event()?;
+        // SAFETY: an all-zero OVERLAPPED is a valid value (see transfer()). Boxing it gives a
+        // stable address that the kernel can keep referring to after Pending moves.
         let mut overlapped: Box<OVERLAPPED> = Box::new(unsafe { std::mem::zeroed() });
         overlapped.hEvent = event.as_raw_handle();
+        // SAFETY: handle is an overlapped pipe instance. overlapped is heap-allocated, and
+        // its hEvent is the event owned by _event. Both are stored in the Pending returned
+        // here, so they outlive any pending connect. Drop cancels and waits on a request
+        // that is still marked waiting before any field is freed.
         let ready = unsafe { ConnectNamedPipe(handle.as_raw_handle(), &mut *overlapped) };
         let waiting = if ready == 0 {
             let e = io::Error::last_os_error();
@@ -293,6 +358,10 @@ impl Pending {
             return Ok(true);
         }
         let mut count = 0;
+        // SAFETY: waiting is set only after ConnectNamedPipe returned pending on this handle
+        // with this boxed OVERLAPPED. self.handle is Some here: take() runs only in accept(),
+        // on a value that is discarded afterwards. bWait is 0, so the call does not block.
+        // count is a live local.
         if unsafe {
             GetOverlappedResult(
                 self.handle.as_ref().unwrap().as_raw_handle(),
@@ -318,6 +387,11 @@ impl Drop for Pending {
         if self.waiting {
             if let Some(handle) = &self.handle {
                 let mut count = 0;
+                // SAFETY: this runs only while waiting is set, so the connect is still pending
+                // on handle with &*self.overlapped. CancelIoEx cancels it, and GetOverlappedResult
+                // with bWait set blocks until the kernel has finished with overlapped and
+                // the event.
+                // Drop runs before the fields are freed, so both are still allocated.
                 unsafe {
                     CancelIoEx(handle.as_raw_handle(), &*self.overlapped);
                     GetOverlappedResult(handle.as_raw_handle(), &*self.overlapped, &mut count, 1);
@@ -326,12 +400,12 @@ impl Drop for Pending {
         }
     }
 }
-pub(super) struct Listener {
+pub(crate) struct Listener {
     name: Vec<u16>,
     pending: Mutex<Pending>,
 }
 impl Listener {
-    pub(super) fn bind(path: &Path) -> io::Result<Self> {
+    pub(crate) fn bind(path: &Path) -> io::Result<Self> {
         let name = name(path)?;
         let pending = Pending::new(&name, true)?;
         Ok(Self {
@@ -339,10 +413,10 @@ impl Listener {
             pending: Mutex::new(pending),
         })
     }
-    pub(super) fn set_nonblocking(&self, _value: bool) -> io::Result<()> {
+    pub(crate) fn set_nonblocking(&self, _value: bool) -> io::Result<()> {
         Ok(())
     }
-    pub(super) fn accept(&self) -> io::Result<(Stream, ())> {
+    pub(crate) fn accept(&self) -> io::Result<(Stream, ())> {
         let mut pending = self
             .pending
             .lock()

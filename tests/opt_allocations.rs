@@ -32,6 +32,9 @@ struct CountingSystem;
 #[global_allocator]
 static GLOBAL_ALLOCATOR: CountingSystem = CountingSystem;
 
+// SAFETY: `CountingSystem` delegates every `GlobalAlloc` method to `System`, which upholds the
+// trait contract, and it forwards the caller's pointers, layouts and sizes unchanged. Its only
+// extra work is relaxed atomic counter updates, which neither allocate nor touch heap memory.
 unsafe impl GlobalAlloc for CountingSystem {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if COUNTING.load(Ordering::Relaxed) {

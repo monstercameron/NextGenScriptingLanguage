@@ -186,6 +186,8 @@ fn cancellation_still_kills_a_child_after_small_input_prefill() {
         .unwrap()
         .parse()
         .unwrap();
+    // SAFETY: signal 0 delivers nothing. `pid` is the worker's own shell PID, written to the
+    // `pid` file before `exec sleep 30`; exec keeps the PID, so this probes the worker.
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
     assert_eq!(
         std::io::Error::last_os_error().raw_os_error(),

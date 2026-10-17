@@ -173,6 +173,9 @@ fn quiet_stdin_captures_observe_deadlines_and_signals() {
             let mut child = OwnedChild(command.spawn().unwrap());
             if cancel {
                 thread::sleep(Duration::from_millis(50));
+                // SAFETY: kill takes only integers. `child` was spawned just above and has not
+                // been waited on (the only call since is thread::sleep), so its pid still names
+                // that process.
                 assert_eq!(unsafe { libc::kill(child.0.id() as i32, libc::SIGTERM) }, 0);
             }
             child.wait();
@@ -189,6 +192,8 @@ fn inherited_stdin_capture_preserves_shared_descriptor_flags() {
     let file = root.path().join("input");
     fs::write(&file, b"data").unwrap();
     let input = fs::File::open(file).unwrap();
+    // SAFETY: `input` is a File opened just above and still alive, so its raw fd is open for
+    // this call. F_GETFL takes no pointer argument and only reads the file status flags.
     let initial = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFL) };
     let script = root.path().join("job.program");
     fs::write(&script, "read from stdin\n").unwrap();
@@ -199,6 +204,8 @@ fn inherited_stdin_capture_preserves_shared_descriptor_flags() {
         .unwrap();
     assert_eq!(success(output), b"data");
     assert_eq!(
+        // SAFETY: `input` is still open here (it is dropped at the end of this test), so its
+        // fd is valid; F_GETFL reads only the status flags and takes no pointer.
         unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFL) },
         initial
     );

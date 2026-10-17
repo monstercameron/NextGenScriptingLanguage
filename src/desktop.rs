@@ -2186,14 +2186,14 @@ fn preflight_renderer_commands(
         launch_arguments(config),
         registry,
         POLICY_APPLET,
-        &cwd,
+        &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
     )?);
     drop(capabilities::command_for(
         binary,
         ipc_arguments("executeDesktop-preflight", "{}"),
         registry,
         POLICY_APPLET,
-        &cwd,
+        &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
     )?);
     Ok(())
 }
@@ -2204,7 +2204,13 @@ fn policy_command(
     registry: &crate::manifest::Registry,
 ) -> Result<Command> {
     let cwd = std::env::current_dir().context("resolving renderer launch working directory")?;
-    capabilities::command_for(binary, arguments, registry, POLICY_APPLET, &cwd)
+    capabilities::command_for(
+        binary,
+        arguments,
+        registry,
+        POLICY_APPLET,
+        &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
+    )
 }
 
 fn launch_arguments(config: &Path) -> Vec<OsString> {

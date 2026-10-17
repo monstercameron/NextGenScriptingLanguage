@@ -1,3 +1,4 @@
+#[cfg(feature = "live")]
 #[path = "live.rs"]
 pub(crate) mod live;
 use super::syntax::*;

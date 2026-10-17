@@ -1,3 +1,4 @@
+#![cfg(feature = "remote")]
 //! Explicit remote-applet latency and client-resource workload.
 //!
 //! Build this ignored test target separately and run its prebuilt binary using

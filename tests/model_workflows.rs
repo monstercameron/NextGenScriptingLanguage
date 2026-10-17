@@ -22,10 +22,20 @@ fn wait_for_command(command: &mut Command, timeout: Duration) -> Output {
         Ok(Ok(output)) => output,
         Ok(Err(error)) => panic!("failed waiting for Python runner: {error}"),
         Err(_) => {
+            // SAFETY: `pid` is the id of a child spawned with `process_group(0)`, so the
+            // child leads its own process group whose id is `pid`; `-pid` addresses that
+            // group and SIGTERM is a valid signal number. The waiter thread is the only
+            // reaper and had not delivered a result when the timeout fired, so the group
+            // normally still has this child as a member. A reaped-and-recycled id is a
+            // narrow residual race, not excluded by this code.
             unsafe {
                 libc::kill(-pid, libc::SIGTERM);
             }
             std::thread::sleep(Duration::from_secs(2));
+            // SAFETY: same process-group invariant as the SIGTERM call above: `pid` leads the
+            // child's group and SIGKILL is a valid signal number. This runs after a grace
+            // period, so the group may already be empty, which makes the call a no-op; the
+            // same recycled-id caveat applies.
             unsafe {
                 libc::kill(-pid, libc::SIGKILL);
             }

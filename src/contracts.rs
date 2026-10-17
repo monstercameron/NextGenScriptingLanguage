@@ -2198,7 +2198,7 @@ pub struct RemoteError {
 }
 
 impl RemoteError {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "remote", not(target_arch = "wasm32")))]
     pub(crate) fn new(kind: RemoteErrorKind, effect_certainty: EffectCertainty) -> Self {
         Self {
             kind,

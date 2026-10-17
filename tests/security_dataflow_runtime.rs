@@ -1,3 +1,4 @@
+#![cfg(feature = "remote")]
 #![cfg(unix)]
 
 use flow::contracts::{

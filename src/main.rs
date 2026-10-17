@@ -275,6 +275,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     {
         return remote_resolve(&arguments[1..]);
     }
+    #[cfg(feature = "live")]
     if arguments.first().is_some_and(|a| a == "live") {
         return flow::live::cli(&arguments[1..], default_manifest_dir(), workflow_path);
     }
@@ -333,6 +334,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if arguments.first().is_some_and(|a| a == "help") {
         std::process::exit(flow::agent::help::cli(&arguments[1..])?);
     }
+    #[cfg(feature = "live")]
     if arguments.first().is_some_and(|a| a == "attach") {
         std::process::exit(flow::agent::attach::cli(&arguments[1..])?);
     }
@@ -955,7 +957,13 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         )?;
     }
     if args.control {
+        #[cfg(feature = "live")]
         return run_with_control(&args, program.trigger.is_some());
+        #[cfg(not(feature = "live"))]
+        bail!(
+            "run --control{} needs the live control endpoint, and this build has none; use the full build",
+            if args.break_at.is_empty() { "" } else { " --break-at" }
+        );
     }
     let schedule_options = schedule_options(&args)?;
     if program.trigger.is_none() && schedule_options.is_some() {
@@ -1801,6 +1809,7 @@ fn reject_finite_only_options(args: &Args, program_kind: &str) -> Result<()> {
 
 /// `run --control`: host a finite program under the live control endpoint. Options
 /// the live host cannot honour are refused by name, not ignored.
+#[cfg(feature = "live")]
 fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
     let refused = [
         (args.checkpoint_dir.is_some(), "--checkpoint"),

@@ -1,3 +1,4 @@
+#![cfg(feature = "live")]
 //! `execute run FILE --control`: the finite run is hosted under the live control
 //! endpoint. The round trip uses the endpoint the host prints, so it runs wherever
 //! the live host does (unix socket or Windows named pipe).

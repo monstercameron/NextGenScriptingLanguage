@@ -20,6 +20,9 @@ fn handle(fd: i32) -> Result<HANDLE> {
         2 => STD_ERROR_HANDLE,
         _ => bail!("invalid standard handle"),
     };
+    // SAFETY: kind is one of the three standard-handle constants chosen by the match above.
+    // GetStdHandle takes no pointers. The handle it returns is not owned here, so it is never
+    // closed; a null or INVALID_HANDLE_VALUE result is rejected on the next line.
     let handle = unsafe { GetStdHandle(kind) };
     if handle.is_null() || handle == INVALID_HANDLE_VALUE {
         bail!("standard handle is unavailable");
@@ -46,6 +49,9 @@ fn cooperative<T: Send + 'static>(
     loop {
         if cancelled.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d) {
             stop.store(true, Ordering::Relaxed);
+            // SAFETY: worker is a JoinHandle that is only joined after this loop, so the thread
+            // handle it holds stays open here. CancelSynchronousIo affects only synchronous I/O
+            // issued by that thread. If the thread already finished, the call fails harmlessly.
             // Repeated cancellation closes the narrow race between the owned
             // worker's stop check and its next synchronous kernel operation.
             unsafe {
@@ -86,6 +92,9 @@ pub fn write_with_deadline(
 /// writes until all bytes are out.
 fn write_all(target: HANDLE, data: &[u8], stop: &AtomicBool) -> Result<()> {
     let mut mode = 0;
+    // SAFETY: target is a standard handle from handle(), and mode is a live local u32 for
+    // the out-parameter. GetConsoleMode returns 0 for a non-console handle, which selects the
+    // byte-write branch below.
     if unsafe { GetConsoleMode(target, &mut mode) } != 0 {
         let text = std::str::from_utf8(data)
             .context("terminal output is not UTF-8; redirect binary output")?;
@@ -97,6 +106,9 @@ fn write_all(target: HANDLE, data: &[u8], stop: &AtomicBool) -> Result<()> {
             }
             let count = (wide.len() - offset).min(16384);
             let mut written = 0;
+            // SAFETY: target is a console handle, since GetConsoleMode succeeded above. The buffer
+            // is wide[offset..] with count at most wide.len() - offset, so count UTF-16 units are
+            // in bounds. written is a live local out-parameter, and the reserved argument is null.
             if unsafe {
                 WriteConsoleW(
                     target,
@@ -122,6 +134,10 @@ fn write_all(target: HANDLE, data: &[u8], stop: &AtomicBool) -> Result<()> {
             }
             let count = (data.len() - offset).min(32768);
             let mut written = 0;
+            // SAFETY: count is at most data.len() - offset, so data[offset..] is in bounds and
+            // the buffer is valid for the count bytes WriteFile may read. written is a live local
+            // out-parameter. lpOverlapped is null, so target must be a synchronous handle. The
+            // code assumes inherited handles are synchronous and cannot check that here.
             if unsafe {
                 WriteFile(
                     target,

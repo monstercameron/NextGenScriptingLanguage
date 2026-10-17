@@ -158,7 +158,7 @@ pub(super) fn execute_call_group(
     input: Input,
     prepared_first_call: Option<(PathBuf, Vec<String>)>,
     bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
+    cwd: &crate::working_dir::WorkingDirectory,
     options: &RunOptions,
     launched: &mut usize,
     signals: &Signals,

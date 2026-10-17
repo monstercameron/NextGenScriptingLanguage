@@ -132,10 +132,15 @@ impl Fixture {
 
 fn set_nonblocking(file: &impl AsRawFd) -> io::Result<()> {
     let descriptor = file.as_raw_fd();
+    // SAFETY: `file` is borrowed for this whole call, so `descriptor` is an open fd owned by
+    // that value. F_GETFL takes no pointer argument and only reads the status flags.
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
     if flags == -1 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: `flags` is the successful F_GETFL result checked just above (`flags == -1`
+    // returns early), OR'd with O_NONBLOCK. F_SETFL takes an int and no pointer, and `file`
+    // is still borrowed, so the fd remains open.
     if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
         return Err(io::Error::last_os_error());
     }
@@ -202,6 +207,8 @@ fn fifo_cache_entry_is_rejected_without_waiting_for_a_writer() {
     let fixture = Fixture::new();
     fs::remove_file(&fixture.entry).unwrap();
     let path = std::ffi::CString::new(fixture.entry.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: `path` is a CString built just above; CString::new rejected interior NULs, so
+    // as_ptr is NUL-terminated, and the CString outlives the call. mkfifo only reads the path.
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
     fixture.rejects(None, "regular file");
 }

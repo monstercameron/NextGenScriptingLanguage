@@ -33,11 +33,11 @@ crossterm = { version = "0.28", optional = true }
 unicode-width = { version = "0.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"], optional = true }
 mio = { version = "1.2.4", features = ["net", "os-poll"] }
 
 [target.'cfg(windows)'.dependencies]
-ureq = { version = "=3.4.2", default-features = false, features = ["native-tls"] }
+ureq = { version = "=3.4.2", default-features = false, features = ["native-tls"], optional = true }
 mio = { version = "1.2.4", features = ["net", "os-poll"] }
 ctrlc = "3.4"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Memory"] }
@@ -47,9 +47,14 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 # product feature set; shipped binaries, release packages, and the test suite build
 # with `--features full`. Disabling `tui` or `model` drops the code each one selects.
 default = []
-full = ["tui", "model", "desktop", "dap"]
-tui = ["dep:ratatui", "dep:crossterm", "dep:unicode-width"]
-model = []
+full = ["tui", "model", "desktop", "dap", "remote", "live"]
+# The terminal UI shows live session state, so it implies the live control plane.
+tui = ["live", "dep:ratatui", "dep:crossterm", "dep:unicode-width"]
+# The live control endpoint, `run --control`, and `attach`.
+live = []
+# The model helper and the remote backend share the HTTP client, so each enables it.
+model = ["dep:ureq"]
+remote = ["dep:ureq"]
 # Quickshell desktop renderer nodes and the DAP adapter. Lean builds refuse both with a clear error.
 desktop = []
 dap = []
@@ -84,3 +89,11 @@ required-features = ["model"]
 [[example]]
 name = "native-fixture"
 path = "tests/fixtures/native_fixture.rs"
+
+# Unsafe policy: every unsafe block has a `// SAFETY:` comment, and every unsafe operation
+# inside an unsafe fn sits in its own block. CI runs clippy with -D warnings.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

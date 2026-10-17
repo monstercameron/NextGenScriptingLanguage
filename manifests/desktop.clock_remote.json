@@ -1,5 +1,6 @@
 {
   "name": "desktop.clock_remote",
+  "build_feature": "remote",
   "binary": "@remote-applet",
   "accepts_stdin": false,
   "parameters": {"pulse": {"type": "integer", "required": true}},

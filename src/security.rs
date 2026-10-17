@@ -339,6 +339,9 @@ struct SecretBytes(Vec<u8>);
 impl Drop for SecretBytes {
     fn drop(&mut self) {
         for byte in &mut self.0 {
+            // SAFETY: `byte` is a `&mut u8` from iterating `self.0`, so it points to an
+            // initialized, aligned byte of this Vec's buffer. Drop has `&mut self`, so no other
+            // reference to that byte exists. The write stores 0 and keeps the length.
             unsafe { std::ptr::write_volatile(byte, 0) };
         }
         std::sync::atomic::compiler_fence(Ordering::SeqCst);
@@ -1073,6 +1076,8 @@ fn open_private_file(path: &Path) -> std::io::Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid(2) takes no arguments, cannot fail (POSIX), and has no memory
+        // preconditions. Its result is compared with the owner uid in `metadata`.
         if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,

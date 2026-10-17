@@ -29,6 +29,7 @@ static INSTALLED: AtomicUsize = AtomicUsize::new(0);
 
 /// Run `run` on this thread with `hook` observing its top-level statements. The
 /// previous hook, if any, is restored afterwards.
+#[cfg(feature = "live")]
 pub fn with_statement_hook<T>(hook: Arc<dyn StatementHook>, run: impl FnOnce() -> T) -> T {
     struct Restore(Option<Arc<dyn StatementHook>>);
     impl Drop for Restore {

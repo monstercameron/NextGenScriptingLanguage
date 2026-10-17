@@ -15,6 +15,10 @@ mod security {
     pub use flow::security::*;
 }
 
+mod working_dir {
+    pub use flow::working_dir::*;
+}
+
 use flow::ast::Value;
 use flow::{parser, runtime};
 use std::collections::BTreeMap;
@@ -141,6 +145,9 @@ fn recorded_pid(directory: &TempDir) -> i32 {
 }
 
 fn assert_reaped(pid: i32) {
+    // SAFETY: signal 0 sends nothing and kill takes no pointers. `pid` is an integer parsed
+    // from the worker's launch marker by recorded_pid. errno is read by the assert below,
+    // with no other libc call in between, so it still holds this call's failure code.
     let result = unsafe { libc::kill(pid, 0) };
     assert_eq!(result, -1, "worker process {pid} is still present");
     assert_eq!(
@@ -226,6 +233,9 @@ fn registry_lifetime_owns_persistent_worker_cleanup() {
     let pid = recorded_pid(&directory);
 
     drop(registry);
+    // SAFETY: signal 0 sends nothing and takes only an integer. `pid` came from the launch
+    // marker of the worker this test just invoked. `final_registry` is a clone that still
+    // owns the pool, so the worker has not been reaped and the pid still names it.
     assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
     drop(final_registry);
     assert_reaped(pid);
@@ -285,6 +295,8 @@ fn pool_rejects_new_identities_at_capacity_without_evicting_state() {
         .collect::<HashSet<_>>();
     let live_workers = pids
         .iter()
+        // SAFETY: signal 0 only probes existence and sends nothing. Each `pid` is an integer
+        // parsed from a launch marker that this test wrote through its own workers.
         .filter(|pid| unsafe { libc::kill(**pid, 0) } == 0)
         .count();
     assert_eq!(live_workers, 16, "pool must retain at most 16 workers");
@@ -540,6 +552,9 @@ fn output_and_stderr_limits_are_enforced() {
         1,
         "a complete oversized diagnostic should leave the worker reusable"
     );
+    // SAFETY: signal 0 sends nothing and takes only an integer. `stderr_pid` is the worker
+    // recorded in stderr_directory; `pool` still owns it until the drop on the next line,
+    // so it has not been reaped and the pid still names it.
     assert_eq!(unsafe { libc::kill(stderr_pid, 0) }, 0);
     drop(pool);
     assert_reaped(stderr_pid);

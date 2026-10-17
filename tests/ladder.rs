@@ -21,6 +21,9 @@ fn check_collection(script: &str, expected: usize, timeout: Duration) {
             break status;
         }
         if Instant::now() > deadline {
+            // SAFETY: the `try_wait` call at the top of this loop returned `Ok(None)`, so `child`
+            // has not been reaped and `child.id()` still names it; an unreaped zombie keeps its
+            // id reserved. SIGTERM is a valid signal number.
             unsafe {
                 libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
             }

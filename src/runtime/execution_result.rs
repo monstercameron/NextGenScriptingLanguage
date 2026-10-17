@@ -837,7 +837,7 @@ pub(crate) fn worker_failure(
 /// Convert a remote invocation failure while preserving the transport's
 /// explicit effect certainty. A missing response is represented by an
 /// unknown/not-started stage; it never acquires a fabricated process status.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "remote", not(target_arch = "wasm32")))]
 pub(crate) fn remote_failure(
     error: &crate::contracts::RemoteError,
     line: usize,
@@ -1180,7 +1180,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "remote", not(target_arch = "wasm32")))]
     #[test]
     fn remote_failure_keeps_stage_context_without_inventing_status() {
         let failure = remote_failure(

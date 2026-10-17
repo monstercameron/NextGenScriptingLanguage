@@ -812,7 +812,7 @@ impl WorkerProcess {
             launch.startup_arguments.iter(),
             &launch.registry,
             &launch.applet_name,
-            &launch.cwd,
+            &crate::working_dir::WorkingDirectory::plain(launch.cwd.clone()),
         )?;
         command
             .current_dir(&launch.cwd)
@@ -1207,6 +1207,10 @@ fn exchange_failure(error: anyhow::Error, transmitted: bool) -> ExchangeFailure 
 fn kill_process_group(pid: u32) {
     // Each worker starts a private process group. Errors are expected if it
     // already exited; wait below still owns and reaps the direct child.
+    // SAFETY: kill(2) reads only its two integer arguments. The group id is the child's pid, which
+    // is positive and fits pid_t, and the child was spawned with process_group(0), so that pid is
+    // its own group. Every caller reaches here before wait(), so the pid is not yet reaped and
+    // cannot have been reused for another process or group.
     unsafe {
         libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
     }
@@ -1215,10 +1219,14 @@ fn kill_process_group(pid: u32) {
 #[cfg(unix)]
 fn set_nonblocking(file: &impl std::os::fd::AsRawFd) -> std::io::Result<()> {
     let descriptor = file.as_raw_fd();
+    // SAFETY: `descriptor` comes from `file`, which is borrowed for the whole call and so stays
+    // open. F_GETFL takes no argument and only reads the status flags.
     let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
     if flags == -1 {
         return Err(std::io::Error::last_os_error());
     }
+    // SAFETY: `descriptor` is still open, and `flags` is the value F_GETFL returned, checked above
+    // not to be -1. F_SETFL changes only the file status flags, adding O_NONBLOCK.
     if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
         return Err(std::io::Error::last_os_error());
     }
@@ -1244,6 +1252,10 @@ fn wait_ready(
             events,
             revents: 0,
         };
+        // SAFETY: poll reads and writes the one pollfd behind `&mut descriptor_state`, a live
+        // local, and the count 1 matches it. `millis` is a non-negative c_int, since it is clamped
+        // to 0..=i32::MAX above. An invalid descriptor is reported in revents (POLLNVAL) and
+        // handled by the check below.
         let ready = unsafe { libc::poll(&mut descriptor_state, 1, millis) };
         if ready < 0 {
             let error = std::io::Error::last_os_error();

@@ -62,7 +62,7 @@ fn listen(
                 argv,
                 registry,
                 &manifest.name,
-                &options.working_directory,
+                &crate::working_dir::WorkingDirectory::plain(options.working_directory.clone()),
             )?;
             command
                 .current_dir(&options.working_directory)

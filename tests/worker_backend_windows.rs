@@ -44,6 +44,10 @@ mod security {
     pub use flow::security::*;
 }
 
+mod working_dir {
+    pub use flow::working_dir::*;
+}
+
 use flow::contracts::Sensitivity;
 use flow::{parser, runtime};
 use serde_json::json;
@@ -135,6 +139,9 @@ fn marker_pid(directory: &TempDir) -> u32 {
 }
 
 fn assert_reaped(pid: u32) {
+    // SAFETY: OpenProcess reads only scalar arguments here (access mask, inherit flag 0,
+    // and `pid` parsed from the launch marker); it takes no pointers. A NULL return means
+    // failure and is handled by the is_null check at line 152 before the handle is used.
     let process = unsafe {
         OpenProcess(
             PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
@@ -143,6 +150,9 @@ fn assert_reaped(pid: u32) {
         )
     };
     if process.is_null() {
+        // SAFETY: GetLastError returns the calling thread's last-error value, which is
+        // still the one set by the failed OpenProcess at line 145: the only code run in
+        // between is the pure-Rust `is_null` check, with no Win32 calls.
         let error = unsafe { GetLastError() };
         assert_eq!(
             error, ERROR_INVALID_PARAMETER,
@@ -150,7 +160,12 @@ fn assert_reaped(pid: u32) {
         );
         return;
     }
+    // SAFETY: `process` was checked non-null at line 152, so it is a valid handle that
+    // this function owns. WaitForSingleObject with timeout 0 only polls it, and the
+    // handle stays open until CloseHandle at line 170.
     let state = unsafe { WaitForSingleObject(process, 0) };
+    // SAFETY: `process` is the non-null handle from OpenProcess (line 145) that has not
+    // been closed yet; this is its only CloseHandle, so the handle is closed exactly once.
     unsafe {
         CloseHandle(process);
     }
@@ -162,9 +177,18 @@ fn assert_reaped(pid: u32) {
 }
 
 fn wait_for_exit(pid: u32) {
+    // SAFETY: OpenProcess takes no pointer arguments; PROCESS_SYNCHRONIZE, inherit flag 0
+    // and `pid` are scalar values. A NULL return means failure and is caught by the assert
+    // at line 184 before the handle is used.
     let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
     assert!(!process.is_null(), "opening worker process {pid}");
+    // SAFETY: `process` is non-null (asserted at line 184) and was opened with SYNCHRONIZE
+    // access, which WaitForSingleObject requires. The handle stays open until CloseHandle
+    // at line 193.
     let state = unsafe { WaitForSingleObject(process, 3_000) };
+    // SAFETY: `process` is the handle from OpenProcess at line 183 that passed the non-null
+    // assert at line 184. It has not been closed yet, so this CloseHandle call is its only
+    // close and the handle is not used after it.
     unsafe {
         CloseHandle(process);
     }

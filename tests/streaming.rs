@@ -191,6 +191,10 @@ fn wait_for_child_pid(path: &Path) -> libc::pid_t {
 fn assert_process_group_reaped(pid: libc::pid_t) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
+        // SAFETY: signal 0 sends nothing and the call takes only integers. `pid` is the
+        // process-group leader recorded by the idle fixture; the runtime starts applets with
+        // setpgid(0, 0) (src/runtime/unix_process.rs), so -pid names that group. Nothing here
+        // rejects 0 or a negative pid, so callers must pass a positive one.
         let result = unsafe { libc::kill(-pid, 0) };
         if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
             return;
@@ -371,6 +375,9 @@ impl Drop for Running {
     fn drop(&mut self) {
         // Signal only the owned CLI child. Its runtime owns and reaps its applet groups.
         if self.child.try_wait().ok().flatten().is_none() {
+            // SAFETY: kill takes only integers. The try_wait above returned Ok(None) or an
+            // error (both map to is_none), never Ok(Some), so the child has not been reaped
+            // and `self.child.id()` still names it.
             unsafe {
                 libc::kill(self.child.id() as libc::pid_t, libc::SIGINT);
             }
@@ -419,6 +426,8 @@ fn assert_spawn_lines(stderr: &str, expected: &[&str]) {
         .filter_map(|e| e["pid"].as_u64())
     {
         assert_eq!(
+            // SAFETY: signal 0 sends nothing and takes only an integer. `pid` is the applet
+            // pid the runner reported in its own spawn trace for a child it owns.
             unsafe { libc::kill(pid as libc::pid_t, 0) },
             -1,
             "owned applet still alive after runner exit"
@@ -862,6 +871,9 @@ fn blocked_stdout_remains_deadline_bounded_and_cancellable() {
         if cancel {
             runner.assert_still_running();
             assert_eq!(
+                // SAFETY: kill takes only integers. `assert_still_running` just asserted that
+                // try_wait returned Ok(None), so the runner has not exited or been reaped and
+                // `runner.child.id()` still names it.
                 unsafe { libc::kill(runner.child.id() as libc::pid_t, libc::SIGINT) },
                 0
             );

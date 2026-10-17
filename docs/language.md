@@ -228,8 +228,8 @@ these rules:
   refused before the run starts, so no effect runs.
 - Jobs inside reusable program definitions and in imported program modules are
   refused under checkpoints, before any effect runs.
-- A job node is retry-safe only when every stage is builtin or cacheable, like
-  an ordinary invocation. If a run is interrupted while a job node is in flight,
+- A job node is retry-safe only when every stage is retry-safe, like an ordinary
+  invocation (see Retry safety below). If a run is interrupted while a job node is in flight,
   `resume` refuses the uncertain node unless `--retry-uncertain` is passed. With
   that flag the whole node runs again from its `spawn`, so a native stage may
   repeat its effects.
@@ -802,9 +802,10 @@ with network or writes effects also needs `--allow undeclared`.
 
 Retrying also needs the effects to be safe to repeat. The attempt is safe when its
 outcome declares that nothing started (`effect_certainty: not_started`), or when the
-command is builtin or cacheable and has no redirection. These are the same rules
+command is retry-safe and has no redirection (see Retry safety below). These are
+the same rules
 checkpoint resume uses. Otherwise the retry is refused unless the step says
-`even if uncertain`. A quoted executable is never builtin or cacheable, so its
+`even if uncertain`. A quoted executable is never retry-safe, so its
 retries always need that clause.
 
 After the last allowed attempt the command fails with `retry exhausted after N+1
@@ -958,6 +959,30 @@ The script keeps execute's output rule. A command's stdout becomes the pipeline 
 The script must pass `dash -n`. The integration tests also compare its stdout and success with `execute run` under dash on Unix, and run shellcheck when it is installed.
 
 Two limits follow from sh itself. Applet arguments are expanded when the script is compiled, so a leading `~` takes the home directory of the compiling user. Output containing NUL bytes cannot pass through a sh variable.
+
+### Retry safety
+
+Retry safety asks one question: does running a stage again repeat an effect the runtime
+cannot account for? It decides two things. Under a checkpoint, an element or node that
+is retry-safe needs no durable begin record before it runs, so a loop of such elements
+costs no flush per element. On resume, a retry-safe node runs again without the
+`--retry-uncertain` override. A stage is retry-safe when:
+
+- it is builtin, or
+- it is cacheable (deterministic and reusable), or
+- it is an in-process applet and every effect it declares is a read (`fs.read*`,
+  `clock.read`), or it declares no effects at all.
+
+Anything else is uncertain. That includes a write, lock, process, network, system, or
+undeclared effect, and every native or external command, whose effects the runtime
+cannot see. A manifest that sets `"uncertain_on_failure": true` is uncertain even when
+its effects are reads. Cacheable is an author contract: the result is deterministic and reusable, and
+retry safety relies on it. Declare `cacheable` only for applets whose re-run has no
+external effect.
+
+A loop over a pure in-process applet such as `text.upper` therefore writes no begin
+records, while a loop over a native command writes one fsynced begin record per element
+before that element runs.
 
 ## Finite stdin and Unix composition
 

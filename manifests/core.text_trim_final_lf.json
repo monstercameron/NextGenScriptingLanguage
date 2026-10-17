@@ -1,6 +1,7 @@
 {
   "name": "text.trim_final_lf",
   "binary": "@execute-applet",
+  "cacheable": true,
   "accepts_stdin": true,
   "parameters": {
     "text": {

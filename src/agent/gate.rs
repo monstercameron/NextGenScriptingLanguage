@@ -21,6 +21,8 @@ use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
+pub use crate::contracts::effect_category;
+
 /// Protocol identifier of the verdict object.
 pub const PROTOCOL: &str = "execute.gate/1";
 
@@ -57,44 +59,10 @@ pub fn parse_category(name: &str) -> Result<&'static str> {
     }
 }
 
-/// Shipped effect names that the prefix rules below do not place. Each one is mapped on
-/// purpose: reading host state is `reads`; creating or locking a file is `writes`; an
-/// action that starts or drives another program is `process`. Installing packages and
-/// controlling services change the system, so they are `system`, which approving
-/// `process` does not cover.
-const EXPLICIT_EFFECTS: &[(&str, &str)] = &[
-    ("clock.read", "reads"),
-    ("compositor.dispatch", "process"),
-    ("filesystem.lock", "writes"),
-    ("network.loopback", "network"),
-    ("package.install", "system"),
-    ("systemd.control", "system"),
-];
-
 /// Shipped effects that stay `undeclared` on purpose. They change the desktop, and no
 /// category describes them better, so using one needs an explicit approval of
 /// `undeclared`. Test `shipped_manifest_effects_are_all_placed` keeps this list exact.
 pub const DELIBERATELY_UNDECLARED: &[&str] = &["desktop.notify", "desktop.osd", "desktop.render"];
-
-/// The category one declared effect string belongs to.
-pub fn effect_category(effect: &str) -> &'static str {
-    if let Some((_, category)) = EXPLICIT_EFFECTS.iter().find(|(name, _)| *name == effect) {
-        category
-    } else if effect.starts_with("fs.read") {
-        "reads"
-    } else if effect.starts_with("fs.write")
-        || effect.starts_with("file.write")
-        || effect.contains(".write")
-    {
-        "writes"
-    } else if effect.starts_with("network.") {
-        "network"
-    } else if effect == "process.spawn" {
-        "process"
-    } else {
-        "undeclared"
-    }
-}
 
 /// The categories one plan row triggers.
 fn triggered(row: &Value) -> Vec<&'static str> {

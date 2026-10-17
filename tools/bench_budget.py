@@ -33,7 +33,7 @@ def ten_step_pipeline():
 
 def for_each_10000(checkpointed):
     items = ", ".join(f'"{n}"' for n in range(FOR_EACH_ITEMS))
-    body = f"for each item in [{items}]\n  run text.trim_final_lf with text item\n"
+    body = f"for each item in [{items}]\n  run text.upper with text item\n"
     return body, checkpointed
 
 

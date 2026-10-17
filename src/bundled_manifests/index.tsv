@@ -85,47 +85,47 @@ core.text_replace.json	1276	text.replace		102356	1276
 core.text_split.json	1303	text.split		103632	1303
 core.text_strip_prefix.json	1104	text.strip_prefix		104935	1104
 core.text_strip_suffix.json	1104	text.strip_suffix		106039	1104
-core.text_trim_final_lf.json	1039	text.trim_final_lf		107143	1039
-core.text_upper.json	896	text.upper		108182	896
-core.toml_parse.json	1023	toml.parse		109078	1023
-core.toml_stringify.json	904	toml.stringify		110101	904
-core.yaml_parse.json	1023	yaml.parse		111005	1023
-core.yaml_stringify.json	904	yaml.stringify		112028	904
-count.lines.json	168	count.lines	count lines	112932	168
-cut.json	426	cut		113100	426
-desktop.clock_format.json	1005	desktop.clock_format		113526	1005
-desktop.clock_local.json	815	desktop.clock_local		114531	815
-desktop.clock_remote.json	897	desktop.clock_remote		115346	897
-desktop.fixture_sync.json	1291	desktop.fixture_sync		116243	1291
-desktop.quickshell.json	513	desktop.quickshell		117534	513
-false.json	85	false	fail	118047	85
-gh.repo.json	471	gh.repo		118132	471
-git.commit.json	493	git.commit	commit changes	118603	493
-grep.json	443	grep		119096	443
-head.json	275	head		119539	275
-jev.ask.json	1107	jev.ask		119814	1107
-jev.classify.json	2538	jev.classify		120921	2538
-jev.judge.json	2228	jev.judge		123459	2228
-jev.score.json	2367	jev.score		125687	2367
-join.json	421	join		128054	421
-jq.json	459	jq		128475	459
-jq.ps.json	920	jq.ps		128934	920
-llm.ask.json	2812	llm.ask		129854	2812
-llm.extract.json	2933	llm.extract		132666	2933
-ls.json	396	ls		135599	396
-mkdir.json	480	mkdir		135995	480
-omarchy.browser-refresh.json	961	omarchy.browser-refresh		136475	961
-omarchy.editor-install.json	803	omarchy.editor-install		137436	803
-omarchy.editor-list.json	770	omarchy.editor-list		138239	770
-paste.json	423	paste		139009	423
-printf.json	227	printf	print	139432	227
-ps.json	288	ps		139659	288
-pwd.json	58	pwd		139947	58
-sed.json	441	sed		140005	441
-sort.json	295	sort		140446	295
-tail.follow.json	323	tail.follow	follow file	140741	323
-tail.json	447	tail		141064	447
-tr.json	522	tr		141511	522
-uniq.json	295	uniq		142033	295
-upper.json	199	upper	uppercase	142328	199
-wc.json	279	wc		142527	279
+core.text_trim_final_lf.json	1060	text.trim_final_lf		107143	1060
+core.text_upper.json	896	text.upper		108203	896
+core.toml_parse.json	1023	toml.parse		109099	1023
+core.toml_stringify.json	904	toml.stringify		110122	904
+core.yaml_parse.json	1023	yaml.parse		111026	1023
+core.yaml_stringify.json	904	yaml.stringify		112049	904
+count.lines.json	168	count.lines	count lines	112953	168
+cut.json	426	cut		113121	426
+desktop.clock_format.json	1005	desktop.clock_format		113547	1005
+desktop.clock_local.json	815	desktop.clock_local		114552	815
+desktop.clock_remote.json	897	desktop.clock_remote		115367	897
+desktop.fixture_sync.json	1291	desktop.fixture_sync		116264	1291
+desktop.quickshell.json	513	desktop.quickshell		117555	513
+false.json	85	false	fail	118068	85
+gh.repo.json	471	gh.repo		118153	471
+git.commit.json	493	git.commit	commit changes	118624	493
+grep.json	443	grep		119117	443
+head.json	275	head		119560	275
+jev.ask.json	1107	jev.ask		119835	1107
+jev.classify.json	2538	jev.classify		120942	2538
+jev.judge.json	2228	jev.judge		123480	2228
+jev.score.json	2367	jev.score		125708	2367
+join.json	421	join		128075	421
+jq.json	459	jq		128496	459
+jq.ps.json	920	jq.ps		128955	920
+llm.ask.json	2812	llm.ask		129875	2812
+llm.extract.json	2933	llm.extract		132687	2933
+ls.json	396	ls		135620	396
+mkdir.json	480	mkdir		136016	480
+omarchy.browser-refresh.json	961	omarchy.browser-refresh		136496	961
+omarchy.editor-install.json	803	omarchy.editor-install		137457	803
+omarchy.editor-list.json	770	omarchy.editor-list		138260	770
+paste.json	423	paste		139030	423
+printf.json	227	printf	print	139453	227
+ps.json	288	ps		139680	288
+pwd.json	58	pwd		139968	58
+sed.json	441	sed		140026	441
+sort.json	295	sort		140467	295
+tail.follow.json	323	tail.follow	follow file	140762	323
+tail.json	447	tail		141085	447
+tr.json	522	tr		141532	522
+uniq.json	295	uniq		142054	295
+upper.json	199	upper	uppercase	142349	199
+wc.json	279	wc		142548	279

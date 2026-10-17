@@ -401,6 +401,22 @@ pub(crate) fn graph_node_fingerprint(
     ))
 }
 
+/// Whether re-running one applet call repeats no external side effect the checkpoint
+/// cannot see. Builtin and cacheable applets are deterministic and reusable. An
+/// in-process applet is retry-safe when every effect it declares is a read, or it
+/// declares none: a re-run of a read has no side effect. A write, process, network,
+/// system, or undeclared effect stays uncertain, and so does every native or external
+/// command, whose real effects are unknown.
+fn applet_retry_safe(manifest: &Manifest) -> bool {
+    if manifest.builtin.is_some() || manifest.cacheable {
+        return true;
+    }
+    manifest.execution_backend() == AppletBackend::InProcess
+        && manifest
+            .execution_contract()
+            .is_some_and(|contract| crate::contracts::effects_are_read_only(&contract.effects))
+}
+
 pub(super) fn retry_safe(
     program: &Program,
     start: usize,
@@ -426,14 +442,14 @@ pub(super) fn retry_safe(
         } = &step.kind
         {
             let manifest = registry.resolve_call(call)?;
-            if manifest.builtin.is_none() && !manifest.cacheable {
+            if !applet_retry_safe(manifest) {
                 return Ok(false);
             }
         }
         if let StepKind::TaskGroup { tasks, .. } = &step.kind {
             for call in tasks {
                 let manifest = registry.resolve_call(call)?;
-                if manifest.builtin.is_none() && !manifest.cacheable {
+                if !applet_retry_safe(manifest) {
                     return Ok(false);
                 }
             }
@@ -441,7 +457,7 @@ pub(super) fn retry_safe(
         if let StepKind::SpawnJob { stages, .. } = &step.kind {
             for stage in stages {
                 let manifest = registry.resolve_call(&stage.call)?;
-                if manifest.builtin.is_none() && !manifest.cacheable {
+                if !applet_retry_safe(manifest) {
                     return Ok(false);
                 }
             }
@@ -933,5 +949,64 @@ mod tests {
         std::fs::write(&binary, b"second binary contents").unwrap();
         let after_change = node_fingerprint(&program, 0, 2, &registry, temp.path()).unwrap();
         assert_ne!(first, after_change);
+    }
+}
+
+#[cfg(test)]
+mod retry_rule_tests {
+    use super::applet_retry_safe;
+    use crate::contracts::effects_are_read_only;
+    use crate::manifest::Registry;
+    use std::path::Path;
+
+    #[test]
+    fn in_process_applets_are_retry_safe_only_when_they_declare_reads_or_nothing() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        let registry = Registry::load_default(&dir).unwrap();
+        let safe = |name: &str| applet_retry_safe(registry.resolve(name).unwrap());
+        assert!(safe("text.upper"), "a pure transform declares no effects");
+        assert!(safe("fs.test"), "a read of the filesystem");
+        assert!(safe("env.load"), "a read of the environment");
+        assert!(
+            !safe("fs.write_atomic"),
+            "a write, lock, and native command stay uncertain"
+        );
+    }
+
+    #[test]
+    fn native_commands_stay_uncertain_unless_they_are_declared_deterministic() {
+        let plain =
+            Registry::from_sources(&[r#"{"name":"native.tool","binary":"tool","arguments":[]}"#])
+                .unwrap();
+        assert!(!applet_retry_safe(plain.resolve("native.tool").unwrap()));
+        let cacheable = Registry::from_sources(&[
+            r#"{"name":"native.pure","binary":"tool","cacheable":true,"arguments":[]}"#,
+        ])
+        .unwrap();
+        assert!(applet_retry_safe(cacheable.resolve("native.pure").unwrap()));
+    }
+
+    #[test]
+    fn only_read_effects_keep_a_stage_retry_safe() {
+        let reads = |effects: &[&str]| {
+            let effects: Vec<String> = effects.iter().map(|e| e.to_string()).collect();
+            effects_are_read_only(&effects)
+        };
+        assert!(reads(&[]));
+        assert!(reads(&["fs.read.file"]));
+        assert!(reads(&["clock.read"]));
+        assert!(!reads(&["filesystem.write"]));
+        assert!(!reads(&["filesystem.lock"]));
+        assert!(!reads(&["process.spawn"]));
+        assert!(!reads(&["network.loopback"]));
+        assert!(!reads(&["package.install"]));
+        assert!(
+            !reads(&["desktop.notify"]),
+            "an undeclared effect stays uncertain"
+        );
+        assert!(
+            !reads(&["fs.read.file", "fs.write.file"]),
+            "one write makes the stage uncertain"
+        );
     }
 }

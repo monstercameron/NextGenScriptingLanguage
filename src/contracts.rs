@@ -400,6 +400,48 @@ pub type Capability = String;
 /// declared effect must also be present in the capability set.
 pub type Effect = String;
 
+/// Shipped effect names that the prefix rules below do not place. Each one is mapped on
+/// purpose: reading host state is `reads`; creating or locking a file is `writes`; an
+/// action that starts or drives another program is `process`. Installing packages and
+/// controlling services change the system, so they are `system`, which approving
+/// `process` does not cover.
+const EXPLICIT_EFFECTS: &[(&str, &str)] = &[
+    ("clock.read", "reads"),
+    ("compositor.dispatch", "process"),
+    ("filesystem.lock", "writes"),
+    ("network.loopback", "network"),
+    ("package.install", "system"),
+    ("systemd.control", "system"),
+];
+
+/// The category one declared effect string belongs to.
+pub fn effect_category(effect: &str) -> &'static str {
+    if let Some((_, category)) = EXPLICIT_EFFECTS.iter().find(|(name, _)| *name == effect) {
+        category
+    } else if effect.starts_with("fs.read") {
+        "reads"
+    } else if effect.starts_with("fs.write")
+        || effect.starts_with("file.write")
+        || effect.contains(".write")
+    {
+        "writes"
+    } else if effect.starts_with("network.") {
+        "network"
+    } else if effect == "process.spawn" {
+        "process"
+    } else {
+        "undeclared"
+    }
+}
+
+/// Whether every declared effect is a read, or none is declared. Re-running such an
+/// applet repeats no write, process, network, or system effect.
+pub fn effects_are_read_only(effects: &[Effect]) -> bool {
+    effects
+        .iter()
+        .all(|effect| effect_category(effect) == "reads")
+}
+
 /// How the output bytes become a typed value at the explicit contract boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -44,7 +44,7 @@ jobs:
           tracked=$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v -E '(^|/)\.env\.example$' || true)
           if [ -n "$tracked" ]; then
             echo "Local env files must not be tracked:" >&2
-            echo "$tracked" | sed 's/^/  /' >&2
+            while IFS= read -r file; do printf "  %s\n" "$file"; done <<<"$tracked" >&2
             exit 1
           fi
       - name: Install pinned gitleaks

@@ -245,7 +245,8 @@ completed node therefore refuses the resume, before any effect runs.
 
 A node is in flight from its first applet invocation, not from when it starts
 waiting for inputs. An interrupted node that is not retry-safe needs
-`retry_uncertain`; a node is retry-safe when its applet is builtin or cacheable.
+`retry_uncertain`; a node is retry-safe when its applet is retry-safe (see Retry safety
+in the language reference).
 Retrying reruns that node only.
 
 Under checkpoints, terminal outputs come in node completion order, and within a

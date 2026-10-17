@@ -1,0 +1,157 @@
+.TH EXECUTE 1 "October 2026" "execute 0.9.0-rc.5" "User Commands"
+.SH NAME
+execute \- readable Unix workflows with declarative applets and direct pipes
+.SH SYNOPSIS
+.B execute
+.I FILE
+[\fIOPTIONS\fR] [\fB\-\-\fR \fIARG\fR...]
+.br
+.B execute
+.B check|explain|inspect|run
+.I FILE
+[\fIOPTIONS\fR]
+.br
+.B execute resume
+.I FILE
+.B \-\-checkpoint
+.I DIR
+.br
+.B execute applets
+.BR list|inspect|discover|match
+.br
+.B execute modules
+.BR inspect|verify|lock
+.I MANIFEST
+.br
+.B execute service generate
+.BR systemd|launchd
+.I FILE
+.br
+.B execute lsp
+.RB [ \-\-stdio ]
+.br
+.B execute live
+.IR SUBCOMMAND ...
+.br
+.B execute model
+.BR classify|judge|score|generate|extract
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+Execute runs
+.I .program
+files: typed glue that starts native commands and manifest applets, moves their
+output through direct pipes, and reports what it will do. Computation belongs to
+applets, not to the language. Use
+.B execute check
+to validate a program without running anything, and
+.B execute explain
+to see the effects a program would have.
+.SH COMMANDS
+.TP
+.B check \fIFILE\fR
+Validate a program without running it. Add
+.B \-\-json
+for a structured result.
+.TP
+.B explain \fIFILE\fR
+Show each step and its declared effects. Add
+.B \-\-json
+for a machine-readable plan, which includes the declared flags and options.
+.TP
+.B inspect \fIFILE\fR
+Describe the program's inputs, including flags, options and their sources, without
+running it.
+.TP
+.B run \fIFILE\fR
+Run the program. Arguments after
+.B \-\-
+are passed to the program's declared inputs. Use
+.B run \fIFILE\fR \fB\-\- \-\-help\fR
+for the help generated from its declarations.
+.TP
+.B resume \fIFILE\fR \fB\-\-checkpoint\fR \fIDIR\fR
+Continue a checkpointed run from its last durable step.
+.SH OPTIONS
+.TP
+.BI \-\-input " NAME=VALUE"
+Supply a declared program input. May be repeated.
+.TP
+.B \-\-json
+Structured result for
+.B check
+and
+.BR explain .
+.TP
+.BI \-\-manifest\-dir " DIR"
+Directory containing applet manifests. Defaults to the installed manifests.
+.TP
+.BI \-\-manifest\-catalog " FILE"
+Packed manifest catalog. Cannot be combined with
+.BR \-\-manifest\-dir .
+.TP
+.BI \-\-capability\-policy " FILE"
+Enforce a versioned applet policy for
+.BR check ", " explain ", " inspect ", " run ", " resume ", " live .
+.TP
+.BI \-\-data\-flow\-policy " FILE"
+Enforce origin and persistence data-flow grants.
+.TP
+.BI \-\-cache\-dir " DIR"
+Cache directory for
+.B run
+and
+.BR resume .
+.TP
+.BI \-\-checkpoint " DIR"
+Durable checkpoint directory for
+.B run
+and
+.BR resume .
+.TP
+.B \-\-retry\-uncertain
+Retry an invocation whose prior outcome is uncertain. Only with
+.BR resume .
+.TP
+.B \-\-trace
+Print execution details to standard error.
+.TP
+.BI \-\-max\-output\-bytes " N"
+Largest captured output, in bytes.
+.TP
+.BI \-\-command\-timeout\-ms " N"
+Lifetime limit for each native pipeline.
+.TP
+.BI \-\-total\-timeout\-ms " N"
+Lifetime limit for the whole workflow.
+.TP
+.BI \-\-drain\-timeout\-ms " N"
+Budget for an interrupt to finish running work before the run is cancelled. Default
+10000. Only with
+.BR run .
+.TP
+.B \-h, \-\-help
+Show the command help, or with a program file and
+.B \-\-
+the program's generated help.
+.SH EXIT STATUS
+A program's explicit
+.B exit with status
+value is its exit status. A failing native command reports its own status. An
+interrupt exits with 130 after any drain.
+.SH FILES
+.TP
+.I /usr/share/execute/manifests
+Bundled applet manifests, found from the installed binary's location.
+.TP
+.I /usr/share/execute/docs
+Language and platform documentation.
+.TP
+.I /usr/share/execute/editors
+Editor grammar for syntax highlighting.
+.SH SEE ALSO
+The language reference in
+.IR /usr/share/execute/docs .
+.SH AUTHORS
+Execute maintainers. Source:
+.UR https://github.com/monstercameron/NextGenScriptingLanguage
+.UE

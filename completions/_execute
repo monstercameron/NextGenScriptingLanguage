@@ -1,0 +1,20 @@
+#compdef execute
+# zsh completion for execute
+_arguments -s \
+  '1:command:(check explain inspect run resume applets modules service live model lsp)' \
+  '--input[supply a declared program input]:NAME=VALUE' \
+  '--json[structured result for check and explain]' \
+  '--manifest-dir[directory containing applet manifests]:directory:_directories' \
+  '--manifest-catalog[packed manifest catalog]:file:_files' \
+  '--capability-policy[versioned applet policy]:file:_files' \
+  '--data-flow-policy[origin and persistence grants]:file:_files' \
+  '--cache-dir[cache directory]:directory:_directories' \
+  '--checkpoint[durable checkpoint directory]:directory:_directories' \
+  '--retry-uncertain[retry an uncertain invocation on resume]' \
+  '--trace[print execution details to stderr]' \
+  '--max-output-bytes[largest captured output]:bytes:' \
+  '--command-timeout-ms[lifetime limit for each native pipeline]:milliseconds:' \
+  '--total-timeout-ms[lifetime limit for the whole workflow]:milliseconds:' \
+  '--drain-timeout-ms[interrupt drain budget]:milliseconds:' \
+  '--help[show help]' \
+  '*:file:_files'

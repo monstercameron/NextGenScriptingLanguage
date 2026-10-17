@@ -104,6 +104,45 @@ def check_binary(path, target):
             raise ValueError("Mach-O architecture mismatch")
 
 
+# Shell completions, the man page, the editor grammar and the docs. A system install
+# (deb, rpm, AUR) puts each file where its tooling looks; an archive keeps the same files
+# under the relative names below. Source paths are relative to the repository root.
+COMPLETIONS = [
+    ("completions/execute.bash", "share/bash-completion/completions/execute"),
+    ("completions/_execute", "share/zsh/site-functions/_execute"),
+    ("completions/execute.fish", "share/fish/vendor_completions.d/execute.fish"),
+]
+MAN_PAGE = "docs/man/execute.1"
+GRAMMAR = [
+    "editors/vscode/syntaxes/execute.tmLanguage.json",
+    "editors/vscode/language-configuration.json",
+]
+DOCS = ["docs/language.md", "docs/grammar.md", "docs/windows.md", "docs/releases.md"]
+
+
+def extra_files(system):
+    """(source, destination) pairs for the extras, relative to the package prefix."""
+    if system:
+        completions = COMPLETIONS
+        man = [(MAN_PAGE, "share/man/man1/execute.1")]
+
+        def under(source):
+            return "share/execute/" + source
+
+    else:
+        completions = [(source, source) for source, _ in COMPLETIONS]
+        man = [(MAN_PAGE, "man/execute.1")]
+
+        def under(source):
+            return source
+
+    pairs = list(completions) + man + [(s, under(s)) for s in GRAMMAR + DOCS]
+    missing = [source for source, _ in pairs if not (ROOT / source).is_file()]
+    if missing:
+        raise ValueError("missing package extras: " + ", ".join(missing))
+    return pairs
+
+
 def populate(root, binaries, target, system=False):
     prefix = root / "usr" if system else root
     bindir = prefix / "bin"
@@ -120,12 +159,10 @@ def populate(root, binaries, target, system=False):
     shutil.copytree(ROOT / "manifests", share / "manifests")
     for name in ["README.md", "LICENSE"]:
         shutil.copyfile(ROOT / name, share / name)
-    docs = share / "docs"
-    docs.mkdir()
-    for name in ["windows.md", "releases.md", "syntax.md"]:
-        source = ROOT / "docs" / name
-        if source.is_file():
-            shutil.copyfile(source, docs / name)
+    for source, relative in extra_files(system):
+        destination = prefix / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / source, destination)
 
 
 def archive(root, destination, epoch):
@@ -182,6 +219,12 @@ def linux_packages(work, binaries, target, dest, value, epoch):
         (rpmroot / name).mkdir(parents=True)
     payload = work / "payload"
     populate(payload, binaries, target, system=True)
+    # Files outside /usr/share/execute, which the spec lists one by one.
+    outside_share_execute = "\n".join(
+        "/usr/" + relative
+        for _, relative in extra_files(True)
+        if not relative.startswith("share/execute/")
+    )
     # No shell interpolation of arbitrary input: all paths are controlled build directories.
     spec = rpmroot / "SPECS/execute.spec"
     spec.write_text(
@@ -204,8 +247,9 @@ cp -a "%s/usr/." %%{buildroot}/usr/
 /usr/bin/execute-model
 /usr/bin/execute-applet
 /usr/share/execute
+%s
 """
-        % (pv, str(payload))
+        % (pv, str(payload), outside_share_execute)
     )
     run(
         "rpmbuild",

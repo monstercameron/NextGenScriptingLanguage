@@ -415,5 +415,121 @@ class Publication(unittest.TestCase):
                     self.assertEqual(gh.call_count, 1)
 
 
+class PackagingLayout(unittest.TestCase):
+    """The installed layout that the .deb, .rpm and AUR packages share."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.work = Path(self._tmp.name)
+        self.binaries = self.work / "release"
+        self.binaries.mkdir()
+        for name in ["execute", "execute-model", "execute-applet"]:
+            (self.binaries / name).write_bytes(name.encode())
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_system_layout_installs_completions_man_page_grammar_and_docs(self):
+        root = self.work / "system"
+        with mock.patch.object(package, "check_binary"):
+            package.populate(root, self.binaries, "x86_64-unknown-linux-musl", system=True)
+        expected = [
+            "usr/share/bash-completion/completions/execute",
+            "usr/share/zsh/site-functions/_execute",
+            "usr/share/fish/vendor_completions.d/execute.fish",
+            "usr/share/man/man1/execute.1",
+            "usr/share/execute/editors/vscode/syntaxes/execute.tmLanguage.json",
+            "usr/share/execute/editors/vscode/language-configuration.json",
+            "usr/share/execute/docs/language.md",
+            "usr/share/execute/manifests/printf.json",
+        ]
+        for relative in expected:
+            self.assertTrue((root / relative).is_file(), relative)
+
+    def test_archive_layout_keeps_the_same_files_under_relative_names(self):
+        root = self.work / "archive"
+        with mock.patch.object(package, "check_binary"):
+            package.populate(root, self.binaries, "x86_64-apple-darwin")
+        for relative in [
+            "completions/execute.bash",
+            "completions/_execute",
+            "completions/execute.fish",
+            "man/execute.1",
+            "editors/vscode/syntaxes/execute.tmLanguage.json",
+            "docs/language.md",
+        ]:
+            self.assertTrue((root / relative).is_file(), relative)
+
+    def test_rpm_spec_lists_the_files_outside_share_execute(self):
+        outside = [relative for _, relative in package.extra_files(True) if not relative.startswith("share/execute/")]
+        self.assertEqual(
+            sorted(outside),
+            sorted([
+                "share/bash-completion/completions/execute",
+                "share/zsh/site-functions/_execute",
+                "share/fish/vendor_completions.d/execute.fish",
+                "share/man/man1/execute.1",
+            ]),
+        )
+
+
+class AurPackages(unittest.TestCase):
+    """The PKGBUILDs are rendered per release; their pinned files must match the inputs."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.work = Path(self._tmp.name)
+        self.value = release.version()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_templates_install_the_manifest_directory_the_binary_searches(self):
+        for name in ["execute-bin", "execute"]:
+            text = (ROOT / "packaging/aur" / name / "PKGBUILD").read_text()
+            self.assertIn("/usr/share/execute/manifests", text, name)
+            self.assertIn('/usr/bin/execute"', text, name)
+            self.assertIn("_tag=", text, name)
+
+    def test_render_pins_version_and_checksums_of_the_inputs(self):
+        import aur
+
+        x64 = self.work / "x64.tar.gz"
+        x64.write_bytes(b"binary archive bytes")
+        source = self.work / "source.tar.gz"
+        source.write_bytes(b"source archive bytes")
+        out = self.work / "pkgs"
+        aur.render(out, self.value, linux_x64=x64, source=source)
+
+        binary = (out / "execute-bin/PKGBUILD").read_text()
+        self.assertIn("_tag=" + self.value, binary)
+        self.assertIn(
+            "sha256sums_x86_64=('" + hashlib.sha256(b"binary archive bytes").hexdigest() + "')",
+            binary,
+        )
+        self.assertIn("sha256sums_aarch64=('SKIP')", binary)
+        self.assertTrue((out / "execute-bin" / ("execute-" + self.value + "-linux-x64.tar.gz")).is_file())
+
+        built = (out / "execute/PKGBUILD").read_text()
+        self.assertIn(
+            "sha256sums=('" + hashlib.sha256(b"source archive bytes").hexdigest() + "')",
+            built,
+        )
+        self.assertTrue((out / "execute" / ("NextGenScriptingLanguage-" + self.value + ".tar.gz")).is_file())
+
+    def test_pkgver_has_no_hyphen_and_the_tag_keeps_it(self):
+        import aur
+
+        text = aur.pin("_tag=0.1.0\npkgver=x\n", "0.9.0-rc.5")
+        self.assertIn("_tag=0.9.0-rc.5", text)
+        self.assertIn("pkgver=${_tag//-/_}", text)
+
+    def test_render_refuses_a_version_that_is_not_the_repository_version(self):
+        import aur
+
+        with self.assertRaisesRegex(ValueError, "not the repository version"):
+            aur.render(self.work / "pkgs", "9.9.9")
+
+
 if __name__ == "__main__":
     unittest.main()

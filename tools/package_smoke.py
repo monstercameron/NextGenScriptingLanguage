@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import tarfile
 import zipfile
+from package import extra_files
 from release import version
 
 
@@ -194,6 +195,14 @@ def main():
             prefix / ("bin/execute-applet" + suffix),
             prefix / "share/execute/manifests" if args.system else prefix / "manifests",
         )
+        if args.system:
+            missing = [
+                relative
+                for _, relative in extra_files(True)
+                if not (prefix / relative).is_file()
+            ]
+            if missing:
+                raise SystemExit("system package lacks " + ", ".join(missing))
 
     if args.archive:
         if args.system:

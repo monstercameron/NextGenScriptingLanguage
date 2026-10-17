@@ -4285,8 +4285,21 @@ fn run_finite_state(
     let mut control_state = control_flow::RuntimeState::default();
     if let Some(journal) = journal.as_deref_mut() {
         if state_source == FiniteStateSource::Restore {
-            let state = journal.take_restored_state()?;
+            let mut state = journal.take_restored_state()?;
             index = journal.completed_nodes().last().map_or(0, |node| node.end);
+            // A top-level for each with committed elements continues after them.
+            if let Some(resumed) =
+                checkpoint::elements::for_each_resume(journal, program, index, &state, registry)?
+            {
+                loop_frames.restore_for_each(
+                    index,
+                    &resumed.binding,
+                    resumed.outer,
+                    resumed.items,
+                    resumed.consumed,
+                )?;
+                state = resumed.state;
+            }
             cwd = state.cwd;
             bindings = state.bindings;
             data = Input::Bytes(state.output);
@@ -4436,13 +4449,17 @@ fn run_finite_state(
         if let Some(journal) = journal.as_deref_mut().filter(|_| journal_end.is_none()) {
             let end = resume::node_end(program, index);
             journal_end = Some(end);
-            journal_uncertain = matches!(
-                step.kind,
-                StepKind::If { .. }
-                    | StepKind::IfCommand { .. }
-                    | StepKind::CallProgram { .. }
-                    | StepKind::Loop { .. }
-            ) || resume::uncertain_on_failure(program, index, end, registry)?;
+            // Element nodes record uncertainty per element in their element log, so one
+            // uncertain element does not make the whole node uncertain.
+            let tracks_elements = checkpoint::elements::tracks_new_node(journal, program, index);
+            journal_uncertain = !tracks_elements
+                && (matches!(
+                    step.kind,
+                    StepKind::If { .. }
+                        | StepKind::IfCommand { .. }
+                        | StepKind::CallProgram { .. }
+                        | StepKind::Loop { .. }
+                ) || resume::uncertain_on_failure(program, index, end, registry)?);
             let module_session = current_module_session(signals)?;
             let fingerprint = resume::node_fingerprint_with_modules(
                 program,
@@ -4458,7 +4475,7 @@ fn run_finite_state(
                 end,
                 step.line,
                 &cwd,
-                resume::retry_safe(program, index, end, registry)?,
+                tracks_elements || resume::retry_safe(program, index, end, registry)?,
             )?;
         }
         let mut jump_to = None;
@@ -4496,6 +4513,17 @@ fn run_finite_state(
                         signals,
                         || serde_json::json!({"event":"loop", "line":step.line, "entered":entered}),
                     )?;
+                    if entered {
+                        if let Some(journal) = journal.as_deref_mut() {
+                            checkpoint::elements::for_each_element_begin(
+                                journal,
+                                program,
+                                registry,
+                                &loop_frames,
+                                index,
+                            )?;
+                        }
+                    }
                     if !entered {
                         control_state.leave_loop(index)?;
                         jump_to = Some(index + end);
@@ -4506,6 +4534,24 @@ fn run_finite_state(
                     loop_frames
                         .end_iteration(header, &mut bindings)
                         .with_context(|| format!("line {}", step.line))?;
+                    if let Some(journal) = journal.as_deref_mut() {
+                        if checkpoint::elements::for_each_element_due(journal, program, header) {
+                            let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
+                                options.max_output_bytes,
+                                signals,
+                                options.command_timeout,
+                            )?;
+                            checkpoint::elements::for_each_element_commit(
+                                journal,
+                                &loop_frames,
+                                header,
+                                &cwd,
+                                &bytes,
+                                &bindings,
+                            )?;
+                            data = Input::Bytes(bytes);
+                        }
+                    }
                     jump_to = Some(header);
                 }
                 StepKind::If {
@@ -4892,17 +4938,44 @@ fn run_finite_state(
                         outer_deadline: signals.deadline,
                     };
                     let group = match each {
-                        Some(each) => tasks::run_each(
-                            config,
-                            each,
-                            &tasks[0],
-                            registry,
-                            &bindings,
-                            options,
-                            Arc::clone(&signals.cancelled),
-                            Arc::clone(&signals.drain),
-                            AppletInvocationContext::from_signals(signals)?,
-                        ),
+                        Some(each) => {
+                            match checkpoint::elements::group_journal(
+                                journal.as_deref_mut(),
+                                program,
+                                index,
+                                each,
+                                &bindings,
+                                registry,
+                            )? {
+                                Some((mut sink, skip)) => tasks::run_each(
+                                    config,
+                                    each,
+                                    &tasks[0],
+                                    registry,
+                                    &bindings,
+                                    options,
+                                    Arc::clone(&signals.cancelled),
+                                    Arc::clone(&signals.drain),
+                                    AppletInvocationContext::from_signals(signals)?,
+                                    tasks::ElementPlan {
+                                        skip,
+                                        sink: Some(&mut sink as &mut dyn tasks::GroupSink),
+                                    },
+                                ),
+                                None => tasks::run_each(
+                                    config,
+                                    each,
+                                    &tasks[0],
+                                    registry,
+                                    &bindings,
+                                    options,
+                                    Arc::clone(&signals.cancelled),
+                                    Arc::clone(&signals.drain),
+                                    AppletInvocationContext::from_signals(signals)?,
+                                    tasks::ElementPlan::none(),
+                                ),
+                            }
+                        }
                         None => tasks::run_group(
                             config,
                             tasks,
@@ -7253,6 +7326,105 @@ mod drain_tests {
     }
 
     #[test]
+    fn restored_parallel_elements_are_not_started_again() {
+        use crate::runtime::checkpoint::elements::ElementOutcome;
+        use crate::runtime::tasks::{ElementPlan, GroupSink};
+
+        #[derive(Default)]
+        struct Recorder {
+            begins: Vec<usize>,
+            commits: Vec<usize>,
+        }
+        impl GroupSink for Recorder {
+            fn begin(&mut self, index: usize) -> Result<()> {
+                self.begins.push(index);
+                Ok(())
+            }
+            fn commit(&mut self, index: usize, _outcome: &ElementOutcome) -> Result<()> {
+                self.commits.push(index);
+                Ok(())
+            }
+        }
+
+        let source = "parallel for each word in [\"a\", \"b\", \"c\"] at most 2 as results\n  run printf with message word\n";
+        let program = crate::parser::parse(source).unwrap();
+        let registry =
+            Registry::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        let session =
+            crate::modules::ProgramModuleSession::preload_program(&program, &registry).unwrap();
+        *signals.program_modules.lock().unwrap() = Some(Arc::new(session));
+        let (mode, limit, tasks, each) = program
+            .steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                StepKind::TaskGroup {
+                    mode,
+                    limit,
+                    tasks,
+                    each,
+                    ..
+                } => Some((*mode, *limit, tasks.clone(), each.clone())),
+                _ => None,
+            })
+            .expect("a task group step");
+        let each = each.expect("a parallel for each");
+
+        // Element 0 committed in an earlier run: its recorded result is restored.
+        let restored = ElementOutcome {
+            output: b"restored-a".to_vec(),
+            stderr: Vec::new(),
+            status: 0,
+            outcome: crate::contracts::Outcome {
+                status: 0,
+                name: "printf".into(),
+                kind: crate::contracts::OutcomeKind::Success,
+                effect_certainty: crate::contracts::EffectCertainty::KnownResponse,
+            },
+            value: None,
+            uncertain: false,
+            launched_processes: 1,
+        };
+        let mut skip = std::collections::BTreeMap::new();
+        skip.insert(0usize, restored);
+        let mut recorder = Recorder::default();
+        let result = super::tasks::run_each(
+            super::tasks::TaskGroupConfig {
+                mode,
+                limit,
+                outer_deadline: None,
+            },
+            &each,
+            &tasks[0],
+            &registry,
+            &BTreeMap::new(),
+            &options(directory.path()),
+            Arc::clone(&signals.cancelled),
+            Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+            AppletInvocationContext::from_signals(&signals).unwrap(),
+            ElementPlan {
+                skip,
+                sink: Some(&mut recorder),
+            },
+        )
+        .expect("a group with restored elements runs the rest");
+
+        // Only the elements that did not commit begin, and only they commit.
+        assert_eq!(recorder.begins, vec![1, 2]);
+        // Commits follow completion order, which concurrent elements do not fix.
+        let mut commits = recorder.commits.clone();
+        commits.sort_unstable();
+        assert_eq!(commits, vec![1, 2]);
+        let value = crate::structured::to_json(&result.value).unwrap();
+        let items = value["items"].as_array().unwrap();
+        assert_eq!(items[0]["output_text"], "restored-a");
+        assert_eq!(items[1]["output_text"], "b\n");
+    }
+
+    #[test]
     fn drained_parallel_for_each_admits_no_elements() {
         let source = "parallel for each word in [\"a\", \"b\", \"c\"] at most 2 as results\n  run printf with message word\n";
         let program = crate::parser::parse(source).unwrap();
@@ -7294,6 +7466,7 @@ mod drain_tests {
             Arc::clone(&signals.cancelled),
             Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED)),
             AppletInvocationContext::from_signals(&signals).unwrap(),
+            super::tasks::ElementPlan::none(),
         )
         .expect("a drained group reports its elements, not an error");
         let value = crate::structured::to_json(&result.value).unwrap();

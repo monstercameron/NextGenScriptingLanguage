@@ -15,15 +15,20 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub(super) mod elements;
 #[allow(dead_code)]
 mod leaf_cursor;
+use elements::ElementReplay;
 
 const LEGACY_JOURNAL_VERSION: u32 = 1;
 /// Version 2 keeps completed nodes inline in the journal.
 const INLINE_JOURNAL_VERSION: u32 = 2;
 /// Version 3 keeps completed nodes in the append-only `completed.jsonl` log and
 /// records only how many lines are committed, plus their chain digest.
-const JOURNAL_VERSION: u32 = 3;
+const SEGMENTED_JOURNAL_VERSION: u32 = 3;
+/// Version 4 adds the per-element log `elements.jsonl` for top-level `for each`
+/// and `parallel for each` nodes. Older builds refuse it by version.
+const JOURNAL_VERSION: u32 = 4;
 const COMPLETED_LOG: &str = "completed.jsonl";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -172,6 +177,10 @@ struct InFlightNode {
     line: usize,
     cwd_before: EncodedPath,
     retry_safe: bool,
+    /// The element log as it was at the last journal write. Element commits do not
+    /// write the journal, so lines after this anchor are covered only by the chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    elements: Option<elements::ElementAnchor>,
 }
 
 impl InFlightNode {
@@ -282,6 +291,22 @@ pub(super) struct Journal {
     completed_chain: String,
     /// Bytes of the completed-node log covered by the committed count.
     completed_log_bytes: u64,
+    /// Chain digest over the element log lines of the in-flight node.
+    elements_chain: String,
+    /// Bytes of the element log covered by the chain.
+    elements_bytes: u64,
+    /// Complete element lines covered by the chain.
+    elements_lines: usize,
+    /// The open element log, appended through one handle.
+    elements_file: Option<File>,
+    /// Element lines written since the last sync.
+    elements_dirty: bool,
+    /// When the element log was last synced.
+    elements_synced_at: std::time::Instant,
+    /// Binding references of the last sequential commit.
+    element_state_cache: Option<elements::ElementStateCache>,
+    /// The element log replayed at open, held until the runtime takes it.
+    element_replay: Option<ElementReplay>,
     _lock: File,
 }
 
@@ -379,6 +404,8 @@ impl Journal {
                 );
             }
             // Versions 1 and 2 keep completed nodes inline; this resume moves them to the log.
+            // Version 3 only needs its version rewritten, since its log already exists.
+            let migrate_inline = data.version <= INLINE_JOURNAL_VERSION;
             let migrate_legacy = data.version != JOURNAL_VERSION;
             data.version = JOURNAL_VERSION;
             real_directory(&blobs_directory, "checkpoint blob", false)?;
@@ -394,6 +421,14 @@ impl Journal {
                 data,
                 completed_chain: log.chain.clone(),
                 completed_log_bytes: log.bytes,
+                elements_chain: String::new(),
+                elements_bytes: 0,
+                elements_lines: 0,
+                elements_file: None,
+                elements_dirty: false,
+                elements_synced_at: std::time::Instant::now(),
+                element_state_cache: None,
+                element_replay: None,
                 _lock: lock,
             };
             // Fail at open on truncated, missing, oversized, or corrupt state blobs.
@@ -405,12 +440,17 @@ impl Journal {
                 journal.preloaded_state = Some(restored);
             }
             if migrate_legacy {
-                // The log is written before the journal that counts its lines, so a
-                // crash in between leaves the inline journal valid.
-                let (lines, _) = encode_completed_log(&journal.data.completed)?;
-                atomic_write(&journal.directory, COMPLETED_LOG, "", &lines)?;
+                if migrate_inline {
+                    // The log is written before the journal that counts its lines, so a
+                    // crash in between leaves the inline journal valid.
+                    let (lines, _) = encode_completed_log(&journal.data.completed)?;
+                    atomic_write(&journal.directory, COMPLETED_LOG, "", &lines)?;
+                }
                 journal.persist()?;
             }
+            // Element progress is authoritative only for the in-flight node, so the
+            // log is read once here and handed to the runtime at that node.
+            journal.load_elements()?;
             Ok(journal)
         } else {
             if fs::symlink_metadata(&journal_path).is_ok() {
@@ -456,6 +496,14 @@ impl Journal {
                 data,
                 completed_chain: chain_start(),
                 completed_log_bytes: 0,
+                elements_chain: String::new(),
+                elements_bytes: 0,
+                elements_lines: 0,
+                elements_file: None,
+                elements_dirty: false,
+                elements_synced_at: std::time::Instant::now(),
+                element_state_cache: None,
+                element_replay: None,
                 _lock: lock,
             };
             journal.persist()?;
@@ -668,7 +716,21 @@ impl Journal {
             line,
             cwd_before: EncodedPath::from_path(cwd_before),
             retry_safe,
+            elements: None,
         });
+        // Re-beginning the same node on resume keeps the element records that were
+        // replayed at open. A different node starts an empty element log.
+        let identity_changed = previous_in_flight.as_ref().is_none_or(|node| {
+            node.fingerprint != fingerprint || node.start != start || node.end != end
+        });
+        if identity_changed {
+            if let Err(error) = self.reset_elements(fingerprint, start, end) {
+                self.data.in_flight = previous_in_flight;
+                self.data.status = previous_status;
+                self.data.error = previous_error;
+                return Err(error);
+            }
+        }
         self.data.status = Status::Running;
         if let Err(error) = self.persist() {
             self.data.status = previous_status;
@@ -883,15 +945,27 @@ impl Journal {
     }
 
     fn persist(&mut self) -> Result<()> {
+        // Element commits are group-synced. The journal may name them as its anchor,
+        // so they reach disk before the journal does.
+        self.sync_elements()?;
         // Serialize the body once. The checksum covers exactly these bytes, which
         // are the ones embedded in the envelope.
+        // The anchor is what the element log holds now, which is the state this write
+        // makes durable. Later element commits lag behind it until the next write.
+        let in_flight = self.data.in_flight.clone().map(|mut node| {
+            node.elements = (self.elements_lines > 0).then(|| elements::ElementAnchor {
+                lines: self.elements_lines,
+                chain: self.elements_chain.clone(),
+            });
+            node
+        });
         let body = JournalDisk {
             version: JOURNAL_VERSION,
             identity: self.data.identity.clone(),
             status: self.data.status,
             completed_count: self.data.completed.len(),
             completed_chain: self.completed_chain.clone(),
-            in_flight: self.data.in_flight.clone(),
+            in_flight,
             snapshot: self.data.snapshot.clone(),
             error: self.data.error.clone(),
             listener_cursor: self.data.listener_cursor.clone(),
@@ -1064,7 +1138,7 @@ fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
         }
         let (_, log) = encode_completed_log(&data.completed)?;
         (data, log)
-    } else if version == JOURNAL_VERSION {
+    } else if version == SEGMENTED_JOURNAL_VERSION || version == JOURNAL_VERSION {
         let disk: JournalDisk =
             serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
         if serialized_digest(&disk)? != envelope.checksum {

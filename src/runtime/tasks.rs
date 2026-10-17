@@ -1,5 +1,6 @@
 //! Bounded applet task groups used by finite `.program` workflows.
 
+use super::checkpoint::elements::ElementOutcome;
 use super::{AppletInvocationContext, AppletInvocationResult, RunOptions};
 use crate::ast::{Invocation, TaskEach, TaskGroupMode, Value};
 use crate::contracts::{Outcome, OutcomeKind};
@@ -115,6 +116,29 @@ pub(super) struct TaskGroupConfig {
     pub mode: TaskGroupMode,
     pub limit: usize,
     pub outer_deadline: Option<Instant>,
+}
+
+/// Receives the begin and the successful result of each parallel element, so the
+/// checkpoint can record them. Called on the thread that runs the group.
+pub(in crate::runtime) trait GroupSink {
+    fn begin(&mut self, index: usize) -> Result<()>;
+    fn commit(&mut self, index: usize, outcome: &ElementOutcome) -> Result<()>;
+}
+
+/// Elements restored from a checkpoint, and the sink for new element records.
+pub(in crate::runtime) struct ElementPlan<'a> {
+    pub skip: BTreeMap<usize, ElementOutcome>,
+    pub sink: Option<&'a mut dyn GroupSink>,
+}
+
+impl ElementPlan<'_> {
+    /// No checkpoint: every element runs and nothing is recorded.
+    pub(in crate::runtime) fn none() -> Self {
+        Self {
+            skip: BTreeMap::new(),
+            sink: None,
+        }
+    }
 }
 
 struct Completion {
@@ -625,7 +649,9 @@ pub(super) fn run_each(
     cancelled: Arc<AtomicBool>,
     draining: Arc<std::sync::atomic::AtomicU8>,
     context: AppletInvocationContext,
+    elements: ElementPlan<'_>,
 ) -> Result<TaskGroupResult> {
+    let ElementPlan { skip, mut sink } = elements;
     let TaskGroupConfig {
         limit,
         outer_deadline,
@@ -731,12 +757,31 @@ pub(super) fn run_each(
     let (sender, receiver) = mpsc::channel();
     let mut handles: Vec<Option<TaskHandle<()>>> = (0..prepared.len()).map(|_| None).collect();
     let mut total_output_bytes = 0usize;
+    // Restored elements already ran in the checkpointed run: they count against the
+    // output budget and are never started again.
+    for (&index, outcome) in &skip {
+        total_output_bytes = total_output_bytes
+            .saturating_add(outcome.output.len())
+            .saturating_add(outcome.stderr.len());
+        records[index] = TaskRecord {
+            id: prepared[index].id.clone(),
+            state: TaskState::Succeeded,
+            invocation: Some(outcome.clone().into_result()),
+            launched_processes: outcome.launched_processes,
+            error: None,
+            uncertain: outcome.uncertain,
+        };
+    }
     let mut next = 0usize;
     let mut active = 0usize;
     let mut stopped: Option<(usize, String)> = None;
 
     while next < prepared.len() || active > 0 {
         while active < limit && next < prepared.len() {
+            if skip.contains_key(&next) {
+                next += 1;
+                continue;
+            }
             if draining.load(Ordering::SeqCst) != crate::platform::DRAIN_IDLE {
                 // A drain admits no new elements; running ones finish and are reported
                 // as not started for the rest.
@@ -748,6 +793,9 @@ pub(super) fn run_each(
                 break;
             }
             let index = next;
+            if let Some(sink) = sink.as_deref_mut() {
+                sink.begin(index)?;
+            }
             let task = prepared[index].clone();
             let registry = registry.clone();
             let context = context.clone();
@@ -844,6 +892,15 @@ pub(super) fn run_each(
             &prepared,
             &mut total_output_bytes,
         );
+        if let Some(sink) = sink.as_deref_mut() {
+            if matches!(records[index].state, TaskState::Succeeded) {
+                if let Some(result) = &records[index].invocation {
+                    let outcome =
+                        ElementOutcome::from_result(result, records[index].launched_processes);
+                    sink.commit(index, &outcome)?;
+                }
+            }
+        }
         if total_output_bytes > max_output_bytes {
             stopped = Some((
                 index,

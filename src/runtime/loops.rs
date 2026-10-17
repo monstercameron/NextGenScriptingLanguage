@@ -120,6 +120,10 @@ enum Iterations {
     ForEach {
         binding: String,
         items: std::vec::IntoIter<Value>,
+        /// Items yielded so far, including those restored from a checkpoint.
+        taken: usize,
+        /// The item the loop body is running for, kept for element records.
+        current: Option<Value>,
     },
     While,
 }
@@ -175,6 +179,8 @@ impl LoopStack {
                     Iterations::ForEach {
                         binding: binding.clone(),
                         items: items.into_iter(),
+                        taken: 0,
+                        current: None,
                     }
                 }
                 LoopKind::While { .. } | LoopKind::WhileCommand { .. } => Iterations::While,
@@ -195,8 +201,15 @@ impl LoopStack {
                     true
                 }
             }
-            Iterations::ForEach { binding, items } => {
+            Iterations::ForEach {
+                binding,
+                items,
+                taken,
+                current,
+            } => {
                 if let Some(item) = items.next() {
+                    *taken += 1;
+                    *current = Some(item.clone());
                     bindings.insert(binding.clone(), item);
                     true
                 } else {
@@ -223,6 +236,57 @@ impl LoopStack {
         self.entered += 1;
         Ok(true)
     }
+    /// The element index and item of the `for each` at `header` that is running now.
+    pub fn current_element(&self, header: usize) -> Option<(usize, &Value)> {
+        let frame = self
+            .frames
+            .iter()
+            .rev()
+            .find(|frame| frame.header == header)?;
+        match &frame.iterations {
+            Iterations::ForEach {
+                taken,
+                current: Some(item),
+                ..
+            } => Some((taken - 1, item)),
+            _ => None,
+        }
+    }
+
+    /// Re-enter a top-level `for each` whose first `consumed` items already ran in a
+    /// checkpointed run. The next header check yields item `consumed`.
+    pub fn restore_for_each(
+        &mut self,
+        header: usize,
+        binding: &str,
+        outer: BTreeSet<String>,
+        mut items: Vec<Value>,
+        consumed: usize,
+    ) -> Result<()> {
+        if consumed > items.len() {
+            bail!("checkpoint restored more for each elements than the list holds");
+        }
+        if self.frames.last().is_some() {
+            bail!("checkpoint restored a for each inside another loop");
+        }
+        if self.entered + consumed > MAX_LOOP_ITERATIONS {
+            bail!("loop iteration budget of {MAX_LOOP_ITERATIONS} exceeded");
+        }
+        self.entered += consumed;
+        let remaining = items.split_off(consumed);
+        self.frames.push(Frame {
+            header,
+            outer,
+            iterations: Iterations::ForEach {
+                binding: binding.to_owned(),
+                items: remaining.into_iter(),
+                taken: consumed,
+                current: None,
+            },
+        });
+        Ok(())
+    }
+
     pub fn end_iteration(
         &mut self,
         header: usize,

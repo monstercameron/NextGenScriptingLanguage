@@ -33,7 +33,7 @@ pub struct Sidecar {
     pub expect: Expect,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Expect {
     #[serde(default)]
@@ -42,16 +42,6 @@ pub struct Expect {
     pub stdout: Option<String>,
     #[serde(default)]
     pub files: BTreeMap<String, String>,
-}
-
-impl Default for Expect {
-    fn default() -> Self {
-        Self {
-            status: 0,
-            stdout: None,
-            files: BTreeMap::new(),
-        }
-    }
 }
 
 pub struct Outcome {

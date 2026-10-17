@@ -34,6 +34,8 @@ pub mod invocation_io;
 mod jobs;
 pub(crate) mod live;
 mod loops;
+pub mod observe;
+use observe::execute_call_group;
 mod program_backend;
 mod resume;
 mod service;
@@ -1363,6 +1365,7 @@ fn write_streamed_stdout(bytes: &[u8], signals: &Signals) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
+    observe::note_terminal_output(bytes);
     write_with_deadline(1, bytes, &signals.cancelled, signals.deadline)
         .context("could not stream workflow stdout")
 }
@@ -2854,7 +2857,7 @@ fn run_command_condition(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_call_group(
+fn execute_call_group_unobserved(
     calls: &[(&Invocation, &Manifest, usize)],
     input: Input,
     prepared_first_call: Option<(PathBuf, Vec<String>)>,
@@ -4524,6 +4527,9 @@ fn run_finite_state(
                         || serde_json::json!({"event":"job_cancel","line":step.line,"job":name}),
                     )?;
                 }
+                // A replayed run leaves files alone; the pipeline value still flows.
+                StepKind::Append { .. } | StepKind::Save { .. } | StepKind::Redirect { .. }
+                    if observe::suppresses_writes(step.line) => {}
                 StepKind::Append { path } => {
                     let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                         options.max_output_bytes,
@@ -4876,7 +4882,11 @@ fn run_finite_state(
                                 )
                             }
                         } else {
-                            let _inherit = InheritTerminalStdout::enter(streamed);
+                            // An observer needs the bytes, so a streamed step is captured
+                            // and written after it completes, as streaming already does.
+                            let _inherit = InheritTerminalStdout::enter(
+                                streamed && !observe::captures_streamed_stdout(),
+                            );
                             let _env = crate::capabilities::CommandEnvScope::enter(env);
                             let _stderr = ForceStderrCapture::enter(
                                 redirect
@@ -5034,7 +5044,9 @@ fn run_finite_state(
                         if streamed {
                             // Nothing consumes this value, so it is written now
                             // and the pipeline value becomes empty.
-                            write_streamed_stdout(&bytes, signals)?;
+                            if !observe::suppresses_terminal_output(step.line) {
+                                write_streamed_stdout(&bytes, signals)?;
+                            }
                             data = Input::Empty;
                         } else {
                             data = Input::Bytes(bytes);

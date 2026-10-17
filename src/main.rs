@@ -16,6 +16,8 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 
 mod github_annotations;
+mod record_cli;
+mod repl_cli;
 mod run_parts;
 mod test_runner;
 
@@ -46,6 +48,7 @@ struct Args {
     total_timeout: Option<std::time::Duration>,
     max_record_bytes: usize,
     max_record_bytes_set: bool,
+    record_dir: Option<PathBuf>,
 }
 
 struct FiniteCheckSnapshot {
@@ -174,6 +177,15 @@ fn execute() -> Result<()> {
     }
     if arguments.first().is_some_and(|a| a == "run-parts") {
         return run_parts::cli(&arguments[1..]);
+    }
+    if arguments.first().is_some_and(|a| a == "show-run") {
+        return record_cli::show_run(&arguments[1..]);
+    }
+    if arguments.first().is_some_and(|a| a == "replay") {
+        return record_cli::replay(&arguments[1..]);
+    }
+    if arguments.first().is_some_and(|a| a == "repl") {
+        return repl_cli::repl(&arguments[1..]);
     }
     if arguments.first().is_some_and(|a| a == "lsp") {
         if arguments.len() != 1 && !(arguments.len() == 2 && arguments[1] == "--stdio") {
@@ -764,7 +776,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             // Validate with the same inputs as `check` before describing effects.
             runtime::validate_with_arguments(&program, &registry, &inputs)?;
             let path = args.file.to_string_lossy().into_owned();
-            write_json(&flow::agent::explain::explain_json(&program, &registry, &path)?)
+            write_json(&flow::agent::explain::explain_json(
+                &program, &registry, &path,
+            )?)
         }
         "explain" => {
             writeln!(
@@ -846,14 +860,21 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     )?;
                 }
             } else {
-                // Uncaptured stdout streams to this terminal as it is produced.
-                let result = runtime::with_streamed_stdout(|| {
-                    if let Some(checkpoint) = checkpoint.as_ref() {
-                        runtime::run_checkpointed(&program, &registry, &options, checkpoint)
-                    } else {
-                        runtime::run(&program, &registry, &options)
+                let result = if let Some(directory) = args.record_dir.as_deref() {
+                    if checkpoint.is_some() {
+                        bail!("--record cannot be combined with checkpoints");
                     }
-                })?;
+                    record_cli::run_recorded(directory, &args.file, &program, &registry, &options)?
+                } else {
+                    // Uncaptured stdout streams to this terminal as it is produced.
+                    runtime::with_streamed_stdout(|| {
+                        if let Some(checkpoint) = checkpoint.as_ref() {
+                            runtime::run_checkpointed(&program, &registry, &options, checkpoint)
+                        } else {
+                            runtime::run(&program, &registry, &options)
+                        }
+                    })?
+                };
                 io::stdout()
                     .write_all(&result.output)
                     .context("could not write workflow output")?;
@@ -901,6 +922,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut data_flow_policy = None;
     let mut cache_dir = None;
     let mut checkpoint_dir = None;
+    let mut record_dir = None;
     let mut retry_uncertain = false;
     let mut once = false;
     let mut trace = false;
@@ -1021,6 +1043,17 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     &mut index,
                     "--data-flow-policy",
                     "a policy file",
+                )?));
+            }
+            "--record" if command == "run" => {
+                if record_dir.is_some() {
+                    bail!("--record may be specified only once");
+                }
+                record_dir = Some(PathBuf::from(take_option_value(
+                    &arguments,
+                    &mut index,
+                    "--record",
+                    "a new or empty directory",
                 )?));
             }
             "--cache-dir" if matches!(command.as_str(), "run" | "resume") => {
@@ -1203,6 +1236,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         total_timeout,
         max_record_bytes,
         max_record_bytes_set: max_record_bytes_seen,
+        record_dir,
     }))
 }
 

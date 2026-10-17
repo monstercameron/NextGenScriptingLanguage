@@ -464,6 +464,36 @@ pub fn capture_declared_environment_secrets(
     Ok(())
 }
 
+/// Every environment variable name the active data-flow policy declares secret,
+/// sorted and without values. Used to name what a run record redacted.
+pub fn declared_secret_environment_names(registry: &Registry) -> Vec<String> {
+    let policy = registry.host_state::<DataFlowPolicy>();
+    if !policy.active {
+        return Vec::new();
+    }
+    let names: BTreeSet<String> = policy
+        .secret_environment
+        .values()
+        .flatten()
+        .cloned()
+        .collect();
+    names.into_iter().collect()
+}
+
+/// Register every declared secret environment value present in `environment`
+/// with the shared redactor, for every applet the registry knows. Records use
+/// this before a run starts, so secrets are redacted even before an applet
+/// launches with them.
+pub fn register_declared_environment_secrets(
+    registry: &Registry,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Result<(), PolicyError> {
+    for manifest in registry.manifests() {
+        capture_declared_environment_secrets(registry, &manifest.name, environment)?;
+    }
+    Ok(())
+}
+
 /// Whether policy declares this applet to receive credential-bearing
 /// environment inputs. Runtime dataflow and persistence checks should treat
 /// its outputs as `Secret`, even before a cache lookup or process launch, so

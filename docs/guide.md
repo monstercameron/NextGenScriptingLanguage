@@ -431,3 +431,66 @@ With `--json`, one document is printed with protocol `execute.run-parts/1`, summ
 counts for each status, and a `results` array giving each program's name, status,
 hash, and exit code. The programs' own output then goes to standard error, so
 standard output stays parseable.
+
+## Record a run, show what failed, and replay it
+
+`execute run FILE --record DIR` keeps a record of one finite run in a new or empty
+directory. The directory is private (mode 0700 on Unix, files 0600). The record has
+`run.json` (program and plan hashes, redacted inputs, result, limits), `program.program`
+(a copy of the program as it ran), `trace.jsonl` (one line per applet group, with
+argv, status, declared outcome, wall time, and stdout and stderr byte counts and
+hashes), and `blobs/` (the captured bytes, content-addressed). Records are bounded:
+at most 16 MiB of captured output, after which steps keep their hashes but not their
+bytes and the record is marked `truncated`.
+
+Values that the data-flow policy declares secret (`--data-flow-policy`) are redacted
+from every record file, from `show-run`, and from replay output. Redaction is by exact
+value, so a secret the policy does not declare is recorded as it was. Recording
+refuses programs with triggers, background jobs (`spawn`), and cached steps
+(`and cache`), and it cannot be combined with checkpoints, since their steps cannot
+all be observed.
+
+```sh
+execute run deploy.program --record .runs/deploy
+execute show-run .runs/deploy            # failed step, outcome, certainty, slowest steps
+execute show-run .runs/deploy --json
+```
+
+`execute replay DIR` reruns the recorded program with each applet group answered from
+the record. It launches no process and writes no file, and it reports
+`N steps replayed, no divergence, 0 processes launched`. Replay compares each group's
+line, applet, binary and argv with the record. An edited program stops at the first
+group that differs:
+
+```sh
+execute replay .runs/deploy --program deploy-edited.program
+execute replay .runs/deploy --until 40          # stop before line 41
+execute replay .runs/deploy --as-test tests/deploy-recorded   # then: execute test tests
+```
+
+`--as-test DIR` writes `NAME.test.program` and `NAME.test.json` with the recorded
+inputs, exit status, and terminal stdout. The fixture runs the real program, so it
+needs the tools the program calls.
+
+## Try statements in a session
+
+`execute repl` reads statements from standard input, one statement at a time. An
+indented body, or a statement that opens one (`if`, `for`, `repeat`, `every`, ...),
+continues until a blank line. Each block is validated against the whole session, with
+the same checks as a file. A block that fails validation is reported with `rejected:`
+and dropped, and the session continues. A block that runs and then fails is reported
+with `error:`, and its statements are dropped too.
+
+Statements before a new block are not run again: the session answers them from its
+own record, so bindings carry over and earlier file writes and printed output are not
+repeated. Commands:
+
+- `:explain` shows the plan of the session program.
+- `:bindings` lists top-level `as NAME` bindings with the start of their last value.
+- `:save FILE` writes the session program to a new file. An existing file is never
+  replaced.
+- `:quit` ends the session.
+
+```sh
+printf 'run printf with message "a" as first\nrun printf with message first\n:save session.program\n:quit\n' | execute repl
+```

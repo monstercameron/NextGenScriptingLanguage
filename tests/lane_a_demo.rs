@@ -14,7 +14,7 @@ fn demo() -> PathBuf {
 
 fn inputs(root: &Path) -> Vec<String> {
     [
-        format!("theme_name=dark"),
+        "theme_name=dark".to_owned(),
         format!("themes_root={}", root.join("themes").display()),
         format!("current_link={}", root.join("current/theme").display()),
         format!("templates={}", demo().join("templates/*.tpl").display()),

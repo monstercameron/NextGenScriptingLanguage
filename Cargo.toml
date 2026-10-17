@@ -47,11 +47,13 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 # product feature set; shipped binaries, release packages, and the test suite build
 # with `--features full`. Disabling `tui` or `model` drops the code each one selects.
 default = []
-full = ["tui", "model", "desktop", "dap", "remote", "live"]
+full = ["tui", "model", "desktop", "dap", "remote", "live", "lsp"]
 # The terminal UI shows live session state, so it implies the live control plane.
 tui = ["live", "dep:ratatui", "dep:crossterm", "dep:unicode-width"]
 # The live control endpoint, `run --control`, and `attach`.
 live = []
+# The language server behind `execute lsp`: editor completions, hovers, and diagnostics.
+lsp = []
 # The model helper and the remote backend share the HTTP client, so each enables it.
 model = ["dep:ureq"]
 remote = ["dep:ureq"]

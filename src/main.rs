@@ -344,11 +344,16 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if arguments.first().is_some_and(|a| a == "repair") {
         return repair_cli::repair(&arguments[1..]);
     }
+    #[cfg(feature = "lsp")]
     if arguments.first().is_some_and(|a| a == "lsp") {
         if arguments.len() != 1 && !(arguments.len() == 2 && arguments[1] == "--stdio") {
             bail!("execute lsp accepts no arguments other than optional --stdio");
         }
         return flow::language_server::run_stdio();
+    }
+    #[cfg(not(feature = "lsp"))]
+    if arguments.first().is_some_and(|a| a == "lsp") {
+        bail!("`lsp` needs the language server, and this build has none; use the full build");
     }
     if arguments.first().is_some_and(|a| a == "modules") {
         return modules_cli(&arguments[1..]);

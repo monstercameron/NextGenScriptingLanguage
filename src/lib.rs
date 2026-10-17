@@ -69,7 +69,7 @@ pub mod live;
 #[cfg(all(feature = "fuzzing", not(target_arch = "wasm32")))]
 pub mod fuzz_entry;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "lsp", not(target_arch = "wasm32")))]
 pub mod language_server;
 
 #[cfg(not(target_arch = "wasm32"))]

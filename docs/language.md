@@ -682,6 +682,12 @@ command into words, expand globs or `$variables`, insert `--`, or invoke a shell
 Use the tool's own option rules and a safe format such as `%s` when passing data
 to `printf`. Direct calls run with the caller's environment and privileges.
 
+Before a fresh finite run starts any command, Execute resolves every statically
+known native executable, including those in branches, loops, and task groups,
+and reports all unresolved ones together. A run that resumes from a checkpoint
+does not repeat this check. Once a working-directory change makes relative names
+unknown, later calls are resolved when they run.
+
 `run`, `then`, `pipe to`, `stream from`, and `listen to` accept these calls, as do
 native statements inside schedules and TUI handlers. Direct calls share the
 existing process supervision, timeouts, cancellation, output bounds and native

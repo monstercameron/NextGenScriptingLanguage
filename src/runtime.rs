@@ -3552,6 +3552,14 @@ fn run_finite_state(
     let _job_run = signals.begin_job_run(options.max_output_bytes)?;
     let mut cwd = fs::canonicalize(&options.working_directory)?;
     let module_session = preload_program_modules(program, registry, signals, &cwd)?;
+    // A fresh run resolves its native commands before any of them can start. A
+    // restore does not, since completed nodes may no longer need every tool.
+    let resuming = journal
+        .as_deref()
+        .is_some_and(|journal| !journal.completed_nodes().is_empty());
+    if !resuming {
+        preflight_executables(program, registry, &cwd)?;
+    }
     if (!signals.background_jobs_allowed || state_out.is_some() || journal.is_some())
         && (has_job_operations(program) || module_session.has_background_job_operations())
     {

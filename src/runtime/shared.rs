@@ -38,6 +38,71 @@ fn validate_exit_operand(
         _ => bail!("{what} must be an integer literal or integer binding"),
     }
 }
+/// Resolve every statically known native executable before the first effect and
+/// report all unresolved ones together. Branches and loop bodies count, because
+/// validation already checks them. Once a working-directory change makes relative
+/// names unknown, later calls are left to their own run-time resolution.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn preflight_executables(
+    program: &Program,
+    registry: &Registry,
+    cwd: &Path,
+) -> Result<()> {
+    let mut known_cwd = true;
+    let mut missing = Vec::new();
+    let check = |call: &Invocation, line: usize, missing: &mut Vec<String>| -> Result<()> {
+        let manifest = registry.resolve_call(call)?;
+        if manifest.builtin.is_some()
+            || manifest.execution_backend() != crate::contracts::AppletBackend::Command
+        {
+            return Ok(());
+        }
+        let binary = manifest.binary_for(call);
+        if binary.starts_with('@') {
+            return Ok(());
+        }
+        if let Err(error) = binary_path(binary, cwd) {
+            missing.push(format!("line {line}: {error:#}"));
+        }
+        Ok(())
+    };
+    for step in &program.steps {
+        match &step.kind {
+            StepKind::UseFolder { .. } => known_cwd = false,
+            StepKind::Invoke { call, .. } => {
+                if registry.resolve_call(call)?.builtin == Some(Builtin::Cd) {
+                    known_cwd = false;
+                } else if known_cwd {
+                    check(call, step.line, &mut missing)?;
+                }
+            }
+            StepKind::TaskGroup { tasks, .. } if known_cwd => {
+                for call in tasks {
+                    check(call, step.line, &mut missing)?;
+                }
+            }
+            StepKind::SpawnJob { stages, .. } if known_cwd => {
+                for stage in stages {
+                    check(&stage.call, stage.line, &mut missing)?;
+                }
+            }
+            StepKind::IfCommand { call, .. }
+            | StepKind::Loop {
+                kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                ..
+            } if known_cwd => check(call, step.line, &mut missing)?,
+            _ => {}
+        }
+    }
+    if !missing.is_empty() {
+        bail!(
+            "executables unavailable before the run started: {}",
+            missing.join("; ")
+        );
+    }
+    Ok(())
+}
+
 /// A command condition is an ordinary applet or executable call. It is type
 /// checked like any call; builtins change shell state and are not conditions.
 fn validate_command_condition(

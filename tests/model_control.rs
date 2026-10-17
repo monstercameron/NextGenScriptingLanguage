@@ -1,3 +1,4 @@
+#![cfg(feature = "model")]
 //! Offline security and checkpoint checks for the native `execute-model` child.
 #![cfg(unix)]
 

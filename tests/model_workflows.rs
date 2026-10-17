@@ -1,3 +1,4 @@
+#![cfg(feature = "model")]
 #![cfg(unix)]
 //! Run the authored model workflows against checked-in offline fixtures.
 use serde_json::Value;

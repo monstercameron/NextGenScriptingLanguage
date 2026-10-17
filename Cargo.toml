@@ -62,6 +62,12 @@ codegen-units = 1
 [patch.crates-io]
 iana-time-zone = { path = "vendor/iana-time-zone" }
 
+# The helper that runs model adapters; a build without `model` omits it.
+[[bin]]
+name = "execute-model"
+path = "src/bin/execute-model.rs"
+required-features = ["model"]
+
 [[example]]
 name = "native-fixture"
 path = "tests/fixtures/native_fixture.rs"

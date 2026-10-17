@@ -18,6 +18,7 @@ pub mod home;
 pub mod inputs;
 pub mod manifest;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "model")]
 pub mod models;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod modules;

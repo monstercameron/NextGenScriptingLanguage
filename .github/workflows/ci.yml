@@ -53,6 +53,12 @@ jobs:
         run: |
           cargo build --locked --release --bin execute
           python3 tools/check_binary_size.py target/release/execute tools/linux-binary-budget.json
+      - name: Check Linux minimal build size and tests
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --locked --release --bin execute --no-default-features
+          python3 tools/check_binary_size.py target/release/execute tools/linux-minimal-binary-budget.json
+          cargo test --locked --no-default-features --lib
       - name: Measure Linux latency budget
         if: runner.os == 'Linux'
         run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests

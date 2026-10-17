@@ -1,0 +1,4 @@
+{
+  "max_bytes": null,
+  "note": "Minimal build (--no-default-features: no TUI, no model helper). Set max_bytes to about 110% of the Linux target/release/execute size printed by the Check Linux minimal build size step in the first CI run that reaches it. Until then the step reports the size without enforcing it."
+}

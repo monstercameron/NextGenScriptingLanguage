@@ -1,3 +1,4 @@
+#![cfg(feature = "model")]
 //! Table-driven model adapter tests: argument validation, fixture contracts,
 //! endpoint and credential policy, request shapes, and provider normalization.
 //!

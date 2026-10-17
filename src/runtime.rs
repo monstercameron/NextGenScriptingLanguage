@@ -4653,7 +4653,8 @@ fn run_finite_state(
                             .map(|(name, value)| Ok((name.clone(), resolve(value, &bindings)?)))
                             .collect::<Result<BTreeMap<_, _>>>()?;
                         let args = manifest.build_arguments(&parameters)?;
-                        let destination = cwd.join(&args[0]);
+                        let destination =
+                            cwd.join(crate::capabilities::expand_home_path(&args[0])?);
                         crate::capabilities::authorize_host_path(
                             registry,
                             &destination,

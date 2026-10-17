@@ -1094,6 +1094,30 @@ where
 /// Resolve the complete per-applet child environment. The caller applies the
 /// returned snapshot to one child only; this function never mutates the host
 /// process environment. Values are intentionally not included in diagnostics.
+/// Expand a leading `~` or `~/` (or `~\` on Windows) to the user's home directory,
+/// for path-typed values only. Argv strings are never passed through here, so a
+/// literal `~` stays literal there. `~user` is not supported and stays literal.
+pub fn expand_home_path(path: &str) -> Result<PathBuf> {
+    let rest = if path == "~" {
+        Some("")
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        Some(rest)
+    } else if cfg!(windows) {
+        path.strip_prefix("~\\")
+    } else {
+        None
+    };
+    let Some(rest) = rest else {
+        return Ok(PathBuf::from(path));
+    };
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .context("cannot expand ~: no home directory is set in the environment")?;
+    Ok(home.join(rest))
+}
+
 /// Per-command environment changes from `and environment {...}` and
 /// `and without environment [...]`. Set values are secrets for redaction: they
 /// are registered as they are applied, and explain and trace show names only.
@@ -1696,12 +1720,13 @@ fn preflight_host_paths(
                     "capability policy requires literal host filesystem paths that can be checked before effects"
                 );
             };
-            if dynamic_cwd && !Path::new(path).is_absolute() {
+            let path = expand_home_path(path)?;
+            if dynamic_cwd && !path.is_absolute() {
                 bail!(
                     "capability policy cannot preflight a relative host path after a working-directory change"
                 );
             }
-            authorize_host_path(registry, Path::new(path), write, cwd)?;
+            authorize_host_path(registry, &path, write, cwd)?;
         }
         // `policy` is passed explicitly to make it clear this scan is active
         // only after a policy was installed; it is also used by future path

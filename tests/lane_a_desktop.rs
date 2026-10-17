@@ -332,16 +332,16 @@ fn hyprland_argv_shapes_and_socket_address_are_explicit() {
     );
 
     let dispatch = explain_source(
-        "run hypr.dispatch with arguments [\"exec\", \"kitty\"]\n",
+        "run hypr.dispatch with arguments [\"workspace\", \"2\"]\n",
         &[],
     );
     assert!(
-        dispatch.contains(&start_line("hyprctl", &["dispatch", "exec", "kitty"])),
+        dispatch.contains(&start_line("hyprctl", &["dispatch", "workspace", "2"])),
         "{dispatch}"
     );
 
     let socket = explain_source(
-        "run hypr.socket2 with address \"UNIX-CONNECT:/run/user/1000/hypr/sig/.socket2.sock\"\n",
+        "run hypr.socket2 with socket_path \"/run/user/1000/hypr/sig/.socket2.sock\"\n",
         &[],
     );
     assert!(
@@ -392,7 +392,7 @@ fn desktop_examples_check_with_their_declared_inputs() {
         ("packages.program", &[("package", "vim")]),
         ("hyprland-clients.program", &[]),
         ("dbus-monitor.program", &[]),
-        ("hyprland-events.program", &[("address", "UNIX-CONNECT:/x")]),
+        ("hyprland-events.program", &[("socket_path", "/x")]),
     ];
     for (file, inputs) in cases {
         let directory = tempfile::tempdir().unwrap();
@@ -628,7 +628,7 @@ fn listeners_forward_each_producer_line_to_stdout() {
     let example = fs::read_to_string(examples().join("hyprland-events.program")).unwrap();
     let output = hypr.run(
         &example,
-        &[("address", "UNIX-CONNECT:/x")],
+        &[("socket_path", "/x")],
         &[("FAKE_STDOUT", "openwindow>>abc\n")],
     );
     assert!(

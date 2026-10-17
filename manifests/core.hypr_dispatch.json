@@ -8,7 +8,35 @@
     "arguments": {
       "type": "list",
       "items": "string",
-      "required": true
+      "required": true,
+      "allow_first_token": [
+        "workspace",
+        "movetoworkspace",
+        "movetoworkspacesilent",
+        "movefocus",
+        "movewindow",
+        "swapwindow",
+        "resizeactive",
+        "moveactive",
+        "killactive",
+        "togglefloating",
+        "fullscreen",
+        "pseudo",
+        "togglesplit",
+        "pin",
+        "focusmonitor",
+        "movecurrentworkspacetomonitor",
+        "togglespecialworkspace",
+        "focuswindow",
+        "cyclenext",
+        "bringactivetotop",
+        "centerwindow",
+        "layoutmsg",
+        "dpms",
+        "forcerendererreload",
+        "exit"
+      ],
+      "forbid_option_items": true
     }
   },
   "arguments": [

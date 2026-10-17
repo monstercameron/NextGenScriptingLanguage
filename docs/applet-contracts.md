@@ -729,6 +729,30 @@ take boolean at "/changed" from made_dir as dir_changed
 The example `examples/stdlib/ensure-config.program` combines these with
 `path.join`. Coverage is in `tests/lane_a_ensure.rs`.
 
+## Theme switching
+
+`examples/desktop/theme-switch.program` composes the applets above into a theme
+switch. It renders each `*.tpl` template into a new theme directory with
+`text.render`, points the current-theme link at that directory with
+`fs.ensure_symlink`, and reloads the compositor. If the reload fails, it points the
+link back at the previous target and fails.
+
+Ordering matters more than atomicity. Rendering finishes before the link changes,
+so a render failure leaves the current theme untouched. The link swap is the commit
+point. The rollback is a second link update, not a transaction: `fs.transaction`
+handles regular files and rejects symbolic links, so it cannot swap the link.
+`fs.ensure_symlink` reports the previous target in `previous` so the rollback knows
+where to point. A first switch needs an existing link, because a previous target
+of `""` cannot be restored. A glob that matches no templates renders nothing and
+the switch proceeds; the example does not count matches.
+
+Typed editing of hyprlang, TOML and INI configuration files is intentionally out of
+scope for applets. Templates are rendered as text, and the program writes them. No
+applet parses or rewrites those formats in place.
+
+Coverage: `tests/lane_a_theme.rs`. The portable test checks the program. The Unix
+tests create real links and a fake `hyprctl`.
+
 ## Desktop wrappers
 
 These are ordinary command manifests that wrap installed desktop tools. Each one
@@ -767,12 +791,39 @@ Without that status capture, a non-success exit stops the program.
   and is effectful. `hypr.socket2` is a `socat` listener producer.
 
 Environment inputs. The Hyprland wrappers read `HYPRLAND_INSTANCE_SIGNATURE` from
-the environment, which the tool inherits. The socket address for `hypr.socket2`
-is `UNIX-CONNECT:$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock`.
-A listener must follow its input declarations directly, so the caller composes the
-address and passes it as the `address` input; `examples/desktop/hyprland-events.program`
+the environment, which the tool inherits. The socket for `hypr.socket2` is
+`$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock`, passed as the
+`socket_path` input. The manifest adds the `UNIX-CONNECT:` prefix itself. The path must
+be absolute and free of `,`, `:`, `!`, whitespace, control characters and `..`
+components, so socat's address language (`EXEC:`, `SYSTEM:`, `OPEN:`) cannot be
+reached. The check runs before socat starts. A listener must follow its input
+declarations directly, so the caller composes the path; `examples/desktop/hyprland-events.program`
 shows the command. Listener handlers receive each record as their pipeline input,
 so `then "cat"` forwards it unchanged.
+
+`hypr.dispatch` is an allowlist. Its first argument must be exactly one of a fixed
+set of non-spawning dispatchers (`workspace`, `movefocus`, `killactive`, and so on;
+see the manifest). The whole first item is compared, case-insensitively. A blank
+item, an item starting with `-` (which hyprctl would read as its own option, so
+`-j exec` cannot hide a dispatcher), and any unknown name are refused before
+hyprctl starts. `exec` and `execr` are not in the list. `hypr.dispatch_exec` accepts
+only those two dispatchers and declares `process.spawn`, so capability policy can
+tell the two apart. Both are effectful. hyprctl's `--` end-of-options marker is not
+used, because its support is not confirmed from documentation.
+
+Both dispatch manifests also set `forbid_option_items`, which applies to every item,
+not only the first. An item starting with `-` is refused unless it is a plain number
+such as `-10` or `-10%`, and an item containing `;`, a newline, a carriage return or
+a NUL is refused. A later `--batch` therefore cannot run a `;`-separated command
+batch. The rule runs on literal values at check time and on resolved values before
+argv is built.
+The notification action keys, the menu prompts and the D-Bus match rule are not
+interpreted as commands: notify-send only reports the selected key, gum and the
+menus only read input, and busctl only filters messages, so those manifests do
+not refuse input.
+
+Prefixed arguments (`{"prefix": ..., "parameter": ...}`) are the general form for
+a path appended to a tool's own address syntax. They validate the same way.
 
 Examples live in `examples/desktop/`. The portable checks are in
 `tests/lane_a_desktop.rs`: they inspect each manifest, assert the argv shapes

@@ -65,6 +65,19 @@ struct ParameterSpec {
     required: bool,
     #[serde(default)]
     min_items: Option<usize>,
+    /// For string lists: the first item's first word must be one of these
+    /// (compared ASCII case-insensitively). Empty means no restriction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    allow_first_token: Vec<String>,
+    /// For string lists: the first item's first word must not be one of these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    deny_first_token: Vec<String>,
+    /// For string lists: every item must be safe to pass to a tool that reads
+    /// options and `;`-separated command batches. Items starting with `-` are
+    /// refused unless they are plain numbers, and separators or control bytes
+    /// are refused everywhere.
+    #[serde(default, skip_serializing_if = "is_false")]
+    forbid_option_items: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fields: Option<BTreeMap<String, ParameterFieldSpec>>,
 }
@@ -76,6 +89,9 @@ impl From<RawParameter> for ParameterSpec {
             item_type: raw.items,
             required: raw.required,
             min_items: raw.min_items,
+            allow_first_token: raw.allow_first_token,
+            deny_first_token: raw.deny_first_token,
+            forbid_option_items: raw.forbid_option_items,
             fields: raw.fields,
         }
     }
@@ -130,6 +146,14 @@ enum ArgumentNode {
         json_parameter: String,
     },
     JsonArguments,
+    /// A literal prefix followed by one path-like parameter, rendered as one
+    /// argument. The value must be an absolute path free of address
+    /// metacharacters (see `check_prefixed_path`), so the prefix chooses the
+    /// address family and the parameter cannot change it.
+    PrefixedParameter {
+        prefix: String,
+        parameter: String,
+    },
     WhenPresent {
         when_present: String,
         append: Vec<ArgumentNode>,
@@ -203,6 +227,9 @@ impl Registry {
                     item_type: Some(ParameterType::Scalar),
                     required: false,
                     min_items: None,
+                    allow_first_token: Vec::new(),
+                    deny_first_token: Vec::new(),
+                    forbid_option_items: false,
                     fields: None,
                 },
             )]),
@@ -690,6 +717,13 @@ impl Manifest {
         )
     }
 
+    /// Whether results of this in-process applet are raw UTF-8 text or a path.
+    pub(crate) fn in_process_text_output(&self) -> bool {
+        self.contract
+            .as_ref()
+            .is_some_and(|contract| contract.in_process_text_output())
+    }
+
     /// Decode output only at the explicit contract boundary. Legacy output is
     /// always preserved as bytes; status acceptance is a separate runtime
     /// decision. For a typed contract, non-success is an error unless a
@@ -888,6 +922,16 @@ impl Manifest {
                 bail!("applet {:?} requires parameter {name:?}", self.name);
             }
         }
+        // Literal values bound to a prefixed argument are checked now, so a
+        // refused address fails at check time. Resolved values are checked again
+        // when the argument is built, before any process starts.
+        let mut prefixed = Vec::new();
+        prefixed_parameter_names(&self.arguments, &mut prefixed);
+        for name in prefixed {
+            if let Some(Value::String(path)) = invocation.parameters.get(name) {
+                check_prefixed_path(name, path)?;
+            }
+        }
         for (name, value) in &invocation.parameters {
             let spec = &self.parameters[name];
             if let Value::Reference(reference) = value {
@@ -1017,6 +1061,12 @@ impl Manifest {
                 None => {}
                 Some(value) => {
                     validate_value(name, value, spec, false, &BTreeMap::new())?;
+                    // Resolved values are checked explicitly, so the first-token
+                    // rule does not depend on the static path's deferral.
+                    if let Value::List(items) = value {
+                        check_first_token(name, spec, items)?;
+                        check_option_items(name, spec, items, false)?;
+                    }
                     if let Some(port) = self.ports().and_then(|ports| ports.inputs.get(name)) {
                         port.schema
                             .validate_value(value)
@@ -1209,8 +1259,114 @@ fn validate_value(
                 bail!("parameter {name:?} needs at least {minimum} item(s)");
             }
         }
+        // A reference first item is deferred: validate_argument_values checks the
+        // resolved list (with references disallowed) before any argv is built.
+        if !matches!(items.first(), Some(Value::Reference(_))) {
+            check_first_token(name, spec, items)?;
+        }
+        check_option_items(name, spec, items, allow_reference_items)?;
     }
     Ok(())
+}
+
+/// Enforce a list's first-token rules on the list's values. The whole first item
+/// is compared, exactly and case-insensitively, against the allow or deny list.
+/// There is no word extraction: a sub-word can hide a dispatcher, and a leading
+/// `-` is an option to the tool, so a first item that is empty, whitespace-only,
+/// or starts with `-` is refused whenever a rule applies. The check fails closed:
+/// a missing first item (for an allow list), a non-text first item, or an
+/// unresolved reference is an error, never a pass. Callers run it on resolved
+/// values before any argument is rendered.
+fn check_first_token(name: &str, spec: &ParameterSpec, items: &[Value]) -> Result<()> {
+    if spec.allow_first_token.is_empty() && spec.deny_first_token.is_empty() {
+        return Ok(());
+    }
+    match items.first() {
+        None if !spec.allow_first_token.is_empty() => {
+            bail!("parameter {name:?} requires a first item")
+        }
+        None => Ok(()),
+        Some(Value::String(first)) => {
+            if first.trim().is_empty() {
+                bail!("parameter {name:?} first item must not be empty");
+            }
+            if first.trim_start().starts_with('-') {
+                bail!(
+                    "parameter {name:?} first item {first:?} starts with '-' and would be read as an option"
+                );
+            }
+            if !spec.allow_first_token.is_empty()
+                && !spec
+                    .allow_first_token
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(first))
+            {
+                bail!(
+                    "parameter {name:?} first item must be one of {:?}, got {first:?}",
+                    spec.allow_first_token
+                );
+            }
+            if spec
+                .deny_first_token
+                .iter()
+                .any(|denied| denied.eq_ignore_ascii_case(first))
+            {
+                bail!("parameter {name:?} first item {first:?} is refused");
+            }
+            Ok(())
+        }
+        Some(other) => bail!(
+            "parameter {name:?} first item must be resolved text when first-token rules apply, got {}",
+            value_kind(other)
+        ),
+    }
+}
+
+/// Refuse list items that a tool would read as an option or as a command batch.
+/// The rule applies to every item, not only the first, because a later
+/// `--batch` or `;`-separated command still runs. A plain number may start with
+/// `-` (for example a resize amount), but nothing else may. Separators and
+/// control bytes are refused everywhere. `allow_references` is true for the
+/// static check; at argument-build time every item must already be text.
+fn check_option_items(
+    name: &str,
+    spec: &ParameterSpec,
+    items: &[Value],
+    allow_references: bool,
+) -> Result<()> {
+    if !spec.forbid_option_items {
+        return Ok(());
+    }
+    for (index, item) in items.iter().enumerate() {
+        let text = match item {
+            Value::String(text) => text,
+            Value::Reference(_) if allow_references => continue,
+            other => bail!(
+                "parameter {name:?} item {index} must be resolved text when option rules apply, got {}",
+                value_kind(other)
+            ),
+        };
+        if text.contains([';', '\n', '\r', '\0']) {
+            bail!("parameter {name:?} item {index} contains a command separator or control byte");
+        }
+        let trimmed = text.trim();
+        if trimmed.starts_with('-') && !is_plain_number(trimmed) {
+            bail!(
+                "parameter {name:?} item {index} {text:?} would be read as an option; only plain numbers may start with '-'"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `-?[0-9]+(\.[0-9]+)?%?`, the number shapes a resize or move amount uses.
+fn is_plain_number(text: &str) -> bool {
+    let text = text.strip_suffix('%').unwrap_or(text);
+    let text = text.strip_prefix('-').unwrap_or(text);
+    let mut parts = text.splitn(2, '.');
+    let integer = parts.next().unwrap_or("");
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    digits(integer) && parts.next().is_none_or(digits)
 }
 
 fn validate_record_parameter(
@@ -1337,6 +1493,55 @@ fn value_kind(value: &Value) -> &'static str {
     }
 }
 
+/// Render `prefix` followed by a validated path parameter as one argument.
+fn prefixed_argument(
+    prefix: &str,
+    values: &BTreeMap<String, Value>,
+    parameter: &str,
+) -> Result<String> {
+    let value = values
+        .get(parameter)
+        .ok_or_else(|| anyhow!("missing parameter {parameter:?}"))?;
+    let Value::String(path) = value else {
+        bail!("prefixed parameter {parameter:?} must be text");
+    };
+    check_prefixed_path(parameter, path)?;
+    Ok(format!("{prefix}{path}"))
+}
+
+fn prefixed_parameter_names<'a>(nodes: &'a [ArgumentNode], out: &mut Vec<&'a str>) {
+    for node in nodes {
+        match node {
+            ArgumentNode::PrefixedParameter { parameter, .. } => out.push(parameter),
+            ArgumentNode::WhenPresent { append, .. } => prefixed_parameter_names(append, out),
+            _ => {}
+        }
+    }
+}
+
+/// A prefixed value is appended to a tool's own address or mini-language, so it
+/// must be a plain absolute path. Address syntax treats `,`, `:` and `!` as
+/// separators and options, and whitespace or control bytes as delimiters, so
+/// those are refused here, before any process starts. `..` components are
+/// refused so the path cannot climb out of the directory it names.
+fn check_prefixed_path(parameter: &str, path: &str) -> Result<()> {
+    if path.len() < 2 || !path.starts_with('/') {
+        bail!("parameter {parameter:?} must be an absolute path below /");
+    }
+    if path
+        .chars()
+        .any(|c| matches!(c, ',' | ':' | '!') || c.is_whitespace() || c.is_control())
+    {
+        bail!(
+            "parameter {parameter:?} contains a character reserved by address syntax (, : ! whitespace or control)"
+        );
+    }
+    if path.split('/').any(|part| part == "..") {
+        bail!("parameter {parameter:?} must not contain .. components");
+    }
+    Ok(())
+}
+
 fn append_arguments(
     node: &ArgumentNode,
     values: &BTreeMap<String, Value>,
@@ -1369,6 +1574,9 @@ fn append_arguments(
             out.push(json_value_to_string(value)?);
         }
         ArgumentNode::JsonArguments => out.push(json_arguments_to_string(values)?),
+        ArgumentNode::PrefixedParameter { prefix, parameter } => {
+            out.push(prefixed_argument(prefix, values, parameter)?);
+        }
         ArgumentNode::WhenPresent {
             when_present,
             append,
@@ -1417,6 +1625,9 @@ fn append_arguments_borrowed<'a>(
         }
         ArgumentNode::JsonArguments => {
             out.push(Cow::Owned(json_arguments_to_string(values)?));
+        }
+        ArgumentNode::PrefixedParameter { prefix, parameter } => {
+            out.push(Cow::Owned(prefixed_argument(prefix, values, parameter)?));
         }
         ArgumentNode::WhenPresent {
             when_present,
@@ -1510,6 +1721,12 @@ struct RawParameter {
     #[serde(default)]
     min_items: Option<usize>,
     #[serde(default)]
+    allow_first_token: Vec<String>,
+    #[serde(default)]
+    deny_first_token: Vec<String>,
+    #[serde(default)]
+    forbid_option_items: bool,
+    #[serde(default)]
     fields: Option<BTreeMap<String, ParameterFieldSpec>>,
 }
 
@@ -1539,6 +1756,10 @@ enum RawArgument {
         json_parameter: String,
     },
     JsonArguments,
+    PrefixedParameter {
+        prefix: String,
+        parameter: String,
+    },
     WhenPresent {
         when_present: String,
         append: Vec<RawArgument>,
@@ -1571,6 +1792,8 @@ impl<'de> Deserialize<'de> for RawArgument {
             when_present: Option<String>,
             #[serde(default, deserialize_with = "present")]
             append: Option<Vec<RawArgument>>,
+            #[serde(default, deserialize_with = "present")]
+            prefix: Option<String>,
         }
         struct Visitor;
         impl<'de> serde::de::Visitor<'de> for Visitor {
@@ -1582,8 +1805,26 @@ impl<'de> Deserialize<'de> for RawArgument {
                 self,
                 map: M,
             ) -> Result<Self::Value, M::Error> {
-                let fields =
+                let mut fields =
                     Fields::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                if let Some(prefix) = fields.prefix.take() {
+                    return match (
+                        fields.parameter,
+                        fields.literal,
+                        fields.spread,
+                        fields.json_parameter,
+                        fields.json_arguments,
+                        fields.when_present,
+                        fields.append,
+                    ) {
+                        (Some(parameter), None, None, None, None, None, None) => {
+                            Ok(RawArgument::PrefixedParameter { prefix, parameter })
+                        }
+                        _ => Err(serde::de::Error::custom(
+                            "prefix requires exactly one parameter and no other argument fields",
+                        )),
+                    };
+                }
                 match (
                     fields.literal,
                     fields.parameter,
@@ -1668,6 +1909,13 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         }
         if !is_list && spec.min_items.is_some() {
             bail!("parameter {name:?}: min_items only applies to lists");
+        }
+        let token_rules = !spec.allow_first_token.is_empty() || !spec.deny_first_token.is_empty();
+        if token_rules && (!is_list || spec.item_type != Some(ParameterType::String)) {
+            bail!("parameter {name:?}: first-token rules apply only to string lists");
+        }
+        if spec.forbid_option_items && (!is_list || spec.item_type != Some(ParameterType::String)) {
+            bail!("parameter {name:?}: forbid_option_items applies only to string lists");
         }
         validate_parameter_fields(spec.kind, spec.fields.as_ref(), name)?;
     }
@@ -2172,6 +2420,18 @@ fn convert_argument(
             ArgumentNode::JsonParameter { json_parameter }
         }
         RawArgument::JsonArguments => ArgumentNode::JsonArguments,
+        RawArgument::PrefixedParameter { prefix, parameter } => {
+            if prefix.contains('\0') {
+                bail!("prefix argument cannot contain a NUL byte");
+            }
+            let spec = parameters.get(&parameter).ok_or_else(|| {
+                anyhow!("argument mapping references undeclared parameter {parameter:?}")
+            })?;
+            if !matches!(spec.kind, ParameterType::String | ParameterType::Path) {
+                bail!("prefixed parameter {parameter:?} must be a string or path");
+            }
+            ArgumentNode::PrefixedParameter { prefix, parameter }
+        }
         RawArgument::WhenPresent {
             when_present,
             append,
@@ -2200,6 +2460,7 @@ fn validate_argument_usage(manifest: &Manifest) -> Result<()> {
             match node {
                 ArgumentNode::Literal { .. } | ArgumentNode::JsonArguments => {}
                 ArgumentNode::Parameter { parameter }
+                | ArgumentNode::PrefixedParameter { parameter, .. }
                 | ArgumentNode::Spread { spread: parameter }
                 | ArgumentNode::JsonParameter {
                     json_parameter: parameter,
@@ -2918,6 +3179,22 @@ mod argument_decoder_compat {
                     Ok(RawArgument::JsonParameter { .. })
                 ));
                 *extensions += 1;
+            } else if value.get("prefix").is_some() {
+                // `{"prefix": ..., "parameter": ...}` is also an extension node.
+                let source = value.to_string();
+                assert!(
+                    value["prefix"].is_string() && value["parameter"].is_string(),
+                    "invalid prefix node: {source}"
+                );
+                assert!(
+                    serde_json::from_str::<LegacyArgument>(&source).is_err(),
+                    "new prefix node unexpectedly belongs to the legacy grammar: {source}"
+                );
+                assert!(matches!(
+                    serde_json::from_str::<RawArgument>(&source),
+                    Ok(RawArgument::PrefixedParameter { .. })
+                ));
+                *extensions += 1;
             } else if !contains_extension(value) {
                 compare(&value.to_string());
             }
@@ -2932,6 +3209,7 @@ mod argument_decoder_compat {
         fn contains_extension(value: &serde_json::Value) -> bool {
             value.get("json_arguments").is_some()
                 || value.get("json_parameter").is_some()
+                || value.get("prefix").is_some()
                 || value
                     .get("append")
                     .and_then(|v| v.as_array())
@@ -2954,5 +3232,112 @@ mod argument_decoder_compat {
             extensions > 0,
             "catalog should exercise the new argument node"
         );
+    }
+}
+
+#[cfg(test)]
+mod first_token_rule_tests {
+    use super::*;
+
+    fn deny_exec() -> ParameterSpec {
+        ParameterSpec {
+            kind: ParameterType::List,
+            item_type: Some(ParameterType::String),
+            required: true,
+            min_items: None,
+            allow_first_token: Vec::new(),
+            deny_first_token: vec!["exec".into(), "execr".into()],
+            forbid_option_items: false,
+            fields: None,
+        }
+    }
+
+    fn option_spec() -> ParameterSpec {
+        let mut spec = deny_exec();
+        spec.deny_first_token.clear();
+        spec.forbid_option_items = true;
+        spec
+    }
+
+    #[test]
+    fn option_rule_applies_to_every_item_and_allows_plain_numbers() {
+        let spec = option_spec();
+        let items = |list: &[&str]| -> Vec<Value> {
+            list.iter()
+                .map(|item| Value::String((*item).into()))
+                .collect()
+        };
+        assert!(check_option_items("a", &spec, &items(&["workspace", "2"]), false).is_ok());
+        assert!(
+            check_option_items("a", &spec, &items(&["resizeactive", "-10", "0"]), false).is_ok()
+        );
+        assert!(check_option_items(
+            "a",
+            &spec,
+            &items(&["resizeactive", "-10%", "10.5%"]),
+            false
+        )
+        .is_ok());
+        assert!(
+            check_option_items("a", &spec, &items(&["workspace", "--batch", "x"]), false).is_err()
+        );
+        assert!(check_option_items("a", &spec, &items(&["workspace", "-j"]), false).is_err());
+        assert!(check_option_items("a", &spec, &items(&["workspace", "1;2"]), false).is_err());
+        assert!(check_option_items("a", &spec, &items(&["workspace", "a\nb"]), false).is_err());
+        assert!(check_option_items("a", &spec, &items(&["workspace", "a\0b"]), false).is_err());
+        assert!(check_option_items("a", &spec, &items(&["-"]), false).is_err());
+        assert!(check_option_items("a", &spec, &items(&["-10x"]), false).is_err());
+        let reference = [Value::Reference("word".into())];
+        assert!(check_option_items("a", &spec, &reference, true).is_ok());
+        assert!(check_option_items("a", &spec, &reference, false).is_err());
+    }
+
+    #[test]
+    fn option_rule_is_off_unless_declared() {
+        let spec = deny_exec();
+        assert!(check_option_items("a", &spec, &[Value::String("--batch".into())], false).is_ok());
+    }
+
+    fn text(value: &str) -> [Value; 1] {
+        [Value::String(value.into())]
+    }
+
+    #[test]
+    fn deny_rule_compares_the_whole_first_item() {
+        let spec = deny_exec();
+        assert!(check_first_token("arguments", &spec, &[Value::Integer(1)]).is_err());
+        assert!(check_first_token("arguments", &spec, &[Value::Reference("word".into())]).is_err());
+        assert!(check_first_token("arguments", &spec, &text("EXEC")).is_err());
+        assert!(check_first_token("arguments", &spec, &text("execr")).is_err());
+        assert!(check_first_token("arguments", &spec, &text("-j")).is_err());
+        assert!(check_first_token("arguments", &spec, &text("workspace")).is_ok());
+        // Whole-item comparison: a sub-word match is not a refusal, and the
+        // deny list is never bypassed by reading only part of the item.
+        assert!(check_first_token("arguments", &spec, &text("executive")).is_ok());
+        assert!(check_first_token("arguments", &spec, &[]).is_ok());
+    }
+
+    #[test]
+    fn rules_refuse_blank_and_option_shaped_first_items() {
+        let spec = deny_exec();
+        for item in ["", "   ", "\t", "-j", " -j", "--exec"] {
+            assert!(
+                check_first_token("arguments", &spec, &text(item)).is_err(),
+                "{item:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn allow_list_requires_a_first_item_and_matches_the_whole_item() {
+        let mut spec = deny_exec();
+        spec.deny_first_token.clear();
+        spec.allow_first_token = vec!["workspace".into(), "exec".into()];
+        assert!(check_first_token("arguments", &spec, &[]).is_err());
+        assert!(check_first_token("arguments", &spec, &text("WORKSPACE")).is_ok());
+        assert!(check_first_token("arguments", &spec, &text("workspace 2")).is_err());
+        assert!(check_first_token("arguments", &spec, &text("exec,")).is_err());
+        assert!(check_first_token("arguments", &spec, &text("unknown")).is_err());
+        assert!(check_first_token("arguments", &spec, &text(" exec")).is_err());
     }
 }

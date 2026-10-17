@@ -320,6 +320,7 @@ pub(super) fn run_group(
             }
             let sender = sender.clone();
             let handle = match scope.spawn(move |token| {
+                let _output_scope = super::OutputScopeGuard::enter(super::OutputScope::TaskGroup);
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     token.check()?;
                     if parent_cancelled.load(Ordering::Acquire) {
@@ -742,6 +743,7 @@ pub(super) fn run_each(
             }
             let sender = sender.clone();
             let spawned = scope.spawn(move |token| {
+                let _output_scope = super::OutputScopeGuard::enter(super::OutputScope::TaskGroup);
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     token.check()?;
                     if parent_cancelled.load(Ordering::Acquire) {

@@ -147,11 +147,6 @@ fn execute_group_with_sink(
     signals: &Signals,
     mut sink: Option<&mut streaming::LineSink<'_>>,
 ) -> Result<GroupOutput> {
-    // Every command launch passes through here, so the privilege policy is enforced
-    // before any process is created, whatever path reached it.
-    for (call, manifest, _) in calls {
-        crate::capabilities::check_privileged_launch(registry, manifest.binary_for(call), cwd)?;
-    }
     let mut children = Children(
         Vec::with_capacity(calls.len()),
         signals.job_diagnostic_truncation.clone(),
@@ -448,16 +443,16 @@ fn execute_group_with_sink(
                                 output.extend_from_slice(&chunk[..retained]);
                                 if retained < count {
                                     let message = if job_exceeded {
-                                        format!(
-                                            "background job output exceeds maximum of {} bytes",
-                                            options.max_output_bytes
+                                        crate::runtime::output_limit_message(
+                                            false,
+                                            options.max_output_bytes,
                                         )
                                     } else {
-                                        format!(
-                                            "retained background job output exceeds run-wide maximum of {} bytes",
+                                        crate::runtime::output_limit_message(
+                                            true,
                                             signals
                                                 .job_output_limit
-                                                .unwrap_or(options.max_output_bytes)
+                                                .unwrap_or(options.max_output_bytes),
                                         )
                                     };
                                     return Err(native_output_limit_failure(

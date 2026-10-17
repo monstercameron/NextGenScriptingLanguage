@@ -46,12 +46,17 @@ pub struct CapabilityPolicy {
     pub allow_wrappers: BTreeSet<String>,
 }
 
-/// Refuse a command launch that the policy's `deny_privileged` forbids. Called before
-/// any process starts, at every launch path. The executable is checked by the name
-/// written in the program and by the canonical path it would actually run, so a link
-/// to an elevator is still an elevator. Fails closed: a name that cannot be resolved
-/// is still classified by its name.
-pub fn check_privileged_launch(registry: &Registry, binary: &str, cwd: &Path) -> Result<()> {
+/// Refuse a command launch that the policy's `deny_privileged` forbids. This runs in
+/// `command_for`, before any `Command` is built, so every spawn path that builds its
+/// process through it is covered. The executable is classified by each manifest binary
+/// name in `binary_names` and by the path it would actually run, both as written and
+/// canonicalized, so a link to an elevator is still an elevator. Fails closed: a name
+/// that cannot be resolved is still classified by its name.
+pub fn check_privileged_launch(
+    registry: &Registry,
+    binary_names: &[&str],
+    resolved: &Path,
+) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let Some(policy) = configured.as_ref() else {
         return Ok(());
@@ -59,11 +64,16 @@ pub fn check_privileged_launch(registry: &Registry, binary: &str, cwd: &Path) ->
     if !policy.deny_privileged {
         return Ok(());
     }
-    let mut names = vec![binary.to_owned()];
-    if let Ok(path) = crate::runtime::binary_path(binary, cwd) {
-        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+    let shown = binary_names
+        .first()
+        .map(|name| (*name).to_owned())
+        .unwrap_or_else(|| resolved.display().to_string());
+    let mut names: Vec<String> = binary_names.iter().map(|name| (*name).to_owned()).collect();
+    names.push(resolved.display().to_string());
+    if let Ok(canonical) = std::fs::canonicalize(resolved) {
         names.push(canonical.display().to_string());
     }
+    let binary = shown.as_str();
     for name in &names {
         match crate::privilege::classify_names([name.as_str()]) {
             crate::privilege::Privilege::Elevator => {
@@ -829,7 +839,10 @@ fn preflight_invocations_with_policy<'a>(
     let calls: Vec<&crate::ast::Invocation> = calls.into_iter().collect();
     for call in &calls {
         let manifest = registry.resolve_call(call)?;
-        check_privileged_launch(registry, manifest.binary_for(call), cwd)?;
+        let binary = manifest.binary_for(call);
+        let resolved =
+            crate::runtime::binary_path(binary, cwd).unwrap_or_else(|_| PathBuf::from(binary));
+        check_privileged_launch(registry, &[binary], &resolved)?;
     }
     for call in calls {
         if call.direct {
@@ -999,6 +1012,14 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    // The one check every spawn path reaches before a Command exists. It classifies the
+    // manifest binary name, when the applet is registered, and the resolved path.
+    let manifest_binary = registry
+        .resolve(applet_name)
+        .ok()
+        .map(|manifest| manifest.binary.clone());
+    let names: Vec<&str> = manifest_binary.as_deref().into_iter().collect();
+    check_privileged_launch(registry, &names, binary)?;
     let environment = effective_environment(registry, applet_name)?;
     let environment = apply_command_overlay(registry, applet_name, environment)?;
     let configured = registry.host_state::<Option<CapabilityPolicy>>();

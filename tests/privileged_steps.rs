@@ -363,28 +363,85 @@ fn a_resumed_run_is_refused_when_its_suffix_is_privileged() {
         text(&resumed.stderr)
     );
 }
-#[test]
-fn the_launch_check_refuses_privileged_binaries_whatever_path_reaches_it() {
-    // Every command launch calls this check, after the static preflight and independent
-    // of it, so it is tested directly here.
-    let registry =
-        Registry::from_sources(&[manifest("elevated.run", "sudo", &["true"]).to_string()]).unwrap();
+
+fn deny_all_privileged_registry(manifests: &[serde_json::Value]) -> Registry {
+    let sources: Vec<String> = manifests.iter().map(|value| value.to_string()).collect();
+    let registry = Registry::from_sources(&sources).unwrap();
     registry.set_host_state(Some(CapabilityPolicy {
         version: 1,
         applets: BTreeMap::new(),
         deny_privileged: true,
         allow_wrappers: BTreeSet::new(),
     }));
+    registry
+}
+
+#[test]
+fn the_launch_check_classifies_the_manifest_name_and_the_resolved_path() {
+    let registry = deny_all_privileged_registry(&[manifest("elevated.run", "sudo", &["true"])]);
     let directory = tempfile::tempdir().unwrap();
-    for binary in ["sudo", "SUDO.EXE", "/usr/bin/sudo", "env", "sh"] {
+    for (names, resolved) in [
+        (vec!["sudo"], PathBuf::from("sudo")),
+        (vec!["SUDO.EXE"], PathBuf::from("SUDO.EXE")),
+        (vec!["tool"], PathBuf::from("/usr/bin/sudo")),
+        (vec!["env"], PathBuf::from("env")),
+        (vec!["sh"], PathBuf::from("sh")),
+    ] {
         let error =
-            flow::capabilities::check_privileged_launch(&registry, binary, directory.path())
-                .unwrap_err();
+            flow::capabilities::check_privileged_launch(&registry, &names, &resolved).unwrap_err();
         assert!(
             format!("{error:#}").contains("denies privileged steps"),
-            "{binary}: {error:#}"
+            "{names:?} {resolved:?}: {error:#}"
         );
     }
-    flow::capabilities::check_privileged_launch(&registry, "printf", directory.path())
+    // A file whose own name is not listed is still refused when its resolved path is an
+    // elevator: a renamed copy of an elevator is an elevator.
+    let renamed = directory.path().join("pkexec");
+    fs::write(&renamed, b"").unwrap();
+    let error =
+        flow::capabilities::check_privileged_launch(&registry, &["tool"], &renamed).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("denies privileged steps"),
+        "{error:#}"
+    );
+    flow::capabilities::check_privileged_launch(&registry, &["printf"], Path::new("printf"))
         .expect("a standard executable is not refused");
+}
+
+#[test]
+fn command_for_refuses_a_privileged_launch_before_any_command_is_built() {
+    let registry = deny_all_privileged_registry(&[manifest("elevated.run", "sudo", &["true"])]);
+    let directory = tempfile::tempdir().unwrap();
+    // A registered applet whose manifest binary is sudo.
+    let registered = flow::capabilities::command_for(
+        Path::new("sudo"),
+        ["true"],
+        &registry,
+        "elevated.run",
+        directory.path(),
+    );
+    let error = format!("{:#}", registered.err().expect("refused"));
+    assert!(error.contains("denies privileged steps"), "{error}");
+    // A direct executable that is not registered: refused by its resolved name.
+    let direct = flow::capabilities::command_for(
+        Path::new("/usr/bin/sudo"),
+        ["true"],
+        &registry,
+        "sudo",
+        directory.path(),
+    );
+    let error = format!("{:#}", direct.err().expect("refused"));
+    assert!(error.contains("denies privileged steps"), "{error}");
+    // An unregistered applet name over a renamed elevator: refused by the resolved path.
+    let renamed = directory.path().join("pkexec");
+    fs::write(&renamed, b"").unwrap();
+    let renamed_refused = flow::capabilities::command_for(
+        &renamed,
+        std::iter::empty::<&str>(),
+        &registry,
+        "tool",
+        directory.path(),
+    );
+    let error = format!("{:#}", renamed_refused.err().expect("refused"));
+    assert!(error.contains("denies privileged steps"), "{error}");
 }

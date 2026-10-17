@@ -445,6 +445,8 @@ impl Supervisor {
                         .map(|(call, manifest, line)| (call, manifest, *line))
                         .collect::<Vec<_>>();
                     let mut launched = 0;
+                    let _output_scope =
+                        super::OutputScopeGuard::enter(super::OutputScope::BackgroundJob);
                     match execute_group(
                         &registry,
                         &refs,

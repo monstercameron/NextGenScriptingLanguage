@@ -1058,6 +1058,54 @@ thread_local! {
     static FORCE_STDERR_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// The kind of step whose output a thread is capturing, so an output limit error can
+/// name it. Foreground is the default. Jobs and task groups set their kind on the
+/// thread that runs them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputScope {
+    Foreground,
+    BackgroundJob,
+    TaskGroup,
+}
+
+thread_local! {
+    static OUTPUT_SCOPE: std::cell::Cell<OutputScope> =
+        const { std::cell::Cell::new(OutputScope::Foreground) };
+}
+
+/// Sets the output scope of the current thread until it is dropped.
+pub(crate) struct OutputScopeGuard(OutputScope);
+
+impl OutputScopeGuard {
+    pub(crate) fn enter(scope: OutputScope) -> Self {
+        Self(OUTPUT_SCOPE.with(|cell| cell.replace(scope)))
+    }
+}
+
+impl Drop for OutputScopeGuard {
+    fn drop(&mut self) {
+        OUTPUT_SCOPE.with(|cell| cell.set(self.0));
+    }
+}
+
+/// The message for a captured step that exceeded its output limit. It names the kind of
+/// step that overflowed and says how to fix it.
+pub(crate) fn output_limit_message(run_wide: bool, limit: usize) -> String {
+    let kind = match OUTPUT_SCOPE.with(|cell| cell.get()) {
+        OutputScope::Foreground => "foreground command",
+        OutputScope::BackgroundJob => "background job",
+        OutputScope::TaskGroup => "task group",
+    };
+    let scope = if run_wide {
+        format!("retained {kind} output exceeds the run-wide limit of {limit} bytes")
+    } else {
+        format!("{kind} output exceeds the limit of {limit} bytes")
+    };
+    format!(
+        "{scope}; pipe the output to a consuming step (for example `then save to FILE`) or raise --max-output-bytes"
+    )
+}
+
 /// Run a top-level finite program so that a `run` whose stdout has no consumer
 /// writes to this process's stdout as it runs. Library callers keep capture.
 pub fn with_streamed_stdout<T>(run: impl FnOnce() -> T) -> T {
@@ -1589,11 +1637,6 @@ fn execute_group_with_sink(
     signals: &Signals,
     mut sink: Option<&mut streaming::LineSink<'_>>,
 ) -> Result<GroupOutput> {
-    // Every command launch passes through here, so the privilege policy is enforced
-    // before any process is created, whatever path reached it.
-    for (call, manifest, _) in calls {
-        crate::capabilities::check_privileged_launch(registry, manifest.binary_for(call), cwd)?;
-    }
     let mut writer = InputWriter::default();
     let mut children = Children(
         Vec::with_capacity(calls.len()),
@@ -1963,16 +2006,13 @@ fn execute_group_with_sink(
                             output.extend_from_slice(&chunk[..retained]);
                             if retained < count {
                                 let message = if job_exceeded {
-                                    format!(
-                                        "background job output exceeds maximum of {} bytes",
-                                        options.max_output_bytes
-                                    )
+                                    output_limit_message(false, options.max_output_bytes)
                                 } else {
-                                    format!(
-                                        "retained background job output exceeds run-wide maximum of {} bytes",
+                                    output_limit_message(
+                                        true,
                                         signals
                                             .job_output_limit
-                                            .unwrap_or(options.max_output_bytes)
+                                            .unwrap_or(options.max_output_bytes),
                                     )
                                 };
                                 return Err(native_output_limit_failure(
@@ -6448,5 +6488,38 @@ mod resolved_json_argument_tests {
         ]));
         let error = resolved_json_arguments(&referenced, &manifest, &BTreeMap::new()).unwrap_err();
         assert!(error.to_string().contains("undefined result \"missing\""));
+    }
+}
+
+#[cfg(test)]
+mod output_limit_message_tests {
+    use super::*;
+
+    #[test]
+    fn the_message_names_the_kind_of_step_that_overflowed() {
+        let foreground = output_limit_message(false, 16);
+        assert!(foreground.starts_with("foreground command output exceeds the limit of 16 bytes"));
+        assert!(!foreground.contains("background"), "{foreground}");
+        assert!(foreground.contains("pipe the output"), "{foreground}");
+        assert!(foreground.contains("--max-output-bytes"), "{foreground}");
+
+        {
+            let _job = OutputScopeGuard::enter(OutputScope::BackgroundJob);
+            let job = output_limit_message(false, 16);
+            assert!(
+                job.starts_with("background job output exceeds the limit"),
+                "{job}"
+            );
+        }
+        {
+            let _task = OutputScopeGuard::enter(OutputScope::TaskGroup);
+            let task = output_limit_message(true, 32);
+            assert!(
+                task.starts_with("retained task group output exceeds the run-wide limit of 32"),
+                "{task}"
+            );
+        }
+        // The guard restores the foreground scope when it is dropped.
+        assert!(output_limit_message(false, 1).starts_with("foreground command"));
     }
 }

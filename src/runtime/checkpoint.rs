@@ -60,6 +60,14 @@ pub(super) struct CompletedNode {
     pub start: usize,
     /// Exclusive step index.
     pub end: usize,
+    /// The id of the node's first step, from `ast::step_ids`. Resume matches the node
+    /// by this id, so a node is identified by its statement, not its position. Absent
+    /// in journals written before step ids were recorded; those match by index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_id: Option<String>,
+    /// The node's source line when it was recorded, for resume diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
     #[serde(with = "path_serde")]
     pub cwd_before: PathBuf,
 }
@@ -186,11 +194,16 @@ struct InFlightNode {
     /// write the journal, so lines after this anchor are covered only by the chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     elements: Option<elements::ElementAnchor>,
+    /// The first step's id, carried into the completed record. Absent before v5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    step_id: Option<String>,
 }
 
 impl InFlightNode {
     fn completed(&self) -> CompletedNode {
         CompletedNode {
+            step_id: self.step_id.clone(),
+            line: Some(self.line),
             fingerprint: self.fingerprint.clone(),
             start: self.start,
             end: self.end,
@@ -680,6 +693,8 @@ impl Journal {
         Ok(())
     }
 
+    /// Begin a node without a step id. Only tests use it; the runtime records ids.
+    #[cfg(test)]
     pub fn begin_node(
         &mut self,
         fingerprint: &str,
@@ -688,6 +703,21 @@ impl Journal {
         line: usize,
         cwd_before: &Path,
         retry_safe: bool,
+    ) -> Result<()> {
+        self.begin_node_with_step(fingerprint, start, end, line, cwd_before, retry_safe, None)
+    }
+
+    /// Begin a node, recording the id of its first step for resume matching.
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_node_with_step(
+        &mut self,
+        fingerprint: &str,
+        start: usize,
+        end: usize,
+        line: usize,
+        cwd_before: &Path,
+        retry_safe: bool,
+        step_id: Option<String>,
     ) -> Result<()> {
         if start >= end {
             bail!("checkpoint node must cover at least one step");
@@ -708,6 +738,7 @@ impl Journal {
             cwd_before: EncodedPath::from_path(cwd_before),
             retry_safe,
             elements: None,
+            step_id,
         });
         // Re-beginning the same node on resume keeps the element records that were
         // replayed at open. A different node starts an empty element log.
@@ -1723,12 +1754,16 @@ mod tests {
                 start: 0,
                 end: 1,
                 cwd_before: cwd.clone(),
+                step_id: None,
+                line: None,
             },
             CompletedNode {
                 fingerprint: "second".to_owned(),
                 start: 1,
                 end: 2,
                 cwd_before: cwd.clone(),
+                step_id: None,
+                line: None,
             },
         ];
         write_inline_journal(&journal_path, &inline);
@@ -1998,6 +2033,8 @@ mod tests {
             start: 0,
             end: 1,
             cwd_before: cwd.clone(),
+            step_id: None,
+            line: None,
         };
         let serialized = serde_json::to_vec(&node).unwrap();
         let restored: CompletedNode = serde_json::from_slice(&serialized).unwrap();

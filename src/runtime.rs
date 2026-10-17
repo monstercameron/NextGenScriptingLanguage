@@ -4363,6 +4363,10 @@ fn run_finite_state(
             }
         };
     }
+    // A journal node records its first step's id, so resume matches it by statement.
+    let journal_step_ids = journal
+        .is_some()
+        .then(|| crate::ast::step_ids(&program.steps));
     while index < program.steps.len() {
         if signals.cancelled.load(Ordering::Relaxed) && !control_state.cleanup_active() {
             let error = call_frames.iter().rev().fold(
@@ -4472,13 +4476,18 @@ fn run_finite_state(
                 &cwd,
                 module_session.fingerprints(),
             )?;
-            journal.begin_node(
+            let step_id = journal_step_ids
+                .as_ref()
+                .and_then(|ids| ids.get(index))
+                .cloned();
+            journal.begin_node_with_step(
                 &fingerprint,
                 index,
                 end,
                 step.line,
                 &cwd,
                 tracks_elements || resume::retry_safe(program, index, end, registry)?,
+                step_id,
             )?;
         }
         let mut jump_to = None;

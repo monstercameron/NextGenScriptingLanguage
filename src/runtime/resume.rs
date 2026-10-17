@@ -584,7 +584,30 @@ pub(super) fn prepare_with_modules(
     // Reuse content digests only while selected path metadata still matches.
     // Never retain the memo across resume attempts or execution boundaries.
     let mut binary_digests = HashMap::new();
+    // Journals that name their nodes' first steps match each node by that id. A node
+    // must then sit exactly where the completed prefix puts it, so a statement inserted
+    // or removed above it is refused with its old and new line.
+    let step_ids = journal
+        .completed_nodes()
+        .iter()
+        .any(|node| node.step_id.is_some())
+        .then(|| crate::ast::step_ids(&program.steps));
     for node in journal.completed_nodes() {
+        if let (Some(id), Some(ids)) = (&node.step_id, &step_ids) {
+            let old_line = node
+                .line
+                .map_or_else(|| "unknown".to_owned(), |line| line.to_string());
+            match ids.iter().position(|candidate| candidate == id) {
+                Some(index) if index == start => {}
+                Some(index) => bail!(
+                    "completed checkpoint node {id:?} moved from line {old_line} to line {new_line}: a statement was inserted or removed above completed node {id:?}; use a fresh checkpoint",
+                    new_line = program.steps[index].line,
+                ),
+                None => bail!(
+                    "completed checkpoint node {id:?} (line {old_line}) is no longer in the script: a statement was inserted or removed above completed node {id:?}, or its content changed; use a fresh checkpoint",
+                ),
+            }
+        }
         if start >= program.steps.len() {
             bail!("completed checkpoint node changed: script lost a completed step");
         }

@@ -129,12 +129,29 @@ pub(super) fn parse_definition<'arena, 'source: 'arena>(
     ))
 }
 
+/// Step labels are unique within each program body; a definition is its own body.
+fn check_step_labels(steps: &[Step]) -> Result<()> {
+    let mut seen = std::collections::BTreeSet::new();
+    for step in steps {
+        if let Some(label) = &step.label {
+            if !seen.insert(label.as_str()) {
+                bail!("line {}: duplicate step label {label:?}", step.line);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn finish(
     inputs: Vec<InputDeclaration>,
     steps: Vec<Step>,
     trigger: Option<Trigger>,
     definitions: BTreeMap<String, ReusableProgram>,
 ) -> Result<Program> {
+    check_step_labels(&steps)?;
+    for definition in definitions.values() {
+        check_step_labels(&definition.steps)?;
+    }
     if definitions.is_empty()
         && !steps
             .iter()
@@ -199,7 +216,13 @@ fn expand<'a>(
         {
             let (name, definition) =
                 definitions.get_key_value(&call.operation).ok_or_else(|| {
-                    anyhow!("line {}: undefined program {:?}", step.line, call.operation)
+                    match call.operation.strip_prefix(super::PROGRAM_FILE_PREFIX) {
+                        Some(path) => anyhow!(
+                            "line {}: `run program file {path:?}` needs the program loaded from its file",
+                            step.line
+                        ),
+                        None => anyhow!("line {}: undefined program {:?}", step.line, call.operation),
+                    }
                 })?;
             if active.contains(&name.as_str()) {
                 bail!(
@@ -232,6 +255,7 @@ fn expand<'a>(
                 .context("program call length overflow")?;
             steps.push(Step {
                 line: step.line,
+                label: None,
                 kind: StepKind::CallProgram {
                     call: call.clone(),
                     inputs: definition.inputs.clone(),
@@ -243,6 +267,7 @@ fn expand<'a>(
             budget.instruction()?;
             let end = Step {
                 line: step.line,
+                label: None,
                 kind: StepKind::EndCall,
             };
             budget.charge(&end)?;
@@ -260,6 +285,7 @@ fn expand<'a>(
             };
             steps.push(Step {
                 line: step.line,
+                label: None,
                 kind: StepKind::ReadCallInput {
                     binding: binding.clone(),
                 },

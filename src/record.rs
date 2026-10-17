@@ -310,6 +310,7 @@ impl Observer for Recorder {
         };
         let entry = json!({
             "event": "step",
+            "id": crate::runtime::current_step_id().map(|id| id.to_string()),
             "index": index,
             "t_ms": self.started.elapsed().as_millis() as u64,
             "line": request.line,

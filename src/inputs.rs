@@ -11,6 +11,7 @@ impl std::fmt::Display for InputType {
             Self::Boolean => "boolean",
             Self::TextList => "list of text",
             Self::Json => "json",
+            Self::Bytes => "bytes",
         })
     }
 }
@@ -65,6 +66,10 @@ impl InputDeclaration {
                 "false" => Value::Bool(false),
                 _ => bail!("input {:?} requires true or false", self.name),
             },
+            InputType::Bytes => bail!(
+                "input {:?} cannot be a byte capture; byte captures come from `then capture bytes`",
+                self.name
+            ),
             InputType::TextList => {
                 let items: Vec<String> = serde_json::from_str(text).with_context(|| {
                     format!("input {:?} requires a JSON list of text", self.name)
@@ -357,6 +362,12 @@ pub fn describe(
             }
             Some(InputSource::Arguments) => {
                 spec["source"] = serde_json::json!({"kind":"arguments"});
+            }
+            Some(InputSource::ProgramDirectory) => {
+                spec["source"] = serde_json::json!({"kind":"program_directory"});
+            }
+            Some(InputSource::ProgramPath) => {
+                spec["source"] = serde_json::json!({"kind":"program_path"});
             }
             None => {}
         }

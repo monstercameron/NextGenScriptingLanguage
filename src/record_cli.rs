@@ -121,8 +121,8 @@ pub fn replay(arguments: &[String]) -> Result<()> {
         .with_context(|| format!("reading program {}", source_path.display()))?;
     let edited = !replay::program_matches_record(&record, &source);
     let text = std::str::from_utf8(&source).context("the program is not UTF-8")?;
-    let program =
-        flow::parser::parse(text).with_context(|| format!("parsing {}", source_path.display()))?;
+    let program = flow::program_files::parse_source(&source_path, text)
+        .with_context(|| format!("parsing {}", source_path.display()))?;
     if let Some(reason) = replay::unsupported_reason(&program) {
         bail!("replay does not support {reason}");
     }

@@ -67,6 +67,23 @@ fn main() {
             std::fs::write(p, n.to_string()).unwrap();
             print!("{n}");
         }
+        "flaky" => {
+            // flaky COUNTER FAILURES STATUS: count this run, and exit STATUS while
+            // the count is at most FAILURES. Otherwise print the count and succeed.
+            let p = std::path::Path::new(&args[1]);
+            let n = std::fs::read_to_string(p)
+                .unwrap_or_else(|_| "0".into())
+                .parse::<u32>()
+                .unwrap()
+                + 1;
+            std::fs::write(p, n.to_string()).unwrap();
+            let failures: u32 = args[2].parse().unwrap();
+            if n <= failures {
+                eprintln!("fixture busy");
+                std::process::exit(args[3].parse().unwrap());
+            }
+            print!("{n}");
+        }
         "stderr-flood" => {
             let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
             let bytes = [b'e'; 8192];

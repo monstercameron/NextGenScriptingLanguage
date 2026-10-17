@@ -76,6 +76,7 @@ pub(super) fn parse_spawn<'arena, 'source: 'arena>(
                 child.number
             );
         };
+        super::forbid_retry(&call, "a background pipeline stage")?;
         if parsed_connection != connection {
             bail!(
                 "line {}: invalid background pipeline connection",
@@ -110,6 +111,7 @@ pub(super) fn parse_spawn<'arena, 'source: 'arena>(
     }
     steps.push(Step {
         line: header.number,
+        label: None,
         kind: StepKind::SpawnJob { name, stages },
     });
     Ok(())

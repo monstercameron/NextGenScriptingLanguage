@@ -143,6 +143,7 @@ fn validator_rejects_forged_control_flow_ast_without_panicking() -> Result<()> {
     let mut orphan_transfer = flow::parser::parse("run \"pwd\"\n")?;
     orphan_transfer.steps.push(Step {
         line: 2,
+        label: None,
         kind: StepKind::BreakLoop,
     });
     assert!(flow::runtime::validate(&orphan_transfer, &registry).is_err());
@@ -150,6 +151,7 @@ fn validator_rejects_forged_control_flow_ast_without_panicking() -> Result<()> {
     let mut orphan_return = flow::parser::parse("run \"pwd\"\n")?;
     orphan_return.steps.push(Step {
         line: 2,
+        label: None,
         kind: StepKind::Return,
     });
     assert!(flow::runtime::validate(&orphan_return, &registry).is_err());

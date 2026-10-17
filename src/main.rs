@@ -2,7 +2,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use flow::ast::Trigger;
 use flow::capabilities::CapabilityPolicy;
 use flow::manifest::Registry;
-use flow::parser;
 use flow::runtime::{self, CheckpointOptions, RunOptions, ServiceLimits};
 use std::collections::BTreeMap;
 use std::env;
@@ -264,7 +263,11 @@ fn execute() -> Result<()> {
             {
                 match load_registry(args.manifest_dir.clone(), args.manifest_catalog.clone()) {
                     Ok(registry) => {
-                        let diagnostics = flow::diagnostics::analyze_source(&source, &registry);
+                        let diagnostics = flow::diagnostics::analyze_source_at(
+                            &source,
+                            Some(&args.file),
+                            &registry,
+                        );
                         (diagnostics, Some(FiniteCheckSnapshot { source, registry }))
                     }
                     // Diagnostics are best effort. Keep the authoritative load at
@@ -732,7 +735,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     if args.headless {
         bail!("--headless applies only to UI programs");
     }
-    let program = parser::parse(&source)
+    let program = flow::program_files::parse_source(&args.file, &source)
         .with_context(|| format!("could not parse workflow {}", args.file.display()))?;
     // A script's own `--help` (from a shebang line) shows its accept declarations.
     if args.command == "run"
@@ -2089,7 +2092,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     )?;
     let source = fs::read_to_string(&positional[1])
         .with_context(|| format!("reading workflow {}", positional[1].display()))?;
-    let program = parser::parse(&source)
+    let program = flow::program_files::parse_source(&positional[1], &source)
         .with_context(|| format!("parsing workflow {}", positional[1].display()))?;
     let resolved_inputs =
         flow::inputs::parse_cli_arguments(&program.inputs, &supplied_inputs, &program_arguments)?;

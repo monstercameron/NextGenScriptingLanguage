@@ -280,6 +280,8 @@ impl StageMetadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionRecord {
     pub line: usize,
+    /// Stable id of the step that ran the invocation (its label or derived id).
+    pub step_id: Option<String>,
     pub applet: String,
     pub kind: ExecutionKind,
     pub outcome: Option<String>,
@@ -398,6 +400,7 @@ impl ExecutionRecord {
             .collect();
         Self {
             line,
+            step_id: super::current_step_id().map(|id| id.to_string()),
             applet: applet.into(),
             kind,
             outcome: outcome.map(str::to_owned),
@@ -416,6 +419,7 @@ impl ExecutionRecord {
     pub fn to_value(&self) -> Value {
         let mut fields = BTreeMap::new();
         fields.insert("line".into(), Value::Integer(self.line as i64));
+        fields.insert("step_id".into(), optional_text(self.step_id.as_deref()));
         fields.insert("applet".into(), Value::String(self.applet.clone()));
         fields.insert("kind".into(), Value::String(self.kind.as_str().into()));
         fields.insert("outcome".into(), optional_text(self.outcome.as_deref()));

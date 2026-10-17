@@ -123,11 +123,12 @@ pub(crate) fn prepare(
     plan: &GraphPlan,
     registry: &Registry,
     cwd: &Path,
+    modules: &crate::modules::ProgramModuleSession,
     store: Arc<dyn GraphCheckpointStore>,
     retry_uncertain: bool,
 ) -> Result<Checkpointing> {
-    plan.checkpoint_refusal()?;
-    let fingerprints = plan.checkpoint_fingerprints(registry, cwd)?;
+    plan.checkpoint_refusal(registry, modules)?;
+    let fingerprints = plan.checkpoint_fingerprints(registry, cwd, modules.fingerprints())?;
     let state = store.load()?;
     let mut completed = BTreeMap::new();
     for record in state.completed {

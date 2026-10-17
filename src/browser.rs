@@ -218,7 +218,10 @@ impl BrowserSession {
                 | StepKind::Redirect { .. }
                 | StepKind::Environment { .. } => Some("file redirection and append"),
                 StepKind::Interactive => Some("terminal handoff (interactively)"),
+                StepKind::HandOver => Some("hand over to (replaces the script)"),
+                StepKind::LaunchDetached { .. } => Some("launch detached"),
                 StepKind::OnInterrupt { .. } => Some("on interrupt drain"),
+                StepKind::CaptureBytes { .. } | StepKind::UseBytes { .. } => Some("byte captures"),
                 StepKind::Exit { .. } | StepKind::Fail { .. } => {
                     Some("exit with status and fail with message")
                 }
@@ -318,6 +321,9 @@ impl BrowserSession {
                     StepKind::OnInterrupt { .. } => {
                         bail!("on interrupt is not supported in browser execution")
                     }
+                    StepKind::CaptureBytes { .. } | StepKind::UseBytes { .. } => {
+                        bail!("byte captures are not supported in browser execution")
+                    }
                     StepKind::EndIf => {}
                     StepKind::BreakLoop
                     | StepKind::ContinueLoop
@@ -333,6 +339,8 @@ impl BrowserSession {
                     | StepKind::Redirect { .. }
                     | StepKind::Environment { .. }
                     | StepKind::Interactive
+                    | StepKind::HandOver
+                    | StepKind::LaunchDetached { .. }
                     | StepKind::TakeJsonDynamic { .. } => {
                         bail!("control flow feature was not validated for browser execution");
                     }

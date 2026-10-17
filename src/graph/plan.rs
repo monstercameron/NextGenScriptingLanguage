@@ -1288,9 +1288,33 @@ impl GraphPlan {
     }
 
     /// Why this graph cannot be checkpointed, if it cannot. Phase 1 covers finite
-    /// applet graphs whose nodes have at most one stream input each.
-    pub fn checkpoint_refusal(&self) -> Result<()> {
+    /// applet graphs whose nodes have at most one stream input each. A program
+    /// module node must be preloaded with a complete checkpoint identity.
+    pub fn checkpoint_refusal(
+        &self,
+        registry: &Registry,
+        modules: &crate::modules::ProgramModuleSession,
+    ) -> Result<()> {
         for node in &self.nodes {
+            if let Some(call) = node.invocation() {
+                let manifest = registry.resolve_call(call)?;
+                if manifest.execution_backend() == crate::contracts::AppletBackend::ProgramModule {
+                    if modules.get_for_manifest(registry, manifest).is_none() {
+                        bail!(
+                            "graph node {:?} calls program module {:?}, which is not preloaded",
+                            node.id,
+                            manifest.name
+                        );
+                    }
+                    modules.validate_checkpoint_identity().map_err(|error| {
+                        anyhow!(
+                            "graph node {:?} calls program module {:?}, whose identity cannot be fully computed: {error:#}",
+                            node.id,
+                            manifest.name
+                        )
+                    })?;
+                }
+            }
             let source = match &node.kind {
                 GraphNodeKind::Applet { .. } | GraphNodeKind::AppletResultEvent { .. } => None,
                 GraphNodeKind::ProgramService { .. } => Some("a persistent program service"),
@@ -1321,12 +1345,14 @@ impl GraphPlan {
     }
 
     /// A fingerprint per node. It covers the node's definition without source
-    /// lines, its incoming edges, the identity of the invocation it runs, and its
-    /// upstream fingerprints. A completed record is reused only while it matches.
+    /// lines, its incoming edges, the identity of the invocation it runs, its
+    /// upstream fingerprints, and every preloaded program module's fingerprint. A
+    /// completed record is reused only while it matches.
     pub fn checkpoint_fingerprints(
         &self,
         registry: &Registry,
         cwd: &std::path::Path,
+        module_fingerprints: &BTreeMap<String, String>,
     ) -> Result<BTreeMap<String, String>> {
         let mut fingerprints = BTreeMap::<String, String>::new();
         while fingerprints.len() < self.nodes.len() {
@@ -1346,8 +1372,14 @@ impl GraphPlan {
                 {
                     continue;
                 }
-                let fingerprint =
-                    self.node_fingerprint(node, &incoming, &fingerprints, registry, cwd)?;
+                let fingerprint = self.node_fingerprint(
+                    node,
+                    &incoming,
+                    &fingerprints,
+                    registry,
+                    cwd,
+                    module_fingerprints,
+                )?;
                 fingerprints.insert(node.id.clone(), fingerprint);
             }
             if fingerprints.len() == before {
@@ -1364,8 +1396,8 @@ impl GraphPlan {
         fingerprints: &BTreeMap<String, String>,
         registry: &Registry,
         cwd: &std::path::Path,
+        module_fingerprints: &BTreeMap<String, String>,
     ) -> Result<String> {
-        use sha2::{Digest, Sha256};
         let mut definition = node.clone();
         definition.line = None;
         let mut edges: Vec<serde_json::Value> = incoming
@@ -1385,13 +1417,13 @@ impl GraphPlan {
             "node": definition,
             "incoming": edges,
         }))?;
-        let mut hash = Sha256::new();
-        hash.update((identity.len() as u64).to_le_bytes());
-        hash.update(&identity);
-        if let Some(call) = node.invocation() {
-            crate::runtime::resume::invocation_identity(&mut hash, call, registry, cwd)?;
-        }
-        Ok(format!("{:x}", hash.finalize()))
+        crate::runtime::resume::graph_node_fingerprint(
+            &identity,
+            node.invocation(),
+            registry,
+            cwd,
+            module_fingerprints,
+        )
     }
 
     /// Whether an interrupted run of `node` may run again without a manual retry.

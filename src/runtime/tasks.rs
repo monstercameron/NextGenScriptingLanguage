@@ -174,6 +174,7 @@ pub(super) fn preflight_group(
             cache: false,
             status_binding: None,
             result_binding: None,
+            retry: None,
         };
         let manifest = registry
             .resolve_call(&resolved)
@@ -669,6 +670,7 @@ pub(super) fn run_each(
             cache: false,
             status_binding: None,
             result_binding: None,
+            retry: None,
         };
         let manifest = registry
             .resolve_call(&call)

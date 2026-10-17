@@ -175,6 +175,16 @@ impl Diagnostic {
 /// Parse and statically validate source, retaining independent diagnostics when
 /// one malformed line does not prevent checking another line or invocation.
 pub fn analyze_source(source: &str, registry: &Registry) -> Vec<Diagnostic> {
+    analyze_source_at(source, None, registry)
+}
+
+/// Like `analyze_source`, for text read from `path`, so its program file calls
+/// and location inputs resolve from that file's directory.
+pub fn analyze_source_at(
+    source: &str,
+    path: Option<&std::path::Path>,
+    registry: &Registry,
+) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let mut local_error_lines = BTreeSet::new();
 
@@ -246,7 +256,7 @@ pub fn analyze_source(source: &str, registry: &Registry) -> Vec<Diagnostic> {
         }
     }
 
-    match parser::parse(source) {
+    match crate::program_files::parse_at(source, path) {
         Ok(program) => {
             collect_program_diagnostics(source, &program, registry, &mut diagnostics);
             collect_pipeline_diagnostics(source, &program, registry, &mut diagnostics);

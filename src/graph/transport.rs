@@ -2647,6 +2647,7 @@ fn invoke_for_graph(
         cache: false,
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
+        retry: None,
     };
     let session = match context.module_session {
         Some(session) => Arc::clone(session),
@@ -3021,10 +3022,15 @@ fn run_plan(
     let cwd = std::fs::canonicalize(&options.working_directory)?;
     crate::capabilities::preflight_invocations(plan.invocations(), registry, &cwd)?;
     check_preflight_budget(&cancelled, deadline)?;
-    let module_session = Arc::new(crate::modules::ProgramModuleSession::preload_invocations(
-        registry,
-        plan.invocations(),
-    )?);
+    let mut module_session_value =
+        crate::modules::ProgramModuleSession::preload_invocations(registry, plan.invocations())?;
+    if checkpoint.is_some() {
+        // Identify ordinary applets that module bodies call, as a checkpointed program
+        // does. Any the checkpoint cannot identify are refused in `checkpoint_refusal`.
+        module_session_value
+            .fingerprint_body_calls(&cwd, crate::runtime::program_module_body_call_fingerprint)?;
+    }
+    let module_session = Arc::new(module_session_value);
     let graph_sensitivities = graph_module_sensitivity_floor(&plan, registry, &cwd)?;
     for (scope_registry, invocation) in module_session.scoped_body_invocations() {
         crate::capabilities::preflight_invocations(
@@ -3075,6 +3081,7 @@ fn run_plan(
             &plan,
             registry,
             &cwd,
+            &module_session,
             store,
             retry_uncertain,
         )?),

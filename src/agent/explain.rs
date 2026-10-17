@@ -66,6 +66,8 @@ enum Cwd {
 #[derive(Default)]
 struct Row {
     line: usize,
+    /// Stable step id (label or derived), set by the step walker.
+    id: Option<String>,
     kind: &'static str,
     scope: Option<String>,
     invocation: bool,
@@ -87,6 +89,8 @@ struct Row {
     escapes_cwd: bool,
     resolved: Option<bool>,
     undeclared: bool,
+    /// The declared `and retry` policy, shown on the command it applies to.
+    retry: Option<Json>,
 }
 
 impl Row {
@@ -105,6 +109,7 @@ impl Row {
 
     fn to_json(&self) -> Json {
         json!({
+            "id": self.id,
             "line": self.line,
             "kind": self.kind,
             "scope": self.scope,
@@ -127,6 +132,7 @@ impl Row {
             "resolved": self.resolved,
             "undeclared": self.undeclared,
             "privileged": row_privileged(self),
+            "retry": self.retry,
         })
     }
 }
@@ -144,6 +150,9 @@ pub fn explain_json(program: &Program, registry: &Registry, program_path: &str) 
         depth: 0,
         cwd_poisoned: false,
         group_tainted: false,
+        program_directory: crate::program_files::program_directory(std::path::Path::new(
+            program_path,
+        )),
     };
     walker.steps(&program.steps, None);
     let mut plan = summary_object(program_path, &walker.rows);
@@ -180,6 +189,8 @@ struct Walker<'a> {
     depth: usize,
     /// Set by a folder change nested in a body. The folder stays unknown after it.
     cwd_poisoned: bool,
+    /// The calling program's directory. Called files are shown relative to it.
+    program_directory: Option<std::path::PathBuf>,
 }
 
 impl Walker<'_> {
@@ -188,6 +199,7 @@ impl Walker<'_> {
     /// through the call, so the inlined copy is skipped. An invalid offset falls
     /// back to walking the inlined steps, so no step is skipped uncounted.
     fn steps(&mut self, steps: &[Step], scope: Option<&str>) {
+        let ids = crate::ast::step_ids(steps);
         let mut index = 0;
         while index < steps.len() {
             let step = &steps[index];
@@ -197,6 +209,8 @@ impl Walker<'_> {
                     .filter(|target| *target > index && *target <= steps.len()),
                 _ => None,
             };
+            let before = self.rows.len();
+            let id = ids[index].clone();
             match (&step.kind, target) {
                 (StepKind::CallProgram { call, .. }, Some(target)) => {
                     self.call_program(step.line, call, scope);
@@ -206,6 +220,10 @@ impl Walker<'_> {
                     self.step(step.line, &step.kind, scope);
                     index += 1;
                 }
+            }
+            // Rows from a nested body already carry their own ids; this step's rows take its id.
+            for row in &mut self.rows[before..] {
+                row.id.get_or_insert_with(|| id.clone());
             }
         }
     }
@@ -273,6 +291,8 @@ impl Walker<'_> {
                 self.rows.push(row);
             }
             StepKind::UseValue { .. } => self.push_plain(line, "use_value", scope),
+            StepKind::CaptureBytes { .. } => self.push_plain(line, "capture_bytes", scope),
+            StepKind::UseBytes { .. } => self.push_plain(line, "use_bytes", scope),
             StepKind::OnInterrupt { .. } => self.push_plain(line, "on_interrupt", scope),
             StepKind::Read { path, .. } => {
                 let mut row = Row::plain(line, "read", scope);
@@ -314,6 +334,25 @@ impl Walker<'_> {
             StepKind::Interactive => {
                 // Hands the terminal to the next native command.
                 let mut row = Row::plain(line, "interactive", scope);
+                row.modifies_next_invocation = true;
+                self.rows.push(row);
+            }
+            StepKind::HandOver => {
+                // Replaces the script with the next native command.
+                let mut row = Row::plain(line, "hand over to", scope);
+                row.modifies_next_invocation = true;
+                self.rows.push(row);
+            }
+            StepKind::LaunchDetached { output } => {
+                // Starts the next native command unowned; the script does not wait for it.
+                // Its output file is a write, reported like a redirect target.
+                if let Some(path) = output {
+                    self.file_write(line, "launch detached output", Some(path), scope);
+                    if let Some(row) = self.rows.last_mut() {
+                        row.modifies_next_invocation = true;
+                    }
+                }
+                let mut row = Row::plain(line, "launch detached", scope);
                 row.modifies_next_invocation = true;
                 self.rows.push(row);
             }
@@ -442,6 +481,22 @@ impl Walker<'_> {
             environment_tainted: tainted,
             ..Row::default()
         };
+        // A declared retry is shown whether or not the command resolves. `idempotent`
+        // is the static part of the runtime's rule: builtins and cacheable applets.
+        row.retry = call.retry.map(|policy| {
+            let idempotent = !call.direct
+                && self
+                    .registry
+                    .resolve_call(call)
+                    .is_ok_and(|manifest| manifest.builtin.is_some() || manifest.cacheable);
+            json!({
+                "attempts": u64::from(policy.retries) + 1,
+                "backoff_ms": policy.backoff_ms,
+                "doubling": policy.doubling,
+                "even_if_uncertain": policy.even_if_uncertain,
+                "idempotent": idempotent,
+            })
+        });
         if call.direct {
             // A quoted executable bypasses the catalog, so its effects are unknown.
             row.binary = Some(call.operation.clone());
@@ -509,7 +564,10 @@ impl Walker<'_> {
     fn call_program(&mut self, line: usize, call: &Invocation, scope: Option<&str>) {
         let name = call.operation.clone();
         let mut row = Row::plain(line, "call_program", scope);
-        row.applet = Some(name.clone());
+        row.applet = Some(crate::program_files::display_key(
+            &name,
+            self.program_directory.as_deref(),
+        ));
         if self.stack.contains(&name) {
             row.resolved = Some(false);
             row.undeclared = true;

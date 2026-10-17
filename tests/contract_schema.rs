@@ -320,6 +320,7 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
             cache: false,
             status_binding: None,
             result_binding: None,
+            retry: None,
         })
         .is_err());
     assert!(manifest
@@ -332,6 +333,7 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
             cache: false,
             status_binding: None,
             result_binding: None,
+            retry: None,
         })
         .is_ok());
     let implicit_bytes = load(base(json!({"version":1})));
@@ -345,6 +347,7 @@ fn explicit_outcome_certainty_is_machine_readable_and_bytes_cannot_be_bound() {
             cache: false,
             status_binding: None,
             result_binding: None,
+            retry: None,
         })
         .is_err());
 
@@ -651,6 +654,7 @@ fn number_ports_refine_json_parameters_before_invocation_and_dispatch() {
         cache: false,
         status_binding: None,
         result_binding: None,
+        retry: None,
     };
     assert!(manifest
         .validate(&invocation(

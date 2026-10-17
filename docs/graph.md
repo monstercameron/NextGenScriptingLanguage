@@ -5,9 +5,12 @@ Current source accepts a `graph` block as a workflow file. Use the ordinary
 `execute.graph/1` topology, `explain` prints Graphviz DOT, and `run` returns
 terminal port events as JSON. Graphs can declare the same typed top-level inputs
 as finite programs, then use those names in applet parameters. `--input` and
-declared positional arguments follow the ordinary workflow rules. Graphs do not
-support checkpoints/resume, trigger/run limits or UI options. The small example
-is [`examples/graph/composition.program`](../examples/graph/composition.program).
+declared positional arguments follow the ordinary workflow rules. Finite applet
+graphs have a phase 1 checkpoint API (see [Checkpoints](#checkpoints)); the
+on-disk journal for it is still pending, so `run --checkpoint` on a graph is
+refused for now. Resume, trigger/run limits and UI options are not supported for
+graphs. The small example is
+[`examples/graph/composition.program`](../examples/graph/composition.program).
 
 The [runtime composition proof](../examples/composition/graph-runtime/README.md)
 combines a scheduled module, a loopback remote event source, a persistent worker
@@ -191,6 +194,44 @@ declared output label with observed input labels, so a public transform cannot
 erase a Secret or Unknown input label. Remote applet nodes are authorized using
 that effective label before graph execution; see the
 [data-flow policy](security-dataflow.md).
+
+## Checkpoints
+
+`graph::run_checkpointed(plan, &registry, &run_options, cancelled, store,
+retry_uncertain)` runs a finite applet graph whose completed nodes are recorded
+in a `GraphCheckpointStore`. The store is a trait; `MemoryGraphStore` implements
+it in memory for tests. The on-disk store (the v5 `graph.jsonl` journal) is
+pending, and until it lands the CLI refuses `run --checkpoint` for graphs.
+
+Phase 1 covers these graphs:
+
+- Finite applet nodes only. Timer, listener, native stream, program service and
+  renderer nodes are refused before any effect runs, and the refusal names the
+  node.
+- At most one stream input (`records` or `events` port) per node. A node with
+  two or more is refused, and the refusal names the node. Multi-stream ordering is
+  not supported yet.
+- Acyclic graphs. Program-module nodes need a complete module identity; a node
+  whose module identity cannot be fully computed is refused, and the refusal names
+  the node.
+
+A node's outputs are held back until the node completes. Its completion record is
+stored before any of its outputs reach downstream nodes. A later run replays a
+completed node's recorded outputs, with their recorded sensitivity, and does not
+run the node again. Replayed events get new sequence numbers.
+
+Each node's fingerprint covers its definition without source lines, its incoming
+edges, its invocation's manifest and executable digest, its upstream fingerprints,
+and every preloaded program module's fingerprint. Changing a module behind a
+completed node therefore refuses the resume, before any effect runs.
+
+A node is in flight from its first applet invocation, not from when it starts
+waiting for inputs. An interrupted node that is not retry-safe needs
+`retry_uncertain`; a node is retry-safe when its applet is builtin or cacheable.
+Retrying reruns that node only.
+
+Under checkpoints, terminal outputs come in node completion order, and within a
+node in emission order. Graph runs without checkpoints keep arrival order.
 
 ## Runtime limits
 

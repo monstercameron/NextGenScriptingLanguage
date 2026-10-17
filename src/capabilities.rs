@@ -1702,6 +1702,9 @@ fn preflight_host_paths(
                 StepKind::Redirect {
                     path: Some(path), ..
                 } => (path, true),
+                StepKind::LaunchDetached {
+                    output: Some(path), ..
+                } => (path, true),
                 StepKind::Invoke { call, .. }
                     if !call.direct
                         && registry.resolve_call(call)?.builtin

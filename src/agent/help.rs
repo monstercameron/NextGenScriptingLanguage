@@ -5,10 +5,8 @@
 //! until then every input reports `description: null`.
 
 use crate::ast::{InputDeclaration, InputSource, InputType, Program, Value as ProgramValue};
-use crate::parser;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
-use std::fs;
 use std::path::Path;
 
 /// Protocol identifier of the `--json` object.
@@ -31,8 +29,7 @@ pub fn cli(arguments: &[String]) -> Result<i32> {
         }
     }
     let file = file.ok_or_else(|| anyhow!("{USAGE}"))?;
-    let source = fs::read_to_string(file).with_context(|| format!("reading {file}"))?;
-    let program = parser::parse(&source)?;
+    let program = crate::program_files::parse_file(Path::new(file))?;
     let description = describe(&program, Path::new(file).to_string_lossy().as_ref());
     if as_json {
         println!("{}", serde_json::to_string_pretty(&description)?);
@@ -98,6 +95,7 @@ fn type_label(kind: InputType) -> &'static str {
         InputType::Boolean => "boolean",
         InputType::TextList => "list of text",
         InputType::Json => "json",
+        InputType::Bytes => "bytes",
     }
 }
 
@@ -107,6 +105,8 @@ fn source_label(source: &InputSource) -> String {
         InputSource::Environment(name) => format!("environment {name}"),
         InputSource::Argument(index) => format!("argument {index}"),
         InputSource::Arguments => "all arguments".to_owned(),
+        InputSource::ProgramDirectory => "program directory".to_owned(),
+        InputSource::ProgramPath => "program path".to_owned(),
     }
 }
 

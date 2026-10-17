@@ -113,6 +113,9 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
                 .binding
                 .take()
                 .ok_or_else(|| anyhow!("line {line_number}: graph applet needs `as <node>`"))?;
+            if call.retry.is_some() {
+                bail!("line {line_number}: graph nodes do not accept `and retry`");
+            }
             if call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
                 bail!(
                     "line {line_number}: graph nodes do not accept finite cache/status/result suffixes"
@@ -174,6 +177,9 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
                 else {
                     bail!("line {line_number}: listener source must be one applet invocation");
                 };
+                if call.retry.is_some() {
+                    bail!("line {line_number}: listener sources do not accept `and retry`");
+                }
                 if call.binding.is_some()
                     || call.status_binding.is_some()
                     || call.result_binding.is_some()

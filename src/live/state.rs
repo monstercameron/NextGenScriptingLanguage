@@ -445,6 +445,7 @@ pub(crate) fn validate(
                                 inputs: plan.program.inputs.clone(),
                                 steps: vec![crate::ast::Step {
                                     line: 0,
+                                    label: None,
                                     kind: StepKind::Invoke {
                                         call: call.clone(),
                                         connection: crate::ast::Connection::Start,

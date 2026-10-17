@@ -1344,6 +1344,8 @@ fn parse_module_source(source: &str, source_path: &Path) -> Result<Program> {
                 crate::ast::StepKind::Exit { .. }
                     | crate::ast::StepKind::Fail { .. }
                     | crate::ast::StepKind::Interactive
+                    | crate::ast::StepKind::HandOver
+                    | crate::ast::StepKind::LaunchDetached { .. }
             )
         }) {
             bail!(
@@ -1899,6 +1901,8 @@ fn port_schema_accepts_input(schema: &ValueSchema, input: InputType) -> bool {
         InputType::Text => matches!(schema.kind, OutputType::Text | OutputType::Path),
         InputType::Integer => schema.kind == OutputType::Integer,
         InputType::Boolean => schema.kind == OutputType::Boolean,
+        // Byte captures are never program inputs.
+        InputType::Bytes => false,
         InputType::TextList => {
             schema.kind == OutputType::List
                 && schema.items.as_deref().is_some_and(|item| {

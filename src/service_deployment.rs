@@ -230,6 +230,9 @@ fn validate_service_inputs(
                 declaration.name
             ),
             Some(InputSource::Arguments) => {}
+            // The loader always supplies a location default, so this arm is unreachable
+            // for loaded programs; a service reads its own program file's location.
+            Some(InputSource::ProgramDirectory | InputSource::ProgramPath) => {}
             Some(InputSource::Argument(position)) if *position <= positional_count => {}
             Some(InputSource::Argument(position)) => bail!(
                 "workflow needs positional input {:?} at argument {position}; supply it after `--`",

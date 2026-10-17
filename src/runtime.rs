@@ -1,5 +1,7 @@
 //! Unix program executor with finite pipelines and persistent event services.
-use crate::ast::{Connection, Invocation, ListenSource, Program, StepKind, Trigger, Value};
+use crate::ast::{
+    Connection, Invocation, ListenSource, Program, RetryPolicy, StepKind, Trigger, Value,
+};
 use crate::contracts::{AppletBackend, Lifecycle, OutcomeKind};
 use crate::manifest::{AppletOutput, Builtin, Manifest, Registry};
 use anyhow::{anyhow, bail, Context, Result};
@@ -30,6 +32,7 @@ mod checkpoint;
 mod control;
 mod control_flow;
 pub mod execution_result;
+mod handoff;
 pub mod invocation_io;
 mod jobs;
 pub(crate) mod live;
@@ -1025,8 +1028,11 @@ fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Re
     }
     Err(anyhow!("executable {binary:?} not found in PATH"))
 }
-fn event(enabled: bool, value: serde_json::Value, signals: &Signals) -> Result<()> {
+fn event(enabled: bool, mut value: serde_json::Value, signals: &Signals) -> Result<()> {
     if enabled {
+        if let (Some(object), Some(id)) = (value.as_object_mut(), current_step_id()) {
+            object.insert("id".to_owned(), serde_json::Value::String(id.to_string()));
+        }
         stdio::write_with_deadline(
             2,
             format!("{value}\n").as_bytes(),
@@ -1036,6 +1042,139 @@ fn event(enabled: bool, value: serde_json::Value, signals: &Signals) -> Result<(
     }
     Ok(())
 }
+
+/// The longest delay before one declared retry, the same limit the parser enforces.
+const MAX_RETRY_DELAY_MS: u64 = 3_600_000;
+
+/// What a failed command with a declared `and retry` does next.
+enum RetryPlan {
+    /// No declared retry applies, so the failure propagates unchanged.
+    NotDeclared,
+    /// A declared retry does not apply to this failure, with the reason.
+    Refused(String),
+    /// The declared retries are used up after this many attempts.
+    Exhausted { attempts: u32 },
+    /// Run again from `restart` after `delay`; `attempt` numbers the new attempt.
+    Again {
+        restart: usize,
+        delay: std::time::Duration,
+        attempt: u32,
+    },
+}
+
+/// Decide whether a failed declared-retry command runs again. Only outcomes the
+/// contract marks retryable, or a nonzero exit of a command without a contract, are
+/// retried. A failure whose effects may be uncertain needs `even if uncertain`,
+/// unless the outcome says nothing started or the command is builtin or cacheable.
+fn plan_retry(
+    program: &Program,
+    index: usize,
+    error: &anyhow::Error,
+    registry: &Registry,
+    state: &mut Option<(usize, u32)>,
+) -> Result<RetryPlan> {
+    let StepKind::Invoke { call, .. } = &program.steps[index].kind else {
+        return Ok(RetryPlan::NotDeclared);
+    };
+    let Some(policy) = call.retry else {
+        return Ok(RetryPlan::NotDeclared);
+    };
+    let earlier = match *state {
+        Some((at, count)) if at == index => count,
+        _ => 0,
+    };
+    let failures = earlier + 1;
+    let Some(failure) = error.downcast_ref::<CommandFailed>() else {
+        *state = None;
+        return Ok(RetryPlan::Refused(
+            "the failure is not a command exit".to_owned(),
+        ));
+    };
+    let Some(outcome) = failure.outcome.as_ref() else {
+        *state = None;
+        return Ok(RetryPlan::Refused(
+            "the command ended without an exit status".to_owned(),
+        ));
+    };
+    let manifest = registry.resolve_call(call)?;
+    let declared = outcome.kind == OutcomeKind::Retryable
+        || (outcome.kind == OutcomeKind::Failure && manifest.execution_contract().is_none());
+    if !declared {
+        *state = None;
+        return Ok(RetryPlan::Refused(format!(
+            "the outcome is {}, not retryable",
+            outcome.kind.as_str()
+        )));
+    }
+    let start = command_start(program, index);
+    let end = resume::node_end(program, start);
+    let effects_safe = outcome.effect_certainty == crate::contracts::EffectCertainty::NotStarted
+        || resume::retry_safe(program, start, end, registry)?;
+    if !effects_safe && !policy.even_if_uncertain {
+        *state = None;
+        return Ok(RetryPlan::Refused(
+            "its effects may already have happened; add `even if uncertain` to retry anyway"
+                .to_owned(),
+        ));
+    }
+    if failures > policy.retries {
+        *state = None;
+        return Ok(RetryPlan::Exhausted { attempts: failures });
+    }
+    *state = Some((index, failures));
+    Ok(RetryPlan::Again {
+        restart: start,
+        delay: retry_delay(policy, failures),
+        attempt: failures + 1,
+    })
+}
+
+/// The first statement of the command at `index`. Its environment and redirection
+/// markers come directly before it, and a retry restarts there.
+fn command_start(program: &Program, index: usize) -> usize {
+    let mut start = index;
+    while start > 0
+        && matches!(
+            program.steps[start - 1].kind,
+            StepKind::Environment { .. } | StepKind::Redirect { .. } | StepKind::Interactive
+        )
+    {
+        start -= 1;
+    }
+    start
+}
+
+/// The wait before retry number `retry_number` (1-based). With doubling, each later
+/// wait is twice the one before it, up to the parser's limit.
+fn retry_delay(policy: RetryPolicy, retry_number: u32) -> std::time::Duration {
+    let Some(base) = policy.backoff_ms else {
+        return std::time::Duration::ZERO;
+    };
+    let factor = if policy.doubling {
+        1u64.checked_shl(retry_number.saturating_sub(1))
+            .unwrap_or(u64::MAX)
+    } else {
+        1
+    };
+    std::time::Duration::from_millis(base.saturating_mul(factor).min(MAX_RETRY_DELAY_MS))
+}
+
+/// Sleep before a retry, in short slices so cancellation and the deadline still apply.
+fn wait_before_retry(signals: &Signals, delay: std::time::Duration) -> Result<()> {
+    let until = std::time::Instant::now() + delay;
+    loop {
+        check_deadline(signals.deadline)?;
+        if signals.cancelled.load(Ordering::Relaxed) {
+            bail!("workflow cancelled by signal");
+        }
+        let now = std::time::Instant::now();
+        if now >= until {
+            return Ok(());
+        }
+        std::thread::sleep((until - now).min(std::time::Duration::from_millis(20)));
+    }
+}
+
 fn lazy_event(
     enabled: bool,
     signals: &Signals,
@@ -1174,6 +1313,56 @@ struct GroupOutput {
     diagnostic: Vec<u8>,
     stdout_captured: bool,
     stages: Vec<execution_result::StageResult>,
+}
+
+thread_local! {
+    /// Stable step ids of the finite run on this thread, and the index of its current step.
+    static STEP_IDS: std::cell::RefCell<Option<std::sync::Arc<[std::sync::Arc<str>]>>> =
+        const { std::cell::RefCell::new(None) };
+    static STEP_INDEX: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Installs the step ids of one finite run on this thread. Dropping it restores the
+/// enclosing run's ids, so a nested program does not relabel its caller's events.
+struct StepIdScope {
+    previous: Option<std::sync::Arc<[std::sync::Arc<str>]>>,
+    previous_index: usize,
+}
+
+impl StepIdScope {
+    fn enter(steps: &[crate::ast::Step]) -> Self {
+        let ids: std::sync::Arc<[std::sync::Arc<str>]> = crate::ast::step_ids(steps)
+            .into_iter()
+            .map(|id| std::sync::Arc::from(id.as_str()))
+            .collect();
+        let previous = STEP_IDS.with(|cell| cell.replace(Some(ids)));
+        let previous_index = STEP_INDEX.with(|index| index.replace(0));
+        Self {
+            previous,
+            previous_index,
+        }
+    }
+}
+
+impl Drop for StepIdScope {
+    fn drop(&mut self) {
+        STEP_IDS.with(|cell| *cell.borrow_mut() = self.previous.take());
+        STEP_INDEX.with(|index| index.set(self.previous_index));
+    }
+}
+
+/// Marks the step now executing on this thread.
+fn set_current_step(index: usize) {
+    STEP_INDEX.with(|cell| cell.set(index));
+}
+
+/// The stable id of the step executing on this thread, when a finite run is active.
+pub(crate) fn current_step_id() -> Option<std::sync::Arc<str>> {
+    STEP_IDS.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .and_then(|ids| ids.get(STEP_INDEX.with(std::cell::Cell::get)).cloned())
+    })
 }
 
 thread_local! {
@@ -1412,6 +1601,26 @@ fn windows_file_info(
         return Err(std::io::Error::last_os_error()).context("reading file identity");
     }
     Ok(info)
+}
+
+/// Authorize and open one output target of a redirect or a detached launch. Every
+/// output file takes this path: the write grant and the persistence policy are
+/// checked before the hardened open, so no output target has its own rules.
+fn open_redirect_target(
+    destination: &Path,
+    append: bool,
+    registry: &Registry,
+    signals: &Signals,
+    cwd: &Path,
+) -> Result<File> {
+    crate::capabilities::authorize_host_path(registry, destination, true, cwd)?;
+    crate::security::authorize_persistence_set(
+        registry,
+        "workflow.redirect",
+        crate::security::PersistenceKind::Save,
+        &signals.sensitivity_floor(),
+    )?;
+    open_output_file(destination, append, registry, cwd)
 }
 
 /// Open a redirect or append target before any command runs, and keep the handle
@@ -3642,6 +3851,8 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::EndTry
             | StepKind::UseFolder { .. }
             | StepKind::UseValue { .. }
+            | StepKind::CaptureBytes { .. }
+            | StepKind::UseBytes { .. }
             | StepKind::Read { .. }
             | StepKind::ReadStdin { .. }
             | StepKind::InspectJob { .. }
@@ -3656,7 +3867,9 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::Append { .. }
             | StepKind::Redirect { .. }
             | StepKind::Environment { .. }
-            | StepKind::Interactive => {}
+            | StepKind::Interactive
+            | StepKind::HandOver
+            | StepKind::LaunchDetached { .. } => {}
         }
     }
     if let Some(crate::ast::Trigger::Listen {
@@ -3711,6 +3924,7 @@ pub fn invoke_applet(
         cache: false,
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
+        retry: None,
     };
     let module_session = Arc::new(crate::modules::ProgramModuleSession::preload_invocations(
         registry,
@@ -3748,6 +3962,7 @@ pub fn invoke_applet_with_module_session(
         cache: false,
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
+        retry: None,
     };
     let manifest = registry.resolve_call(&call)?;
     let cwd = fs::canonicalize(&options.working_directory)?;
@@ -3805,6 +4020,7 @@ pub(crate) fn invoke_call_with_context(
         cache: false,
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
+        retry: None,
     };
     let manifest = registry.resolve_call(&call)?;
     manifest.validate(&call)?;
@@ -3813,6 +4029,7 @@ pub(crate) fn invoke_call_with_context(
         inputs: Vec::new(),
         steps: vec![crate::ast::Step {
             line: 1,
+            label: None,
             kind: StepKind::Invoke {
                 call: call.clone(),
                 connection: Connection::Start,
@@ -3936,6 +4153,7 @@ fn run_finite_inner(
     initial_binding: Option<(String, Value)>,
     journal: Option<&mut checkpoint::Journal>,
 ) -> Result<RunResult> {
+    handoff::validate(program, journal.is_some())?;
     let state_source = if journal.is_some() {
         FiniteStateSource::Restore
     } else {
@@ -4032,13 +4250,17 @@ fn run_finite_state(
     // declarations. Validate their known loop inputs before earlier effects.
     let preflight_context =
         !initial_bindings.is_empty() && state_source == FiniteStateSource::Fresh;
+    let _step_ids = StepIdScope::enter(&program.steps);
     let mut bindings = initial_bindings;
+    // Raw captures from `then capture bytes as NAME`, kept apart from text bindings.
+    let mut byte_bindings: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut data = initial_input;
     // Set by a `Redirect` step and consumed by the very next `Invoke`.
     let mut pending_redirect: Option<PendingRedirect> = None;
     // Set by an `Environment` step and consumed by the next command.
     let mut pending_env: Option<crate::capabilities::CommandEnvOverlay> = None;
     let mut pending_handoff = false;
+    let mut pending_process: Option<handoff::ProcessRequest> = None;
     let mut result = RunResult {
         output: Vec::new(),
         cache_hits: 0,
@@ -4049,6 +4271,8 @@ fn run_finite_state(
         exit: None,
     };
     let mut execution_history = execution_result::ExecutionHistory::default();
+    // The step index of a declared retry in progress, and its failed attempts so far.
+    let mut retry_failures: Option<(usize, u32)> = None;
     let mut index = 0;
     let mut call_frames: Vec<calls::Frame<'_>> = Vec::new();
     let mut loop_frames = loops::LoopStack::default();
@@ -4189,6 +4413,7 @@ fn run_finite_state(
             }
         }
         let step = &program.steps[index];
+        set_current_step(index);
         // Markers only steer control flow; the statements they close are the stops.
         if depth == 0
             && !matches!(
@@ -4533,6 +4758,24 @@ fn run_finite_state(
                 StepKind::UseValue { source } => {
                     data = Input::Bytes(text_value_bytes(source, &bindings, step.line)?);
                 }
+                StepKind::CaptureBytes { binding } => {
+                    let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
+                        options.max_output_bytes,
+                        signals,
+                        options.command_timeout,
+                    )?;
+                    byte_bindings.insert(binding.clone(), bytes.clone());
+                    data = Input::Bytes(bytes);
+                }
+                StepKind::UseBytes { binding } => {
+                    let bytes = byte_bindings.get(binding).cloned().with_context(|| {
+                        format!(
+                            "line {}: byte binding {binding:?} is not defined",
+                            step.line
+                        )
+                    })?;
+                    data = Input::Bytes(bytes);
+                }
                 StepKind::Read { binding, .. }
                 | StepKind::ReadStdin { binding }
                 | StepKind::ReadCallInput { binding } => {
@@ -4857,6 +5100,13 @@ fn run_finite_state(
                     // consumes this request.
                     pending_handoff = true;
                 }
+                StepKind::HandOver => {
+                    // The next native command replaces this script; its Invoke step consumes this.
+                    pending_process = Some(handoff::ProcessRequest::HandOver);
+                }
+                StepKind::LaunchDetached { output } => {
+                    pending_process = Some(handoff::ProcessRequest::Detach(output.clone()));
+                }
                 StepKind::Environment { set, unset } => {
                     let mut overlay = crate::capabilities::CommandEnvOverlay {
                         set: BTreeMap::new(),
@@ -4881,20 +5131,14 @@ fn run_finite_state(
                     let file = match path {
                         Some(path) => {
                             let destination = path_value(path, &bindings, &cwd)?;
-                            crate::capabilities::authorize_host_path(
-                                registry,
-                                &destination,
-                                true,
-                                &cwd,
-                            )?;
-                            crate::security::authorize_persistence_set(
-                                registry,
-                                "workflow.redirect",
-                                crate::security::PersistenceKind::Save,
-                                &signals.sensitivity_floor(),
-                            )?;
                             let append = *target == crate::ast::RedirectTarget::StderrAppend;
-                            Some(open_output_file(&destination, append, registry, &cwd)?)
+                            Some(open_redirect_target(
+                                &destination,
+                                append,
+                                registry,
+                                signals,
+                                &cwd,
+                            )?)
                         }
                         None => None,
                     };
@@ -4933,6 +5177,7 @@ fn run_finite_state(
                     let mut redirect = pending_redirect.take();
                     let env = pending_env.take();
                     let handoff = std::mem::take(&mut pending_handoff);
+                    let process = pending_process.take();
                     let manifest = registry.resolve_call(call)?;
                     if handoff
                         && (manifest.execution_backend() != AppletBackend::Command || call.cache)
@@ -4942,7 +5187,72 @@ fn run_finite_state(
                             step.line
                         );
                     }
-                    if manifest.builtin == Some(Builtin::Cd) {
+                    if let Some(request) = process {
+                        let parameters = call
+                            .parameters
+                            .iter()
+                            .map(|(name, value)| Ok((name.clone(), resolve(value, &bindings)?)))
+                            .collect::<Result<BTreeMap<_, _>>>()?;
+                        let argv = manifest.build_arguments(&parameters)?;
+                        let binary = binary_path(manifest.binary_for(call), &cwd)?;
+                        let command = crate::capabilities::command_for(
+                            &binary,
+                            argv.iter().map(|argument| OsStr::new(argument.as_str())),
+                            registry,
+                            &manifest.name,
+                            &cwd,
+                        )?;
+                        match request {
+                            handoff::ProcessRequest::HandOver => {
+                                // Output of earlier statements is written now, before the
+                                // program takes the stdout; a hand-over never returns to
+                                // write it at the end of the run.
+                                let pending = std::mem::replace(&mut data, Input::Empty)
+                                    .materialize(
+                                        options.max_output_bytes,
+                                        signals,
+                                        options.command_timeout,
+                                    )?;
+                                std::io::stdout()
+                                    .write_all(&pending)
+                                    .with_context(|| format!("line {}: hand over", step.line))?;
+                                let code = handoff::hand_over(command)
+                                    .with_context(|| format!("line {}: hand over", step.line))?;
+                                // Windows exit codes outside 0-255 cannot be represented
+                                // by a script exit and are reported as 1.
+                                control_state.set_exit(ProgramExit {
+                                    status: u8::try_from(code).unwrap_or(1),
+                                    message: None,
+                                });
+                            }
+                            handoff::ProcessRequest::Detach(output) => {
+                                // The output is a write target exactly like a redirect.
+                                let output = match output {
+                                    Some(path) => {
+                                        let destination = path_value(&path, &bindings, &cwd)?;
+                                        let file = open_redirect_target(
+                                            &destination,
+                                            false,
+                                            registry,
+                                            signals,
+                                            &cwd,
+                                        )?;
+                                        file.set_len(0).with_context(|| {
+                                            format!("truncating {}", destination.display())
+                                        })?;
+                                        Some(file)
+                                    }
+                                    None => None,
+                                };
+                                handoff::launch_detached(command, output).with_context(|| {
+                                    format!("line {}: launch detached", step.line)
+                                })?;
+                                result.launched_processes += 1;
+                                signals.account_child_process_launches(1);
+                                data = Input::Empty;
+                            }
+                        }
+                    } else if manifest.builtin == Some(Builtin::Cd) {
                         let parameters = call
                             .parameters
                             .iter()
@@ -4981,6 +5291,14 @@ fn run_finite_state(
                             if let StepKind::Invoke { call, .. } = &next.kind {
                                 calls.push((call, registry.resolve_call(call)?, next.line));
                             }
+                        }
+                        if calls.len() > 1
+                            && calls.iter().any(|(stage, _, _)| stage.retry.is_some())
+                        {
+                            bail!(
+                                "line {}: `and retry` cannot apply to a command in a pipeline",
+                                step.line
+                            );
                         }
                         let output_call = calls.last().expect("invocation group is nonempty").0;
                         let output_manifest = calls.last().expect("invocation group is nonempty").1;
@@ -5359,6 +5677,57 @@ fn run_finite_state(
             }
             Ok(())
         })();
+        // A declared retry runs the command again from its first marker. The journal
+        // node stays open, because the step has not completed.
+        let execution = match execution {
+            Err(error) if control_rethrow.is_none() => {
+                match plan_retry(program, index, &error, registry, &mut retry_failures)? {
+                    RetryPlan::NotDeclared => Err(error),
+                    RetryPlan::Refused(reason) => {
+                        Err(error.context(format!("line {}: retry refused: {reason}", step.line)))
+                    }
+                    RetryPlan::Exhausted { attempts } => Err(error.context(format!(
+                        "line {}: retry exhausted after {attempts} attempts",
+                        step.line
+                    ))),
+                    RetryPlan::Again {
+                        restart,
+                        delay,
+                        attempt,
+                    } => {
+                        if let Some(failure) = error.downcast_ref::<CommandFailed>() {
+                            if let Some(outcome) = &failure.outcome {
+                                execution_history.push_outcome(
+                                    failure.line,
+                                    failure.operation.as_str(),
+                                    outcome,
+                                    None,
+                                    failure.stderr.as_deref(),
+                                    &failure.stages,
+                                );
+                            }
+                        }
+                        lazy_event(options.trace, signals, || {
+                            serde_json::json!({
+                                "event": "retry",
+                                "line": step.line,
+                                "attempt": attempt,
+                                "delay_ms": u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                            })
+                        })?;
+                        wait_before_retry(signals, delay)?;
+                        index = restart;
+                        continue;
+                    }
+                }
+            }
+            other => {
+                if other.is_ok() {
+                    retry_failures = None;
+                }
+                other
+            }
+        };
         if let Some(error) = control_rethrow {
             if let Some(journal) = journal.as_deref_mut() {
                 if !journal.persistence_failed() {
@@ -5598,13 +5967,14 @@ pub fn run_with_context(
         bail!("triggered programs require run_service");
     }
     // TUI handlers run through this entry point and cannot hand over the terminal.
-    if let Some(step) = program
-        .steps
-        .iter()
-        .find(|step| matches!(step.kind, StepKind::Interactive))
-    {
+    if let Some(step) = program.steps.iter().find(|step| {
+        matches!(
+            step.kind,
+            StepKind::Interactive | StepKind::HandOver | StepKind::LaunchDetached { .. }
+        )
+    }) {
         bail!(
-            "line {}: interactively is not supported in TUI handlers",
+            "line {}: interactively, hand over, and detached launch are not supported in TUI handlers",
             step.line
         );
     }
@@ -5769,6 +6139,7 @@ mod argv_construction_tests {
             cache: false,
             status_binding: None,
             result_binding: None,
+            retry: None,
         };
         match arguments_for_group_call(&literal, manifest, &bindings).unwrap() {
             GroupArguments::Borrowed(arguments) => {
@@ -6649,6 +7020,7 @@ mod resolved_json_argument_tests {
             cache: false,
             status_binding: None,
             result_binding: None,
+            retry: None,
         }
     }
 

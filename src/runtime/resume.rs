@@ -379,15 +379,26 @@ fn node_fingerprint_with_digests(
     }
     Ok(format!("{:x}", hash.finalize()))
 }
-/// The identity of one invocation as a graph node's checkpoint fingerprint sees it:
-/// its resolved manifest, executable path and content digest, and working directory.
-pub(crate) fn invocation_identity(
-    hash: &mut Sha256,
-    call: &Invocation,
+/// A graph node's checkpoint fingerprint, built as a checkpointed program node's is:
+/// the node's own definition (`base`), its invocation's manifest, executable path and
+/// content digest, and every preloaded program module's fingerprint.
+pub(crate) fn graph_node_fingerprint(
+    base: &[u8],
+    call: Option<&Invocation>,
     registry: &Registry,
     cwd: &Path,
-) -> Result<()> {
-    manifest_identity(hash, call, registry, cwd, &mut HashMap::new(), false)
+    module_fingerprints: &BTreeMap<String, String>,
+) -> Result<String> {
+    let mut hash = Sha256::new();
+    hash_field(&mut hash, b"execute-graph-node-v1");
+    hash_field(&mut hash, base);
+    if let Some(call) = call {
+        manifest_identity(&mut hash, call, registry, cwd, &mut HashMap::new(), false)?;
+    }
+    Ok(with_module_fingerprints(
+        format!("{:x}", hash.finalize()),
+        module_fingerprints,
+    ))
 }
 
 pub(super) fn retry_safe(
@@ -482,6 +493,18 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
     {
         bail!(
             "line {}: on interrupt is not supported with checkpointed runs yet",
+            step.line
+        );
+    }
+    // Byte captures live outside the journal and would be lost on resume.
+    if let Some(step) = program.steps.iter().find(|step| {
+        matches!(
+            step.kind,
+            StepKind::CaptureBytes { .. } | StepKind::UseBytes { .. }
+        )
+    }) {
+        bail!(
+            "line {}: byte captures are not supported with checkpointed runs yet",
             step.line
         );
     }
@@ -642,6 +665,7 @@ pub fn run_checkpointed(
     validate(program, registry)?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate_checkpoint_controls(program, registry)?;
+    super::handoff::validate(program, true)?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     let configured = configured_inputs(program, registry, options)?;
     let options = configured.as_ref();
@@ -842,6 +866,7 @@ mod tests {
             cache: false,
             status_binding: None,
             result_binding: None,
+            retry: None,
         };
         let program = Program {
             definitions: Default::default(),
@@ -849,6 +874,7 @@ mod tests {
             steps: vec![
                 Step {
                     line: 1,
+                    label: None,
                     kind: StepKind::Invoke {
                         call: call.clone(),
                         connection: Connection::Start,
@@ -856,6 +882,7 @@ mod tests {
                 },
                 Step {
                     line: 2,
+                    label: None,
                     kind: StepKind::Invoke {
                         call,
                         connection: Connection::Pipe,

@@ -90,6 +90,7 @@ pub(super) fn parse_group<'arena, 'source: 'arena>(
                 child.number
             );
         };
+        super::forbid_retry(&call, "a task group entry")?;
         if call.direct {
             bail!("line {}: task groups require named applets; direct quoted commands are unsupported", child.number);
         }
@@ -126,6 +127,7 @@ pub(super) fn parse_group<'arena, 'source: 'arena>(
     }
     steps.push(Step {
         line: header.number,
+        label: None,
         kind: StepKind::TaskGroup {
             mode,
             limit,
@@ -220,6 +222,7 @@ fn parse_each<'arena, 'source: 'arena>(
             child.number
         );
     };
+    super::forbid_retry(&call, "a parallel for each command")?;
     if call.binding.is_some()
         || call.cache
         || call.discard_stderr
@@ -240,6 +243,7 @@ fn parse_each<'arena, 'source: 'arena>(
     }
     steps.push(Step {
         line: header.number,
+        label: None,
         kind: StepKind::TaskGroup {
             mode: TaskGroupMode::Join,
             limit,

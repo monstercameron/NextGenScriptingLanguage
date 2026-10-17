@@ -31,12 +31,13 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "line", "kind", "scope", "direct", "applet", "binary", "argv", "effects",
+          "id", "line", "kind", "scope", "direct", "applet", "binary", "argv", "effects",
           "capabilities", "writes", "network", "reads", "cwd_change",
           "modifies_next_invocation", "environment_sensitive", "environment_tainted",
-          "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared", "privileged"
+          "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared", "privileged", "retry"
         ],
         "properties": {
+          "id": { "type": ["string", "null"] },
           "line": { "type": "integer", "minimum": 1 },
           "kind": { "type": "string" },
           "scope": { "type": ["string", "null"] },
@@ -67,7 +68,19 @@
           "escapes_cwd": { "type": "boolean" },
           "resolved": { "type": ["boolean", "null"] },
           "undeclared": { "type": "boolean" },
-          "privileged": { "type": "boolean" }
+          "privileged": { "type": "boolean" },
+          "retry": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["attempts", "backoff_ms", "doubling", "even_if_uncertain", "idempotent"],
+            "properties": {
+              "attempts": { "type": "integer", "minimum": 2 },
+              "backoff_ms": { "type": ["integer", "null"], "minimum": 0 },
+              "doubling": { "type": "boolean" },
+              "even_if_uncertain": { "type": "boolean" },
+              "idempotent": { "type": "boolean" }
+            }
+          }
         }
       }
     },

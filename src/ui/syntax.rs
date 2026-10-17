@@ -545,6 +545,7 @@ fn parse_component(lines: &[Line<'_>], i: &mut usize) -> Result<Component> {
                                 number: line.number,
                                 indent: line.indent,
                                 tokens: &line.tokens,
+                                label: None,
                             })
                         };
                         let mut steps = Vec::new();
@@ -632,6 +633,7 @@ fn parse_action(line: &Line<'_>) -> Result<Action> {
     }
     Ok(Action::Native(Step {
         line: line.number,
+        label: None,
         kind: parser::parse_line(&line.tokens)?,
     }))
 }
@@ -965,14 +967,16 @@ mod borrowed_token_tests {
             &actions[0],
             Action::Native(Step {
                 kind: crate::ast::StepKind::Loop { end: 7, .. },
-                line: 6
+                line: 6,
+                ..
             })
         ));
         assert!(matches!(
             &actions[6],
             Action::Native(Step {
                 kind: crate::ast::StepKind::EndLoop { back: 6 },
-                line: 6
+                line: 6,
+                ..
             })
         ));
         assert!(matches!(&actions[7], Action::Show(Value::Result, target) if target == "status"));

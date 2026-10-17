@@ -1,6 +1,6 @@
 use crate::ast::{
     Condition, ConditionOperator, Connection, InputDeclaration, InputSource, InputType, Invocation,
-    ListenSource, LoopKind, Program, RedirectTarget, Step, StepKind, Trigger, Value,
+    ListenSource, LoopKind, Program, RedirectTarget, RetryPolicy, Step, StepKind, Trigger, Value,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use std::borrow::Cow;
@@ -23,6 +23,7 @@ struct SourceLine {
     number: usize,
     indent: usize,
     token_range: Range<usize>,
+    label: Option<String>,
 }
 
 impl SourceLine {
@@ -39,6 +40,8 @@ pub(crate) struct BlockLine<'arena, 'source> {
     pub number: usize,
     pub indent: usize,
     pub tokens: &'arena [Token<'source>],
+    /// The `fetch:` label written before this statement, removed from `tokens`.
+    pub label: Option<&'arena str>,
 }
 
 const MAX_CONTROL_DEPTH: usize = 64;
@@ -62,7 +65,7 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
     steps: &mut Vec<Step>,
     depth: usize,
 ) -> Result<()> {
-    parse_statement_in_scope(
+    parse_labelled_statement(
         line_at,
         cursor,
         indent,
@@ -72,6 +75,24 @@ pub(crate) fn parse_statement<'arena, 'source: 'arena>(
     )
 }
 
+/// Parses one statement, then gives its first step the statement's `fetch:` label.
+fn parse_labelled_statement<'arena, 'source: 'arena>(
+    line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
+    cursor: &mut usize,
+    indent: usize,
+    steps: &mut Vec<Step>,
+    depth: usize,
+    scope: StatementScope,
+) -> Result<()> {
+    let label = line_at(*cursor).and_then(|line| line.label);
+    let start = steps.len();
+    parse_statement_in_scope(line_at, cursor, indent, steps, depth, scope)?;
+    if let (Some(label), Some(step)) = (label, steps.get_mut(start)) {
+        step.label = Some(label.to_owned());
+    }
+    Ok(())
+}
+
 pub(super) fn parse_reusable_statement<'arena, 'source: 'arena>(
     line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
     cursor: &mut usize,
@@ -79,7 +100,7 @@ pub(super) fn parse_reusable_statement<'arena, 'source: 'arena>(
     steps: &mut Vec<Step>,
     depth: usize,
 ) -> Result<()> {
-    parse_statement_in_scope(
+    parse_labelled_statement(
         line_at,
         cursor,
         indent,
@@ -90,6 +111,80 @@ pub(super) fn parse_reusable_statement<'arena, 'source: 'arena>(
             reusable_program: true,
         },
     )
+}
+
+/// Statement heads that cannot name a step: a label with one of these names would read
+/// like the statement it labels.
+const LABEL_KEYWORDS: &[&str] = &[
+    "accept",
+    "append",
+    "break",
+    "cancel",
+    "catch",
+    "cd",
+    "continue",
+    "define",
+    "detach",
+    "else",
+    "encode",
+    "every",
+    "exit",
+    "fail",
+    "finally",
+    "for",
+    "hand",
+    "if",
+    "inspect",
+    "interactively",
+    "listen",
+    "loop",
+    "otherwise",
+    "parse",
+    "pipe",
+    "read",
+    "redirect",
+    "repeat",
+    "return",
+    "run",
+    "save",
+    "spawn",
+    "take",
+    "then",
+    "try",
+    "until",
+    "use",
+    "whenever",
+    "while",
+];
+
+/// A statement may start with `fetch:`, a label for its first step. Returns the label
+/// name, or `None` for an ordinary statement.
+fn statement_label(tokens: &[Token<'_>], number: usize) -> Result<Option<String>> {
+    let Some(Token::Word(word)) = tokens.first() else {
+        return Ok(None);
+    };
+    let Some(name) = word.strip_suffix(':') else {
+        return Ok(None);
+    };
+    let valid = name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if !valid {
+        bail!(
+            "line {number}: step label {name:?} must start with a letter and use only letters, digits, _ or -"
+        );
+    }
+    if LABEL_KEYWORDS.contains(&name) {
+        bail!("line {number}: step label {name:?} is a keyword and cannot label a step");
+    }
+    if tokens.len() == 1 {
+        bail!("line {number}: step label {name:?} must precede a statement");
+    }
+    if matches!(tokens.get(1), Some(Token::Word(next)) if next.ends_with(':')) {
+        bail!("line {number}: a statement takes one step label");
+    }
+    Ok(Some(name.to_owned()))
 }
 
 fn parse_statement_in_scope<'arena, 'source: 'arena>(
@@ -125,6 +220,7 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
     if let Some(kind) = control_flow::parse_transfer(line.tokens, scope, line.number)? {
         steps.push(Step {
             line: line.number,
+            label: None,
             kind,
         });
         *cursor += 1;
@@ -156,6 +252,7 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
             .map_err(|error| anyhow!("line {}: {error:#}", line.number))?;
         steps.push(Step {
             line: line.number,
+            label: None,
             kind,
         });
         *cursor += 1;
@@ -176,6 +273,7 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
         {
             steps.push(Step {
                 line: line.number,
+                label: None,
                 kind,
             });
         }
@@ -223,6 +321,7 @@ fn parse_if_block<'arena, 'source: 'arena>(
     };
     steps.push(Step {
         line: line.number,
+        label: None,
         kind,
     });
     *cursor += 1;
@@ -248,12 +347,14 @@ fn parse_if_block<'arena, 'source: 'arena>(
             // nested block consumes this line and its own EndIf.
             steps.push(Step {
                 line: otherwise.number,
+                label: None,
                 kind: StepKind::Otherwise { end: 0 },
             });
             let nested = BlockLine {
                 number: otherwise.number,
                 indent: otherwise.indent,
                 tokens: &otherwise.tokens[1..],
+                label: None,
             };
             parse_if_block(line_at, cursor, indent, steps, depth + 1, scope, &nested)?;
         } else {
@@ -261,6 +362,7 @@ fn parse_if_block<'arena, 'source: 'arena>(
                 .map_err(|error| anyhow!("line {}: {error}", otherwise.number))?;
             steps.push(Step {
                 line: otherwise.number,
+                label: None,
                 kind: StepKind::Otherwise { end: 0 },
             });
             *cursor += 1;
@@ -277,6 +379,7 @@ fn parse_if_block<'arena, 'source: 'arena>(
     }
     steps.push(Step {
         line: line.number,
+        label: None,
         kind: StepKind::EndIf,
     });
     let finish = steps.len();
@@ -353,6 +456,7 @@ fn parse_condition_head(tokens: &[Token<'_>], keyword: &str) -> Result<Condition
     else {
         bail!("expected a command after `{keyword} run`");
     };
+    forbid_retry(&call, "a command condition")?;
     if connection != Connection::Start
         || call.binding.is_some()
         || call.status_binding.is_some()
@@ -420,6 +524,7 @@ fn parse_loop<'arena, 'source: 'arena>(
     let start = steps.len();
     steps.push(Step {
         line: line.number,
+        label: None,
         kind: StepKind::Loop { kind, end: 0 },
     });
     *cursor += 1;
@@ -448,6 +553,7 @@ fn parse_loop<'arena, 'source: 'arena>(
     let back = steps.len() - start;
     steps.push(Step {
         line: line.number,
+        label: None,
         kind: StepKind::EndLoop { back },
     });
     if let StepKind::Loop { end, .. } = &mut steps[start].kind {
@@ -608,6 +714,7 @@ impl HandlerOpeners {
             let index = steps.len();
             steps.push(Step {
                 line: block.number,
+                label: None,
                 kind: StepKind::Try {
                     catch: None,
                     finally: None,
@@ -692,12 +799,14 @@ fn emit_handler_blocks<'arena, 'source: 'arena>(
         let finally = steps.len();
         steps.push(Step {
             line: block.number,
+            label: None,
             kind: StepKind::Finally,
         });
         let guard = (kind == HandlerKind::Interrupt).then_some(steps.len());
         if guard.is_some() {
             steps.push(Step {
                 line: block.number,
+                label: None,
                 kind: StepKind::OnInterrupt { end: 0 },
             });
         }
@@ -714,6 +823,7 @@ fn emit_handler_blocks<'arena, 'source: 'arena>(
         }
         steps.push(Step {
             line: block.number,
+            label: None,
             kind: StepKind::EndTry,
         });
         let end = steps.len();
@@ -730,8 +840,30 @@ fn emit_handler_blocks<'arena, 'source: 'arena>(
     Ok(())
 }
 
+/// A parsed program before lowering. Its file-call operands are still unresolved.
+pub(crate) struct RawProgram {
+    pub(crate) inputs: Vec<InputDeclaration>,
+    pub(crate) steps: Vec<Step>,
+    pub(crate) trigger: Option<Trigger>,
+    pub(crate) definitions: BTreeMap<String, crate::ast::ReusableProgram>,
+}
+
+/// Definition key prefix for `run program file "PATH"`. Program names are
+/// identifiers, so a file key cannot collide with a same-file definition.
+pub(crate) const PROGRAM_FILE_PREFIX: &str = "file:";
+
 /// Parse the line-oriented workflow language into its AST.
 pub fn parse(source: &str) -> Result<Program> {
+    lower(parse_raw(source)?)
+}
+
+/// Expand same-file program calls and produce the executable program.
+pub(crate) fn lower(raw: RawProgram) -> Result<Program> {
+    reusable::finish(raw.inputs, raw.steps, raw.trigger, raw.definitions)
+}
+
+/// Parse one source text without lowering it.
+pub(crate) fn parse_raw(source: &str) -> Result<RawProgram> {
     let mut statements = logical_lines(source)?;
     take_language_version(&mut statements)?;
     let mut definitions = BTreeMap::new();
@@ -743,14 +875,39 @@ pub fn parse(source: &str) -> Result<Program> {
         let token_start = token_arena.len();
         tokenize_into(&statement.text, &mut token_arena)
             .with_context(|| format!("line {}", statement.number))?;
-        let token_range = token_start..token_arena.len();
+        let mut token_range = token_start..token_arena.len();
         if token_range.is_empty() {
             continue;
+        }
+        let label = statement_label(&token_arena[token_range.clone()], statement.number)?;
+        if label.is_some() {
+            token_range.start += 1;
+            // Declarations, triggers and clauses are not steps, so they cannot be labelled.
+            if [
+                "accept",
+                "define",
+                "every",
+                "on",
+                "listen",
+                "whenever",
+                "otherwise",
+                "catch",
+                "finally",
+            ]
+            .iter()
+            .any(|word| word_is(token_arena.get(token_range.start), word))
+            {
+                bail!(
+                    "line {}: a step label cannot precede a declaration, trigger, or clause",
+                    statement.number
+                );
+            }
         }
         lines.push(SourceLine {
             number: statement.number,
             indent: statement.indent,
             token_range,
+            label,
         });
     }
 
@@ -759,6 +916,7 @@ pub fn parse(source: &str) -> Result<Program> {
             number: line.number,
             indent: line.indent,
             tokens: line.tokens(&token_arena),
+            label: line.label.as_deref(),
         })
     };
     let handlers = program_handlers(&lines, &token_arena)?;
@@ -859,7 +1017,12 @@ pub fn parse(source: &str) -> Result<Program> {
                 );
             }
             crate::inputs::validate(&inputs)?;
-            return reusable::finish(inputs, steps, Some(trigger), definitions);
+            return Ok(RawProgram {
+                inputs,
+                steps,
+                trigger: Some(trigger),
+                definitions,
+            });
         }
         if is_listener_event_header(line_tokens) {
             bail!(
@@ -880,7 +1043,12 @@ pub fn parse(source: &str) -> Result<Program> {
     }
 
     crate::inputs::validate(&inputs)?;
-    reusable::finish(inputs, steps, None, definitions)
+    Ok(RawProgram {
+        inputs,
+        steps,
+        trigger: None,
+        definitions,
+    })
 }
 
 fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
@@ -936,8 +1104,25 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
                 cursor += 1;
                 InputSource::Arguments
             }
-            _ => bail!("input source must be environment, argument, or arguments"),
+            Some(Token::Word("program")) if word_is(tokens.get(cursor + 1), "directory") => {
+                cursor += 2;
+                InputSource::ProgramDirectory
+            }
+            Some(Token::Word("program")) if word_is(tokens.get(cursor + 1), "path") => {
+                cursor += 2;
+                InputSource::ProgramPath
+            }
+            _ => bail!(
+                "input source must be environment, argument, arguments, program directory, or program path"
+            ),
         };
+        if matches!(
+            source,
+            InputSource::ProgramDirectory | InputSource::ProgramPath
+        ) && kind != InputType::Text
+        {
+            bail!("program location inputs must be text");
+        }
         Some(source)
     } else {
         None
@@ -967,6 +1152,13 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         }
     }
     ensure_end(tokens, cursor)?;
+    if matches!(
+        source,
+        Some(InputSource::ProgramDirectory | InputSource::ProgramPath)
+    ) && default.is_some()
+    {
+        bail!("program location inputs take their value from the program file and cannot declare a default");
+    }
     if let (Some(choices), Some(Value::String(value))) = (&choices, &default) {
         if !choices.contains(value) {
             bail!(
@@ -1140,6 +1332,7 @@ fn parse_trigger_header<'source>(
         else {
             bail!("line {}: listener source must be an applet", header.number);
         };
+        forbid_retry(&call, "a listener source")?;
         if call.binding.is_some()
             || call.status_binding.is_some()
             || call.result_binding.is_some()
@@ -1307,21 +1500,43 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
     if matches!(tokens.first(), Some(Token::Word("run" | "then")))
         && word_is(tokens.get(1), "program")
     {
+        // `run program file "PATH"` drops the path here and keys the call by it.
+        let file_path = match (tokens.get(2), tokens.get(3)) {
+            (Some(Token::Word("file")), Some(Token::String(path))) => Some(path.clone()),
+            _ => None,
+        };
+        let without_path: Vec<Token<'_>> = match file_path {
+            Some(_) => tokens[..3].iter().chain(&tokens[4..]).cloned().collect(),
+            None => Vec::new(),
+        };
+        let invocation_tokens = if file_path.is_some() {
+            &without_path[..]
+        } else {
+            tokens
+        };
         let StepKind::Invoke {
             mut call,
             connection,
-        } = parse_invocation(tokens)?
+        } = parse_invocation(invocation_tokens)?
         else {
             unreachable!()
         };
-        let name = call
-            .operation
-            .strip_prefix("program ")
-            .context("expected `run program <name>`")?;
-        if !is_identifier(name) {
-            bail!("program name must be an identifier");
+        if let Some(path) = file_path {
+            if path.is_empty() || path.contains('\0') {
+                bail!("program file path must be nonempty and cannot contain a NUL byte");
+            }
+            call.operation = format!("{PROGRAM_FILE_PREFIX}{path}");
+        } else {
+            let name = call
+                .operation
+                .strip_prefix("program ")
+                .context("expected `run program <name>`")?;
+            if !is_identifier(name) {
+                bail!("program name must be an identifier");
+            }
+            call.operation = name.to_owned();
         }
-        call.operation = name.to_owned();
+        forbid_retry(&call, "a program call")?;
         if call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
             bail!("program calls cannot cache or capture native status or execution results");
         }
@@ -1366,6 +1581,9 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
     }
     if word_is(tokens.first(), "then") && word_is(tokens.get(1), "append") {
         return parse_append(tokens);
+    }
+    if word_is(tokens.first(), "then") && word_is(tokens.get(1), "capture") {
+        return parse_capture(tokens);
     }
     if tokens.first().is_some_and(|token| {
         matches!(token, Token::Word(word) if matches!(*word, "repeat" | "for" | "while" | "if" | "otherwise" | "else" | "loop"))
@@ -1445,7 +1663,22 @@ pub(crate) fn is_input_header(line: &str) -> bool {
     line.split_ascii_whitespace().next() == Some("accept")
 }
 
+/// `then capture bytes as NAME`: the pipeline bytes are bound unchanged.
+fn parse_capture(tokens: &[Token<'_>]) -> Result<StepKind> {
+    if !(word_is(tokens.get(2), "bytes") && word_is(tokens.get(3), "as")) {
+        bail!("expected `then capture bytes as <name>`");
+    }
+    let binding = parse_binding_identifier(tokens.get(4), "binding name")?;
+    ensure_end(tokens, 5)?;
+    Ok(StepKind::CaptureBytes { binding })
+}
+
 fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
+    if word_is(tokens.get(1), "bytes") {
+        let binding = parse_binding_identifier(tokens.get(2), "binding name")?;
+        ensure_end(tokens, 3)?;
+        return Ok(StepKind::UseBytes { binding });
+    }
     if word_is(tokens.get(1), "value") {
         if tokens.len() == 2 {
             bail!("expected `use value <value>`");
@@ -1691,6 +1924,7 @@ fn parse_interactive_run(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
     let StepKind::Invoke { call, connection } = parse_invocation(tokens)? else {
         bail!("`interactively` applies to a single native `run` command");
     };
+    forbid_retry(&call, "`interactively`")?;
     if connection != Connection::Start {
         bail!("`interactively` applies to a fresh command, not `then` or `pipe to`");
     }
@@ -1700,7 +1934,78 @@ fn parse_interactive_run(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
     ])
 }
 
+/// `hand over to "program" ...` and `launch detached "program" ...`: one fresh native
+/// command with a process-level handoff. The marker step directly precedes the
+/// command's `Invoke`. Redirection, stdin, environment and result bindings are
+/// rejected, because the command runs outside the script's pipeline. Detached
+/// launch takes an optional trailing `and output to "file"` instead.
+fn parse_process_handoff(tokens: &[Token<'_>]) -> Result<Option<Vec<StepKind>>> {
+    let detached = if word_is(tokens.first(), "hand")
+        && word_is(tokens.get(1), "over")
+        && word_is(tokens.get(2), "to")
+    {
+        false
+    } else if word_is(tokens.first(), "launch") && word_is(tokens.get(1), "detached") {
+        true
+    } else {
+        return Ok(None);
+    };
+    let verb = if detached {
+        "launch detached"
+    } else {
+        "hand over to"
+    };
+    let mut rest = if detached { &tokens[2..] } else { &tokens[3..] };
+    let mut output = None;
+    if detached {
+        if let [.., Token::Word("and"), Token::Word("output"), Token::Word("to"), Token::String(path)] =
+            rest
+        {
+            if path.is_empty() || path.contains('\0') {
+                bail!("launch detached output path must be nonempty and cannot contain a NUL byte");
+            }
+            output = Some(Value::String(path.clone().into_owned()));
+            rest = &rest[..rest.len() - 4];
+        }
+    }
+    if !matches!(rest.first(), Some(Token::String(_))) {
+        bail!("`{verb}` takes a quoted native program path, for example `{verb} \"program\"`");
+    }
+    let mut run = Vec::with_capacity(rest.len() + 1);
+    run.push(Token::Word("run"));
+    run.extend(rest.iter().cloned());
+    let steps = parse_simple_statement(&run)?;
+    let [.., StepKind::Invoke { call, connection }] = steps.as_slice() else {
+        bail!("`{verb}` applies to one native command with no redirection, stdin, or environment");
+    };
+    if steps.len() != 1 || *connection != Connection::Start || !call.direct {
+        bail!("`{verb}` applies to one fresh native command with no redirection, stdin, or environment");
+    }
+    forbid_retry(call, "a hand-over or detached command")?;
+    if call.binding.is_some()
+        || call.status_binding.is_some()
+        || call.result_binding.is_some()
+        || call.discard_stderr
+        || call.cache
+    {
+        bail!("`{verb}` does not bind results, keep status, discard stderr, or cache its command");
+    }
+    let marker = if detached {
+        StepKind::LaunchDetached { output }
+    } else {
+        StepKind::HandOver
+    };
+    let invoke = steps
+        .into_iter()
+        .next()
+        .expect("one invoke step was checked");
+    Ok(Some(vec![marker, invoke]))
+}
+
 fn parse_simple_statement(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
+    if let Some(steps) = parse_process_handoff(tokens)? {
+        return Ok(steps);
+    }
     // `interactively` is a trailing word on one top-level native `run`.
     if let Some(Token::Word("interactively")) = tokens.last() {
         return parse_interactive_run(&tokens[..tokens.len() - 1]);
@@ -1861,7 +2166,8 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
                 && ((word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
                     || (direct && is_discard_stderr_suffix(tokens, cursor))
                     || is_status_suffix(tokens, cursor)
-                    || is_result_suffix(tokens, cursor))
+                    || is_result_suffix(tokens, cursor)
+                    || is_retry_suffix(tokens, cursor))
             {
                 break;
             }
@@ -1918,7 +2224,8 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
             let blocked = (word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
                 || (direct && is_discard_stderr_suffix(tokens, cursor))
                 || is_status_suffix(tokens, cursor)
-                || is_result_suffix(tokens, cursor);
+                || is_result_suffix(tokens, cursor)
+                || is_retry_suffix(tokens, cursor);
             if word_is(tokens.get(cursor), "and") && !blocked {
                 cursor += 1;
                 continue;
@@ -1975,6 +2282,20 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
     if discard_stderr && cache {
         bail!("`and discard stderr` cannot be combined with `and cache`");
     }
+    let retry = if is_retry_suffix(tokens, cursor) {
+        cursor += 2;
+        Some(parse_retry_suffix(tokens, &mut cursor)?)
+    } else {
+        None
+    };
+    if retry.is_some() {
+        if connection != Connection::Start {
+            bail!("`and retry` applies to a `run` command, not `then` or `pipe to`");
+        }
+        if cache || status_binding.is_some() || result_binding.is_some() {
+            bail!("`and retry` cannot be combined with `and cache`, `and keep status`, or `and keep result`");
+        }
+    }
     ensure_end(tokens, cursor)?;
 
     Ok(StepKind::Invoke {
@@ -1987,9 +2308,96 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
             cache,
             status_binding,
             result_binding,
+            retry,
         },
         connection,
     })
+}
+
+/// Most retries one command may declare; each is a whole extra attempt.
+const MAX_RETRIES: u32 = 100;
+/// Longest single delay before a retry, one hour.
+const MAX_RETRY_BACKOFF_MS: u64 = 3_600_000;
+
+fn is_retry_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
+    word_is(tokens.get(cursor), "and") && word_is(tokens.get(cursor + 1), "retry")
+}
+
+/// The words after `and retry`: `up to N times [even if uncertain] [with backoff
+/// AMOUNT UNIT [doubling]]`.
+fn parse_retry_suffix(tokens: &[Token<'_>], cursor: &mut usize) -> Result<RetryPolicy> {
+    if !(word_is(tokens.get(*cursor), "up") && word_is(tokens.get(*cursor + 1), "to")) {
+        bail!("expected `and retry up to N times`");
+    }
+    let retries = match tokens.get(*cursor + 2) {
+        Some(Token::Word(count)) => count
+            .parse::<u32>()
+            .ok()
+            .filter(|count| (1..=MAX_RETRIES).contains(count)),
+        _ => None,
+    }
+    .with_context(|| format!("retry count must be between 1 and {MAX_RETRIES}"))?;
+    if !(word_is(tokens.get(*cursor + 3), "times") || word_is(tokens.get(*cursor + 3), "time")) {
+        bail!("expected `times` after the retry count");
+    }
+    *cursor += 4;
+    let even_if_uncertain = word_is(tokens.get(*cursor), "even")
+        && word_is(tokens.get(*cursor + 1), "if")
+        && word_is(tokens.get(*cursor + 2), "uncertain");
+    if even_if_uncertain {
+        *cursor += 3;
+    }
+    let (backoff_ms, doubling) =
+        if word_is(tokens.get(*cursor), "with") && word_is(tokens.get(*cursor + 1), "backoff") {
+            let amount = match tokens.get(*cursor + 2) {
+                Some(Token::Word(amount)) => amount.parse::<u64>().ok(),
+                _ => None,
+            }
+            .context("backoff must be a whole number of a time unit")?;
+            let unit = match tokens.get(*cursor + 3) {
+                Some(Token::Word(unit)) => *unit,
+                _ => bail!("expected a backoff unit: milliseconds, seconds, minutes, or hours"),
+            };
+            let factor = duration_unit_ms(unit)
+                .with_context(|| format!("unsupported backoff unit `{unit}`"))?;
+            let delay = amount
+                .checked_mul(factor)
+                .filter(|delay| *delay <= MAX_RETRY_BACKOFF_MS)
+                .context("backoff must be at most one hour")?;
+            *cursor += 4;
+            let doubling = word_is(tokens.get(*cursor), "doubling");
+            if doubling {
+                *cursor += 1;
+            }
+            (Some(delay), doubling)
+        } else {
+            (None, false)
+        };
+    Ok(RetryPolicy {
+        retries,
+        even_if_uncertain,
+        backoff_ms,
+        doubling,
+    })
+}
+
+/// Milliseconds in one duration unit word, as used by `with backoff`.
+fn duration_unit_ms(unit: &str) -> Option<u64> {
+    match unit {
+        "millisecond" | "milliseconds" => Some(1),
+        "second" | "seconds" => Some(1_000),
+        "minute" | "minutes" => Some(60_000),
+        "hour" | "hours" => Some(3_600_000),
+        _ => None,
+    }
+}
+
+/// Refuse `and retry` where the command's invocation is used without a retry loop.
+pub(crate) fn forbid_retry(call: &Invocation, context: &str) -> Result<()> {
+    if call.retry.is_some() {
+        bail!("{context} cannot use `and retry`");
+    }
+    Ok(())
 }
 
 const MAX_VALUE_NESTING: usize = 64;

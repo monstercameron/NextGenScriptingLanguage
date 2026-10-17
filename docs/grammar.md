@@ -28,6 +28,7 @@ declaration = "accept" NAME "as" TYPE [ "one" "of" choices ] [ "from" source ] {
 option      = "with" "default" value | "described" "as" TEXT
 choices     = "[" TEXT { "," TEXT } "]"
 source      = "environment" TEXT | "arguments" | "argument" INTEGER
+            | "program" ( "directory" | "path" )
 TYPE        = "text" | "integer" | "boolean" | "list" "of" "text" | "json"
 ```
 
@@ -53,6 +54,7 @@ accept arguments as list of text from arguments
 accept greeting as text described as "Who to greet"
 accept repeats as integer described as "Repeat count" with default 3
 accept mode as text one of ["light", "dark"] with default "light" described as "Theme"
+accept here as text from program directory
 ```
 
 `one of` applies only to `text` inputs. Its choices are nonempty, unique, NUL-free
@@ -178,6 +180,15 @@ repeat 2 times
 ```text
 definition  = "define" "a" "program" "named" NAME body
 call        = "run" "program" NAME [ "with" argument { "and" argument } ] [ "as" NAME ]
+file call   = "run" "program" "file" TEXT [ "with" argument { "and" argument } ] [ "as" NAME ]
+```
+
+A `file` call runs another `.program` file's top level in-process, with the same
+explicit inputs as a named call. Its path resolves from the calling file's directory.
+The call is checked when the program loads, before any step runs.
+
+```text
+run program file "install/config/fonts.program" with theme theme as fonts
 ```
 
 ```program

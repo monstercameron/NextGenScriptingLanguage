@@ -719,6 +719,28 @@ nested services remain future work. See
 [compare-file-line-counts.program](../examples/compare-file-line-counts.program) and
 [normalize-stdin-with-program.program](../examples/normalize-stdin-with-program.program).
 
+### Call another program file
+
+`run program file "PATH" with NAME VALUE as RESULT` runs another `.program` file in
+the same process, without a module manifest. The path is relative to the calling
+file's directory. It runs with explicit inputs only, as a named call does, and its
+result binds the same way. The file is read and checked when the caller loads, so
+a missing file, a cycle, or a literal call input of the wrong type is refused before
+the first effect. Values computed at run time are checked when their call starts.
+
+```text
+accept name as text with default "world"
+run program file "install/config/fonts.program" with theme name as fonts
+```
+
+A called file is an ordinary finite program with two limits. It cannot declare a
+trigger or define `define a program` blocks, and its inputs cannot come from the
+environment or from arguments: callers pass them. Line numbers in a diagnostic
+from a called file refer to that file, not to the caller. Calls nest to 16 files
+and a program may reach 256 distinct files. A file call needs the loader, so
+programs run from text with no path (live editing, the REPL, and language-server
+text) report it as an error, not run it.
+
 ### Direct executable calls
 
 A quoted command name is an executable, resolved through the inherited `PATH`
@@ -814,6 +836,14 @@ then save to "hello.txt"
 The final finite result goes to stdout, including after a save. Intermediate
 results remain pipeline values. To inspect multiple command results separately,
 use separate programs or explicitly save the results you need.
+
+### Hand over and detached launch
+
+`hand over to "program" with arguments [...]` replaces the script with one native program, so it must be the last statement of the program. On Unix the process is replaced with `execve`, keeping its process id and exit status. Windows has no in-place replacement, so the program starts with inherited stdio, the script waits for it, and its exit code becomes the script's exit code; codes outside 0-255 are reported as 1.
+
+`launch detached "program" with arguments [...]` starts the program and continues without waiting. The script does not own the child: exiting the script neither waits for nor cancels it. An optional `and output to "file"` sends stdout and stderr to that file, which is truncated and checked exactly like a redirect target: the write grant and persistence policy apply, and a link is refused. A detached command produces no pipeline data, so it cannot feed a `then` or `pipe to` statement.
+
+Both forms take one fresh native program named by a quoted path. They reject redirection, stdin, environment changes, result bindings, `discard stderr`, and caching. They are refused under `--checkpoint`, in triggered, service and listener programs, in live and browser programs, and in TUI handlers.
 
 ## Finite stdin and Unix composition
 
@@ -954,6 +984,24 @@ values, for example `input "mode" must be one of "light", "dark"; got "blue"`.
 program's inputs under `inputs` with the same field. `described as` works with
 `one of` in either position relative to `with default`. `one of` is not allowed on
 `integer`, `boolean`, `list of text`, or `json` inputs.
+
+### Program location
+
+`from program directory` and `from program path` bind a text input to where the
+program file lives, not to where it runs. `program directory` is the canonical
+directory of the file, and `program path` is its canonical path. Scripts can read
+files shipped beside them without `$(dirname "$0")`:
+
+```program
+accept here as text from program directory
+accept self as text from program path
+```
+
+The value is the input's default, so an explicit `--input` or `with` value still
+wins, as with environment inputs. A location input must be `text` and cannot declare
+its own `with default`. A called file's location inputs name that file's directory,
+not the caller's. Programs run from text with no file path have no location, so the
+input is required there.
 
 ### Agent interface discovery
 

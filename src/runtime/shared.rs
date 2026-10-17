@@ -566,13 +566,25 @@ pub(crate) fn validate_live(
             step.line
         );
     }
-    if let Some(step) = program
-        .steps
-        .iter()
-        .find(|step| matches!(step.kind, StepKind::Interactive))
-    {
+    if let Some(step) = program.steps.iter().find(|step| {
+        matches!(
+            step.kind,
+            StepKind::CaptureBytes { .. } | StepKind::UseBytes { .. }
+        )
+    }) {
         bail!(
-            "line {}: live programs do not support interactively",
+            "line {}: byte captures are not supported in live programs",
+            step.line
+        );
+    }
+    if let Some(step) = program.steps.iter().find(|step| {
+        matches!(
+            step.kind,
+            StepKind::Interactive | StepKind::HandOver | StepKind::LaunchDetached { .. }
+        )
+    }) {
+        bail!(
+            "line {}: live programs do not support interactively, hand over, or detached launch",
             step.line
         );
     }
@@ -1093,7 +1105,10 @@ fn validate_range(
                 }
             }
             match &step.kind {
-                StepKind::Interactive | StepKind::OnInterrupt { .. } => {}
+                StepKind::Interactive
+                | StepKind::HandOver
+                | StepKind::LaunchDetached { .. }
+                | StepKind::OnInterrupt { .. } => {}
                 StepKind::Loop { .. }
                 | StepKind::EndLoop { .. }
                 | StepKind::If { .. }
@@ -1149,6 +1164,30 @@ fn validate_range(
                 }
                 StepKind::UseValue { source } => {
                     validate_text_operand(source, flow, "use value")?;
+                    flow.has_data = true;
+                    flow.stdout_unavailable = false;
+                    flow.started = true;
+                }
+                StepKind::CaptureBytes { binding: name } => {
+                    if !flow.has_data {
+                        bail!("capture bytes requires preceding output");
+                    }
+                    binding(
+                        &Some(name.clone()),
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
+                    flow.bind_type(name, crate::ast::InputType::Bytes)?;
+                    flow.started = true;
+                }
+                StepKind::UseBytes { binding: name } => {
+                    match flow.types.get(name) {
+                        Some(crate::ast::InputType::Bytes) => {}
+                        Some(kind) => {
+                            bail!("use bytes requires a byte capture, but {name:?} is {kind}")
+                        }
+                        None => bail!("use bytes: byte binding {name:?} is not defined"),
+                    }
                     flow.has_data = true;
                     flow.stdout_unavailable = false;
                     flow.started = true;
@@ -1568,6 +1607,8 @@ fn validate_range(
                                     | StepKind::ReadStdin { .. }
                                     | StepKind::ReadCallInput { .. }
                                     | StepKind::UseValue { .. }
+                                    | StepKind::CaptureBytes { .. }
+                                    | StepKind::UseBytes { .. }
                                     | StepKind::Invoke { .. }
                                     | StepKind::EncodeJson { .. }
                             )
@@ -1929,6 +1970,12 @@ pub fn explain_with_inputs(
             StepKind::UseValue { source } => {
                 format!("use value {source:?} as pipeline input; launches no process")
             }
+            StepKind::CaptureBytes { binding } => {
+                format!("capture pipeline bytes unchanged as {binding}; pipeline continues")
+            }
+            StepKind::UseBytes { binding } => {
+                format!("use byte binding {binding} as pipeline input; launches no process")
+            }
             StepKind::Read { path, .. } => format!(
                 "read {:?}",
                 resolve(path, &known).unwrap_or_else(|_| path.clone())
@@ -2009,6 +2056,11 @@ pub fn explain_with_inputs(
                 resolve(path, &known).unwrap_or_else(|_| path.clone())
             ),
             StepKind::Interactive => "interactive (terminal handoff)".into(),
+            StepKind::HandOver => "hand over to (replaces the script)".into(),
+            StepKind::LaunchDetached { output } => match output {
+                Some(path) => format!("launch detached (output to {path:?})"),
+                None => "launch detached".into(),
+            },
             StepKind::Environment { set, unset } => {
                 let mut parts = Vec::new();
                 if !set.is_empty() {
@@ -2080,7 +2132,21 @@ pub fn explain_with_inputs(
                     } else {
                         ""
                     },
-                ) + match crate::privilege::classify(manifest.binary_for(call)) {
+                ) + &call.retry.map_or_else(String::new, |policy| {
+                    format!(
+                        " and retry up to {} times{}{}",
+                        policy.retries,
+                        if policy.even_if_uncertain {
+                            " even if uncertain"
+                        } else {
+                            ""
+                        },
+                        policy.backoff_ms.map_or_else(String::new, |ms| format!(
+                            " with backoff {ms} ms{}",
+                            if policy.doubling { " doubling" } else { "" }
+                        )),
+                    )
+                }) + match crate::privilege::classify(manifest.binary_for(call)) {
                     crate::privilege::Privilege::Elevator => {
                         " [privileged: elevator]"
                     }

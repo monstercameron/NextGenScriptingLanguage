@@ -41,6 +41,26 @@ pub struct Invocation {
     /// stage metadata and explicitly captured output bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_binding: Option<String>,
+    /// `and retry up to N times`: run again after a declared retryable failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryPolicy>,
+}
+
+/// A declared retry for one command. Retries happen only for outcomes the
+/// contract marks retryable (or a nonzero exit of a direct executable), and only
+/// when the effects are retry-safe or the step says `even if uncertain`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryPolicy {
+    /// Retries after the first attempt.
+    pub retries: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub even_if_uncertain: bool,
+    /// Delay before the first retry, in milliseconds. Absent means no delay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backoff_ms: Option<u64>,
+    /// Double the delay before each later retry.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub doubling: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -229,6 +249,15 @@ pub enum StepKind {
     UseValue {
         source: Value,
     },
+    /// `then capture bytes as NAME`: binds the pipeline bytes, unchanged and unchecked for
+    /// UTF-8, to a byte binding; the pipeline continues with the same bytes.
+    CaptureBytes {
+        binding: String,
+    },
+    /// `use bytes NAME`: sets the pipeline input to a byte binding's bytes.
+    UseBytes {
+        binding: String,
+    },
     Read {
         path: Value,
         binding: Option<String>,
@@ -280,6 +309,16 @@ pub enum StepKind {
     /// `interactively`: the next command takes the terminal for its run (terminal
     /// handoff). It must immediately precede one fresh, unpiped native command.
     Interactive,
+    /// `hand over to "program" ...`: the next command replaces this script. It must
+    /// be the last statement of the program and precede one fresh native command.
+    HandOver,
+    /// `launch detached "program" ...`: the next command starts unowned. When `output`
+    /// is given it is a write target like a redirect: its stdout and stderr go to that
+    /// file, which is truncated. It must precede one fresh native command.
+    LaunchDetached {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<Value>,
+    },
     /// Opens a top-level `on interrupt` body inside its cleanup block. The body runs only
     /// while a drain is in progress; otherwise control jumps to `end` (relative).
     OnInterrupt {
@@ -311,6 +350,44 @@ pub enum RedirectTarget {
 pub struct Step {
     pub line: usize,
     pub kind: StepKind,
+    /// The `fetch:` label written before the statement; it identifies the statement's
+    /// first step across edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Stable id for each step, in order: its label when present, else a derived id made of
+/// the step kind, a short hash of its canonical JSON and its occurrence among identical
+/// steps. Line numbers never enter a derived id, so inserting a statement above a step
+/// changes only the derived ids of identical steps, and never a labelled id.
+pub fn step_ids(steps: &[Step]) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    let mut occurrences: BTreeMap<String, usize> = BTreeMap::new();
+    steps
+        .iter()
+        .map(|step| {
+            if let Some(label) = &step.label {
+                return label.clone();
+            }
+            let canonical = serde_json::to_string(&step.kind).unwrap_or_default();
+            let kind = match serde_json::to_value(&step.kind) {
+                Ok(serde_json::Value::Object(map)) => map.keys().next().cloned(),
+                Ok(serde_json::Value::String(name)) => Some(name),
+                _ => None,
+            }
+            .unwrap_or_else(|| "step".to_owned());
+            let digest = Sha256::digest(canonical.as_bytes());
+            let short: String = digest
+                .iter()
+                .take(6)
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            let key = format!("{kind}:{short}");
+            let occurrence = occurrences.entry(key.clone()).or_insert(0);
+            *occurrence += 1;
+            format!("{key}#{occurrence}")
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -341,6 +418,8 @@ pub enum InputType {
     Boolean,
     TextList,
     Json,
+    /// A raw byte capture (`then capture bytes as NAME`). Never valid as text.
+    Bytes,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -364,6 +443,11 @@ pub enum InputSource {
     Environment(String),
     Argument(usize),
     Arguments,
+    /// `from program directory`: the canonical directory of the program file.
+    /// The loader supplies it as the input's default, so a `--input` still wins.
+    ProgramDirectory,
+    /// `from program path`: the canonical path of the program file.
+    ProgramPath,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

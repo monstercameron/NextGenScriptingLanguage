@@ -109,6 +109,7 @@ pub(super) fn parse_try<'arena, 'source: 'arena>(
     let start = steps.len();
     steps.push(Step {
         line: header.number,
+        label: None,
         kind: StepKind::Try {
             catch: None,
             finally: None,
@@ -141,6 +142,7 @@ pub(super) fn parse_try<'arena, 'source: 'arena>(
         catch_index = Some(steps.len());
         steps.push(Step {
             line: clause.number,
+            label: None,
             kind: StepKind::Catch { binding, end: 0 },
         });
         *cursor += 1;
@@ -162,6 +164,7 @@ pub(super) fn parse_try<'arena, 'source: 'arena>(
         finally_index = Some(steps.len());
         steps.push(Step {
             line: clause.number,
+            label: None,
             kind: StepKind::Finally,
         });
         *cursor += 1;
@@ -192,6 +195,7 @@ pub(super) fn parse_try<'arena, 'source: 'arena>(
     let end_index = steps.len();
     steps.push(Step {
         line: header.number,
+        label: None,
         kind: StepKind::EndTry,
     });
     let finish = steps.len();

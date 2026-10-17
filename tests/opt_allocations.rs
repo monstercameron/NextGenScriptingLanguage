@@ -168,6 +168,7 @@ fn report_release_allocation_counts() {
         cache: false,
         status_binding: None,
         result_binding: None,
+        retry: None,
     };
 
     let directory = tempfile::tempdir().unwrap();

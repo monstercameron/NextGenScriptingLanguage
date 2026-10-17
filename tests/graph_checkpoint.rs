@@ -451,3 +451,68 @@ fn a_node_with_two_stream_inputs_is_refused_naming_the_node() {
         "{message}"
     );
 }
+
+/// A direct program-module applet, written as `program_modules.rs` writes one.
+fn write_module_applet(dir: &Path, name: &str, source: &str) {
+    let source_name = format!("{}.program", name.replace('.', "_"));
+    fs::write(dir.join(&source_name), source).unwrap();
+    let manifest = json!({
+        "name": name,
+        "binary": "@program-module",
+        "accepts_stdin": false,
+        "parameters": {},
+        "arguments": [],
+        "contract": {
+            "version": 1,
+            "backend": "program_module",
+            "program": {"source": source_name, "entry": "entry", "interface_version": 1},
+            "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "json"}
+        }
+    });
+    fs::write(
+        dir.join(format!("{name}.json")),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_changed_module_behind_a_completed_node_refuses_resume() {
+    let fixture = fixture();
+    let module_source =
+        |word: &str| format!("define a program named entry\n  then encode \"{word}\" as json\n");
+    write_module_applet(&fixture.manifests, "test.describe", &module_source("one"));
+    let source = "graph modules\n\
+        \x20 run test.describe as described\n\
+        end graph\n";
+    let store = Arc::new(MemoryGraphStore::default());
+    let run = |registry: &Registry, store: Arc<MemoryGraphStore>| {
+        graph::run_checkpointed(
+            plan(source, registry),
+            registry,
+            &options(&fixture.root),
+            Arc::new(AtomicBool::new(false)),
+            store,
+            false,
+        )
+    };
+
+    let registry = Registry::load(&fixture.manifests).unwrap();
+    let first = run(&registry, store.clone()).unwrap();
+    assert_eq!(store.load().unwrap().completed.len(), 1);
+
+    // The unchanged module replays its completed node.
+    let replayed = run(&registry, store.clone()).unwrap();
+    assert_eq!(terminal(&replayed).len(), terminal(&first).len());
+
+    // A changed module behind the completed node must refuse the resume.
+    write_module_applet(&fixture.manifests, "test.describe", &module_source("two"));
+    let registry = Registry::load(&fixture.manifests).unwrap();
+    let refused = run(&registry, store.clone());
+    let message = format!("{:#}", refused.unwrap_err());
+    assert!(
+        message.contains("changed since the checkpoint"),
+        "{message}"
+    );
+}

@@ -455,7 +455,11 @@ impl FlowState {
 mod loop_shape_tests {
     use super::*;
     fn step(kind: StepKind) -> Step {
-        Step { line: 1, kind }
+        Step {
+            line: 1,
+            label: None,
+            kind,
+        }
     }
     fn header(end: usize) -> Step {
         step(StepKind::Loop {

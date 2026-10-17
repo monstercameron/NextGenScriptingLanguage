@@ -11,7 +11,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::os::fd::{FromRawFd, OwnedFd};
 
 #[cfg(unix)]

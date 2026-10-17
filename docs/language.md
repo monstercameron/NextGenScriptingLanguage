@@ -714,7 +714,11 @@ applies to a command that starts a statement, and it is a `read` followed by the
 command as a consumer. `then append to <path>` adds the pipeline value to the file
 and keeps it as the pipeline value. Unlike `save`, it does not replace the file.
 Redirection to a file is a persistence sink for data-flow policy. Live programs
-reject these forms.
+reject these forms. Under a capability policy, a redirect or append target needs a
+filesystem write grant, and the check runs before any command starts. A target is
+opened before the command runs, and the open file is what gets written. A link in
+the final component is refused on Unix (`O_NOFOLLOW`) and on Windows (reparse
+points), and the resolved path must still lie inside the grant.
 
 `run`, `then`, `pipe to`, `stream from`, and `listen to` accept these calls, as do
 native statements inside schedules and TUI handlers. Direct calls share the

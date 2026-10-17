@@ -983,7 +983,11 @@ fn validate_range(
             let path = match &step.kind {
                 StepKind::UseFolder { path }
                 | StepKind::Read { path, .. }
-                | StepKind::Save { path, .. } => Some(path),
+                | StepKind::Save { path, .. }
+                | StepKind::Append { path }
+                | StepKind::Redirect {
+                    path: Some(path), ..
+                } => Some(path),
                 _ => None,
             };
             if let Some(Value::Reference(name)) = path {

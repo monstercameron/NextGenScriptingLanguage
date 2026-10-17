@@ -1167,7 +1167,9 @@ impl Drop for ForceStderrCapture {
 /// A `Redirect` step waiting for the command that follows it.
 struct PendingRedirect {
     target: crate::ast::RedirectTarget,
-    destination: Option<PathBuf>,
+    /// Opened, authorized and re-checked when the redirect step runs, before the
+    /// command starts. Writes go through this handle, not a later path lookup.
+    file: Option<File>,
 }
 
 impl PendingRedirect {
@@ -1175,25 +1177,27 @@ impl PendingRedirect {
         !matches!(self.target, crate::ast::RedirectTarget::StdoutToStderr)
     }
 
-    fn destination(&self) -> Result<&Path> {
-        self.destination
-            .as_deref()
-            .context("redirection has no file target")
-    }
-
-    /// Write the command's stderr to its file target after it has completed or
-    /// failed with stderr. A merged or stdout target leaves the file alone.
-    fn write_stderr(&self, stderr: &[u8]) -> Result<()> {
-        match self.target {
-            crate::ast::RedirectTarget::StderrFile => atomic_write(self.destination()?, stderr),
-            crate::ast::RedirectTarget::StderrAppend => append_file(self.destination()?, stderr),
+    /// Write the command's stderr through the handle opened before it ran. A
+    /// merged or stdout target leaves the file alone.
+    fn write_stderr(&mut self, stderr: &[u8]) -> Result<()> {
+        use std::io::Write as _;
+        match (self.target, self.file.as_mut()) {
+            (
+                crate::ast::RedirectTarget::StderrFile | crate::ast::RedirectTarget::StderrAppend,
+                Some(file),
+            ) => {
+                file.write_all(stderr)
+                    .context("could not write redirected stderr")?;
+                file.sync_all()
+                    .context("could not sync redirected stderr file")
+            }
             _ => Ok(()),
         }
     }
 
     /// Route a completed command's output and return the stdout that remains in
     /// the pipeline. Stdout to stderr leaves nothing for the pipeline to read.
-    fn route(&self, stdout: Vec<u8>, stderr: &[u8], signals: &Signals) -> Result<Vec<u8>> {
+    fn route(&mut self, stdout: Vec<u8>, stderr: &[u8], signals: &Signals) -> Result<Vec<u8>> {
         match self.target {
             crate::ast::RedirectTarget::StderrMerged => {
                 let mut merged = stdout;
@@ -1213,14 +1217,60 @@ impl PendingRedirect {
     }
 }
 
-/// Append bytes to a file, creating it when needed, and make them durable.
-fn append_file(destination: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write as _;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+/// Open a redirect or append target before any command runs, and keep the handle
+/// that later writes use. The final component must not be a link, and the file
+/// the handle now refers to must lie inside the write grant. A stderr target is
+/// truncated only after that check, so a refused path keeps its old contents.
+fn open_output_file(
+    destination: &Path,
+    append: bool,
+    registry: &Registry,
+    cwd: &Path,
+) -> Result<File> {
+    #[cfg(windows)]
+    {
+        if let Ok(metadata) = std::fs::symlink_metadata(destination) {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            if metadata.file_type().is_symlink()
+                || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            {
+                bail!(
+                    "refusing to write through a link or reparse point: {}",
+                    destination.display()
+                );
+            }
+        }
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true);
+    if append {
+        options.append(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Refuse a symlink in the final component instead of following it.
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
         .open(destination)
-        .with_context(|| format!("opening {} for append", destination.display()))?;
+        .with_context(|| format!("opening {} for output", destination.display()))?;
+    // Re-check the resolved path of the file that was just opened, so a link in
+    // an intermediate directory cannot move the write outside the grant.
+    let canonical = std::fs::canonicalize(destination)
+        .with_context(|| format!("resolving {}", destination.display()))?;
+    crate::capabilities::authorize_host_path(registry, &canonical, true, cwd)?;
+    if !append {
+        file.set_len(0)
+            .with_context(|| format!("truncating {}", destination.display()))?;
+    }
+    Ok(file)
+}
+
+/// Append bytes through a handle opened by `open_output_file`, and make them durable.
+fn append_to_open_file(file: &mut File, destination: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write as _;
     file.write_all(bytes)
         .with_context(|| format!("appending to {}", destination.display()))?;
     file.sync_all()
@@ -4404,7 +4454,8 @@ fn run_finite_state(
                         crate::security::PersistenceKind::Save,
                         &signals.sensitivity_floor(),
                     )?;
-                    append_file(&destination, &bytes)?;
+                    let mut file = open_output_file(&destination, true, registry, &cwd)?;
+                    append_to_open_file(&mut file, &destination, &bytes)?;
                     if journal.is_some() {
                         File::open(destination.parent().unwrap_or(&cwd))?.sync_all()?;
                     }
@@ -4417,7 +4468,9 @@ fn run_finite_state(
                     data = Input::Bytes(bytes);
                 }
                 StepKind::Redirect { target, path } => {
-                    let destination = match path {
+                    // The file is opened now, before the command can start, and the
+                    // command's stderr is written through this same handle later.
+                    let file = match path {
                         Some(path) => {
                             let destination = path_value(path, &bindings, &cwd)?;
                             crate::capabilities::authorize_host_path(
@@ -4432,13 +4485,14 @@ fn run_finite_state(
                                 crate::security::PersistenceKind::Save,
                                 &signals.sensitivity_floor(),
                             )?;
-                            Some(destination)
+                            let append = *target == crate::ast::RedirectTarget::StderrAppend;
+                            Some(open_output_file(&destination, append, registry, &cwd)?)
                         }
                         None => None,
                     };
                     pending_redirect = Some(PendingRedirect {
                         target: *target,
-                        destination,
+                        file,
                     });
                 }
                 StepKind::Save { path, .. } => {
@@ -4468,7 +4522,7 @@ fn run_finite_state(
                     data = Input::Bytes(bytes);
                 }
                 StepKind::Invoke { call, connection } => {
-                    let redirect = pending_redirect.take();
+                    let mut redirect = pending_redirect.take();
                     let manifest = registry.resolve_call(call)?;
                     if manifest.builtin == Some(Builtin::Cd) {
                         let parameters = call
@@ -4733,7 +4787,7 @@ fn run_finite_state(
                                     // A failed command's stderr still goes to its
                                     // file target before the failure propagates.
                                     if let (Some(redirect), Some(failure)) =
-                                        (redirect.as_ref(), error.downcast_ref::<CommandFailed>())
+                                        (redirect.as_mut(), error.downcast_ref::<CommandFailed>())
                                     {
                                         let stderr = failure.stderr.clone().unwrap_or_else(|| {
                                             failure.diagnostic.clone().into_bytes()
@@ -4861,7 +4915,7 @@ fn run_finite_state(
                                 bindings.insert(name.clone(), record);
                             }
                         }
-                        let bytes = match &redirect {
+                        let bytes = match &mut redirect {
                             Some(redirect) => redirect.route(bytes, &redirected_stderr, signals)?,
                             None => bytes,
                         };

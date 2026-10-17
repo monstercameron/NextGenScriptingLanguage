@@ -1534,6 +1534,10 @@ fn preflight_host_paths(
             let (path, write) = match &step.kind {
                 StepKind::UseFolder { path } | StepKind::Read { path, .. } => (path, false),
                 StepKind::Save { path, .. } => (path, true),
+                StepKind::Append { path } => (path, true),
+                StepKind::Redirect {
+                    path: Some(path), ..
+                } => (path, true),
                 StepKind::Invoke { call, .. }
                     if !call.direct
                         && registry.resolve_call(call)?.builtin

@@ -379,6 +379,35 @@ pub struct Step {
 /// the step kind, a short hash of its canonical JSON and its occurrence among identical
 /// steps. Line numbers never enter a derived id, so inserting a statement above a step
 /// changes only the derived ids of identical steps, and never a labelled id.
+/// The part of a step kind that identifies it. Declarations and background stages carry
+/// their source line, and that line moves when an unrelated statement is inserted above
+/// them, so it is zeroed for identity. Every other kind is used as written.
+fn identity_kind(kind: &StepKind) -> std::borrow::Cow<'_, StepKind> {
+    let carries_lines = match kind {
+        StepKind::CallProgram { inputs, .. } => inputs.iter().any(|input| input.line != 0),
+        StepKind::SpawnJob { stages, .. } => stages.iter().any(|stage| stage.line != 0),
+        _ => false,
+    };
+    if !carries_lines {
+        return std::borrow::Cow::Borrowed(kind);
+    }
+    let mut owned = kind.clone();
+    match &mut owned {
+        StepKind::CallProgram { inputs, .. } => {
+            for input in inputs {
+                input.line = 0;
+            }
+        }
+        StepKind::SpawnJob { stages, .. } => {
+            for stage in stages {
+                stage.line = 0;
+            }
+        }
+        _ => {}
+    }
+    std::borrow::Cow::Owned(owned)
+}
+
 pub fn step_ids(steps: &[Step]) -> Vec<String> {
     use sha2::{Digest, Sha256};
     let mut occurrences: BTreeMap<String, usize> = BTreeMap::new();
@@ -388,7 +417,7 @@ pub fn step_ids(steps: &[Step]) -> Vec<String> {
             if let Some(label) = &step.label {
                 return label.clone();
             }
-            let canonical = serde_json::to_string(&step.kind).unwrap_or_default();
+            let canonical = serde_json::to_string(&identity_kind(&step.kind)).unwrap_or_default();
             let kind = match serde_json::to_value(&step.kind) {
                 Ok(serde_json::Value::Object(map)) => map.keys().next().cloned(),
                 Ok(serde_json::Value::String(name)) => Some(name),

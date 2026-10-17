@@ -110,7 +110,8 @@ fn and_stdin_from_feeds_a_file_to_one_command() {
         "run printf with message \"one\"\nthen save to \"in.txt\"\nrun count.lines and stdin from \"in.txt\"\n",
     );
     assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n");
+    // wc pads its count on some platforms (macOS), so compare the number alone.
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
 }
 
 #[test]

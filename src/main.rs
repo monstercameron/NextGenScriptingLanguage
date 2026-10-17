@@ -1592,7 +1592,13 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
             .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
         max_output_bytes: args.max_output_bytes,
     };
-    flow::live::host_run(&run, default_manifest_dir(), workflow_path)
+    // The host has already written the program's output and diagnostics. Exit with
+    // the program's status, as plain run does; process::exit skips buffer drops.
+    let status = flow::live::host_run(&run, default_manifest_dir(), workflow_path)?;
+    if status != 0 {
+        std::process::exit(status);
+    }
+    Ok(())
 }
 
 fn take_option_value(

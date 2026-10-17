@@ -71,11 +71,12 @@ pub struct HostRun {
 /// The endpoint is a fresh path that is never reused. It is removed on exit.
 /// `max_output_bytes` is capped at the live message limit (1 MiB), which bounds the
 /// captured output of each native command.
+/// Returns the process status the run ends with, which the caller exits with.
 pub fn host_run(
     run: &HostRun,
     default_manifests: PathBuf,
     path: fn(&str) -> Result<PathBuf>,
-) -> Result<()> {
+) -> Result<i32> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -120,8 +121,11 @@ pub fn host_run(
         args.push("--command-timeout-ms".to_owned());
         args.push(timeout.to_string());
     }
-    dispatch(&args, default_manifests, path, Mode::Run)?;
-    Ok(())
+    let finished = dispatch(&args, default_manifests, path, Mode::Run)?;
+    Ok(finished["exit_status"]
+        .as_i64()
+        .and_then(|status| i32::try_from(status).ok())
+        .unwrap_or(1))
 }
 
 fn error_response(error: &anyhow::Error) -> Json {
@@ -487,7 +491,7 @@ fn dispatch(
                 doc.ui = crate::ui::initial_live_state(screen)?;
             }
         }
-        let plan = validate(&doc, &registry, max_bytes)?;
+        let plan = validate(&doc, &registry, max_bytes, mode == Mode::Run)?;
         if plan.screen.is_some()
             && !opts.headless
             && (!std::io::stdin().is_terminal() || !std::io::stdout().is_terminal())
@@ -514,6 +518,7 @@ fn dispatch(
             launches: 0,
             cache_hits: 0,
             last_output: Data::default(),
+            exit: None,
             active_cancel: Arc::new(AtomicBool::new(false)),
             producer_cancel: Arc::new(AtomicBool::new(false)),
             producer_done: false,
@@ -536,6 +541,7 @@ fn dispatch(
             initial_bindings,
             initial_input,
             headless: opts.headless,
+            run_mode: mode == Mode::Run,
         });
         let options = RunOptions {
             inputs: Default::default(),
@@ -742,16 +748,16 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
             )?;
         }
     }
-    let mut run_done: Option<Result<(), String>> = None;
+    let mut run_end: Option<RunEnd> = None;
     let control = shared.clone();
     let worker = thread::spawn(move || worker::run(control, options));
     let active = Arc::new(AtomicUsize::new(0));
     let mut clients = Vec::new();
     let result = (|| -> Result<()> {
         while !shared.stop.load(Ordering::Relaxed) {
-            if mode == Mode::Run && run_done.is_none() {
-                if let Some(done) = run_outcome(&shared) {
-                    run_done = Some(done);
+            if mode == Mode::Run && run_end.is_none() {
+                if let Some(end) = run_outcome(&shared) {
+                    run_end = Some(end);
                     shared.stop.store(true, Ordering::Relaxed);
                     break;
                 }
@@ -819,35 +825,60 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
     if mode == Mode::Serve {
         return Ok(json!({"ok":true,"event":"stopped"}));
     }
-    match run_done {
-        Some(Ok(())) => {
-            // Live capture keeps the output of the last native command. Plain run
-            // streams every command, so earlier command output is not replayed here.
-            let output = shared.state.lock().unwrap().last_output.clone();
-            let mut stdout = std::io::stdout().lock();
-            match output {
-                Data::Text { text } => stdout.write_all(text.as_bytes())?,
-                Data::Bytes { bytes } => stdout.write_all(&bytes)?,
-            }
-            stdout.flush()?;
-            Ok(Json::Null)
+    let Some(end) = run_end else {
+        bail!("run stopped before it completed; the run was cancelled by control stop or a signal");
+    };
+    // Uncaptured stdout has already streamed. Write what plain run writes last: the
+    // pipeline output of a completed run, then its diagnostic, then the status.
+    if let Some(output) = end.output {
+        let mut stdout = std::io::stdout().lock();
+        match output {
+            Data::Text { text } => stdout.write_all(text.as_bytes())?,
+            Data::Bytes { bytes } => stdout.write_all(&bytes)?,
         }
-        Some(Err(message)) => bail!("{message}"),
-        None => bail!(
-            "run stopped before it completed; the run was cancelled by control stop or a signal"
-        ),
+        stdout.flush()?;
     }
+    if let Some(diagnostic) = &end.diagnostic {
+        crate::runtime::write_diagnostic(diagnostic.as_bytes());
+    }
+    Ok(json!({"ok":true,"event":"run_finished","exit_status":end.status}))
+}
+
+/// A finite run's terminal result, read once it reaches a terminal status.
+struct RunEnd {
+    /// The process status: a program's `exit with`/`fail with` status, a failed
+    /// command's status, or 0 for a run that completes without one.
+    status: i32,
+    /// The pipeline output of a completed run. A failed run has none.
+    output: Option<Data>,
+    /// The complete stderr text, with its newline: a `fail with` message, or the
+    /// error of a failed run.
+    diagnostic: Option<String>,
 }
 
 /// The outcome of a finite run once it reaches a terminal status.
-fn run_outcome(shared: &Shared) -> Option<Result<(), String>> {
+fn run_outcome(shared: &Shared) -> Option<RunEnd> {
     let state = shared.state.lock().unwrap();
+    let record = state.exit.clone();
     match state.status.as_str() {
-        "completed" => Some(Ok(())),
-        "failed" => Some(Err(state
-            .error
-            .clone()
-            .unwrap_or_else(|| "run failed".to_owned()))),
+        "completed" => Some(RunEnd {
+            status: record.as_ref().map_or(0, |exit| exit.status),
+            output: Some(state.last_output.clone()),
+            diagnostic: record
+                .and_then(|exit| exit.message)
+                .map(|message| format!("{message}\n")),
+        }),
+        "failed" => {
+            let error = state
+                .error
+                .clone()
+                .unwrap_or_else(|| "run failed".to_owned());
+            Some(RunEnd {
+                status: record.map_or(1, |exit| exit.status),
+                output: None,
+                diagnostic: Some(format!("execute: {error}\n")),
+            })
+        }
         _ => None,
     }
 }

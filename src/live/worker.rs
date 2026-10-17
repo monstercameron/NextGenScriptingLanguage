@@ -364,7 +364,14 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
         state.changed("node_started");
         shared.wake.notify_all();
         drop(state);
-        let result = runtime::live::execute_node(&node, &shared.registry, &options, context, token);
+        // A run-mode node streams uncaptured stdout to this terminal, as plain run does.
+        let result = if shared.run_mode {
+            runtime::with_streamed_stdout(|| {
+                runtime::live::execute_node(&node, &shared.registry, &options, context, token)
+            })
+        } else {
+            runtime::live::execute_node(&node, &shared.registry, &options, context, token)
+        };
         let mut state = shared.state.lock().unwrap();
         state.in_flight = false;
         state.active = None;
@@ -372,7 +379,13 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
             Ok((result, context)) => {
                 let mut candidate = state.doc.clone();
                 candidate.apply_node(context);
-                candidate.cursor = end;
+                // `exit with` or `fail with` ends the program: no later node may run.
+                let exit = result.exit.clone();
+                candidate.cursor = if exit.is_some() {
+                    state.plan.program.steps.len()
+                } else {
+                    end
+                };
                 if within_state_limit(&candidate).unwrap_or(false) {
                     state.doc = candidate;
                     state.nodes += 1;
@@ -383,6 +396,12 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
                         if *budget == 0 {
                             state.running = false;
                         }
+                    }
+                    if let Some(exit) = exit {
+                        state.exit = Some(ExitRecord {
+                            status: i32::from(exit.status),
+                            message: exit.message,
+                        });
                     }
                     state.status = if state.running { "ready" } else { "paused" }.into();
                     state.changed("node_completed");
@@ -396,6 +415,10 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
                 }
             }
             Err(error) => {
+                state.exit = Some(ExitRecord {
+                    status: command_exit_status(&error),
+                    message: None,
+                });
                 state.error = Some(format!("{error:#}").chars().take(4096).collect());
                 state.uncertain = true;
                 state.running = false;
@@ -406,6 +429,32 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
         shared.wake.notify_all();
     }
     join_producer(producer);
+}
+
+/// The process status a failed run reports. It mirrors the CLI's mapping for a
+/// failed native command: its own status (or 128 plus its signal), else 1.
+fn command_exit_status(error: &anyhow::Error) -> i32 {
+    let Some(failure) = error.downcast_ref::<runtime::CommandFailed>() else {
+        return 1;
+    };
+    #[cfg(unix)]
+    let signalled = {
+        use std::os::unix::process::ExitStatusExt;
+        failure.status.signal().map_or(1, |signal| 128 + signal)
+    };
+    #[cfg(not(unix))]
+    let signalled = 1;
+    let code = failure.status.code().unwrap_or(signalled);
+    let valid = if cfg!(windows) {
+        code != 0
+    } else {
+        (1..=255).contains(&code)
+    };
+    if valid {
+        code
+    } else {
+        1
+    }
 }
 
 fn trigger_wait(trigger: &Trigger, next_tick: Option<Instant>, now: Instant) -> Duration {

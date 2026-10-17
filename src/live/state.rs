@@ -317,7 +317,14 @@ impl Document {
     }
 }
 
-pub(crate) fn validate(doc: &Document, registry: &Registry, max_bytes: usize) -> Result<Plan> {
+/// `run_mode` is true for `execute run --control`, a finite run that ends; only it
+/// may exit or fail. A served live program keeps its state and never ends.
+pub(crate) fn validate(
+    doc: &Document,
+    registry: &Registry,
+    max_bytes: usize,
+    run_mode: bool,
+) -> Result<Plan> {
     if !doc.cwd.is_absolute() || !doc.cwd.is_dir() || doc.cwd.to_str().is_none() {
         bail!("cwd must be an existing absolute directory");
     }
@@ -474,6 +481,7 @@ pub(crate) fn validate(doc: &Document, registry: &Registry, max_bytes: usize) ->
                 || !doc.bindings.is_empty()
                 || doc.input.len() > 0
                 || matches!(plan.program.trigger, Some(Trigger::Listen { .. })),
+            run_mode,
         )?;
         for step in &plan.program.steps[..plan.body_start] {
             match &step.kind {
@@ -491,8 +499,18 @@ pub(crate) fn validate(doc: &Document, registry: &Registry, max_bytes: usize) ->
     Ok(plan)
 }
 
+/// How a run-mode program ended: the status it reports to the process, and the
+/// `fail with message` text, if any.
+#[derive(Clone, Debug)]
+pub(crate) struct ExitRecord {
+    pub status: i32,
+    pub message: Option<String>,
+}
+
 pub(crate) struct State {
     pub doc: Document,
+    /// Set by a run-mode program's `exit with`/`fail with`, or by a failed command.
+    pub exit: Option<ExitRecord>,
     pub plan: Plan,
     pub revision: u64,
     pub running: bool,
@@ -616,6 +634,9 @@ pub(crate) struct Shared {
     pub initial_bindings: BTreeMap<String, Json>,
     pub initial_input: Data,
     pub headless: bool,
+    /// `execute run --control`: stream uncaptured stdout to this terminal and allow
+    /// the program to exit.
+    pub run_mode: bool,
 }
 
 #[derive(Deserialize)]
@@ -859,7 +880,12 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                             "use retry to explicitly authorize re-execution, or edit cursor to skip the failed group",
                         ));
                     }
-                    validate(&state.doc, &shared.registry, shared.max_bytes)?;
+                    validate(
+                        &state.doc,
+                        &shared.registry,
+                        shared.max_bytes,
+                        shared.run_mode,
+                    )?;
                     state.uncertain = false;
                     state.error = None;
                     state.running = true;
@@ -888,7 +914,12 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                     if let Some(screen) = &state.plan.screen {
                         candidate.ui = crate::ui::initial_live_state(screen)?;
                     }
-                    validate(&candidate, &shared.registry, shared.max_bytes)?;
+                    validate(
+                        &candidate,
+                        &shared.registry,
+                        shared.max_bytes,
+                        shared.run_mode,
+                    )?;
                     state.ui_epoch += 1;
                     state.ui_dirty = true;
                     state.doc = candidate;
@@ -923,7 +954,12 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                 bail!("UI event queue is full");
             }
             events.push(request.value.context("event requires value")?);
-            validate(&candidate, &shared.registry, shared.max_bytes)?;
+            validate(
+                &candidate,
+                &shared.registry,
+                shared.max_bytes,
+                shared.run_mode,
+            )?;
             state.doc = candidate;
             state.ui_dirty = true;
             state.changed("ui_event_queued");
@@ -992,7 +1028,12 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                     Json::Null
                 };
             }
-            let plan = validate(&candidate, &shared.registry, shared.max_bytes)?;
+            let plan = validate(
+                &candidate,
+                &shared.registry,
+                shared.max_bytes,
+                shared.run_mode,
+            )?;
             if plan.screen.is_some() && !shared.headless {
                 use std::io::IsTerminal;
                 if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {

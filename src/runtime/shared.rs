@@ -554,6 +554,7 @@ pub(crate) fn validate_live(
     registry: &Registry,
     names: BTreeSet<String>,
     has_data: bool,
+    allow_exit: bool,
 ) -> Result<()> {
     if let Some(step) = program
         .steps
@@ -568,11 +569,9 @@ pub(crate) fn validate_live(
     if has_job_operations(program) {
         bail!("live programs do not support finite-scope background job handles");
     }
-    if let Some(step) = program
-        .steps
-        .iter()
-        .find(|step| matches!(step.kind, StepKind::Exit { .. } | StepKind::Fail { .. }))
-    {
+    if let Some(step) = program.steps.iter().find(|step| {
+        !allow_exit && matches!(step.kind, StepKind::Exit { .. } | StepKind::Fail { .. })
+    }) {
         bail!(
             "line {}: live programs keep their state between runs and cannot exit or fail",
             step.line

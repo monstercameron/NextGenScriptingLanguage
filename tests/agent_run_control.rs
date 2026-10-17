@@ -104,6 +104,140 @@ fn control_is_accepted_only_by_run_and_only_once() {
     assert!(String::from_utf8_lossy(&twice.stderr).contains("--control may be specified only once"));
 }
 
+/// Stderr without the one line `--control` adds for the endpoint address.
+fn without_endpoint(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .filter(|line| !line.starts_with("execute: control endpoint "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Run `execute run tool.program` with or without `--control`; the pair must agree.
+fn run_both(directory: &std::path::Path, source: &str) -> (Output, Output) {
+    std::fs::write(directory.join("tool.program"), source).unwrap();
+    let plain = execute(&["run", "tool.program"], directory);
+    let hosted = execute(&["run", "tool.program", "--control"], directory);
+    (plain, hosted)
+}
+
+#[test]
+fn run_control_streams_each_command_like_plain_run() {
+    let directory = tempfile::tempdir().unwrap();
+    let (plain, hosted) = run_both(
+        directory.path(),
+        "run printf with message \"first\"\nrun printf with message \"second\"\n",
+    );
+    assert!(plain.status.success());
+    assert_eq!(String::from_utf8_lossy(&plain.stdout), "first\nsecond\n");
+    assert!(
+        hosted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hosted.stderr)
+    );
+    // Both commands reach stdout as they run, not only the last one.
+    assert_eq!(hosted.stdout, plain.stdout);
+}
+
+#[test]
+fn run_control_keeps_streamed_stdout_when_a_command_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let (plain, hosted) = run_both(
+        directory.path(),
+        "run printf with message \"before\"\nrun false\nrun printf with message \"never\"\n",
+    );
+    assert_eq!(plain.status.code(), Some(1));
+    assert_eq!(hosted.status.code(), plain.status.code());
+    assert_eq!(hosted.stdout, plain.stdout);
+    assert_eq!(String::from_utf8_lossy(&hosted.stdout), "before\n");
+    let stderr = String::from_utf8_lossy(&hosted.stderr);
+    assert!(stderr.contains("applet \"false\" failed"), "{stderr}");
+}
+
+#[test]
+fn run_control_exit_with_status_sets_the_exit_status_and_skips_later_steps() {
+    let directory = tempfile::tempdir().unwrap();
+    let (plain, hosted) = run_both(
+        directory.path(),
+        "run printf with message \"a\"\nexit with status 7\nrun printf with message \"never\"\n",
+    );
+    assert_eq!(plain.status.code(), Some(7));
+    assert_eq!(
+        hosted.status.code(),
+        Some(7),
+        "{}",
+        String::from_utf8_lossy(&hosted.stderr)
+    );
+    assert_eq!(hosted.stdout, plain.stdout);
+    assert_eq!(String::from_utf8_lossy(&hosted.stdout), "a\n");
+}
+
+#[test]
+fn run_control_fail_with_message_writes_the_message_and_exits_with_its_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let (plain, hosted) = run_both(
+        directory.path(),
+        "fail with message \"boom\" and status 4\n",
+    );
+    assert_eq!(plain.status.code(), Some(4));
+    assert_eq!(hosted.status.code(), Some(4));
+    assert!(hosted.stdout.is_empty());
+    assert_eq!(
+        without_endpoint(&hosted.stderr),
+        without_endpoint(&plain.stderr)
+    );
+    assert!(String::from_utf8_lossy(&hosted.stderr).contains("boom"));
+}
+
+#[test]
+fn run_control_does_not_cap_streamed_output_at_the_live_limit() {
+    // Two MiB is past the live 1 MiB per-command capture limit. Uncaptured stdout
+    // streams, so it must arrive whole.
+    let directory = tempfile::tempdir().unwrap();
+    let big = vec![b'a'; 2 * 1024 * 1024];
+    std::fs::write(directory.path().join("big.txt"), &big).unwrap();
+    let (plain, hosted) = run_both(directory.path(), "run cat with path \"big.txt\"\n");
+    assert!(plain.status.success());
+    assert!(
+        hosted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hosted.stderr)
+    );
+    assert_eq!(plain.stdout.len(), big.len());
+    assert_eq!(hosted.stdout.len(), big.len());
+}
+
+#[test]
+fn live_serve_still_refuses_exit_and_fail() {
+    // A served program keeps its state and never ends, so exit and fail stay refused
+    // there. Validation fails before the socket is bound.
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("tool.program"),
+        "run printf with message \"a\"\nexit with status 7\n",
+    )
+    .unwrap();
+    let socket = directory.path().join("tool.sock");
+    let output = execute(
+        &[
+            "live",
+            "serve",
+            "tool.program",
+            "--socket",
+            &socket.to_string_lossy(),
+        ],
+        directory.path(),
+    );
+    assert!(!output.status.success());
+    // The live command reports its error as one JSON object on stdout.
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("cannot exit or fail"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!socket.exists());
+}
+
 mod round_trip {
     use super::*;
     use serde_json::Value;

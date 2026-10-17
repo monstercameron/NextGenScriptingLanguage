@@ -952,13 +952,7 @@ impl WorkerProcess {
                         if !exited {
                             return Ok(true);
                         }
-                        std::thread::sleep(
-                            IO_POLL_INTERVAL.min(
-                                deadline
-                                    .map(|until| until.saturating_duration_since(Instant::now()))
-                                    .unwrap_or(IO_POLL_INTERVAL),
-                            ),
-                        );
+                        wait_for_worker_output(&mut self.output, deadline);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
                         return Ok(false);
@@ -1109,7 +1103,9 @@ impl WorkerProcess {
                         message: format!("duplicating worker stdin handle: {error:#}"),
                         transmitted: false,
                     })?;
+            let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel::<()>(1);
             let writer = std::thread::spawn(move || {
+                let _finished = WriterFinished(finished_tx);
                 let mut input = input;
                 let mut written = 0;
                 let mut attempted = false;
@@ -1135,7 +1131,14 @@ impl WorkerProcess {
             });
 
             loop {
-                if writer.is_finished() {
+                let wait = deadline
+                    .map(|until| until.saturating_duration_since(Instant::now()))
+                    .unwrap_or(IO_POLL_INTERVAL)
+                    .min(IO_POLL_INTERVAL);
+                if !matches!(
+                    finished_rx.recv_timeout(wait),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ) {
                     let (written, _, result) = writer.join().map_err(|_| ExchangeFailure {
                         kind: WorkerErrorKind::IoError,
                         message: "worker stdin writer thread panicked".into(),
@@ -1164,14 +1167,6 @@ impl WorkerProcess {
                         .unwrap_or(true);
                     return Err(exchange_failure(error, transmitted));
                 }
-
-                std::thread::sleep(
-                    IO_POLL_INTERVAL.min(
-                        deadline
-                            .map(|until| until.saturating_duration_since(Instant::now()))
-                            .unwrap_or(IO_POLL_INTERVAL),
-                    ),
-                );
             }
         }
     }
@@ -1367,6 +1362,26 @@ fn read_worker_chunk(
     }
 }
 
+/// Signals the writer's completion when the thread returns or unwinds.
+#[cfg(windows)]
+struct WriterFinished(std::sync::mpsc::SyncSender<()>);
+
+#[cfg(windows)]
+impl Drop for WriterFinished {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+/// Wait for worker output, bounded by the deadline and the poll interval.
+#[cfg(windows)]
+fn wait_for_worker_output(reader: &mut WorkerOutput, deadline: Option<Instant>) {
+    let remaining = deadline
+        .map(|until| until.saturating_duration_since(Instant::now()))
+        .unwrap_or(IO_POLL_INTERVAL);
+    reader.wait_readable(IO_POLL_INTERVAL.min(remaining));
+}
+
 #[cfg(windows)]
 fn read_worker_chunk(
     reader: &mut WorkerOutput,
@@ -1380,13 +1395,7 @@ fn read_worker_chunk(
             Ok(count) => return Ok(count),
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(
-                    IO_POLL_INTERVAL.min(
-                        deadline
-                            .map(|until| until.saturating_duration_since(Instant::now()))
-                            .unwrap_or(IO_POLL_INTERVAL),
-                    ),
-                );
+                wait_for_worker_output(reader, deadline);
             }
             Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(0),
             Err(error) => {

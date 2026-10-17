@@ -444,6 +444,8 @@ pub(crate) fn lock(file: &File) -> Result<()> {
 /// this exact worker; no thread is detached or allowed to fill a queue.
 pub(crate) struct Pump {
     receiver: Option<std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>>,
+    /// A chunk error received by `wait_readable`, returned by the next `read`.
+    pending_error: Option<std::io::Error>,
     worker: Option<std::thread::JoinHandle<()>>,
     stop: Arc<AtomicBool>,
     pending: Vec<u8>,
@@ -488,6 +490,7 @@ impl Pump {
         });
         Self {
             receiver: Some(receiver),
+            pending_error: None,
             worker: Some(worker),
             stop,
             pending: Vec::new(),
@@ -496,6 +499,31 @@ impl Pump {
         }
     }
 }
+impl Pump {
+    /// Block for at most `timeout` until a chunk arrives, without consuming it.
+    /// Returns at once when bytes are buffered, an error is held, or the stream
+    /// has ended, so a caller can wake on output instead of sleeping.
+    pub(crate) fn wait_readable(&mut self, timeout: std::time::Duration) {
+        if self.offset < self.pending.len() || self.eof || self.pending_error.is_some() {
+            return;
+        }
+        let received = match self.receiver.as_ref() {
+            Some(receiver) => receiver.recv_timeout(timeout),
+            None => Err(std::sync::mpsc::RecvTimeoutError::Disconnected),
+        };
+        match received {
+            Ok(Ok(bytes)) => {
+                self.eof = bytes.is_empty();
+                self.pending = bytes;
+                self.offset = 0;
+            }
+            Ok(Err(error)) => self.pending_error = Some(error),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => self.eof = true,
+        }
+    }
+}
+
 impl std::io::Read for Pump {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         if buffer.is_empty() {
@@ -504,6 +532,9 @@ impl std::io::Read for Pump {
         if self.offset == self.pending.len() {
             if self.eof {
                 return Ok(0);
+            }
+            if let Some(error) = self.pending_error.take() {
+                return Err(error);
             }
             let Some(receiver) = self.receiver.as_ref() else {
                 self.eof = true;

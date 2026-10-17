@@ -41,12 +41,16 @@
         },
         "target": {
           "type": "text"
+        },
+        "previous": {
+          "type": "text"
         }
       },
       "required": [
         "changed",
         "path",
-        "target"
+        "target",
+        "previous"
       ]
     },
     "capabilities": [
@@ -84,12 +88,16 @@
               },
               "target": {
                 "type": "text"
+              },
+              "previous": {
+                "type": "text"
               }
             },
             "required": [
               "changed",
               "path",
-              "target"
+              "target",
+              "previous"
             ]
           },
           "delivery": "single"

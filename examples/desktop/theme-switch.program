@@ -1,0 +1,44 @@
+# Switch the active theme. Every template is rendered into a new theme directory,
+# the current-theme link is pointed at that directory, and the compositor reloads.
+# If the reload fails, the link is restored to its previous target and the program
+# exits with a failure.
+#
+# Ordering, since a symbolic-link swap is not a fs.transaction target:
+#   1. Create the theme directory and render every template into it. A render
+#      failure stops here, before the link changes, so the current theme is untouched.
+#   2. Point the current-theme link at the new directory. This is the commit point.
+#   3. Reload. On failure, point the link back at the previous target and fail.
+# The rollback is a second link update, not a multi-file transaction. A first switch
+# needs an existing link, because a previous target of "" cannot be restored.
+#
+# Run with:
+#   execute examples/desktop/theme-switch.program --input theme_name=dark \
+#     --input theme_root=/home/me/.config/omarchy/themes \
+#     --input current_link=/home/me/.config/omarchy/current/theme \
+#     --input templates='/home/me/.config/omarchy/templates/*.tpl' \
+#     --input values_json='{"background":"#1e1e2e"}'
+accept theme_name as text
+accept theme_root as text
+accept current_link as text
+accept templates as text
+accept values_json as text
+
+run path.join with parts [theme_root, theme_name] as theme_dir
+run fs.ensure_dir with path theme_dir as made_dir
+run json.parse with text values_json as values
+run fs.glob with pattern templates as template_files
+for each template in template_files
+  run path.basename with path template as file_name
+  run text.strip_suffix with text file_name and suffix ".tpl" as output_name
+  run path.join with parts [theme_dir, output_name] as output_path
+  run text.render with template_path template and values values as rendered
+  run fs.ensure_file with path output_path and content rendered as written
+
+run fs.ensure_symlink with path current_link and target theme_dir as swap
+take text at "/previous" from swap as previous
+run "hyprctl" with arguments ["reload"] and keep status as reload_status
+if reload_status is not 0
+  run fs.ensure_symlink with path current_link and target previous as rollback
+  run "printf" with arguments ["reload failed; restored the previous theme\n"]
+  run "false"
+run "printf" with arguments ["theme %s active\n", theme_name]

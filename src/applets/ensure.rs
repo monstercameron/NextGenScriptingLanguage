@@ -128,12 +128,15 @@ pub(super) fn ensure_symlink(args: &Map<String, Value>, cwd: &Path) -> Result<Va
         Err(error) if error.kind() == ErrorKind::NotFound => None,
         Err(error) => return Err(io_error(error, format!("checking {}", link.display()))),
     };
-    let changed = match existing {
+    // The previous target lets a caller roll the link back; it is empty when no
+    // link existed before this call.
+    let (changed, previous) = match existing {
         Some(metadata) if metadata.file_type().is_symlink() => {
             let current = fs::read_link(&link)
                 .map_err(|error| io_error(error, format!("reading {}", link.display())))?;
+            let previous = current.to_string_lossy().into_owned();
             if current == Path::new(target) {
-                false
+                (false, previous)
             } else {
                 let temp = temporary_link_path(&link);
                 make_link(target, &temp, &link)?;
@@ -144,7 +147,7 @@ pub(super) fn ensure_symlink(args: &Map<String, Value>, cwd: &Path) -> Result<Va
                         format!("replacing link {}", link.display()),
                     ));
                 }
-                true
+                (true, previous)
             }
         }
         Some(_) => {
@@ -155,10 +158,15 @@ pub(super) fn ensure_symlink(args: &Map<String, Value>, cwd: &Path) -> Result<Va
         }
         None => {
             make_link(target, &link, &link)?;
-            true
+            (true, String::new())
         }
     };
-    Ok(json!({"changed": changed, "path": text, "target": target}))
+    Ok(json!({
+        "changed": changed,
+        "path": text,
+        "target": target,
+        "previous": previous,
+    }))
 }
 
 pub(super) fn ensure_dir(args: &Map<String, Value>, cwd: &Path) -> Result<Value, AppletError> {

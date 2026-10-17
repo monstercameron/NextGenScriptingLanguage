@@ -19,16 +19,22 @@ mod working_dir {
     pub use flow::working_dir::*;
 }
 
+#[path = "../src/platform/unix_ffi.rs"]
+pub(crate) mod unix_ffi;
+
 mod platform {
-    #[path = "../../src/platform/unix_ffi.rs"]
-    pub(crate) mod unix_ffi;
+    pub(crate) use crate::unix_ffi;
 }
 
 // The harness includes the whole FFI module but uses only some of its functions.
 const _: fn() = || {
     let _ = (
+        platform::unix_ffi::status_flags,
+        platform::unix_ffi::set_status_flags,
+        platform::unix_ffi::set_nonblocking,
         platform::unix_ffi::set_close_on_exec,
         platform::unix_ffi::duplicate_cloexec,
+        platform::unix_ffi::poll_one,
         platform::unix_ffi::effective_uid,
     );
 };

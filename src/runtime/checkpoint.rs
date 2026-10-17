@@ -217,7 +217,7 @@ struct JournalEnvelope {
 
 /// Reference encoder for the envelope layout, used to prove `encode_envelope`
 /// writes identical bytes.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[derive(Serialize)]
 struct JournalEnvelopeRef<'a> {
     checksum: String,

@@ -1741,7 +1741,8 @@ fn execute_group_with_sink(
             "line {terminal_line}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output"
         );
     }
-    let mut terminal_foreground: Option<TerminalForeground> = None;
+    // Assigned for each command before its first use, so it needs no initial value.
+    let mut terminal_foreground: Option<TerminalForeground>;
     for (index, (call, manifest, line)) in calls.iter().enumerate() {
         check_native_abort(calls, &children, &observed_stages, signals)?;
         let (binary, argv) = if let Some(prepared) = &signals.prepared_job_commands {

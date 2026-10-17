@@ -596,7 +596,7 @@ fn is_write_effect(effect: &str) -> bool {
 /// another program. An invocation whose binary is unknown is privileged, so an
 /// unclassified step cannot pass as harmless.
 fn row_privileged(row: &Row) -> bool {
-    row.invocation && row.binary.as_deref().map_or(true, is_privileged_invocation)
+    row.invocation && row.binary.as_deref().is_none_or(is_privileged_invocation)
 }
 
 fn summary_object(program_path: &str, rows: &[Row]) -> Json {

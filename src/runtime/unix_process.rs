@@ -573,7 +573,7 @@ struct TerminalForeground {
 impl TerminalForeground {
     /// Prepare `command` for the handoff. Returns `None` when stdin is not a
     /// terminal; the command then runs like any other native command.
-    fn begin(command: &mut Command) -> Option<Self> {
+    fn begin(command: &mut std::process::Command) -> Option<Self> {
         // SAFETY: isatty only inspects descriptor 0.
         if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
             return None;

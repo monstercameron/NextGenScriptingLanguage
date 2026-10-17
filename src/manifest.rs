@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::any::{Any, TypeId};
-#[cfg(not(target_arch = "wasm32"))]
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -718,6 +717,7 @@ impl Manifest {
     }
 
     /// Whether results of this in-process applet are raw UTF-8 text or a path.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn in_process_text_output(&self) -> bool {
         self.contract
             .as_ref()
@@ -1035,7 +1035,7 @@ impl Manifest {
             }
             if let Value::String(text) = value {
                 if starts_with_home(text) {
-                    let expanded = crate::capabilities::expand_home_path(text)
+                    let expanded = crate::home::expand_home_path(text)
                         .with_context(|| format!("parameter {name:?}"))?;
                     *text = expanded.into_os_string().into_string().map_err(|_| {
                         anyhow!("parameter {name:?}: the home directory is not UTF-8")
@@ -2582,7 +2582,7 @@ mod tests {
         let manifest = registry.resolve("reader.path").unwrap();
         let supplied = BTreeMap::from([("file".to_owned(), Value::String("~/a.txt".to_owned()))]);
         let borrowed = manifest.build_arguments_borrowed(&supplied).unwrap();
-        let expected = crate::capabilities::expand_home_path("~/a.txt")
+        let expected = crate::home::expand_home_path("~/a.txt")
             .unwrap()
             .into_os_string()
             .into_string()

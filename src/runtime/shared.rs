@@ -2164,5 +2164,5 @@ fn path_value(value: &Value, bindings: &BTreeMap<String, Value>, cwd: &Path) -> 
         },
         _ => bail!("path result must contain text"),
     };
-    Ok(cwd.join(crate::capabilities::expand_home_path(path)?))
+    Ok(cwd.join(crate::home::expand_home_path(path)?))
 }

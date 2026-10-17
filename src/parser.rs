@@ -568,6 +568,168 @@ fn take_language_version(statements: &mut Vec<LogicalLine>) -> Result<()> {
     Ok(())
 }
 
+/// Program-level cleanup blocks. `on exit` runs on every exit path; `on interrupt` runs
+/// when a first interrupt starts a drain. Both wrap the statements in try/finally.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HandlerKind {
+    Exit,
+    Interrupt,
+}
+
+#[derive(Clone, Copy)]
+struct HandlerBlock {
+    kind: HandlerKind,
+    /// Cursor index of the `on exit` / `on interrupt` header line.
+    header: usize,
+    number: usize,
+    /// Cursor index just after the indented body.
+    body_end: usize,
+}
+
+/// Step indices of the opening `try` for each handler, pushed before the statements.
+struct HandlerOpeners {
+    exit: Option<usize>,
+    interrupt: Option<usize>,
+    count: usize,
+}
+
+impl HandlerOpeners {
+    fn push(steps: &mut Vec<Step>, blocks: &[HandlerBlock]) -> Self {
+        let mut openers = Self {
+            exit: None,
+            interrupt: None,
+            count: 0,
+        };
+        // The exit cleanup encloses the interrupt cleanup, so it opens first.
+        for kind in [HandlerKind::Exit, HandlerKind::Interrupt] {
+            let Some(block) = blocks.iter().find(|block| block.kind == kind) else {
+                continue;
+            };
+            let index = steps.len();
+            steps.push(Step {
+                line: block.number,
+                kind: StepKind::Try {
+                    catch: None,
+                    finally: None,
+                    end: 0,
+                },
+            });
+            match kind {
+                HandlerKind::Exit => openers.exit = Some(index),
+                HandlerKind::Interrupt => openers.interrupt = Some(index),
+            }
+            openers.count += 1;
+        }
+        openers
+    }
+}
+
+fn program_handlers(lines: &[SourceLine], arena: &[Token<'_>]) -> Result<Vec<HandlerBlock>> {
+    let mut blocks: Vec<HandlerBlock> = Vec::new();
+    let mut cursor = 0;
+    while cursor < lines.len() {
+        let line = &lines[cursor];
+        let kind = if line.indent == 0 {
+            match line.tokens(arena) {
+                [Token::Word("on"), Token::Word("exit")] => Some(HandlerKind::Exit),
+                [Token::Word("on"), Token::Word("interrupt")] => Some(HandlerKind::Interrupt),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let Some(kind) = kind else {
+            cursor += 1;
+            continue;
+        };
+        let label = match kind {
+            HandlerKind::Exit => "on exit",
+            HandlerKind::Interrupt => "on interrupt",
+        };
+        if blocks.iter().any(|block| block.kind == kind) {
+            bail!("line {}: duplicate {label} block", line.number);
+        }
+        let mut body_end = cursor + 1;
+        while body_end < lines.len() && lines[body_end].indent != 0 {
+            body_end += 1;
+        }
+        if body_end == cursor + 1 {
+            bail!(
+                "line {}: {label} body must contain an indented statement",
+                line.number
+            );
+        }
+        blocks.push(HandlerBlock {
+            kind,
+            header: cursor,
+            number: line.number,
+            body_end,
+        });
+        cursor = body_end;
+    }
+    Ok(blocks)
+}
+
+/// Appends each handler after the statements: interrupt cleanup first (it sits inside the
+/// exit cleanup), then the exit cleanup. Indices are relative to each opening `try`.
+fn emit_handler_blocks<'arena, 'source: 'arena>(
+    line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
+    blocks: &[HandlerBlock],
+    openers: &HandlerOpeners,
+    steps: &mut Vec<Step>,
+) -> Result<()> {
+    for kind in [HandlerKind::Interrupt, HandlerKind::Exit] {
+        let Some(block) = blocks.iter().find(|block| block.kind == kind) else {
+            continue;
+        };
+        let opener = match kind {
+            HandlerKind::Exit => openers.exit,
+            HandlerKind::Interrupt => openers.interrupt,
+        };
+        let Some(opener) = opener else {
+            continue;
+        };
+        let finally = steps.len();
+        steps.push(Step {
+            line: block.number,
+            kind: StepKind::Finally,
+        });
+        let guard = (kind == HandlerKind::Interrupt).then_some(steps.len());
+        if guard.is_some() {
+            steps.push(Step {
+                line: block.number,
+                kind: StepKind::OnInterrupt { end: 0 },
+            });
+        }
+        let mut cursor = block.header + 1;
+        let indent = line_at(cursor).map_or(0, |line| line.indent);
+        while cursor < block.body_end {
+            parse_statement(line_at, &mut cursor, indent, steps, 0)?;
+        }
+        if let Some(guard) = guard {
+            let target = steps.len();
+            if let StepKind::OnInterrupt { end } = &mut steps[guard].kind {
+                *end = target - guard;
+            }
+        }
+        steps.push(Step {
+            line: block.number,
+            kind: StepKind::EndTry,
+        });
+        let end = steps.len();
+        if let StepKind::Try {
+            finally: finally_slot,
+            end: end_slot,
+            ..
+        } = &mut steps[opener].kind
+        {
+            *finally_slot = Some(finally - opener);
+            *end_slot = end - opener;
+        }
+    }
+    Ok(())
+}
+
 /// Parse the line-oriented workflow language into its AST.
 pub fn parse(source: &str) -> Result<Program> {
     let mut statements = logical_lines(source)?;
@@ -599,8 +761,22 @@ pub fn parse(source: &str) -> Result<Program> {
             tokens: line.tokens(&token_arena),
         })
     };
+    let handlers = program_handlers(&lines, &token_arena)?;
+    if let Some(line) = lines.iter().find(|line| {
+        line.indent == 0 && !handlers.is_empty() && is_trigger_header(line.tokens(&token_arena))
+    }) {
+        bail!(
+            "line {}: on exit and on interrupt apply to one-shot programs, not triggers",
+            line.number
+        );
+    }
+    let openers = HandlerOpeners::push(&mut steps, &handlers);
     let mut cursor = 0;
     while cursor < lines.len() {
+        if let Some(block) = handlers.iter().find(|block| block.header == cursor) {
+            cursor = block.body_end;
+            continue;
+        }
         let line = &lines[cursor];
         let line_tokens = line.tokens(&token_arena);
         if line.indent != 0 {
@@ -610,7 +786,7 @@ pub fn parse(source: &str) -> Result<Program> {
             );
         }
         if word_is(line_tokens.first(), "define") {
-            if !steps.is_empty() {
+            if steps.len() > openers.count {
                 bail!(
                     "line {}: program definitions must precede executable statements",
                     line.number
@@ -623,7 +799,7 @@ pub fn parse(source: &str) -> Result<Program> {
             continue;
         }
         if word_is(line_tokens.first(), "accept") {
-            if !steps.is_empty() {
+            if steps.len() > openers.count {
                 bail!(
                     "line {}: input declarations must precede executable statements",
                     line.number
@@ -692,6 +868,15 @@ pub fn parse(source: &str) -> Result<Program> {
             );
         }
         parse_statement(&block_line, &mut cursor, 0, &mut steps, 0)?;
+    }
+    if let Some(first) = handlers.first() {
+        if steps.len() == openers.count {
+            bail!(
+                "line {}: on exit and on interrupt need at least one statement to wrap",
+                first.number
+            );
+        }
+        emit_handler_blocks(&block_line, &handlers, &openers, &mut steps)?;
     }
 
     crate::inputs::validate(&inputs)?;

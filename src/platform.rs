@@ -72,17 +72,49 @@ pub(crate) fn cancel_exit_code() -> Option<i32> {
     }
 }
 
-pub(crate) fn signals(cancel: Arc<AtomicBool>) -> Result<Vec<signal_hook::SigId>> {
+/// Interrupt drain states shared by a run and its signal handlers. The first
+/// interrupt of a run with an `on interrupt` body requests a drain: no new work is
+/// admitted and the program unwinds at the next statement boundary. A second
+/// interrupt cancels as before.
+pub(crate) const DRAIN_IDLE: u8 = 0;
+pub(crate) const DRAIN_REQUESTED: u8 = 1;
+pub(crate) const DRAIN_STARTED: u8 = 2;
+pub(crate) const DRAIN_CANCELLED: u8 = 3;
+
+/// Records an interrupt against a drain state. True when it requested the drain;
+/// false when a drain was already under way and the interrupt must cancel.
+pub(crate) fn request_drain(state: &std::sync::atomic::AtomicU8) -> bool {
+    state
+        .compare_exchange(
+            DRAIN_IDLE,
+            DRAIN_REQUESTED,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+}
+
+pub(crate) fn signals(
+    cancel: Arc<AtomicBool>,
+    drain: Option<Arc<std::sync::atomic::AtomicU8>>,
+) -> Result<Vec<signal_hook::SigId>> {
     #[cfg(unix)]
     {
         let mut ids = Vec::new();
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGQUIT, libc::SIGHUP] {
             let flag = cancel.clone();
-            // SAFETY: the action only performs atomic stores, which are
+            let drain = drain.clone();
+            // SAFETY: the action only performs atomic operations, which are
             // async-signal-safe.
             let registered = unsafe {
                 signal_hook::low_level::register(signal, move || {
                     record_cancel_signal(signal);
+                    if let Some(drain) = &drain {
+                        if request_drain(drain) {
+                            return;
+                        }
+                        drain.store(DRAIN_CANCELLED, std::sync::atomic::Ordering::SeqCst);
+                    }
                     flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 })
             };
@@ -100,7 +132,7 @@ pub(crate) fn signals(cancel: Arc<AtomicBool>) -> Result<Vec<signal_hook::SigId>
     }
     #[cfg(windows)]
     {
-        windows::signals(cancel)?;
+        windows::signals(cancel, drain)?;
         Ok(Vec::new())
     }
 }

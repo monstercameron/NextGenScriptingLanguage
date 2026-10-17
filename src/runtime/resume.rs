@@ -375,6 +375,16 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
     if let Some(step) = program
         .steps
         .iter()
+        .find(|step| matches!(step.kind, StepKind::OnInterrupt { .. }))
+    {
+        bail!(
+            "line {}: on interrupt is not supported with checkpointed runs yet",
+            step.line
+        );
+    }
+    if let Some(step) = program
+        .steps
+        .iter()
         .find(|step| matches!(step.kind, StepKind::Interactive))
     {
         bail!(

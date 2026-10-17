@@ -160,6 +160,7 @@ fn execute_group_with_sink(
     let mut pending_spawn_events = Vec::new();
     let bounded = Signals {
         cancelled: signals.cancelled.clone(),
+        drain: Arc::clone(&signals.drain),
         registrations: Vec::new(),
         capture_diagnostics: signals.capture_diagnostics,
         graph_service_cancellation: signals.graph_service_cancellation,

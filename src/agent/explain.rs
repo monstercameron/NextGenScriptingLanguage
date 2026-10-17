@@ -257,6 +257,7 @@ impl Walker<'_> {
                 self.rows.push(row);
             }
             StepKind::UseValue { .. } => self.push_plain(line, "use_value", scope),
+            StepKind::OnInterrupt { .. } => self.push_plain(line, "on_interrupt", scope),
             StepKind::Read { path, .. } => {
                 let mut row = Row::plain(line, "read", scope);
                 row.reads = Some(true);

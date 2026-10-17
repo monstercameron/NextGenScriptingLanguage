@@ -508,6 +508,29 @@ does not run any later step and reports the same status, re-derived from the
 restored bindings. Validation rejects nested exits in a checkpointed program
 before any effect.
 
+### Exit and interrupt handlers
+
+A top-level `on exit` block runs on every exit path: normal completion, `exit`,
+`fail`, and an error. It wraps the program's statements in a try/finally, so
+its output is the run's final output, as with `finally`.
+
+A top-level `on interrupt` block runs when an interrupt starts a drain. The
+first interrupt (SIGINT, SIGTERM, SIGQUIT or SIGHUP on Unix; Ctrl-C on Windows)
+stops admitting new work: a running command or `parallel for each` element
+finishes, the next statement boundary unwinds through the cleanup blocks, and
+the run ends with status 130 unless the interrupt's own status applies. A
+second interrupt cancels as before: running children are stopped and the
+`on interrupt` body is skipped. A `parallel for each` that is drained reports
+the elements it did not start as `not_started`; a `parallel` task group with
+`join` or `race` fails instead, as it does when cancelled.
+
+Both blocks are unindented headers with indented bodies, appear at most once
+each, and are allowed only in one-shot programs: a triggered program
+(`every`, `on schedule`, `listen`) rejects them. A program with a handler needs
+at least one statement to wrap. `on interrupt` is rejected with `--checkpoint`
+and in live programs; `on exit` works with checkpoints. Explain shows the
+interrupt body as an `on_interrupt` row.
+
 ### Structured JSON
 
 ```text

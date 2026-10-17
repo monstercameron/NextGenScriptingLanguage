@@ -266,6 +266,7 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                 | crate::ast::StepKind::EndTry
                 | crate::ast::StepKind::EndLoop { .. }
                 | crate::ast::StepKind::Otherwise { .. }
+                | crate::ast::StepKind::OnInterrupt { .. }
                 | crate::ast::StepKind::EndIf => {}
             }
         }
@@ -1589,7 +1590,7 @@ impl Signals {
             cancel: Arc::new(AtomicBool::new(false)),
             ids: Vec::new(),
         };
-        guard.ids = crate::platform::signals(guard.cancel.clone())?;
+        guard.ids = crate::platform::signals(guard.cancel.clone(), None)?;
         Ok(guard)
     }
 }

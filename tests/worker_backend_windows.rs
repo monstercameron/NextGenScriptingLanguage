@@ -17,6 +17,21 @@ mod platform {
 /// parent; this harness does not report interrupt exit codes.
 pub(crate) fn record_cancel_signal(_signal: i32) {}
 
+/// Drain-state helpers mirror `src/platform.rs`, which the included module reaches
+/// through its parent.
+pub(crate) const DRAIN_CANCELLED: u8 = 3;
+
+pub(crate) fn request_drain(state: &std::sync::atomic::AtomicU8) -> bool {
+    state
+        .compare_exchange(
+            0,
+            1,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+}
+
 mod capabilities {
     pub use flow::capabilities::*;
 }

@@ -204,6 +204,7 @@ pub(super) fn preflight_group(
 /// Execute a task group after validating every task before any worker starts.
 /// The returned `Value` is a typed record; task outputs are preserved as
 /// explicit `u8_array` fields when the applet has no typed output schema.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run_group(
     config: TaskGroupConfig,
     tasks: &[Invocation],
@@ -211,6 +212,7 @@ pub(super) fn run_group(
     bindings: &std::collections::BTreeMap<String, Value>,
     options: &RunOptions,
     cancelled: Arc<AtomicBool>,
+    draining: Arc<std::sync::atomic::AtomicU8>,
     context: AppletInvocationContext,
 ) -> Result<TaskGroupResult> {
     let TaskGroupConfig {
@@ -291,6 +293,17 @@ pub(super) fn run_group(
 
     while next < prepared.len() || active > 0 {
         while active < limit && next < prepared.len() && winner.is_none() {
+            if draining.load(Ordering::SeqCst) != crate::platform::DRAIN_IDLE {
+                first_failure.get_or_insert_with(|| {
+                    (
+                        next,
+                        "task group was interrupted before this task started".into(),
+                        None,
+                        false,
+                    )
+                });
+                break;
+            }
             if group_cancelled.load(Ordering::Acquire) {
                 first_failure.get_or_insert_with(|| {
                     (
@@ -609,6 +622,7 @@ pub(super) fn run_each(
     bindings: &BTreeMap<String, Value>,
     options: &RunOptions,
     cancelled: Arc<AtomicBool>,
+    draining: Arc<std::sync::atomic::AtomicU8>,
     context: AppletInvocationContext,
 ) -> Result<TaskGroupResult> {
     let TaskGroupConfig {
@@ -721,6 +735,12 @@ pub(super) fn run_each(
 
     while next < prepared.len() || active > 0 {
         while active < limit && next < prepared.len() {
+            if draining.load(Ordering::SeqCst) != crate::platform::DRAIN_IDLE {
+                // A drain admits no new elements; running ones finish and are reported
+                // as not started for the rest.
+                next = prepared.len();
+                break;
+            }
             if scope.is_cancelled() {
                 stopped.get_or_insert_with(|| (next, "parallel for each was cancelled".into()));
                 break;
@@ -878,6 +898,12 @@ pub(super) fn run_each(
         .into());
     }
 
+    // Elements never admitted (a drain stopped admission) report as not started.
+    for record in records.iter_mut() {
+        if matches!(record.state, TaskState::Pending) {
+            record.state = TaskState::NotStarted;
+        }
+    }
     let value = each_value(&records, &items, &secret_redactor);
     ensure_encoded_limit(&value, max_output_bytes)?;
     Ok(TaskGroupResult {

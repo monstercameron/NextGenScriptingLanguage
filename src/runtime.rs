@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(test, unix))]
 use std::process::Command;
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -331,6 +331,8 @@ include!("runtime/windows_process.rs");
 
 pub(crate) struct Signals {
     cancelled: Arc<AtomicBool>,
+    /// Interrupt drain state (`platform::DRAIN_*`); shared with cleanup scopes.
+    drain: Arc<AtomicU8>,
     registrations: Vec<signal_hook::SigId>,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
@@ -425,8 +427,19 @@ impl AppletInvocationContext {
 
 impl Signals {
     pub(crate) fn register_with_deadline(deadline: Option<Instant>) -> Result<Self> {
+        Self::register(deadline, false)
+    }
+
+    /// Like `register_with_deadline`, but the first interrupt drains the run rather
+    /// than cancelling it; a second interrupt cancels.
+    pub(crate) fn register_with_drain(deadline: Option<Instant>) -> Result<Self> {
+        Self::register(deadline, true)
+    }
+
+    fn register(deadline: Option<Instant>, drain: bool) -> Result<Self> {
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
+            drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
             deadline,
@@ -449,7 +462,8 @@ impl Signals {
             #[cfg(test)]
             job_panic_before_ack: None,
         };
-        guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
+        let armed = drain.then(|| Arc::clone(&guard.drain));
+        guard.registrations = crate::platform::signals(guard.cancelled.clone(), armed)?;
         Ok(guard)
     }
 
@@ -458,7 +472,7 @@ impl Signals {
         deadline: Option<Instant>,
     ) -> Result<Self> {
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
-        guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
+        guard.registrations = crate::platform::signals(guard.cancelled.clone(), None)?;
         Ok(guard)
     }
 
@@ -474,6 +488,7 @@ impl Signals {
     ) -> Result<Self> {
         Ok(Self {
             cancelled,
+            drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
             registrations: Vec::new(),
             capture_diagnostics,
             deadline,
@@ -504,6 +519,7 @@ impl Signals {
     fn cleanup_scope(&self, deadline: Option<Instant>) -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
+            drain: Arc::clone(&self.drain),
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
             deadline,
@@ -573,6 +589,27 @@ impl Signals {
             .ok()?
             .as_ref()
             .map(|frame| Arc::clone(&frame.budget))
+    }
+
+    /// True while an `on interrupt` body should run: a drain is requested or under way.
+    /// A second interrupt cancels and turns this off, so a hard cancel skips the body.
+    fn drain_body_runs(&self) -> bool {
+        matches!(
+            self.drain.load(Ordering::SeqCst),
+            crate::platform::DRAIN_REQUESTED | crate::platform::DRAIN_STARTED
+        )
+    }
+
+    /// Starts a requested drain: true exactly once, at a statement boundary.
+    fn begin_drain(&self) -> bool {
+        self.drain
+            .compare_exchange(
+                crate::platform::DRAIN_REQUESTED,
+                crate::platform::DRAIN_STARTED,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
     }
 
     pub(crate) fn is_cancelled(&self) -> bool {
@@ -2338,9 +2375,28 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     result.with_context(|| format!("writing {}", path.display()))
 }
 
+/// Exit status of a run ended by an interrupt drain: the interrupt's own status, or 130.
+fn drain_exit_status() -> u8 {
+    crate::platform::cancel_exit_code()
+        .and_then(|code| u8::try_from(code).ok())
+        .unwrap_or(130)
+}
+
+/// Programs with an `on interrupt` body drain on their first interrupt.
+fn has_interrupt_handler(program: &Program) -> bool {
+    program
+        .steps
+        .iter()
+        .any(|step| matches!(step.kind, StepKind::OnInterrupt { .. }))
+}
+
 pub fn run(program: &Program, registry: &Registry, options: &RunOptions) -> Result<RunResult> {
     let deadline = deadline_after(options.total_timeout, "total timeout")?;
-    let signals = Signals::register_with_deadline(deadline)?;
+    let signals = if has_interrupt_handler(program) {
+        Signals::register_with_drain(deadline)?
+    } else {
+        Signals::register_with_deadline(deadline)?
+    };
     check_execution_budget(&signals.cancelled, signals.deadline)?;
     validate(program, registry)?;
     check_execution_budget(&signals.cancelled, signals.deadline)?;
@@ -3471,6 +3527,7 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::EndLoop { .. }
             | StepKind::If { .. }
             | StepKind::Otherwise { .. }
+            | StepKind::OnInterrupt { .. }
             | StepKind::EndIf
             | StepKind::EndCall
             | StepKind::BreakLoop
@@ -3998,6 +4055,36 @@ fn run_finite_state(
             None
         };
         let signals = cleanup_signals.as_ref().unwrap_or(parent_signals);
+        // An interrupt that requested a drain unwinds from this statement boundary, as
+        // `exit` does: finally blocks run, including `on interrupt` and `on exit`.
+        // Running steps are not cancelled; the run stops before starting the next one.
+        // A `try` opener is not a boundary: entering it creates the frame the drain
+        // unwinds through, so the drain starts at the first statement inside it.
+        if !control_state.cleanup_active()
+            && !matches!(program.steps[index].kind, StepKind::Try { .. })
+            && parent_signals.begin_drain()
+        {
+            let exit = ProgramExit {
+                status: drain_exit_status(),
+                message: None,
+            };
+            let action = control_state.transfer(
+                control_flow::TransferKind::Exit,
+                program.steps.len(),
+                control_flow::UnwindTo::new(0, 0),
+            )?;
+            if !matches!(action, control_flow::ControlAction::Continue { .. }) {
+                control_state.set_exit(exit);
+            }
+            match apply_control_action(action, control_context!())? {
+                AppliedControl::Continue => {}
+                AppliedControl::Jump(target) => {
+                    index = target;
+                    continue;
+                }
+                AppliedControl::Rethrow(error) => return Err(error),
+            }
+        }
         let step = &program.steps[index];
         // Markers only steer control flow; the statements they close are the stops.
         if depth == 0
@@ -4007,6 +4094,7 @@ fn run_finite_state(
                     | StepKind::EndIf
                     | StepKind::EndCall
                     | StepKind::Otherwise { .. }
+                    | StepKind::OnInterrupt { .. }
             )
         {
             statement_hook::before_statement(step.line, &bindings)?;
@@ -4129,6 +4217,18 @@ fn run_finite_state(
                     }
                 }
                 StepKind::Otherwise { end } => jump_to = Some(index + end),
+                StepKind::OnInterrupt { end } => {
+                    if !signals.drain_body_runs() {
+                        jump_to = Some(index + end);
+                    } else if signals.begin_drain() {
+                        // The interrupt arrived after the last statement boundary: the
+                        // body still runs, and the run ends with the interrupt status.
+                        control_state.set_exit(ProgramExit {
+                            status: drain_exit_status(),
+                            message: None,
+                        });
+                    }
+                }
                 StepKind::EndIf => {}
                 StepKind::CallProgram {
                     call,
@@ -4448,6 +4548,7 @@ fn run_finite_state(
                             &bindings,
                             options,
                             Arc::clone(&signals.cancelled),
+                            Arc::clone(&signals.drain),
                             AppletInvocationContext::from_signals(signals)?,
                         ),
                         None => tasks::run_group(
@@ -4457,6 +4558,7 @@ fn run_finite_state(
                             &bindings,
                             options,
                             Arc::clone(&signals.cancelled),
+                            Arc::clone(&signals.drain),
                             AppletInvocationContext::from_signals(signals)?,
                         ),
                     };
@@ -6573,5 +6675,148 @@ mod output_limit_message_tests {
         }
         // The guard restores the foreground scope when it is dropped.
         assert!(output_limit_message(false, 1).starts_with("foreground command"));
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+
+    fn options(directory: &Path) -> RunOptions {
+        RunOptions {
+            inputs: BTreeMap::new(),
+            working_directory: directory.to_owned(),
+            cache_directory: None,
+            trace: false,
+            max_output_bytes: 4096,
+            command_timeout: Some(Duration::from_secs(5)),
+            total_timeout: Some(Duration::from_secs(10)),
+        }
+    }
+
+    /// Runs `source` in a fresh directory with the drain state preset, without
+    /// installing OS signal handlers. The directory keeps any files the run wrote.
+    fn run_with_drain(
+        source: &str,
+        state: u8,
+        cancel: bool,
+    ) -> (tempfile::TempDir, Result<RunResult>) {
+        let directory = tempfile::tempdir().unwrap();
+        let registry =
+            Registry::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap();
+        let program = crate::parser::parse(source).unwrap();
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(cancel)), false, None)
+                .unwrap();
+        signals.drain.store(state, Ordering::SeqCst);
+        let result = run_finite_inner(
+            &program,
+            &registry,
+            &options(directory.path()),
+            &signals,
+            Input::Empty,
+            None,
+            None,
+        );
+        (directory, result)
+    }
+
+    /// The interrupt body and the main body each leave a marker file, so the test can
+    /// see which ran.
+    const INTERRUPTIBLE: &str = "on interrupt\n  run printf with message \"drained\"\n  then save to file \"drained.txt\"\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
+
+    #[test]
+    fn requested_drain_runs_only_the_interrupt_body() {
+        let (directory, result) =
+            run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_REQUESTED, false);
+        let result = result.expect("a drain is a clean end, not an error");
+        assert_eq!(result.exit.map(|exit| exit.status), Some(130));
+        assert!(directory.path().join("drained.txt").exists());
+        assert!(!directory.path().join("main.txt").exists());
+    }
+
+    #[test]
+    fn run_without_an_interrupt_skips_the_interrupt_body() {
+        let (directory, result) = run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_IDLE, false);
+        assert!(result.expect("ordinary run").exit.is_none());
+        assert!(directory.path().join("main.txt").exists());
+        assert!(!directory.path().join("drained.txt").exists());
+    }
+
+    #[test]
+    fn hard_cancel_skips_the_interrupt_body() {
+        let (directory, result) =
+            run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_CANCELLED, true);
+        let error = result.err().expect("a second interrupt cancels the run");
+        assert!(
+            format!("{error:#}").contains("workflow cancelled by signal"),
+            "{error:#}"
+        );
+        assert!(!directory.path().join("drained.txt").exists());
+    }
+
+    #[test]
+    fn drain_runs_the_interrupt_body_then_the_exit_body() {
+        let source = "on interrupt\n  run printf with message \"interrupted\"\n  then save to file \"interrupted.txt\"\non exit\n  run printf with message \"exit\"\n  then save to file \"exit.txt\"\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
+        let (directory, result) = run_with_drain(source, crate::platform::DRAIN_REQUESTED, false);
+        assert_eq!(
+            result
+                .expect("drain through both cleanups")
+                .exit
+                .map(|exit| exit.status),
+            Some(130)
+        );
+        assert!(directory.path().join("interrupted.txt").exists());
+        assert!(directory.path().join("exit.txt").exists());
+        assert!(!directory.path().join("main.txt").exists());
+    }
+
+    #[test]
+    fn drained_parallel_for_each_admits_no_elements() {
+        let source = "parallel for each word in [\"a\", \"b\", \"c\"] at most 2 as results\n  run printf with message word\n";
+        let program = crate::parser::parse(source).unwrap();
+        let registry =
+            Registry::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        let session =
+            crate::modules::ProgramModuleSession::preload_program(&program, &registry).unwrap();
+        *signals.program_modules.lock().unwrap() = Some(Arc::new(session));
+        let (mode, limit, tasks, each) = program
+            .steps
+            .iter()
+            .find_map(|step| match &step.kind {
+                StepKind::TaskGroup {
+                    mode,
+                    limit,
+                    tasks,
+                    each,
+                    ..
+                } => Some((*mode, *limit, tasks.clone(), each.clone())),
+                _ => None,
+            })
+            .expect("a task group step");
+        let each = each.expect("a parallel for each");
+        let result = super::tasks::run_each(
+            super::tasks::TaskGroupConfig {
+                mode,
+                limit,
+                outer_deadline: None,
+            },
+            &each,
+            &tasks[0],
+            &registry,
+            &BTreeMap::new(),
+            &options(directory.path()),
+            Arc::clone(&signals.cancelled),
+            Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED)),
+            AppletInvocationContext::from_signals(&signals).unwrap(),
+        )
+        .expect("a drained group reports its elements, not an error");
+        let value = crate::structured::to_json(&result.value).unwrap();
+        assert_eq!(result.launched_processes, 0);
+        assert_eq!(value["not_started"], 3, "{value}");
     }
 }

@@ -559,6 +559,16 @@ pub(crate) fn validate_live(
     if let Some(step) = program
         .steps
         .iter()
+        .find(|step| matches!(step.kind, StepKind::OnInterrupt { .. }))
+    {
+        bail!(
+            "line {}: on interrupt is not supported in live programs",
+            step.line
+        );
+    }
+    if let Some(step) = program
+        .steps
+        .iter()
         .find(|step| matches!(step.kind, StepKind::Interactive))
     {
         bail!(
@@ -1083,7 +1093,7 @@ fn validate_range(
                 }
             }
             match &step.kind {
-                StepKind::Interactive => {}
+                StepKind::Interactive | StepKind::OnInterrupt { .. } => {}
                 StepKind::Loop { .. }
                 | StepKind::EndLoop { .. }
                 | StepKind::If { .. }
@@ -1872,6 +1882,9 @@ pub fn explain_with_inputs(
                 if *expect_success { "succeeds" } else { "fails" }
             ),
             StepKind::Otherwise { .. } => "otherwise".into(),
+            StepKind::OnInterrupt { .. } => {
+                "on interrupt body: runs only when an interrupt starts a drain".into()
+            }
             StepKind::EndIf => "end conditional".into(),
             StepKind::CallProgram { call, .. } => format!(
                 "call program {:?}; explicit inputs {:?}; local scope",

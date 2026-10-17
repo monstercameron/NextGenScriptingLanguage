@@ -762,7 +762,7 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
     };
     listener.set_nonblocking(true)?;
     let mut signals = SignalGuard(Vec::new());
-    signals.0 = crate::platform::signals(shared.stop.clone())?;
+    signals.0 = crate::platform::signals(shared.stop.clone(), None)?;
     match mode {
         Mode::Serve => {
             writeln!(

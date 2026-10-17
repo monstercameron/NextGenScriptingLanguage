@@ -280,6 +280,11 @@ pub enum StepKind {
     /// `interactively`: the next command takes the terminal for its run (terminal
     /// handoff). It must immediately precede one fresh, unpiped native command.
     Interactive,
+    /// Opens a top-level `on interrupt` body inside its cleanup block. The body runs only
+    /// while a drain is in progress; otherwise control jumps to `end` (relative).
+    OnInterrupt {
+        end: usize,
+    },
     /// Routes the next command's stderr or stdout. It must immediately precede
     /// one `Invoke` that starts a fresh, unpiped command.
     Redirect {

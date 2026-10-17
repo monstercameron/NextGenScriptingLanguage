@@ -218,6 +218,7 @@ impl BrowserSession {
                 | StepKind::Redirect { .. }
                 | StepKind::Environment { .. } => Some("file redirection and append"),
                 StepKind::Interactive => Some("terminal handoff (interactively)"),
+                StepKind::OnInterrupt { .. } => Some("on interrupt drain"),
                 StepKind::Exit { .. } | StepKind::Fail { .. } => {
                     Some("exit with status and fail with message")
                 }
@@ -314,6 +315,9 @@ impl BrowserSession {
                         }
                     }
                     StepKind::Otherwise { end } => jump = Some(index + end),
+                    StepKind::OnInterrupt { .. } => {
+                        bail!("on interrupt is not supported in browser execution")
+                    }
                     StepKind::EndIf => {}
                     StepKind::BreakLoop
                     | StepKind::ContinueLoop

@@ -23,8 +23,13 @@ use windows_sys::Win32::{
 pub(crate) fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
-pub(crate) fn signals(cancel: Arc<AtomicBool>) -> Result<()> {
-    static FLAGS: OnceLock<Mutex<Vec<Weak<AtomicBool>>>> = OnceLock::new();
+type Registration = (Weak<AtomicBool>, Option<Weak<std::sync::atomic::AtomicU8>>);
+
+pub(crate) fn signals(
+    cancel: Arc<AtomicBool>,
+    drain: Option<Arc<std::sync::atomic::AtomicU8>>,
+) -> Result<()> {
+    static FLAGS: OnceLock<Mutex<Vec<Registration>>> = OnceLock::new();
     static INSTALLED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
     FLAGS.get_or_init(|| Mutex::new(Vec::new()));
     let installed = INSTALLED.get_or_init(|| {
@@ -32,14 +37,19 @@ pub(crate) fn signals(cancel: Arc<AtomicBool>) -> Result<()> {
             super::record_cancel_signal(2);
             if let Some(flags) = FLAGS.get() {
                 let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
-                flags.retain(|weak| {
-                    if let Some(flag) = weak.upgrade() {
-                        flag.store(true, Ordering::Relaxed);
-                        true
-                    } else {
-                        false
+                flags.retain(|(cancel, _)| cancel.strong_count() != 0);
+                for (cancel, drain) in flags.iter() {
+                    // A run with an `on interrupt` body drains on its first interrupt.
+                    if let Some(drain) = drain.as_ref().and_then(|weak| weak.upgrade()) {
+                        if super::request_drain(&drain) {
+                            continue;
+                        }
+                        drain.store(super::DRAIN_CANCELLED, Ordering::SeqCst);
                     }
-                });
+                    if let Some(flag) = cancel.upgrade() {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                }
             }
         })
         .map_err(|e| e.to_string())
@@ -52,8 +62,8 @@ pub(crate) fn signals(cancel: Arc<AtomicBool>) -> Result<()> {
         .unwrap()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    flags.retain(|f| f.strong_count() != 0);
-    flags.push(Arc::downgrade(&cancel));
+    flags.retain(|(cancel, _)| cancel.strong_count() != 0);
+    flags.push((Arc::downgrade(&cancel), drain.as_ref().map(Arc::downgrade)));
     Ok(())
 }
 

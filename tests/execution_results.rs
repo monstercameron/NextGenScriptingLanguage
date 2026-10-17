@@ -17,6 +17,22 @@ use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::thread;
 
+/// The `native-fixture` example, built alongside the tests. Its `write` command prints
+/// its argument unchanged on every platform, which `printf` does not on Windows.
+fn native_fixture() -> String {
+    let name = if cfg!(windows) { "native-fixture.exe" } else { "native-fixture" };
+    let path = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join(name);
+    assert!(path.is_file(), "build cargo build --example native-fixture before these tests");
+    path.to_str().unwrap().to_owned()
+}
+
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {
         inputs: BTreeMap::new(),
@@ -285,14 +301,13 @@ fn source_result_binding_exposes_raw_output_and_all_pipeline_stages() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn source_result_binding_decodes_typed_output_without_an_output_binding() {
     let directory = tempfile::tempdir().unwrap();
     let catalog = registry(json!({
         "name": "typed.fixture",
-        "binary": "printf",
-        "arguments": [{"literal": "{\"count\":5}"}],
+        "binary": native_fixture(),
+        "arguments": [{"literal": "write"}, {"literal": "{\"count\":5}"}],
         "contract": {
             "version": 1,
             "backend": "command",
@@ -318,14 +333,13 @@ fn source_result_binding_decodes_typed_output_without_an_output_binding() {
     assert_eq!(record["value"]["count"], 5);
 }
 
-#[cfg(unix)]
 #[test]
 fn source_result_binding_keeps_the_value_alongside_a_named_output() {
     let directory = tempfile::tempdir().unwrap();
     let catalog = registry(json!({
         "name": "typed.fixture",
-        "binary": "printf",
-        "arguments": [{"literal": "{\"count\":5}"}],
+        "binary": native_fixture(),
+        "arguments": [{"literal": "write"}, {"literal": "{\"count\":5}"}],
         "contract": {
             "version": 1,
             "backend": "command",

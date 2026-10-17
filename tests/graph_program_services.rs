@@ -5,7 +5,8 @@ use flow::graph::{
     RuntimeGraphExecutor,
 };
 #[cfg(unix)]
-use flow::graph::{EdgeSpec, GraphNodeKind, PortRef};
+use flow::graph::{EdgeSpec, GraphNodeKind};
+use flow::graph::PortRef;
 use flow::manifest::Registry;
 use flow::modules::{load_program_module_package, ProgramModuleSession};
 use flow::runtime::RunOptions;
@@ -25,6 +26,22 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const SERVICE_APPLET: &str = "test.snapshot_service";
+
+/// The `native-fixture` example, built alongside the tests. Its `write` command prints its
+/// argument unchanged on every platform, which `printf` does not on Windows.
+fn native_fixture() -> String {
+    let name = if cfg!(windows) { "native-fixture.exe" } else { "native-fixture" };
+    let path = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join(name);
+    assert!(path.is_file(), "build cargo build --example native-fixture before these tests");
+    path.to_str().unwrap().to_owned()
+}
 
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -93,9 +110,9 @@ fn service_fixture(source: &str) -> (TempDir, Registry) {
     .unwrap();
     let source_descriptor = json!({
         "name": "test.snapshot_source",
-        "binary": "printf",
+        "binary": native_fixture(),
         "accepts_stdin": false,
-        "arguments": [{ "literal": "{\"count\":11}" }],
+        "arguments": [{"literal": "write"}, {"literal": "{\"count\":11}"}],
         "parameters": {},
         "contract": {
             "version": 1,
@@ -206,7 +223,6 @@ fn service_with_v1_dependency_fixture() -> (TempDir, Registry) {
     package_service_with_v1_dependency_fixture(service_source, "schedule", false)
 }
 
-#[cfg(unix)]
 fn listener_with_v1_dependency_fixture() -> (TempDir, Registry) {
     let service_source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  run dep.echo with payload snapshot\n";
     package_service_with_v1_dependency_fixture(service_source, "listener", true)
@@ -357,10 +373,10 @@ fn package_service_with_v1_dependency_fixture(
     if include_listener_source {
         let source_applet = json!({
             "name": "test.snapshot_source",
-            "binary": "printf",
+            "binary": native_fixture(),
             "accepts_stdin": false,
             "parameters": {},
-            "arguments": [{"literal": "{\"count\":11}"}],
+            "arguments": [{"literal": "write"}, {"literal": "{\"count\":11}"}],
             "contract": {"version": 1, "output": {"type": "bytes", "encoding": "raw"}}
         });
         fs::write(
@@ -433,7 +449,6 @@ fn scheduled_program_service_emits_successive_typed_events() {
     session.cancel_and_join().unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn native_listener_program_service_emits_a_typed_event_and_counts_its_source() {
     let source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  then encode snapshot as json\n";
@@ -510,7 +525,6 @@ fn native_listener_rejects_declared_failure_and_unmapped_statuses() {
     assert_listener_source_failure_status_is_rejected(9, None);
 }
 
-#[cfg(unix)]
 #[test]
 fn listener_output_decode_failure_keeps_the_successful_source_spawn_count() {
     let source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  then encode \"not-a-record\" as json\n";
@@ -559,7 +573,6 @@ fn scheduled_service_resolves_declared_graph_inputs_before_startup() {
     session.cancel_and_join().unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn scheduled_service_reads_required_single_input_from_graph_edge() {
     let source = "accept snapshot as json\nevery 20 milliseconds\n  then encode snapshot as json\n";
@@ -674,10 +687,10 @@ fn package_service_accepts_a_path_typed_single_input_from_a_graph_edge() {
     .unwrap();
     let path_source = json!({
         "name": "test.path_source",
-        "binary": "printf",
+        "binary": native_fixture(),
         "accepts_stdin": false,
         "parameters": {},
-        "arguments": [{"literal": location.to_string_lossy()}],
+        "arguments": [{"literal": "write"}, {"literal": location.to_string_lossy()}],
         "contract": {"version": 1, "output": {"type": "path", "encoding": "raw"}}
     });
     fs::write(
@@ -1071,7 +1084,6 @@ fn scheduled_package_handler_can_invoke_a_pinned_v1_dependency_alias() {
     session.cancel_and_join().unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn package_listener_preflights_its_native_source_and_invokes_a_pinned_v1_alias() {
     let (root, registry) = listener_with_v1_dependency_fixture();
@@ -1255,11 +1267,13 @@ fn cancelling_a_service_blocked_by_a_full_lossless_edge_queue_joins_it() {
     session.cancel_and_join().unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn post_spawn_decode_failure_retains_the_exact_service_process_count() {
-    let source = "accept snapshot as json\nevery 10 milliseconds\n  run \"printf\" with arguments [\"{\\\"wrong\\\":true}\"]\n";
-    let (root, registry) = service_fixture(source);
+    let source = format!(
+        "accept snapshot as json\nevery 10 milliseconds\n  run {} with arguments [\"write\", \"{{\\\"wrong\\\":true}}\"]\n",
+        serde_json::to_string(&native_fixture()).unwrap()
+    );
+    let (root, registry) = service_fixture(&source);
     let plan = service_plan(&registry, r#"{"count":4}"#, None);
     let mut session = start_session(plan, &registry, root.path(), GraphRunOptions::default());
     let error = session.recv_output().unwrap_err();

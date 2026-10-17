@@ -108,7 +108,7 @@ pub(super) fn verify_opened_identity(file: &File, resolved: &Path) -> Result<()>
         use std::os::unix::fs::MetadataExt;
         let opened = file.metadata()?;
         let by_path =
-            fs::metadata(resolved).with_context(|| format!("checking {}", resolved.display()))?;
+            std::fs::metadata(resolved).with_context(|| format!("checking {}", resolved.display()))?;
         if opened.dev() != by_path.dev() || opened.ino() != by_path.ino() {
             bail!(
                 "file changed while it was being opened: {}",

@@ -42,6 +42,11 @@ pub fn cli(arguments: &[String]) -> Result<i32> {
     Ok(0)
 }
 
+/// The same text `execute help FILE` prints, for a script's own `--help`.
+pub fn render_program_help(program: &Program, program_path: &str) -> String {
+    render_text(&describe(program, program_path))
+}
+
 /// The help object for one parsed program.
 pub fn describe(program: &Program, program_path: &str) -> Value {
     let inputs: Vec<Value> = program.inputs.iter().map(input_entry).collect();

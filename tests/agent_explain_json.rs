@@ -744,3 +744,34 @@ fn a_folder_change_that_climbs_out_makes_the_folder_unknown() {
     let save = rows_of_kind(&object, "save");
     assert_eq!(save[0]["path_is_runtime"], true, "{object}");
 }
+
+// ---------------------------------------------------------------------------
+// Home paths are absolute for this analysis: never joined to the folder.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_home_relative_write_is_flagged_as_escaping_and_reported_literally() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run plain.helper\nthen save to \"~/out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(save[0]["escapes_cwd"], true, "{object}");
+    assert_eq!(save[0]["path"], "~/out.txt", "{object}");
+    assert_eq!(save[0]["path_is_runtime"], false);
+    assert_eq!(object["summary"]["escaping_write_paths"], 1);
+}
+
+#[test]
+fn a_home_folder_makes_later_relative_writes_runtime() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "use folder \"~/project\"\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let folder = rows_of_kind(&object, "use_folder");
+    assert_eq!(folder[0]["escapes_cwd"], true, "{object}");
+    let save = rows_of_kind(&object, "save");
+    assert!(
+        save[0]["path"].is_null(),
+        "a home folder must not be joined: {object}"
+    );
+    assert_eq!(save[0]["path_is_runtime"], true);
+}

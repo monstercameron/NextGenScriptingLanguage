@@ -119,3 +119,83 @@ fn help_reports_usage_errors_and_parse_failures_with_nonzero_status() {
     assert!(!broken.status.success());
     assert!(broken.stdout.is_empty());
 }
+
+#[test]
+fn a_shebang_style_help_request_prints_the_program_help_and_runs_nothing() {
+    // The interpreter line supplies the leading `--`, so the program sees `--help`.
+    let directory = tempfile::tempdir().unwrap();
+    let source = "accept arguments as list of text from arguments\nthen encode arguments as json\n";
+    write_program(directory.path(), source);
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["--", "tool.program", "--help"])
+        .current_dir(directory.path())
+        .env_remove("EXECUTE_MODELS_OFFLINE")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("Inputs:"), "{text}");
+    assert!(text.contains("arguments  list of text  required"), "{text}");
+    assert!(
+        !text.contains("[\"--help\"]"),
+        "the program must not have run: {text}"
+    );
+}
+
+#[test]
+fn a_second_separator_makes_a_leading_help_argument_literal_for_the_program() {
+    // `./prog -- --help`: the shebang separator, then a literal separator.
+    let directory = tempfile::tempdir().unwrap();
+    let source = "accept arguments as list of text from arguments\nthen encode arguments as json\n";
+    write_program(directory.path(), source);
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["--", "tool.program", "--", "--help"])
+        .current_dir(directory.path())
+        .env_remove("EXECUTE_MODELS_OFFLINE")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "[\"--help\"]");
+}
+
+#[test]
+fn an_explicit_separator_after_the_file_also_keeps_help_literal() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "accept arguments as list of text from arguments\nthen encode arguments as json\n";
+    write_program(directory.path(), source);
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["tool.program", "--", "--help"])
+        .current_dir(directory.path())
+        .env_remove("EXECUTE_MODELS_OFFLINE")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "[\"--help\"]");
+}
+
+#[test]
+fn the_direct_option_still_prints_the_global_usage() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "accept arguments as list of text from arguments\nthen encode arguments as json\n";
+    write_program(directory.path(), source);
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["tool.program", "--help"])
+        .current_dir(directory.path())
+        .env_remove("EXECUTE_MODELS_OFFLINE")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: execute"));
+}

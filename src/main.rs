@@ -26,6 +26,9 @@ mod test_runner;
 struct Args {
     inputs: BTreeMap<String, String>,
     program_arguments: Vec<String>,
+    /// True when program arguments followed an explicit `--` separator, so a
+    /// leading `--help` is data for the program rather than a help request.
+    program_arguments_literal: bool,
     json: bool,
     github: bool,
     command: String,
@@ -692,6 +695,22 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     }
     let program = parser::parse(&source)
         .with_context(|| format!("could not parse workflow {}", args.file.display()))?;
+    // A script's own `--help` (from a shebang line) shows its accept declarations.
+    if args.command == "run"
+        && !args.program_arguments_literal
+        && args
+            .program_arguments
+            .first()
+            .is_some_and(|a| a == "--help")
+        && !program.inputs.is_empty()
+    {
+        write!(
+            io::stdout(),
+            "{}",
+            flow::agent::help::render_program_help(&program, &args.file.to_string_lossy())
+        )?;
+        return Ok(());
+    }
     let inputs =
         flow::inputs::parse_cli_arguments(&program.inputs, &args.inputs, &args.program_arguments)?;
     let schedule_options = schedule_options(&args)?;
@@ -923,6 +942,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut github = false;
     let mut inputs = BTreeMap::new();
     let mut program_arguments = Vec::new();
+    let mut program_arguments_literal = false;
     let mut manifest_dir = None;
     let mut manifest_catalog = None;
     let mut capability_policy = None;
@@ -956,6 +976,15 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                         .context("missing workflow file after --")?;
                     file = Some(workflow_path(argument)?);
                     index += 1;
+                    // Shebang form: `--` came from the interpreter line. A second
+                    // `--` makes the following arguments literal, including `--help`.
+                    if arguments.get(index).is_some_and(|a| a == "--") {
+                        program_arguments_literal = true;
+                        index += 1;
+                    }
+                } else {
+                    // An explicit separator after the file: arguments are literal.
+                    program_arguments_literal = true;
                 }
                 program_arguments.extend_from_slice(&arguments[index..]);
                 break;
@@ -1220,6 +1249,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     Ok(Some(Args {
         inputs,
         program_arguments,
+        program_arguments_literal,
         json,
         github,
         command,

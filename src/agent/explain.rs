@@ -544,12 +544,21 @@ fn set_path(row: &mut Row, path: &Value) {
     }
 }
 
-/// True for a POSIX absolute path, a Windows-rooted path, or a drive path.
+/// True for a path that does not resolve under the program's folder: a POSIX or
+/// Windows-rooted path, a drive path, or a home path (`~`, `~/...`, `~\...`). A
+/// home path is never joined to the tracked folder as a relative path.
 fn is_absolute(text: &str) -> bool {
     let bytes = text.as_bytes();
     text.starts_with('/')
         || text.starts_with('\\')
+        || is_home_path(text)
         || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
+/// True for `~`, `~/...`, and `~\...`. The path is reported literally, because
+/// the expanded location depends on the environment at run time.
+fn is_home_path(text: &str) -> bool {
+    text == "~" || text.starts_with("~/") || text.starts_with("~\\")
 }
 
 /// True when any component of a path is `..`, whichever separator is used.

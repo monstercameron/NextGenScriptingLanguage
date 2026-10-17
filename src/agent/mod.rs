@@ -11,3 +11,5 @@ pub mod explain;
 pub mod gate;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod help;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod what_if;

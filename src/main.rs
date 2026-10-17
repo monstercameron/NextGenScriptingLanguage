@@ -32,6 +32,10 @@ struct Args {
     json: bool,
     /// Categories approved with `explain --json --allow`. Empty means no gate.
     allow: Vec<String>,
+    /// `run --what-if`: print the plan and its fingerprint, and run nothing.
+    what_if: bool,
+    /// `run --confirm FINGERPRINT`: run only if the plan still has this fingerprint.
+    confirm: Option<String>,
     github: bool,
     command: String,
     file: PathBuf,
@@ -394,6 +398,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         ),
     };
     if flow::graph::is_graph(&source) {
+        reject_finite_only_options(&args, "graph")?;
         if args.command == "resume"
             || args.checkpoint_dir.is_some()
             || args.max_runs.is_some()
@@ -482,6 +487,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         };
     }
     if flow::ui::syntax::is_screen(&source) {
+        reject_finite_only_options(&args, "screen")?;
         if args.missed_ticks.is_some()
             || args.max_catch_up.is_some()
             || args.calendar_dedup.is_some()
@@ -603,6 +609,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         };
     }
     if flow::stream::is_stream(&source) {
+        reject_finite_only_options(&args, "stream")?;
         let stream = flow::stream::parse(&source).context("parsing stream")?;
         let inputs = flow::inputs::parse_cli_arguments(
             &stream.pipeline.inputs,
@@ -758,6 +765,27 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     if capability_policy.is_some() {
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
         flow::capabilities::preflight(&program, &registry, &env::current_dir()?)?;
+    }
+
+    if args.what_if || args.confirm.is_some() {
+        if args.command != "run" {
+            bail!("--what-if and --confirm apply only to run");
+        }
+        runtime::validate_with_arguments(&program, &registry, &inputs)?;
+        let path = args.file.to_string_lossy().into_owned();
+        let plan = flow::agent::explain::explain_json(&program, &registry, &path)?;
+        let fingerprint = flow::agent::what_if::fingerprint(&plan)?;
+        if args.what_if {
+            write_json(&flow::agent::what_if::report(&path, &fingerprint, plan))?;
+            return Ok(());
+        }
+        if let Some(expected) = &args.confirm {
+            if *expected != fingerprint {
+                bail!(
+                    "plan changed since --what-if: confirmed {expected}, current {fingerprint}; review again with --what-if"
+                );
+            }
+        }
     }
 
     match args.command.as_str() {
@@ -957,6 +985,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut file = None;
     let mut json = false;
     let mut allow = Vec::new();
+    let mut what_if = false;
+    let mut confirm = None;
     let mut github = false;
     let mut inputs = BTreeMap::new();
     let mut program_arguments = Vec::new();
@@ -1012,6 +1042,23 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     bail!("--json may be specified only once");
                 }
                 json = true;
+            }
+            "--what-if" if command == "run" => {
+                if what_if {
+                    bail!("--what-if may be specified only once");
+                }
+                what_if = true;
+            }
+            "--confirm" if command == "run" => {
+                if confirm.is_some() {
+                    bail!("--confirm may be specified only once");
+                }
+                confirm = Some(take_option_value(
+                    &arguments,
+                    &mut index,
+                    "--confirm",
+                    "a plan fingerprint",
+                )?);
             }
             "--allow" if command == "explain" => {
                 let category = take_option_value(&arguments, &mut index, "--allow", "a category")?;
@@ -1274,6 +1321,8 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         program_arguments_literal,
         json,
         allow,
+        what_if,
+        confirm,
         github,
         command,
         file,
@@ -1416,6 +1465,21 @@ fn schedule_options(args: &Args) -> Result<Option<flow::runtime::ScheduleOptions
         missed_ticks,
         calendar_dedup,
     }))
+}
+
+/// The gate and the what-if/confirm checks cover finite programs only. Refuse them
+/// on graph, screen, and stream programs rather than printing an unchecked plan.
+fn reject_finite_only_options(args: &Args, program_kind: &str) -> Result<()> {
+    if !args.allow.is_empty() {
+        bail!("--allow applies only to finite programs, not {program_kind} programs");
+    }
+    if args.command == "explain" && args.json {
+        bail!("explain --json applies only to finite programs, not {program_kind} programs");
+    }
+    if args.what_if || args.confirm.is_some() {
+        bail!("--what-if and --confirm apply only to finite programs, not {program_kind} programs");
+    }
+    Ok(())
 }
 
 fn take_option_value(

@@ -265,6 +265,14 @@ pub enum StepKind {
     Append {
         path: Value,
     },
+    /// Per-command environment for the next native command: `set` values are text
+    /// literals or text bindings, and `unset` names are removed first. It must
+    /// immediately precede a `Redirect` or the command itself.
+    Environment {
+        set: BTreeMap<String, Value>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unset: Vec<String>,
+    },
     /// Routes the next command's stderr or stdout. It must immediately precede
     /// one `Invoke` that starts a fresh, unpiped command.
     Redirect {

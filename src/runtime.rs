@@ -1217,6 +1217,24 @@ impl PendingRedirect {
     }
 }
 
+/// Volume, file index and link count of an open Windows file.
+#[cfg(windows)]
+fn windows_file_info(
+    file: &File,
+) -> Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the handle belongs to `file`, which outlives this call, and
+    // `info` is a valid, writable structure of the size the API expects.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("reading file identity");
+    }
+    Ok(info)
+}
+
 /// Open a redirect or append target before any command runs, and keep the handle
 /// that later writes use. The final component must not be a link, and the file
 /// the handle now refers to must lie inside the write grant. A stderr target is
@@ -1288,20 +1306,37 @@ fn open_output_file(
     }
     #[cfg(windows)]
     {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{
-            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-        };
-        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-        // SAFETY: the handle belongs to `file`, which outlives this call, and
-        // `info` is a valid, writable structure of the size the API expects.
-        if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
-            return Err(std::io::Error::last_os_error())
-                .with_context(|| format!("checking {}", destination.display()));
-        }
-        if info.nNumberOfLinks > 1 {
+        // Parity with the Unix identity check: the opened handle must be the same
+        // file as a read-attributes-only open of the authorized path.
+        let opened = windows_file_info(&file)?;
+        if opened.nNumberOfLinks > 1 {
             bail!(
                 "refusing to write a hard-linked file: {}",
+                destination.display()
+            );
+        }
+        let probe = {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_READ_ATTRIBUTES: u32 = 0x0080;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new()
+                .access_mode(FILE_READ_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(&canonical)
+                .with_context(|| format!("checking {}", canonical.display()))?
+        };
+        let authorized = windows_file_info(&probe)?;
+        if (
+            opened.dwVolumeSerialNumber,
+            opened.nFileIndexHigh,
+            opened.nFileIndexLow,
+        ) != (
+            authorized.dwVolumeSerialNumber,
+            authorized.nFileIndexHigh,
+            authorized.nFileIndexLow,
+        ) {
+            bail!(
+                "redirect target changed while it was being opened: {}",
                 destination.display()
             );
         }
@@ -3384,7 +3419,8 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::EncodeJson { .. }
             | StepKind::Save { .. }
             | StepKind::Append { .. }
-            | StepKind::Redirect { .. } => {}
+            | StepKind::Redirect { .. }
+            | StepKind::Environment { .. } => {}
         }
     }
     if let Some(crate::ast::Trigger::Listen {
@@ -3762,6 +3798,8 @@ fn run_finite_state(
     let mut data = initial_input;
     // Set by a `Redirect` step and consumed by the very next `Invoke`.
     let mut pending_redirect: Option<PendingRedirect> = None;
+    // Set by an `Environment` step and consumed by the next command.
+    let mut pending_env: Option<crate::capabilities::CommandEnvOverlay> = None;
     let mut result = RunResult {
         output: Vec::new(),
         cache_hits: 0,
@@ -4512,6 +4550,24 @@ fn run_finite_state(
                     // Like save, the appended value remains the pipeline value.
                     data = Input::Bytes(bytes);
                 }
+                StepKind::Environment { set, unset } => {
+                    let mut overlay = crate::capabilities::CommandEnvOverlay {
+                        set: BTreeMap::new(),
+                        unset: unset.clone(),
+                    };
+                    for (name, value) in set {
+                        let Value::String(text) = resolve(value, &bindings)
+                            .with_context(|| format!("line {}", step.line))?
+                        else {
+                            bail!(
+                                "line {}: environment value for {name:?} must be text",
+                                step.line
+                            );
+                        };
+                        overlay.set.insert(name.clone(), text);
+                    }
+                    pending_env = Some(overlay);
+                }
                 StepKind::Redirect { target, path } => {
                     // The file is opened now, before the command can start, and the
                     // command's stderr is written through this same handle later.
@@ -4568,6 +4624,7 @@ fn run_finite_state(
                 }
                 StepKind::Invoke { call, connection } => {
                     let mut redirect = pending_redirect.take();
+                    let env = pending_env.take();
                     let manifest = registry.resolve_call(call)?;
                     if manifest.builtin == Some(Builtin::Cd) {
                         let parameters = call
@@ -4811,6 +4868,7 @@ fn run_finite_state(
                             }
                         } else {
                             let _inherit = InheritTerminalStdout::enter(streamed);
+                            let _env = crate::capabilities::CommandEnvScope::enter(env);
                             let _stderr = ForceStderrCapture::enter(
                                 redirect
                                     .as_ref()

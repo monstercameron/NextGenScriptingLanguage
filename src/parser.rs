@@ -1214,12 +1214,121 @@ fn single_value(token: &Token<'_>) -> Result<Value> {
 /// Parse one ordinary statement into its steps. Redirection suffixes on a native
 /// command become, in order, a file read for stdin, a `Redirect` step, and the
 /// command. The command then stays the only `Invoke` for its line.
+/// A per-command environment suffix: `and environment {...}` or
+/// `and without environment [...]`.
+enum EnvironmentSuffix {
+    Set(BTreeMap<String, Value>),
+    Unset(Vec<String>),
+}
+
+/// Environment variable names cannot be empty or contain `=` or NUL.
+fn valid_environment_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains('=') && !name.contains('\0')
+}
+
+/// Index of the token that closes the bracket opened at `open`.
+fn matching_close(tokens: &[Token<'_>], open: usize) -> Option<usize> {
+    let (opener, closer) = match tokens.get(open)? {
+        Token::LeftBrace => (Token::LeftBrace, Token::RightBrace),
+        Token::LeftBracket => (Token::LeftBracket, Token::RightBracket),
+        _ => return None,
+    };
+    let mut depth = 0usize;
+    for (offset, token) in tokens[open..].iter().enumerate() {
+        if *token == opener {
+            depth += 1;
+        } else if *token == closer {
+            depth -= 1;
+            if depth == 0 {
+                return Some(open + offset);
+            }
+        }
+    }
+    None
+}
+
+/// Recognize an environment suffix at `index` and how many tokens it spans.
+fn environment_suffix(
+    tokens: &[Token<'_>],
+    index: usize,
+) -> Result<Option<(EnvironmentSuffix, usize)>> {
+    if !word_is(tokens.get(index), "and") {
+        return Ok(None);
+    }
+    let at = |offset: usize| tokens.get(index + offset);
+    if word_is(at(1), "environment") && matches!(at(2), Some(Token::LeftBrace)) {
+        let close = matching_close(tokens, index + 2)
+            .context("environment record is missing its closing brace")?;
+        let mut cursor = 0;
+        let slice = &tokens[index + 2..=close];
+        let Value::Record(fields) = parse_value(slice, &mut cursor)? else {
+            bail!("`and environment` takes a record of names and values");
+        };
+        ensure_end(slice, cursor)?;
+        let mut set = BTreeMap::new();
+        for (name, value) in fields {
+            if !valid_environment_name(&name) {
+                bail!("invalid environment name {name:?}");
+            }
+            match &value {
+                Value::String(_) | Value::Reference(_) => {}
+                _ => bail!("environment value for {name:?} must be a text literal or text binding"),
+            }
+            set.insert(name, value);
+        }
+        return Ok(Some((EnvironmentSuffix::Set(set), close - index + 1)));
+    }
+    if word_is(at(1), "without")
+        && word_is(at(2), "environment")
+        && matches!(at(3), Some(Token::LeftBracket))
+    {
+        let close = matching_close(tokens, index + 3)
+            .context("environment name list is missing its closing bracket")?;
+        let mut cursor = 0;
+        let slice = &tokens[index + 3..=close];
+        let Value::List(items) = parse_value(slice, &mut cursor)? else {
+            bail!("`and without environment` takes a list of names");
+        };
+        ensure_end(slice, cursor)?;
+        let mut names = Vec::with_capacity(items.len());
+        for item in items {
+            let Value::String(name) = item else {
+                bail!("`and without environment` names must be quoted literals");
+            };
+            if !valid_environment_name(&name) {
+                bail!("invalid environment name {name:?}");
+            }
+            names.push(name);
+        }
+        return Ok(Some((EnvironmentSuffix::Unset(names), close - index + 1)));
+    }
+    Ok(None)
+}
+
 fn parse_simple_statement(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
     let mut kept = Vec::with_capacity(tokens.len());
     let mut stdin = None;
     let mut output = None;
+    let mut env_set: BTreeMap<String, Value> = BTreeMap::new();
+    let mut env_unset: Vec<String> = Vec::new();
+    let mut has_env = false;
     let mut index = 0;
     while index < tokens.len() {
+        if let Some((suffix, span)) = environment_suffix(tokens, index)? {
+            has_env = true;
+            match suffix {
+                EnvironmentSuffix::Set(fields) => {
+                    for (name, value) in fields {
+                        if env_set.insert(name.clone(), value).is_some() {
+                            bail!("environment name {name:?} is set more than once");
+                        }
+                    }
+                }
+                EnvironmentSuffix::Unset(names) => env_unset.extend(names),
+            }
+            index += span;
+            continue;
+        }
         match redirect_suffix(tokens, index) {
             Some((RedirectSuffix::Stdin(path), span)) => {
                 if stdin.replace(path).is_some() {
@@ -1239,13 +1348,17 @@ fn parse_simple_statement(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
             }
         }
     }
-    if stdin.is_none() && output.is_none() {
+    if stdin.is_none() && output.is_none() && !has_env {
         return Ok(vec![parse_line(tokens)?]);
     }
+    if let Some(name) = env_unset.iter().find(|name| env_set.contains_key(*name)) {
+        bail!("environment name {name:?} is both set and removed");
+    }
     let StepKind::Invoke { call, connection } = parse_invocation(&kept)? else {
-        bail!("redirection applies only to a native command");
+        bail!("redirection and environment apply only to a native command");
     };
-    let mut steps = Vec::with_capacity(3);
+    let mut steps = Vec::with_capacity(4);
+    let stdin_present = stdin.is_some();
     if let Some(path) = stdin {
         if connection != Connection::Start {
             bail!("`and stdin from` applies only to a command that starts a pipeline statement");
@@ -1255,10 +1368,19 @@ fn parse_simple_statement(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
             binding: None,
         });
     }
-    let consumer = if steps.is_empty() {
-        connection
-    } else {
+    if has_env {
+        if connection == Connection::Pipe {
+            bail!("`and environment` applies to a single command, not a pipe stage");
+        }
+        steps.push(StepKind::Environment {
+            set: env_set,
+            unset: env_unset,
+        });
+    }
+    let consumer = if stdin_present {
         Connection::Then
+    } else {
+        connection
     };
     if let Some((target, path)) = output {
         if connection == Connection::Pipe {

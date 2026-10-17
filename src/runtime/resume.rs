@@ -51,6 +51,14 @@ pub(super) fn node_end(program: &Program, start: usize) -> usize {
     if matches!(program.steps[start].kind, StepKind::Redirect { .. }) {
         return start + 2;
     }
+    // An environment step is one node with the redirect and command it applies to.
+    if matches!(program.steps[start].kind, StepKind::Environment { .. }) {
+        let redirect = matches!(
+            program.steps.get(start + 1).map(|step| &step.kind),
+            Some(StepKind::Redirect { .. })
+        );
+        return start + if redirect { 3 } else { 2 };
+    }
     if let StepKind::If { end, .. }
     | StepKind::IfCommand { end, .. }
     | StepKind::CallProgram { end, .. }

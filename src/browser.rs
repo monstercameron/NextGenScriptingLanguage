@@ -214,9 +214,9 @@ impl BrowserSession {
                 StepKind::BreakLoop | StepKind::ContinueLoop | StepKind::Return => {
                     Some("loop transfers and reusable-program return")
                 }
-                StepKind::Append { .. } | StepKind::Redirect { .. } => {
-                    Some("file redirection and append")
-                }
+                StepKind::Append { .. }
+                | StepKind::Redirect { .. }
+                | StepKind::Environment { .. } => Some("file redirection and append"),
                 StepKind::Exit { .. } | StepKind::Fail { .. } => {
                     Some("exit with status and fail with message")
                 }
@@ -326,6 +326,7 @@ impl BrowserSession {
                     | StepKind::IfCommand { .. }
                     | StepKind::Append { .. }
                     | StepKind::Redirect { .. }
+                    | StepKind::Environment { .. }
                     | StepKind::TakeJsonDynamic { .. } => {
                         bail!("control flow feature was not validated for browser execution");
                     }

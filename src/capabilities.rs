@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::process::Command;
 use url::Url;
 
@@ -918,6 +918,7 @@ where
     S: AsRef<OsStr>,
 {
     let environment = effective_environment(registry, applet_name)?;
+    let environment = apply_command_overlay(registry, applet_name, environment)?;
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
     let manifest = match registry.resolve(applet_name) {
         Ok(manifest) => manifest,
@@ -1011,6 +1012,65 @@ where
 /// Resolve the complete per-applet child environment. The caller applies the
 /// returned snapshot to one child only; this function never mutates the host
 /// process environment. Values are intentionally not included in diagnostics.
+/// Per-command environment changes from `and environment {...}` and
+/// `and without environment [...]`. Set values are secrets for redaction: they
+/// are registered as they are applied, and explain and trace show names only.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CommandEnvOverlay {
+    pub set: BTreeMap<String, String>,
+    pub unset: Vec<String>,
+}
+
+thread_local! {
+    static COMMAND_ENV_OVERLAY: std::cell::RefCell<Option<CommandEnvOverlay>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Installs one command's overlay for the current thread. The previous overlay
+/// is restored when the guard drops, even on error.
+pub struct CommandEnvScope(Option<CommandEnvOverlay>);
+
+impl CommandEnvScope {
+    pub fn enter(overlay: Option<CommandEnvOverlay>) -> Self {
+        Self(COMMAND_ENV_OVERLAY.with(|cell| cell.replace(overlay)))
+    }
+}
+
+impl Drop for CommandEnvScope {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        COMMAND_ENV_OVERLAY.with(|cell| {
+            cell.replace(previous);
+        });
+    }
+}
+
+/// Apply the active overlay to a launch environment. Unsets remove names first.
+/// Each set name must pass the applet's environment grant, and its value is
+/// registered with the redactor before the child can receive it.
+fn apply_command_overlay(
+    registry: &Registry,
+    applet_name: &str,
+    mut environment: Vec<(OsString, OsString)>,
+) -> Result<Vec<(OsString, OsString)>> {
+    let Some(overlay) = COMMAND_ENV_OVERLAY.with(|cell| cell.borrow().clone()) else {
+        return Ok(environment);
+    };
+    for name in &overlay.unset {
+        environment.retain(|(existing, _)| !same_environment_name(existing, name));
+    }
+    for (name, value) in &overlay.set {
+        authorize_environment_override(registry, applet_name, name)?;
+        crate::security::secret_redactor(registry)
+            .register(value.as_bytes())
+            .map_err(|_| anyhow!("could not register a command environment value as a secret"))?;
+        environment.retain(|(existing, _)| !same_environment_name(existing, name));
+        environment.push((OsString::from(name), OsString::from(value)));
+    }
+    environment.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(environment)
+}
+
 pub fn effective_environment(
     registry: &Registry,
     applet_name: &str,
@@ -1350,7 +1410,7 @@ pub fn authorize_host_path(
                 };
                 paths.iter().any(|path| {
                     canonicalize_for_grant(path, cwd)
-                        .is_ok_and(|root| target == root || target.starts_with(&root))
+                        .is_ok_and(|root| grant_contains(&root, &target))
                 })
             })
         });
@@ -1427,8 +1487,7 @@ pub fn authorize_applet_host_path(
     };
     let allowed = target.as_ref().is_some_and(|target| {
         paths.iter().any(|path| {
-            canonicalize_for_grant(path, cwd)
-                .is_ok_and(|root| target == &root || target.starts_with(&root))
+            canonicalize_for_grant(path, cwd).is_ok_and(|root| grant_contains(&root, target))
         })
     });
     let (action, risk) = if write {
@@ -1618,13 +1677,73 @@ fn validate_policy_path(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty() || path.as_os_str().as_encoded_bytes().contains(&0) {
         bail!("path must be nonempty and contain no NUL byte");
     }
-    if path
-        .components()
-        .any(|component| matches!(component, Component::Prefix(_)))
-    {
-        bail!("unsupported filesystem path prefix");
+    if let Some(Component::Prefix(prefix)) = path.components().next() {
+        match prefix.kind() {
+            Prefix::Disk(_) | Prefix::VerbatimDisk(_) => {
+                if !matches!(path.components().nth(1), Some(Component::RootDir)) {
+                    bail!("drive-relative paths are not supported; use an absolute drive path");
+                }
+            }
+            Prefix::UNC(..) | Prefix::VerbatimUNC(..) => {
+                bail!("network (UNC) paths are not supported in capability grants");
+            }
+            Prefix::DeviceNS(_) | Prefix::Verbatim(_) => {
+                bail!("device and verbatim paths are not supported in capability grants");
+            }
+        }
     }
     Ok(())
+}
+
+/// Whether `target` lies at or under the canonical grant `root`. Windows paths
+/// compare case-insensitively, `/` equals `\`, and a verbatim `\\?\C:` prefix
+/// names the same drive as `C:`. Other platforms compare components exactly.
+fn grant_contains(root: &Path, target: &Path) -> bool {
+    if target == root || target.starts_with(root) {
+        return true;
+    }
+    windows_grant_contains(root, target)
+}
+
+#[cfg(windows)]
+fn windows_grant_contains(root: &Path, target: &Path) -> bool {
+    let root = windows_grant_key(root);
+    let target = windows_grant_key(target);
+    if !target.starts_with(&root) {
+        return false;
+    }
+    let separator = u16::from(b'\\');
+    root.last() == Some(&separator) || target.len() == root.len() || target[root.len()] == separator
+}
+
+#[cfg(not(windows))]
+fn windows_grant_contains(_root: &Path, _target: &Path) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn windows_grant_key(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    let separator = u16::from(b'\\');
+    let mut units = path.as_os_str().encode_wide().collect::<Vec<u16>>();
+    // `\\?\C:` is the verbatim spelling of `C:`; canonicalize returns the former.
+    let verbatim = [
+        u16::from(b'\\'),
+        u16::from(b'\\'),
+        u16::from(b'?'),
+        u16::from(b'\\'),
+    ];
+    if units.len() >= 6 && units[..4] == verbatim && units[5] == u16::from(b':') {
+        units.drain(..4);
+    }
+    for unit in &mut units {
+        *unit = match *unit {
+            0x2F => separator,
+            0x41..=0x5A => *unit + 0x20,
+            other => other,
+        };
+    }
+    units
 }
 
 fn validate_digest(value: &str) -> Result<()> {
@@ -1754,4 +1873,36 @@ fn is_policy_safe_in_process(name: &str) -> bool {
             | "json.filter"
             | "jsonc.edit_content"
     )
+}
+
+#[cfg(all(test, windows))]
+mod windows_grant_path_tests {
+    use super::*;
+
+    #[test]
+    fn drive_and_verbatim_grants_are_accepted_and_unc_or_device_paths_are_rejected() {
+        assert!(validate_policy_path(Path::new(r"C:\data")).is_ok());
+        assert!(validate_policy_path(Path::new(r"\\?\C:\data")).is_ok());
+        assert!(validate_policy_path(Path::new(r"C:data")).is_err());
+        assert!(validate_policy_path(Path::new(r"\\server\share\data")).is_err());
+        assert!(validate_policy_path(Path::new(r"\\?\UNC\server\share\data")).is_err());
+        assert!(validate_policy_path(Path::new(r"\\.\C:\data")).is_err());
+    }
+
+    #[test]
+    fn grants_match_case_insensitively_and_on_component_boundaries() {
+        assert!(grant_contains(
+            Path::new(r"C:\Data"),
+            Path::new(r"c:\data\file.txt")
+        ));
+        assert!(grant_contains(
+            Path::new(r"\\?\C:\Data"),
+            Path::new(r"C:/DATA/file.txt")
+        ));
+        assert!(!grant_contains(
+            Path::new(r"C:\Data"),
+            Path::new(r"C:\Database\file.txt")
+        ));
+        assert!(grant_contains(Path::new(r"C:\"), Path::new(r"c:\anything")));
+    }
 }

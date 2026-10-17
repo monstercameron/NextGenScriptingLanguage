@@ -1576,6 +1576,44 @@ fn validate_range(
                         && !terminal_stdout_captured;
                     flow.started |= manifest.builtin.is_none();
                 }
+                StepKind::Environment { set, .. } => {
+                    for (name, value) in set {
+                        validate_text_operand(
+                            value,
+                            flow,
+                            &format!("environment value for {name:?}"),
+                        )?;
+                    }
+                    let invoke = match steps.get(index + 1) {
+                        Some(crate::ast::Step {
+                            kind: StepKind::Redirect { .. },
+                            ..
+                        }) => index + 2,
+                        _ => index + 1,
+                    };
+                    let Some(crate::ast::Step {
+                        kind: StepKind::Invoke { call, connection },
+                        ..
+                    }) = steps.get(invoke)
+                    else {
+                        bail!(
+                            "environment must immediately precede a redirection or native command"
+                        );
+                    };
+                    if *connection == Connection::Pipe || pipe_in_steps(steps, invoke + 1) {
+                        bail!("environment applies to a single command, not a pipe stage");
+                    }
+                    if call.cache {
+                        bail!("command environment cannot be combined with cache");
+                    }
+                    let manifest = registry.resolve_call(call)?;
+                    if manifest.builtin.is_some() {
+                        bail!("a builtin cannot take a command environment");
+                    }
+                    if manifest.execution_backend() != crate::contracts::AppletBackend::Command {
+                        bail!("command environment applies to native commands only");
+                    }
+                }
                 StepKind::Append { path } => {
                     check_path(path, &flow.names)?;
                     if !flow.has_data {
@@ -1863,6 +1901,21 @@ pub fn explain_with_inputs(
                 "save finite output to {:?}",
                 resolve(path, &known).unwrap_or_else(|_| path.clone())
             ),
+            StepKind::Environment { set, unset } => {
+                let mut parts = Vec::new();
+                if !set.is_empty() {
+                    let names = set.keys().cloned().collect::<Vec<_>>().join(", ");
+                    parts.push(format!("set {names}"));
+                }
+                if !unset.is_empty() {
+                    parts.push(format!("remove {}", unset.join(", ")));
+                }
+                // Values are secrets for redaction, so only names are shown.
+                format!(
+                    "next command environment: {}; values are not shown",
+                    parts.join("; ")
+                )
+            }
             StepKind::Append { path } => format!(
                 "append finite output to {}; the value stays the pipeline value",
                 describe_path(path, &known)

@@ -174,9 +174,10 @@ mod links {
         let root = tempfile::tempdir().unwrap();
         layout(root.path());
         policy(root.path());
-        // An absolute path, so the policy can check the link's target before the run starts.
-        let link = root.path().join("inside/dir-link");
-        let output = run(root.path(), &format!("use folder \"{}\"\n", link.display()));
+        let output = run(
+            root.path(),
+            "use folder \"inside/dir-link\"\nread \"secret.txt\"\n",
+        );
         let text = shown(&output);
         assert!(!output.status.success(), "{text}");
         assert!(
@@ -307,7 +308,7 @@ mod swap_after_use_folder {
         .unwrap();
         fs::write(
             root.path().join("main.program"),
-            "use folder \"inside/link\"\nrun swap.link\nread \"secret.txt\"\nrun echo.stdin\n",
+            "use folder \"inside/link\"\nrun swap.link\nread \"secret.txt\"\npipe to echo.stdin\n",
         )
         .unwrap();
 
@@ -328,11 +329,10 @@ mod swap_after_use_folder {
             !text.contains("OUTSIDE"),
             "the swapped target was read: {text}"
         );
-        // A relative host path after `use folder` is refused before the run starts: the policy
-        // cannot resolve it after a working-directory change. Nothing is read.
-        assert!(!output.status.success(), "{text}");
-        assert!(
-            text.contains("cannot preflight a relative host path after a working-directory change"),
+        assert!(output.status.success(), "{text}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "INSIDE\n",
             "{text}"
         );
     }

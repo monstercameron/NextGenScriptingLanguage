@@ -867,12 +867,11 @@ fn preflight_invocations_with_policy<'a>(
                     "capability policy requires literal host filesystem paths that can be checked before effects"
                 );
             };
-            if dynamic_cwd && !Path::new(path).is_absolute() {
-                bail!(
-                    "capability policy cannot preflight a relative host path after a working-directory change"
-                );
+            // A relative target after a working-directory change is authorized when the
+            // step runs, joined onto the directory it actually names (`enter_directory`).
+            if !dynamic_cwd || Path::new(path).is_absolute() {
+                authorize_host_path(registry, Path::new(path), false, cwd)?;
             }
-            authorize_host_path(registry, Path::new(path), false, cwd)?;
             continue;
         }
         let name = &manifest.name;
@@ -1736,12 +1735,11 @@ fn preflight_host_paths(
                 );
             };
             let path = expand_home_path(path)?;
-            if dynamic_cwd && !path.is_absolute() {
-                bail!(
-                    "capability policy cannot preflight a relative host path after a working-directory change"
-                );
+            // A relative target after a working-directory change is authorized when the
+            // step runs, joined onto the directory it actually names.
+            if !dynamic_cwd || path.is_absolute() {
+                authorize_host_path(registry, &path, write, cwd)?;
             }
-            authorize_host_path(registry, &path, write, cwd)?;
         }
         // `policy` is passed explicitly to make it clear this scan is active
         // only after a policy was installed; it is also used by future path

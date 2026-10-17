@@ -8,6 +8,7 @@
   "required": ["protocol", "program", "steps", "summary"],
   "properties": {
     "protocol": { "const": "execute.explain/1" },
+    "language_version": { "const": 1 },
     "program": { "type": "string" },
     "steps": {
       "type": "array",

@@ -541,9 +541,37 @@ fn bracket_depth(text: &str, number: usize) -> Result<i64> {
     }))
 }
 
+/// The language version this build implements. Unmarked programs are this version.
+pub const LANGUAGE_VERSION: u32 = 1;
+
+/// A first statement `execute N` declares the language version it was written for.
+/// Only the implemented version is accepted; other versions fail with an upgrade message.
+fn take_language_version(statements: &mut Vec<LogicalLine>) -> Result<()> {
+    let Some(first) = statements.first() else {
+        return Ok(());
+    };
+    let words: Vec<&str> = first.text.split_ascii_whitespace().collect();
+    let declared = match words.as_slice() {
+        ["execute", version] if first.indent == 0 => version.parse::<u32>().ok(),
+        _ => None,
+    };
+    let Some(declared) = declared else {
+        return Ok(());
+    };
+    if declared != LANGUAGE_VERSION {
+        bail!(
+            "line {}: program declares language version {declared}, but this execute implements version {LANGUAGE_VERSION}; upgrade execute or remove the marker to use version {LANGUAGE_VERSION}",
+            first.number
+        );
+    }
+    statements.remove(0);
+    Ok(())
+}
+
 /// Parse the line-oriented workflow language into its AST.
 pub fn parse(source: &str) -> Result<Program> {
-    let statements = logical_lines(source)?;
+    let mut statements = logical_lines(source)?;
+    take_language_version(&mut statements)?;
     let mut definitions = BTreeMap::new();
     let mut inputs = Vec::new();
     let mut steps: Vec<Step> = Vec::new();

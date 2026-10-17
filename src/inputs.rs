@@ -361,6 +361,7 @@ pub fn describe(
     }
     Ok(serde_json::json!({
         "protocol": "execute.inspect/1", "validation": "static",
+        "language_version": crate::parser::LANGUAGE_VERSION,
         "inputs": inputs, "inputs_complete": missing.is_empty(), "missing_inputs": missing
     }))
 }

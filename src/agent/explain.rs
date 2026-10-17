@@ -664,6 +664,7 @@ fn summary_object(program_path: &str, rows: &[Row]) -> Json {
     let steps: Vec<Json> = rows.iter().map(Row::to_json).collect();
     json!({
         "protocol": PROTOCOL,
+        "language_version": crate::parser::LANGUAGE_VERSION,
         "program": program_path,
         "steps": steps,
         "summary": {

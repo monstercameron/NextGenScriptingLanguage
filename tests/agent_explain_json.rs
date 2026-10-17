@@ -35,6 +35,31 @@ fn write_manifests(directory: &Path) -> PathBuf {
         }
     });
     std::fs::write(manifests.join("net.helper.json"), declared.to_string()).unwrap();
+    // The same shape as the repository's builtin `cd` manifest.
+    let cd = serde_json::json!({
+        "name": "cd",
+        "binary": "cd",
+        "builtin": "cd",
+        "parameters": { "path": { "type": "string", "required": true } },
+        "arguments": [{ "parameter": "path" }]
+    });
+    std::fs::write(manifests.join("cd.json"), cd.to_string()).unwrap();
+    // A stdin-accepting stage with a declared network effect, for pipe groups.
+    let stage = serde_json::json!({
+        "name": "stdin.helper",
+        "binary": HELPER,
+        "accepts_stdin": true,
+        "parameters": {},
+        "arguments": [{ "literal": "--version" }],
+        "contract": {
+            "version": 1,
+            "backend": "command",
+            "lifecycle": { "kind": "oneshot" },
+            "capabilities": ["network.loopback"],
+            "effects": ["network.loopback"]
+        }
+    });
+    std::fs::write(manifests.join("stdin.helper.json"), stage.to_string()).unwrap();
     manifests
 }
 
@@ -259,13 +284,13 @@ then append to \"log.txt\"\n";
     let redirect = rows_of_kind(&object, "redirect");
     assert_eq!(redirect.len(), 1, "{object}");
     assert_eq!(redirect[0]["writes"], true);
-    assert_eq!(redirect[0]["path"], "err.txt");
+    assert_eq!(redirect[0]["path"], "sub/err.txt");
     assert_eq!(redirect[0]["modifies_next_invocation"], true);
 
     let append = rows_of_kind(&object, "append");
     assert_eq!(append.len(), 1, "{object}");
     assert_eq!(append[0]["writes"], true);
-    assert_eq!(append[0]["path"], "log.txt");
+    assert_eq!(append[0]["path"], "sub/log.txt");
 
     let summary = &object["summary"];
     assert_eq!(summary["writes"], true);
@@ -279,7 +304,7 @@ then append to \"log.txt\"\n";
         .filter_map(Value::as_str)
         .collect();
     assert!(
-        paths.contains(&"err.txt") && paths.contains(&"log.txt"),
+        paths.contains(&"sub/err.txt") && paths.contains(&"sub/log.txt"),
         "{paths:?}"
     );
 }
@@ -357,4 +382,235 @@ fn recursive_definition_is_never_reported_as_fully_declared() {
             "a rejected cycle must not print a plan"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Relative call offsets, environment taint, and working-directory tracking.
+// ---------------------------------------------------------------------------
+
+fn rows_with_applet<'a>(object: &'a Value, applet: &str) -> Vec<&'a Value> {
+    object["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["applet"] == applet)
+        .collect()
+}
+
+#[test]
+fn a_call_at_a_nonzero_index_walks_its_definition_once_and_keeps_later_steps() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "define a program named inner\n  run net.helper\nrun plain.helper\nrun program inner\nrun plain.helper\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+
+    assert_eq!(
+        rows_with_applet(&object, "net.helper").len(),
+        1,
+        "the definition body must appear exactly once: {object}"
+    );
+    let plain = rows_with_applet(&object, "plain.helper");
+    assert_eq!(
+        plain.len(),
+        2,
+        "both top-level steps around the call must be listed: {object}"
+    );
+    assert!(plain
+        .iter()
+        .any(|row| row["line"] == 5 && row["scope"].is_null()));
+    assert_eq!(object["summary"]["invocations"], 3);
+    assert_eq!(object["summary"]["network"], true);
+}
+
+#[test]
+fn an_environment_change_that_can_alter_the_program_undeclares_the_next_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run net.helper and environment {\"PYTHONPATH\": \"/x\"}\nrun net.helper\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let rows = rows_with_applet(&object, "net.helper");
+    assert_eq!(rows.len(), 2, "{object}");
+    assert!(
+        rows[0]["effects"].is_null(),
+        "tainted command must be undeclared: {object}"
+    );
+    assert_eq!(rows[0]["undeclared"], true);
+    assert_eq!(rows[0]["environment_tainted"], true);
+    // The taint applies to that command only; the next one keeps its declaration.
+    assert_eq!(rows[1]["network"], true);
+    assert_eq!(rows[1]["undeclared"], false);
+    assert_eq!(object["summary"]["effects_declared"], false);
+    assert_eq!(object["summary"]["environment_tainted_invocations"], 1);
+}
+
+#[test]
+fn every_loader_or_interpreter_name_and_every_runtime_value_taints_the_next_command() {
+    let directory = tempfile::tempdir().unwrap();
+    for source in [
+        "run net.helper and environment {\"PATH\": \"/tmp/bin\"}\n",
+        "run net.helper and environment {\"LD_PRELOAD\": \"/tmp/x.so\"}\n",
+        "run net.helper and environment {\"DYLD_INSERT_LIBRARIES\": \"/tmp/x.dylib\"}\n",
+        "run net.helper and environment {\"NODE_OPTIONS\": \"--require /tmp/x.js\"}\n",
+        "run net.helper and environment {\"PERL5LIB\": \"/tmp/lib\"}\n",
+        "run net.helper and environment {\"RUBYOPT\": \"-r/tmp/x\"}\n",
+        "run net.helper and without environment [\"PYTHONPATH\"]\n",
+        "accept value as text\nrun net.helper and environment {\"SAFE_NAME\": value}\n",
+    ] {
+        let object = plan(&explain(directory.path(), source, &["--json"]));
+        let rows = rows_with_applet(&object, "net.helper");
+        assert!(
+            rows[0]["effects"].is_null(),
+            "not undeclared for {source:?}: {object}"
+        );
+        assert_eq!(rows[0]["environment_tainted"], true, "{source:?}");
+    }
+}
+
+#[test]
+fn a_harmless_environment_change_keeps_the_declared_effects() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run net.helper and environment {\"LANG\": \"C\", \"TZ\": \"UTC\"}\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let rows = rows_with_applet(&object, "net.helper");
+    assert_eq!(rows[0]["network"], true, "{object}");
+    assert_eq!(rows[0]["environment_tainted"], false);
+    assert_eq!(rows[0]["environment_sensitive"], false);
+    assert_eq!(object["summary"]["effects_declared"], true);
+}
+
+#[test]
+fn a_relative_write_is_reported_under_the_folder_it_is_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "use folder \"sub\"\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(save[0]["path"], "sub/out.txt", "{object}");
+    assert_eq!(save[0]["escapes_cwd"], false);
+    assert_eq!(save[0]["path_is_runtime"], false);
+}
+
+#[test]
+fn a_write_that_climbs_out_of_the_program_folder_is_flagged() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "use folder \"sub\"\nrun plain.helper\nthen save to \"../../escape.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(save[0]["escapes_cwd"], true, "{object}");
+    assert_eq!(object["summary"]["escaping_write_paths"], 1);
+}
+
+#[test]
+fn an_absolute_write_destination_is_flagged_as_escaping() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run plain.helper\nthen save to \"/tmp/absolute.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(save[0]["escapes_cwd"], true, "{object}");
+    assert_eq!(save[0]["path"], "/tmp/absolute.txt");
+}
+
+#[test]
+fn a_runtime_folder_makes_later_relative_writes_runtime() {
+    let directory = tempfile::tempdir().unwrap();
+    let source =
+        "accept target as text\nuse folder target\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert!(save[0]["path"].is_null(), "{object}");
+    assert_eq!(save[0]["path_is_runtime"], true);
+    assert_eq!(object["summary"]["runtime_write_paths"], 1);
+}
+
+#[test]
+fn the_builtin_cd_moves_the_known_folder_and_a_called_program_restores_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run cd with path \"sub\"\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(save[0]["path"], "sub/out.txt", "{object}");
+
+    let source = "define a program named deep\n  use folder \"deep\"\nrun program deep\nrun plain.helper\nthen save to \"out.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(
+        save[0]["path"], "out.txt",
+        "a call must restore the caller's folder: {object}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fail-closed environment: only an inert allowlist keeps effects declared, and
+// every stage of a tainted pipeline group is undeclared.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn only_inert_environment_names_keep_the_declared_effects() {
+    let directory = tempfile::tempdir().unwrap();
+    for source in [
+        "run net.helper and environment {\"LANG\": \"C\"}\n",
+        "run net.helper and environment {\"lang\": \"C\"}\n",
+        "run net.helper and environment {\"TZ\": \"UTC\"}\n",
+        "run net.helper and environment {\"LC_ALL\": \"C\"}\n",
+        "run net.helper and environment {\"TERM\": \"dumb\", \"NO_COLOR\": \"1\"}\n",
+    ] {
+        let object = plan(&explain(directory.path(), source, &["--json"]));
+        let rows = rows_with_applet(&object, "net.helper");
+        assert_eq!(
+            rows[0]["environment_tainted"], false,
+            "{source:?}: {object}"
+        );
+        assert_eq!(rows[0]["undeclared"], false, "{source:?}: {object}");
+        assert_eq!(rows[0]["network"], true, "{source:?}: {object}");
+    }
+}
+
+#[test]
+fn every_other_environment_name_taints_the_next_command() {
+    let directory = tempfile::tempdir().unwrap();
+    for source in [
+        "run net.helper and environment {\"PATH\": \"/tmp/bin\"}\n",
+        "run net.helper and environment {\"GIT_DIR\": \"/tmp/repo\"}\n",
+        "run net.helper and environment {\"NODE_OPTIONS\": \"--require /tmp/x.js\"}\n",
+        "run net.helper and environment {\"HOME\": \"/tmp/home\"}\n",
+        "run net.helper and environment {\"FOO\": \"bar\"}\n",
+        "run net.helper and environment {\"path\": \"/tmp/bin\"}\n",
+        "run net.helper and environment {\"LANG\": \"C\", \"FOO\": \"bar\"}\n",
+        "run net.helper and without environment [\"HOME\"]\n",
+    ] {
+        let object = plan(&explain(directory.path(), source, &["--json"]));
+        let rows = rows_with_applet(&object, "net.helper");
+        assert!(
+            rows[0]["effects"].is_null(),
+            "{source:?} must be undeclared: {object}"
+        );
+        assert_eq!(rows[0]["undeclared"], true, "{source:?}");
+        assert_eq!(rows[0]["environment_tainted"], true, "{source:?}");
+    }
+}
+
+#[test]
+fn an_environment_change_cannot_reach_a_pipeline_group_so_its_stages_stay_declared() {
+    // The language attaches `and environment` only to a single command, so no
+    // environment change can taint a pipeline stage. Both forms are rejected by
+    // the parser, and no plan is printed for them.
+    let directory = tempfile::tempdir().unwrap();
+    for source in [
+        "run net.helper and environment {\"FOO\": \"x\"}\npipe to stdin.helper\n",
+        "run net.helper\npipe to stdin.helper and environment {\"FOO\": \"x\"}\n",
+    ] {
+        let output = explain(directory.path(), source, &["--json"]);
+        assert!(!output.status.success(), "{source:?} must be rejected");
+        assert!(output.stdout.is_empty(), "{source:?} printed a plan");
+    }
+}
+
+#[test]
+fn a_clean_pipeline_keeps_every_stage_declared() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run net.helper\npipe to stdin.helper\nrun net.helper\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let stage = rows_with_applet(&object, "stdin.helper");
+    assert_eq!(stage.len(), 1, "{object}");
+    assert_eq!(stage[0]["environment_tainted"], false, "{object}");
+    assert_eq!(stage[0]["network"], true, "{object}");
+    assert_eq!(stage[0]["undeclared"], false, "{object}");
+    assert_eq!(object["summary"]["environment_tainted_invocations"], 0);
 }

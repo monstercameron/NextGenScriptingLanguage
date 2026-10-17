@@ -1793,7 +1793,8 @@ mod tests {
             status: 7,
             message: Some("disk full".into()),
         }))))
-        .unwrap_err();
+        .err()
+        .expect("a non-zero exit must be reported as a handler error");
         assert_eq!(
             failed.to_string(),
             "handler exited with status 7: disk full"

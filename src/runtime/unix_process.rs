@@ -459,7 +459,7 @@ pub fn supervise_init(worker_arguments: &[String]) -> Result<i32> {
             .context("registering supervisor wake-up")?;
     }
 
-    let worker = Command::new(&executable)
+    let worker = std::process::Command::new(&executable)
         .args(worker_arguments)
         .spawn()
         .context("starting the workflow worker")?;

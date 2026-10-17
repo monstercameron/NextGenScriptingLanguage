@@ -342,6 +342,9 @@ pub struct InputDeclaration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<InputSource>,
     pub line: usize,
+    /// Human-readable text from `described as "TEXT"`, shown by inspect and help.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

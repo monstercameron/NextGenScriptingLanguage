@@ -147,7 +147,7 @@ fn explain_shows_the_redirection() {
     let output = run_script(
         directory.path(),
         "explain",
-        &format!("{}", failing_command("and stderr to \"err.txt\"")),
+        &failing_command("and stderr to \"err.txt\""),
     );
     assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
     let text = String::from_utf8_lossy(&output.stdout);

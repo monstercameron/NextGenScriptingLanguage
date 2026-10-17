@@ -314,6 +314,7 @@ fn report_release_allocation_counts() {
                 default: Some(Value::Integer(42)),
                 source: None,
                 line: n + 1,
+                description: None,
             })
             .collect();
         let supplied: BTreeMap<_, _> = declarations

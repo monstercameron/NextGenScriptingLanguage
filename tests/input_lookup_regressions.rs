@@ -13,6 +13,7 @@ fn declarations(count: usize) -> Vec<InputDeclaration> {
             default: Some(Value::Integer(42)),
             source: None,
             line: n + 1,
+            description: None,
         })
         .collect()
 }

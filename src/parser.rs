@@ -264,7 +264,7 @@ fn parse_if_block<'arena, 'source: 'arena>(
                 kind: StepKind::Otherwise { end: 0 },
             });
             *cursor += 1;
-            if !line_at(*cursor).is_some_and(|child| child.indent > indent) {
+            if line_at(*cursor).is_none_or(|child| child.indent <= indent) {
                 bail!(
                     "line {}: otherwise body must contain an indented statement",
                     otherwise.number
@@ -647,13 +647,30 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
     } else {
         None
     };
-    let default =
+    // `with default V` and `described as "TEXT"` may appear in either order, once each.
+    let mut default = None;
+    let mut description = None;
+    while cursor < tokens.len() {
         if word_is(tokens.get(cursor), "with") && word_is(tokens.get(cursor + 1), "default") {
+            if default.is_some() {
+                bail!("input declares its default more than once");
+            }
             cursor += 2;
-            Some(parse_value(tokens, &mut cursor).context("input default")?)
+            default = Some(parse_value(tokens, &mut cursor).context("input default")?);
+        } else if word_is(tokens.get(cursor), "described") && word_is(tokens.get(cursor + 1), "as")
+        {
+            if description.is_some() {
+                bail!("input declares its description more than once");
+            }
+            let Some(Token::String(text)) = tokens.get(cursor + 2) else {
+                bail!("`described as` must be followed by a quoted description");
+            };
+            description = Some(text.clone().into_owned());
+            cursor += 3;
         } else {
-            None
-        };
+            break;
+        }
+    }
     ensure_end(tokens, cursor)?;
     Ok(InputDeclaration {
         name,
@@ -661,6 +678,7 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         default,
         source,
         line,
+        description,
     })
 }
 
@@ -1547,12 +1565,11 @@ fn parse_invocation(tokens: &[Token<'_>]) -> Result<StepKind> {
                     bail!("duplicate parameter `{}`", entry.key());
                 }
             }
-            if word_is(tokens.get(cursor), "and")
-                && !(word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
-                && !(direct && is_discard_stderr_suffix(tokens, cursor))
-                && !is_status_suffix(tokens, cursor)
-                && !is_result_suffix(tokens, cursor)
-            {
+            let blocked = (word_is(tokens.get(cursor + 1), "cache") && cursor + 2 == tokens.len())
+                || (direct && is_discard_stderr_suffix(tokens, cursor))
+                || is_status_suffix(tokens, cursor)
+                || is_result_suffix(tokens, cursor);
+            if word_is(tokens.get(cursor), "and") && !blocked {
                 cursor += 1;
                 continue;
             }

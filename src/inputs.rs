@@ -349,6 +349,9 @@ pub fn describe(
             }
             None => {}
         }
+        if let Some(text) = &input.description {
+            spec["description"] = text.clone().into();
+        }
         if let Some(value) = known.get(&input.name) {
             spec["value"] = literal_json(value)?;
         } else {

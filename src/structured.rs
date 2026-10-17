@@ -128,6 +128,7 @@ pub(crate) fn take<'a>(
         default: None,
         source: None,
         line,
+        description: None,
     }
     .validate_value(selected)?;
     Ok(selected)

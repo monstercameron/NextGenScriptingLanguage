@@ -88,6 +88,14 @@ native command stages. This modifier requires the unreleased source candidate.
 
 <a id="native-exit-status-pending-source-candidate"></a>
 
+### Language version
+
+A program may begin with `execute 1`, which declares the language version it was
+written for. The marker must be the first statement, with no indentation. This release
+accepts only version 1. Another number fails with `upgrade execute or remove the
+marker`. A program without the marker is version 1. `execute inspect` and
+`execute explain --json` report the version as `language_version`.
+
 ### Native exit status
 
 ```text
@@ -875,6 +883,16 @@ effective inputs; an explicit value equal to its original default is compatible.
 Changes require a fresh checkpoint rather than silently reusing old results.
 Programs with no declarations keep their previous checkpoint representation.
 
+### Describe inputs
+
+`described as "TEXT"` gives an input a human-readable description. It may appear
+before or after `with default`, and each appears at most once. The description is
+reported by `execute inspect` and does not change how the input is read or checked.
+
+```program
+accept name as text described as "Who to greet" with default "you"
+```
+
 ### Agent interface discovery
 
 Use `execute inspect FILE [--input NAME=VALUE]`.
@@ -964,6 +982,51 @@ remain open. The [JSON schema](check-result.schema.json) defines the envelope.
 help/version output and output-write failures retain normal CLI behavior;
 errors from a correctly parsed check use this protocol. Human-readable checks
 are unchanged. Installed 0.8.0 does not include this option.
+
+## Review a plan before it runs
+
+Three options confirm what runs, and they change nothing in the program itself.
+
+**Policy header.** A leading comment block may hold one line
+`# execute-policy: allow CATEGORY...`. The categories are `writes`, `network`,
+`reads`, `process`, `cwd`, `environment`, `privileged` and `undeclared`, and
+`allow none` approves nothing. The header must be in the leading comments, there
+may be only one, and an unknown category is an error. `execute explain FILE --json
+--policy-header` merges the approved categories into the effects report. The header
+grants nothing at run time: enforcement stays with the capability policy.
+
+**What-if and confirm.** `execute run FILE --what-if` prints the plan the run would
+execute, as the explain JSON, with its fingerprint (`execute.what_if/1`). It runs
+nothing and writes nothing. `execute run FILE --confirm FINGERPRINT` runs only when
+the current plan has that fingerprint. Otherwise it stops before any effect with
+`plan changed since --what-if`, so a changed program, manifest or input must be
+reviewed again. Both options apply to finite programs and to `run` only, and
+`--what-if` takes precedence when both are given.
+
+**Single instance.** `execute run FILE --single-instance LOCK` takes an exclusive
+lock on the file LOCK without waiting. A second run that names the same lock fails
+at once with `another instance holds the single-instance lock`. The lock is held
+for the whole run, including graph, screen and stream programs, and the lock file
+is created if it is missing and is never written.
+
+## Attach to a live program
+
+`execute live serve FILE --socket PATH` runs a program that accepts control. From
+another shell, `execute attach PATH` prints one JSON object (`execute.attach/1`)
+with the current revision and runtime state. `execute attach PATH --control ACTION`
+reads that revision first and then sends the action with it, so an instance that
+changed in between refuses the action and applies nothing. The actions are `pause`,
+`resume`, `step`, `cancel`, `retry`, `reset`, `restart`, `restart-source` and `stop`.
+
+`execute run FILE --control` runs the program under a live control endpoint instead
+of a plain run. It prints `execute: control endpoint PATH` on standard error, and the
+endpoint path is fresh for each run and removed when the run ends. Output streams as
+a plain run's does, and the process exits with the program's status. `--control`
+cannot be combined with `--checkpoint`, `--trace`, `--record`, `--what-if`, `--confirm`,
+`--once`, `--headless`, `--allow`, `--policy-header`, `--retry-uncertain`,
+`--total-timeout-ms`, `--max-runs`, `--missed-ticks`, `--max-catch-up`,
+`--calendar-dedup`, `--max-record-bytes`, positional program arguments, or a
+triggered program. Each of these is refused by name.
 
 ## Listener and schedule semantics
 

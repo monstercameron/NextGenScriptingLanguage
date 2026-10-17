@@ -22,18 +22,53 @@ test. Blocks marked `text` are grammar fragments and are not parsed.
 ## Program structure
 
 ```text
-program     = { declaration } { statement }
-declaration = "accept" NAME "as" TYPE [ "from" source ] [ "with" "default" value ]
+program     = [ version ] { declaration } { statement }
+version     = "execute" INTEGER
+declaration = "accept" NAME "as" TYPE [ "from" source ] { option }
+option      = "with" "default" value | "described" "as" TEXT
 source      = "environment" TEXT | "arguments" | "argument" INTEGER
 TYPE        = "text" | "integer" | "boolean" | "list" "of" "text" | "json"
 ```
 
 Declarations come before statements. A declaration after a statement is an error.
 
+The optional `version` line is the first statement of the file, with no indentation.
+It names the language version the program was written for. Only `execute 1` is
+accepted by this release. Any other number is an error, and so is a `version` line
+that is not first.
+
+```program
+execute 1
+accept name as text
+```
+`with default` and `described as` may follow each other in either order, and each
+may appear once. `described as` gives the input a description that `execute inspect`
+reports. It does not change how the input is read.
+
 ```program
 accept name as text
 accept count as integer with default 3
 accept arguments as list of text from arguments
+accept greeting as text described as "Who to greet"
+accept repeats as integer described as "Repeat count" with default 3
+```
+
+A leading comment block may hold one policy header, `# execute-policy: allow
+CATEGORY...`. It is an ordinary comment, so it is not part of the grammar. See the
+language reference for the categories.
+
+## Pipeline input
+
+```text
+statement   = ... | "use" "value" value
+```
+
+`use value` sets the pipeline input to a text value. A following `pipe to` or `then`
+stage reads those bytes. It launches no process.
+
+```program
+use value "hello"
+then tr with from "[:lower:]" and to "[:upper:]"
 ```
 
 ## Native commands and applets
@@ -190,6 +225,20 @@ stdout, to NAME. A group with a binding does not stream to the terminal, and a l
 statement can read NAME. `pipe to` stages cannot capture status or results. The test
 `pipe_to_as_binds_the_terminal_stage_output_and_runs` checks this against the real
 binary.
+
+## Run options outside the grammar
+
+These options are not part of the program text. The language reference describes each
+one in full.
+
+- `run FILE --what-if` prints the plan and its fingerprint, and runs nothing.
+- `run FILE --confirm FINGERPRINT` runs only when the current plan has that fingerprint.
+- `run FILE --single-instance LOCK` refuses to start while another run holds LOCK.
+- `run FILE --control` hosts the run on a live control endpoint, and `attach` reads or
+  controls that endpoint.
+
+See "Review a plan before it runs" and "Attach to a live program" in
+[the language reference](language.md).
 
 ## Reading the examples
 

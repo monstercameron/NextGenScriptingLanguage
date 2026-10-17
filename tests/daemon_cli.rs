@@ -371,13 +371,18 @@ fn warm_round_trip_and_forwarded_run_latency_are_measured() {
     }
     forwarded.sort();
     cold.sort();
-    let run_line = format!(
-        "end-to-end run wall time: forwarded p50 {:?}, cold p50 {:?}",
-        forwarded[forwarded.len() / 2],
-        cold[cold.len() / 2]
-    );
+    let forwarded_p50 = forwarded[forwarded.len() / 2];
+    let cold_p50 = cold[cold.len() / 2];
+    let run_line =
+        format!("end-to-end run wall time: forwarded p50 {forwarded_p50:?}, cold p50 {cold_p50:?}");
     eprintln!("{run_line}");
     report_latency(&run_line);
+    // The daemon exists to make runs faster. A forwarded run that is no faster than a cold one
+    // means the exit or the handoff is waiting on something.
+    assert!(
+        forwarded_p50 < cold_p50,
+        "forwarded p50 {forwarded_p50:?} is not below cold p50 {cold_p50:?}"
+    );
 }
 
 /// Passing tests have their stderr captured, so the figures also go to the CI job summary

@@ -162,7 +162,7 @@ mod imp {
     use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::ptr;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -171,7 +171,9 @@ mod imp {
     const MAX_HEADER_BYTES: usize = 256 * 1024;
     /// Room in the control buffer for one descriptor-passing message.
     const CONTROL_WORDS: usize = 32;
-    /// How often the parent checks its children and the client connections.
+    /// How often the parent checks the client connections and the run deadlines. A run's exit
+    /// does not wait for this: the SIGCHLD wake pipe interrupts the poll as soon as a child
+    /// exits, so the exit is reported at once.
     const POLL_MILLIS: i32 = 50;
     /// How long a run has after its client disconnects before it is killed.
     const KILL_GRACE: Duration = Duration::from_secs(15);
@@ -365,6 +367,7 @@ mod imp {
             .set_nonblocking(true)
             .context("making the listener nonblocking")?;
         let _guard = SocketGuard(socket.to_owned());
+        let wake = ChildWake::install().context("installing the child-exit wake")?;
         let mut server = Server {
             listener,
             run,
@@ -372,10 +375,11 @@ mod imp {
             children: Vec::new(),
             started: Instant::now(),
             served: 0,
+            wake,
         };
         loop {
-            server.reap();
             server.wait_for_activity();
+            server.reap();
             if server.accept_pending() == Flow::Stop {
                 break;
             }
@@ -399,6 +403,96 @@ mod imp {
         Stop,
     }
 
+    /// Write end of the SIGCHLD wake pipe, or -1. The handler only writes a byte to it.
+    static CHILD_WAKE: AtomicI32 = AtomicI32::new(-1);
+
+    /// The `errno` location of the calling thread, so the handler can restore it. `None`
+    /// where this module does not know the accessor; the handler then leaves it alone.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn errno_slot() -> Option<*mut libc::c_int> {
+        // SAFETY: the accessor returns this thread's errno location.
+        Some(unsafe { libc::__errno_location() })
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    fn errno_slot() -> Option<*mut libc::c_int> {
+        // SAFETY: the accessor returns this thread's errno location.
+        Some(unsafe { libc::__error() })
+    }
+
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    )))]
+    fn errno_slot() -> Option<*mut libc::c_int> {
+        None
+    }
+
+    /// SIGCHLD handler: wakes the parent's poll. A full pipe drops the byte, which is harmless
+    /// because a wake is already pending.
+    extern "C" fn on_child_exit(_signal: libc::c_int) {
+        let fd = CHILD_WAKE.load(Ordering::SeqCst);
+        if fd < 0 {
+            return;
+        }
+        let slot = errno_slot();
+        // SAFETY: the slot is this thread's errno location, read before the write.
+        let saved = slot.map(|slot| unsafe { *slot });
+        let byte = 1u8;
+        // SAFETY: write is async-signal-safe, and the descriptor is non-blocking.
+        unsafe {
+            libc::write(fd, ptr::addr_of!(byte).cast(), 1);
+        }
+        if let (Some(slot), Some(saved)) = (slot, saved) {
+            // SAFETY: restores the value read above.
+            unsafe { *slot = saved };
+        }
+    }
+
+    /// The daemon's SIGCHLD wake pipe. The parent drains it in `wait_for_activity`, before it
+    /// reaps, so an exit that lands after a drain leaves a new byte for the next poll.
+    struct ChildWake {
+        read: UnixStream,
+        write: UnixStream,
+    }
+
+    impl ChildWake {
+        fn install() -> io::Result<Self> {
+            let (read, write) = UnixStream::pair()?;
+            read.set_nonblocking(true)?;
+            write.set_nonblocking(true)?;
+            CHILD_WAKE.store(write.as_raw_fd(), Ordering::SeqCst);
+            // SAFETY: the action is fully initialized, and its handler only performs
+            // async-signal-safe calls.
+            let installed = unsafe {
+                let mut action: libc::sigaction = mem::zeroed();
+                action.sa_sigaction =
+                    on_child_exit as extern "C" fn(libc::c_int) as libc::sighandler_t;
+                action.sa_flags = libc::SA_RESTART | libc::SA_NOCLDSTOP;
+                libc::sigemptyset(&mut action.sa_mask);
+                libc::sigaction(libc::SIGCHLD, &action, ptr::null_mut())
+            };
+            if installed != 0 {
+                let error = io::Error::last_os_error();
+                CHILD_WAKE.store(-1, Ordering::SeqCst);
+                return Err(error);
+            }
+            Ok(Self { read, write })
+        }
+    }
+
+    impl Drop for ChildWake {
+        fn drop(&mut self) {
+            CHILD_WAKE.store(-1, Ordering::SeqCst);
+            // SAFETY: restoring the default disposition is always valid.
+            unsafe {
+                libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+            }
+        }
+    }
+
     /// A forked run and the client connection that receives its events.
     struct Child {
         pid: libc::pid_t,
@@ -419,15 +513,21 @@ mod imp {
         children: Vec<Child>,
         started: Instant,
         served: u64,
+        wake: ChildWake,
     }
 
     impl Server {
         /// Block for at most one poll interval, unless a connection or a child's client
         /// has something to say.
         fn wait_for_activity(&self) {
-            let mut descriptors = Vec::with_capacity(self.children.len() + 1);
+            let mut descriptors = Vec::with_capacity(self.children.len() + 2);
             descriptors.push(libc::pollfd {
                 fd: self.listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            });
+            descriptors.push(libc::pollfd {
+                fd: self.wake.read.as_raw_fd(),
                 events: libc::POLLIN,
                 revents: 0,
             });
@@ -448,6 +548,10 @@ mod imp {
                     POLL_MILLIS,
                 );
             }
+            // Drain every pending wake. Reaping happens after this, so an exit that set a byte
+            // before the drain is seen by the reap that follows it.
+            let mut sink = [0u8; 64];
+            while matches!((&self.wake.read).read(&mut sink), Ok(count) if count > 0) {}
         }
 
         fn accept_pending(&mut self) -> Flow {
@@ -566,10 +670,12 @@ mod imp {
                 );
                 return;
             }
+            // The child closes these: the other clients' connections and the wake pipe.
             let held: Vec<RawFd> = self
                 .children
                 .iter()
                 .map(|child| child.connection.as_raw_fd())
+                .chain([self.wake.read.as_raw_fd(), self.wake.write.as_raw_fd()])
                 .collect();
             let setup = ChildSetup {
                 listener_fd: self.listener.as_raw_fd(),

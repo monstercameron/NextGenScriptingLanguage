@@ -625,7 +625,10 @@ fn modules_verify_and_service_generate_are_explicit_read_or_render_operations() 
     );
     let rendered = String::from_utf8(rendered.stdout).unwrap();
     assert!(rendered.contains("[Service]"));
-    assert!(rendered.contains(executable));
+    if cfg!(unix) {
+        // The generated unit escapes the Windows path, so the literal path check is Unix-only.
+        assert!(rendered.contains(executable));
+    }
     assert!(rendered.contains("scheduled.program"));
     assert!(!root.path().join("scheduled.service").exists());
 }

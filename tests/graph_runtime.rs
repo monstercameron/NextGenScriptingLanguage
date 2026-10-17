@@ -11,7 +11,9 @@ use flow::runtime::RunOptions;
 use flow::security::{DataFlowPolicy, SensitivitySet};
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(unix)]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -814,6 +816,7 @@ fn overbudget_reconfigure_keeps_the_old_session_live() {
     session.cancel_and_join().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn actual_manifest_applets_connect_through_shared_invocation_runtime() {
     let cwd = tempfile::tempdir().unwrap();

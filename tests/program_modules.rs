@@ -558,6 +558,7 @@ fn execution_session_preloads_manifest_relative_modules_and_exposes_checkpoint_i
     assert!(session.body_invocations().is_empty());
 }
 
+#[cfg(unix)]
 #[test]
 fn module_private_bindings_and_folder_changes_do_not_escape_to_caller() {
     let temp = tempdir().unwrap();

@@ -247,6 +247,7 @@ fn local_sse_listener_routes_typed_events_through_transform_and_sink() {
     assert!(metadata[1].duplicate_cursor);
 }
 
+#[cfg(unix)]
 #[test]
 fn remote_listener_accounts_dns_helper_spawns_in_graph_result() {
     let (registry, requests, server) = fixture_server_at_host("localhost");

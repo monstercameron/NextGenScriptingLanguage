@@ -109,7 +109,7 @@ def check_file(path, root=ROOT):
     errors = []
     if not path.is_file():
         return [f"{path}: missing maintained document"]
-    for number, line in enumerate(prose(path.read_text()), 1):
+    for number, line in enumerate(prose(path.read_text(encoding="utf-8")), 1):
         for link in LINK.finditer(line):
             target = link[1].strip("<>")
             url = urlsplit(target)
@@ -128,7 +128,7 @@ def check_file(path, root=ROOT):
                 if not destination.exists():
                     reason = "target does not exist"
                 elif url.fragment and destination.suffix in {".md", ".html"}:
-                    ids = anchors(destination.read_text(), destination.suffix == ".md")
+                    ids = anchors(destination.read_text(encoding="utf-8"), destination.suffix == ".md")
                     reason = (
                         None
                         if unquote(url.fragment) in ids

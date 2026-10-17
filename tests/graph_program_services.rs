@@ -1,9 +1,11 @@
 use anyhow::Result;
 use flow::ast::Value;
 use flow::graph::{
-    self, EdgeSpec, GraphContext, GraphExecutor, GraphNode, GraphNodeKind, GraphRunOptions,
-    GraphSession, NodeIo, PortRef, PortValue, RuntimeGraphExecutor,
+    self, GraphContext, GraphExecutor, GraphNode, GraphRunOptions, GraphSession, NodeIo, PortValue,
+    RuntimeGraphExecutor,
 };
+#[cfg(unix)]
+use flow::graph::{EdgeSpec, GraphNodeKind, PortRef};
 use flow::manifest::Registry;
 use flow::modules::{load_program_module_package, ProgramModuleSession};
 use flow::runtime::RunOptions;
@@ -15,6 +17,7 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -203,6 +206,7 @@ fn service_with_v1_dependency_fixture() -> (TempDir, Registry) {
     package_service_with_v1_dependency_fixture(service_source, "schedule", false)
 }
 
+#[cfg(unix)]
 fn listener_with_v1_dependency_fixture() -> (TempDir, Registry) {
     let service_source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  run dep.echo with payload snapshot\n";
     package_service_with_v1_dependency_fixture(service_source, "listener", true)
@@ -429,6 +433,7 @@ fn scheduled_program_service_emits_successive_typed_events() {
     session.cancel_and_join().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn native_listener_program_service_emits_a_typed_event_and_counts_its_source() {
     let source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  then encode snapshot as json\n";
@@ -505,6 +510,7 @@ fn native_listener_rejects_declared_failure_and_unmapped_statuses() {
     assert_listener_source_failure_status_is_rejected(9, None);
 }
 
+#[cfg(unix)]
 #[test]
 fn listener_output_decode_failure_keeps_the_successful_source_spawn_count() {
     let source = "accept snapshot as json\nlisten to test.snapshot_source\nwhenever a line arrives as event\n  then encode \"not-a-record\" as json\n";
@@ -553,6 +559,7 @@ fn scheduled_service_resolves_declared_graph_inputs_before_startup() {
     session.cancel_and_join().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn scheduled_service_reads_required_single_input_from_graph_edge() {
     let source = "accept snapshot as json\nevery 20 milliseconds\n  then encode snapshot as json\n";
@@ -1064,6 +1071,7 @@ fn scheduled_package_handler_can_invoke_a_pinned_v1_dependency_alias() {
     session.cancel_and_join().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn package_listener_preflights_its_native_source_and_invokes_a_pinned_v1_alias() {
     let (root, registry) = listener_with_v1_dependency_fixture();
@@ -1108,11 +1116,13 @@ fn package_listener_preflights_its_native_source_and_invokes_a_pinned_v1_alias()
     assert_eq!(result.launched_processes, 1);
 }
 
+#[cfg(unix)]
 struct HoldAfterFirstEvent {
     service_executor: RuntimeGraphExecutor,
     first_event: mpsc::SyncSender<flow::graph::EventEnvelope>,
 }
 
+#[cfg(unix)]
 impl GraphExecutor for HoldAfterFirstEvent {
     fn execute(&self, node: &GraphNode, io: &mut NodeIo, context: &GraphContext) -> Result<()> {
         if node.id == "sink" {
@@ -1131,6 +1141,7 @@ impl GraphExecutor for HoldAfterFirstEvent {
     }
 }
 
+#[cfg(unix)]
 fn wait_for_marker_count(path: &Path, expected: usize, deadline: Instant) -> usize {
     loop {
         let count = fs::read_to_string(path)
@@ -1147,6 +1158,7 @@ fn wait_for_marker_count(path: &Path, expected: usize, deadline: Instant) -> usi
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn cancelling_a_service_blocked_by_a_full_lossless_edge_queue_joins_it() {
     let marker_root = tempfile::tempdir().unwrap();
@@ -1243,6 +1255,7 @@ fn cancelling_a_service_blocked_by_a_full_lossless_edge_queue_joins_it() {
     session.cancel_and_join().unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn post_spawn_decode_failure_retains_the_exact_service_process_count() {
     let source = "accept snapshot as json\nevery 10 milliseconds\n  run \"printf\" with arguments [\"{\\\"wrong\\\":true}\"]\n";

@@ -130,7 +130,8 @@ fn real_native_statuses_propagate_or_can_be_handled() {
     let folder = tempfile::tempdir().unwrap();
     let failed = invoke(folder.path(), &native(&["exit", "42", "partial"]), &[]);
     assert_eq!(failed.status.code(), Some(42));
-    assert!(failed.stdout.is_empty());
+    // Unconsumed output streams as the command writes it, even when the command fails.
+    assert_eq!(String::from_utf8_lossy(&failed.stdout), "partial");
     let source = format!(
         "{} and keep status as code\nthen encode code as json\n",
         native(&["exit", "42", ""]).trim_end()
@@ -191,11 +192,15 @@ fn output_limits_and_timeouts_kill_owned_descendants() {
     let folder = tempfile::tempdir().unwrap();
     let result = invoke(
         folder.path(),
-        &native(&["flood"]),
+        &format!(
+            "{}then save to \"flood.bin\"
+",
+            native(&["flood"])
+        ),
         &["--max-output-bytes", "1024"],
     );
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("maximum"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("exceeds the limit of 1024 bytes"));
     let marker = folder.path().join("escaped.txt");
     let result = invoke(
         folder.path(),

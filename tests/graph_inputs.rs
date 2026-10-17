@@ -1,17 +1,25 @@
 use flow::ast::Value;
-use flow::graph::{self, GraphPlan, PortValue};
+#[cfg(unix)]
+use flow::graph::PortValue;
+use flow::graph::{self, GraphPlan};
 use flow::manifest::Registry;
+#[cfg(unix)]
 use flow::runtime::RunOptions;
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::sync::atomic::AtomicBool;
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use std::time::Duration;
 
 fn echo_registry() -> Registry {
     Registry::from_sources(&[r#"{"name":"demo.echo","binary":"/usr/bin/printf","parameters":{"message":{"type":"string","required":true}},"arguments":[{"literal":"%s"},{"parameter":"message"}],"contract":{"version":1,"output":{"type":"bytes","encoding":"raw"}}}"#]).unwrap()
 }
 
+#[cfg(unix)]
 fn options(cwd: &Path, inputs: BTreeMap<String, Value>) -> RunOptions {
     RunOptions {
         inputs,
@@ -422,6 +430,7 @@ fn graph_input_resolution_keeps_environment_precedence_over_defaults() {
     std::env::remove_var(key);
 }
 
+#[cfg(unix)]
 #[test]
 fn graph_run_preserves_input_bytes_as_a_single_literal_argv_value() {
     let directory = tempfile::tempdir().unwrap();

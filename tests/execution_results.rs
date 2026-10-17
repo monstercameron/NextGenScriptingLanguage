@@ -285,6 +285,7 @@ fn source_result_binding_exposes_raw_output_and_all_pipeline_stages() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn source_result_binding_decodes_typed_output_without_an_output_binding() {
     let directory = tempfile::tempdir().unwrap();
@@ -317,6 +318,7 @@ fn source_result_binding_decodes_typed_output_without_an_output_binding() {
     assert_eq!(record["value"]["count"], 5);
 }
 
+#[cfg(unix)]
 #[test]
 fn source_result_binding_keeps_the_value_alongside_a_named_output() {
     let directory = tempfile::tempdir().unwrap();

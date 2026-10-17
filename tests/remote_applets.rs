@@ -464,6 +464,7 @@ fn resolver_helper_process_observer_counts_spawns_before_request_completion() {
     assert_eq!(failed_launches.load(Ordering::SeqCst), 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn bearer_file_auth_and_wire_bytes_are_explicit_and_debug_redacted() {
     let directory = tempfile::tempdir().unwrap();

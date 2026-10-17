@@ -529,6 +529,33 @@ does not run any later step and reports the same status, re-derived from the
 restored bindings. Validation rejects nested exits in a checkpointed program
 before any effect.
 
+### Step labels and step ids
+
+A statement may start with a label: one word ending in a colon, such as `fetch:`.
+The label names the statement's first step, so a compound statement is named by its
+opening step. Labels start with a letter and use only letters, digits, `_` and `-`.
+They must be unique in their program body, and they cannot be statement keywords
+such as `if`, `run` or `then`. A label cannot precede a declaration, a trigger or a
+clause, and a statement takes at most one label.
+
+```program
+fetch: run "printf" with arguments ["hello\n"]
+run "printf" with arguments ["world\n"]
+```
+
+Every step has an id. A labelled step's id is its label. An unlabelled step's id
+is derived from its kind, a short hash of its canonical content, and its occurrence
+among identical steps, for example `Invoke:7e9b5db767aa#1`. Derived ids never
+contain line numbers. Inserting a statement above a labelled step leaves its id
+unchanged, even though the step's line number changes. A derived id changes when
+the step's own content changes, or when an identical earlier step is added or
+removed. Use a label when a tool must refer to a step across edits.
+
+Ids appear in `execute explain --json` (each step row's `id`), in `--trace` events
+(`id`), in the recorded step events of `--record` (`id` in `trace.jsonl`), and in
+execution records (`step_id`). Checkpoint identity is not yet keyed by step id; that
+follows the next journal version. Live control does not expose step ids yet.
+
 ### Exit and interrupt handlers
 
 A top-level `on exit` block runs on every exit path: normal completion, `exit`,
@@ -740,6 +767,51 @@ from a called file refer to that file, not to the caller. Calls nest to 16 files
 and a program may reach 256 distinct files. A file call needs the loader, so
 programs run from text with no path (live editing, the REPL, and language-server
 text) report it as an error, not run it.
+
+### Retry a command
+
+`and retry up to N times` on a `run` command runs it again after a failure that may
+be temporary. N is 1 to 100 retries after the first attempt. Optional clauses follow
+it, in this order: `even if uncertain`, then `with backoff AMOUNT UNIT` with an
+optional `doubling`. The unit is milliseconds, seconds, minutes, or hours. A backoff
+is at most one hour.
+
+```program
+run flaky.service and retry up to 3 times with backoff 2 seconds doubling
+```
+
+```text
+run "./sync-mirror" with arguments ["--quick"] and retry up to 2 times even if uncertain
+```
+
+A failed attempt is retried only when its outcome is declared retryable. An applet
+declares this with an outcome of kind `retryable` in its contract. A quoted
+executable has no contract, so any nonzero exit counts as retryable. Other outcomes
+are never retried, and a retry that does not apply is refused with a message naming
+the reason.
+
+Retrying also needs the effects to be safe to repeat. The attempt is safe when its
+outcome declares that nothing started (`effect_certainty: not_started`), or when the
+command is builtin or cacheable and has no redirection. These are the same rules
+checkpoint resume uses. Otherwise the retry is refused unless the step says
+`even if uncertain`. A quoted executable is never builtin or cacheable, so its
+retries always need that clause.
+
+After the last allowed attempt the command fails with `retry exhausted after N+1
+attempts`. Without a backoff, retries follow the failure at once. With a backoff, the
+first wait is the given amount. `doubling` doubles each later wait. The wait stops
+early on cancellation or the program deadline.
+
+Only a plain `run` command can retry. It is refused on `then`, `pipe to`, a
+pipeline stage, `interactively`, hand-over and detached commands, command conditions,
+listener sources, task groups, background jobs, program calls, and graph nodes. It
+cannot be combined with `and cache`, `and keep status`, or `and keep result`. Output
+redirection is kept, and each attempt reopens the file.
+
+Each retry adds a `retry` event to the `--trace` output, with the attempt number and
+the delay. The execution record keeps every failed attempt's outcome. `execute
+explain --json` shows the policy on the command's step as `retry`, with `attempts`,
+`backoff_ms`, `doubling`, `even_if_uncertain`, and `idempotent`.
 
 ### Direct executable calls
 

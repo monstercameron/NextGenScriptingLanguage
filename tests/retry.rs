@@ -80,7 +80,10 @@ fn write_applet(manifests: &Path, name: &str, counter: &Path, outcome: Value) {
         "contract": {
             "version": 1,
             "backend": "command",
-            "outcomes": [outcome],
+            "outcomes": [
+                {"status": 0, "name": "ok", "kind": "success"},
+                outcome
+            ],
             "capabilities": [],
             "effects": []
         }
@@ -163,7 +166,6 @@ fn an_uncertain_direct_command_is_not_retried_without_the_opt_in() {
 }
 
 #[test]
-#[ignore = "contract retryable outcome resolves to failure before retry; tracked in #27"]
 fn a_retryable_contract_outcome_with_known_no_effect_needs_no_opt_in() {
     let root = tempfile::tempdir().unwrap();
     let manifests = manifests(root.path());
@@ -183,7 +185,6 @@ fn a_retryable_contract_outcome_with_known_no_effect_needs_no_opt_in() {
 }
 
 #[test]
-#[ignore = "contract retryable outcome resolves to failure before retry; tracked in #27"]
 fn a_retryable_outcome_with_uncertain_effects_is_refused_then_allowed_with_the_opt_in() {
     let root = tempfile::tempdir().unwrap();
     let manifests = manifests(root.path());

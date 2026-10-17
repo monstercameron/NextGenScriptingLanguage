@@ -163,7 +163,7 @@ fn save_steps_count_as_writes_and_other_steps_have_no_effects() {
     assert!(steps
         .iter()
         .all(|row| row["kind"] != "other" || row["effects"].is_null()));
-    assert_eq!(object["summary"]["save_steps"], true);
+    assert_eq!(object["summary"]["writes"], true);
 }
 
 #[test]
@@ -209,4 +209,152 @@ fn json_is_rejected_for_run_and_the_check_json_contract_is_intact() {
         .unwrap();
     let object: Value = serde_json::from_slice(&check.stdout).expect("check --json object");
     assert_eq!(object["protocol"], "execute.check/1");
+}
+
+// ---------------------------------------------------------------------------
+// Fail-closed classification: every step kind is named, and called definitions
+// are walked. A plan may claim `effects_declared` only when nothing is unknown.
+// ---------------------------------------------------------------------------
+
+fn rows_of_kind<'a>(object: &'a Value, kind: &str) -> Vec<&'a Value> {
+    object["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["kind"] == kind)
+        .collect()
+}
+
+#[test]
+fn every_new_step_kind_is_classified_with_its_effect() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "accept message as text\n\
+use folder \"sub\"\n\
+read \"input.txt\"\n\
+run plain.helper with text \"x\" and environment {\"K\": \"v\"}\n\
+run plain.helper interactively\n\
+run plain.helper and stderr to \"err.txt\"\n\
+run plain.helper\n\
+then append to \"log.txt\"\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+
+    let folder = rows_of_kind(&object, "use_folder");
+    assert_eq!(folder.len(), 1, "{object}");
+    assert_eq!(folder[0]["cwd_change"], true);
+    assert_eq!(folder[0]["path"], "sub");
+
+    let read = rows_of_kind(&object, "read");
+    assert_eq!(read.len(), 1, "{object}");
+    assert_eq!(read[0]["reads"], true);
+    assert_eq!(read[0]["path"], "input.txt");
+
+    let environment = rows_of_kind(&object, "environment");
+    assert_eq!(environment.len(), 1, "{object}");
+    assert_eq!(environment[0]["modifies_next_invocation"], true);
+
+    let interactive = rows_of_kind(&object, "interactive");
+    assert_eq!(interactive.len(), 1, "{object}");
+    assert_eq!(interactive[0]["modifies_next_invocation"], true);
+
+    let redirect = rows_of_kind(&object, "redirect");
+    assert_eq!(redirect.len(), 1, "{object}");
+    assert_eq!(redirect[0]["writes"], true);
+    assert_eq!(redirect[0]["path"], "err.txt");
+    assert_eq!(redirect[0]["modifies_next_invocation"], true);
+
+    let append = rows_of_kind(&object, "append");
+    assert_eq!(append.len(), 1, "{object}");
+    assert_eq!(append[0]["writes"], true);
+    assert_eq!(append[0]["path"], "log.txt");
+
+    let summary = &object["summary"];
+    assert_eq!(summary["writes"], true);
+    assert_eq!(summary["cwd_changes"], true);
+    assert_eq!(summary["reads"], true);
+    assert_eq!(summary["modifies_next_invocation"], true);
+    let paths: Vec<&str> = summary["write_paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        paths.contains(&"err.txt") && paths.contains(&"log.txt"),
+        "{paths:?}"
+    );
+}
+
+#[test]
+fn runtime_destination_of_a_write_is_reported_not_guessed() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "accept target as text\nrun plain.helper\nthen save to target\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let save = rows_of_kind(&object, "save");
+    assert_eq!(save.len(), 1, "{object}");
+    assert_eq!(save[0]["writes"], true);
+    assert!(
+        save[0]["path"].is_null(),
+        "runtime path must not be guessed"
+    );
+    assert_eq!(save[0]["path_is_runtime"], true);
+    assert_eq!(object["summary"]["runtime_write_paths"], 1);
+    assert_eq!(object["summary"]["writes"], true);
+}
+
+#[test]
+fn called_definitions_are_walked_and_their_undeclared_steps_count() {
+    let directory = tempfile::tempdir().unwrap();
+    let source =
+        "define a program named inner\n  run net.helper\n  run plain.helper\nrun program inner\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+
+    let calls = rows_of_kind(&object, "call_program");
+    assert_eq!(calls.len(), 1, "{object}");
+    assert_eq!(calls[0]["resolved"], true);
+
+    let nested: Vec<&Value> = object["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["scope"] == "inner")
+        .collect();
+    assert_eq!(
+        nested.len(),
+        2,
+        "both definition steps must be walked: {object}"
+    );
+
+    let summary = &object["summary"];
+    assert_eq!(summary["invocations"], 2);
+    assert_eq!(
+        summary["network"], true,
+        "a called definition's network effect counts"
+    );
+    assert_eq!(summary["undeclared_invocations"], 1);
+    assert_eq!(
+        summary["effects_declared"], false,
+        "an undeclared step inside a call must not look declared"
+    );
+}
+
+#[test]
+fn recursive_definition_is_never_reported_as_fully_declared() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "define a program named again\n  run program again\nrun program again\n";
+    let output = explain(directory.path(), source, &["--json"]);
+    if output.status.success() {
+        let object: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(object["summary"]["effects_declared"], false, "{object}");
+        assert!(
+            object["summary"]["undeclared_invocations"]
+                .as_u64()
+                .unwrap()
+                >= 1
+        );
+    } else {
+        assert!(
+            output.stdout.is_empty(),
+            "a rejected cycle must not print a plan"
+        );
+    }
 }

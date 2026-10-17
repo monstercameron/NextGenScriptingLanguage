@@ -5,7 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::os::windows::{
     ffi::OsStrExt,
     fs::OpenOptionsExt,
-    io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle},
 };
 use std::path::Path;
 use std::process::{Child, Command};
@@ -270,13 +270,15 @@ fn snapshot_primary_thread(pid: u32) -> Result<OwnedHandle> {
     bail!("suspended primary thread not found")
 }
 
-/// Nonblocking observation of an owned anonymous/named pipe. Reading at most
-/// this many bytes cannot block; BrokenPipe is an ordinary EOF.
-pub(crate) fn available(handle: HANDLE) -> std::io::Result<Option<usize>> {
+/// Nonblocking observation of a pipe. Reading at most this many bytes cannot block;
+/// BrokenPipe is an ordinary EOF. The borrowed handle keeps the pipe open for the call.
+pub(crate) fn available(handle: BorrowedHandle<'_>) -> std::io::Result<Option<usize>> {
     let mut bytes = 0;
-    // SAFETY: `handle` must be an owned pipe handle (see the doc comment above).
-    // PeekNamedPipe with a null buffer and size 0 copies nothing and does not block, and
-    // `&mut bytes` is a valid u32 out-slot. An invalid handle makes it fail, not misbehave.
+    let handle = handle.as_raw_handle() as HANDLE;
+    // SAFETY: `handle` is open for the whole call because it is borrowed from a live Rust
+    // handle, and it is a pipe handle because every caller passes a child pipe. PeekNamedPipe
+    // with a null buffer and size 0 copies nothing and does not block, and `&mut bytes` is a
+    // valid u32 out-slot. A handle of the wrong type makes it fail, not misbehave.
     if unsafe {
         PeekNamedPipe(
             handle,
@@ -300,21 +302,23 @@ pub(crate) fn available(handle: HANDLE) -> std::io::Result<Option<usize>> {
     Ok(Some(bytes as usize))
 }
 
-/// Duplicate a synchronous pipe handle for one bounded I/O operation. The
-/// caller owns and joins any thread using the duplicate before returning.
-pub(crate) fn duplicate_handle_file(handle: HANDLE) -> Result<File> {
+/// Duplicate a synchronous pipe handle for one bounded I/O operation. The borrowed source
+/// stays open for the call, and the duplicate is an owned File that the caller joins
+/// any thread using before returning.
+pub(crate) fn duplicate_handle_file(handle: BorrowedHandle<'_>) -> Result<File> {
+    let source = handle.as_raw_handle() as HANDLE;
     // SAFETY: GetCurrentProcess returns a pseudo-handle that is always valid and needs no
-    // closing. The source `handle` must stay open in this process for the whole call. The
-    // function does not check that itself; its callers keep the handle alive.
+    // closing.
     let process = unsafe { GetCurrentProcess() };
     let mut duplicate = std::ptr::null_mut();
-    // SAFETY: `process` is the current-process pseudo-handle, `handle` is open as described
-    // above, and `&mut duplicate` is a valid out-slot. DUPLICATE_SAME_ACCESS keeps the
-    // source access. The BOOL result is checked for zero below before `duplicate` is used.
+    // SAFETY: `process` is the current-process pseudo-handle, `source` is open for the whole
+    // call because it is borrowed from a live Rust handle, and `&mut duplicate` is a valid
+    // out-slot. DUPLICATE_SAME_ACCESS keeps the source access. The BOOL result is checked for
+    // zero below before `duplicate` is used.
     if unsafe {
         DuplicateHandle(
             process,
-            handle,
+            source,
             process,
             &mut duplicate,
             0,
@@ -400,6 +404,21 @@ pub(crate) fn user_sid(process: HANDLE) -> Result<Vec<u8>> {
 pub(crate) struct PrivateSecurity {
     descriptor: PSECURITY_DESCRIPTOR,
 }
+/// SECURITY_ATTRIBUTES whose descriptor pointer is owned by a PrivateSecurity. The
+/// lifetime `'a` ties every use to that owner, so the pointer cannot dangle.
+#[cfg(feature = "live")]
+pub(crate) struct SecurityAttributes<'a> {
+    raw: SECURITY_ATTRIBUTES,
+    _descriptor: std::marker::PhantomData<&'a PrivateSecurity>,
+}
+#[cfg(feature = "live")]
+impl SecurityAttributes<'_> {
+    /// A pointer to the attributes, valid while this value is borrowed. Callers pass it to
+    /// a Win32 call that reads it during that call.
+    pub(crate) fn as_ptr(&self) -> *const SECURITY_ATTRIBUTES {
+        &self.raw
+    }
+}
 impl PrivateSecurity {
     pub(crate) fn new() -> Result<Self> {
         // SAFETY: GetCurrentProcess returns the current-process pseudo-handle, which is always
@@ -447,12 +466,17 @@ impl PrivateSecurity {
         }
         Ok(Self { descriptor })
     }
+    /// Attributes for pipe creation. They borrow this descriptor, so the lifetime stops
+    /// them from outliving the PrivateSecurity whose memory they point into.
     #[cfg(feature = "live")]
-    pub(crate) fn attributes(&self) -> SECURITY_ATTRIBUTES {
-        SECURITY_ATTRIBUTES {
-            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: self.descriptor,
-            bInheritHandle: 0,
+    pub(crate) fn attributes(&self) -> SecurityAttributes<'_> {
+        SecurityAttributes {
+            raw: SECURITY_ATTRIBUTES {
+                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: self.descriptor,
+                bInheritHandle: 0,
+            },
+            _descriptor: std::marker::PhantomData,
         }
     }
     fn apply(&self, file: &File) -> Result<()> {

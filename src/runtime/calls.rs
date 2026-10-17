@@ -135,7 +135,7 @@ pub(super) struct Frame<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub job_scope: usize,
     pub bindings: BTreeMap<String, Value>,
-    pub cwd: PathBuf,
+    pub cwd: crate::working_dir::WorkingDirectory,
 }
 
 /// The schema was checked before effects; resolve each actual value once.

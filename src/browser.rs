@@ -361,7 +361,7 @@ impl BrowserSession {
                             line: step.line,
                             binding: call.binding.as_deref(),
                             bindings: std::mem::replace(&mut bindings, child),
-                            cwd: cwd.clone(),
+                            cwd: crate::working_dir::WorkingDirectory::plain(cwd.clone()),
                         });
                         if *connection == Connection::Start {
                             data.clear();
@@ -370,7 +370,7 @@ impl BrowserSession {
                     StepKind::EndCall => {
                         let frame = frames.pop().context("program return without call")?;
                         bindings = frame.bindings;
-                        cwd = frame.cwd;
+                        cwd = frame.cwd.path().to_path_buf();
                         bind_text(frame.binding, &data, &mut bindings)?;
                         response.push_trace(|| serde_json::json!({"line":frame.line,"operation":"return","program":frame.name}));
                     }

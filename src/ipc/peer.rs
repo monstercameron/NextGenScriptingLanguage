@@ -8,7 +8,7 @@ pub(crate) fn peer_is_owner(stream: &UnixStream) -> bool {
     {
         // SAFETY: geteuid has no preconditions and cannot fail. It only reads the
         // process's effective uid.
-        peer_has_uid(stream, unsafe { libc::geteuid() })
+        peer_has_uid(stream, crate::platform::unix_ffi::effective_uid())
     }
     #[cfg(windows)]
     {

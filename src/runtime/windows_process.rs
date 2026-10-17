@@ -1,7 +1,7 @@
 // Included only on Windows; the parser, validation, cache, branches, JSON,
 // same-file calls and checkpoint state machine remain shared with Unix.
 use crate::platform::windows::{available, Job};
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::AsHandle;
 
 struct ManagedChild {
     child: Child,
@@ -38,7 +38,7 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
         // A continuously writable stderr must yield to stdout, status,
         // cancellation and deadline checks in the supervising loop.
         for _ in 0..16 {
-            match available(reader.as_raw_handle())? {
+            match available(reader.as_handle())? {
                 None => {
                     child.stderr = None;
                     break;
@@ -392,12 +392,7 @@ fn execute_group_with_sink(
                 started,
             )?;
             if !eof {
-                match available(
-                    stdout
-                        .as_ref()
-                        .expect("captured stdout pipe")
-                        .as_raw_handle(),
-                )? {
+                match available(stdout.as_ref().expect("captured stdout pipe").as_handle())? {
                     None => eof = true,
                     Some(0) => {}
                     Some(count) => {

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicBool, Arc};
 
 pub(crate) mod sandbox;
+#[cfg(unix)]
+pub(crate) mod unix_ffi;
 #[cfg(windows)]
 pub(crate) mod windows;
 

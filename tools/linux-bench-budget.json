@@ -1,0 +1,15 @@
+{
+  "ten_step_pipeline_median_ms": null,
+  "ten_step_pipeline_max_rss_kb": null,
+  "for_each_10000_median_ms": null,
+  "for_each_10000_max_rss_kb": null,
+  "for_each_10000_checkpoint_median_ms": null,
+  "for_each_10000_checkpoint_max_rss_kb": null,
+  "applet_100_median_ms": null,
+  "applet_100_max_rss_kb": null,
+  "pipe_1mb_median_ms": null,
+  "pipe_1mb_max_rss_kb": null,
+  "parallel_limit_8_median_ms": null,
+  "parallel_limit_8_max_rss_kb": null,
+  "note": "Set each median budget to about 150% and each RSS budget to about 110% of the value the first Linux CI run prints. Until then the step reports the numbers without enforcing them."
+}

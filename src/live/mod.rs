@@ -798,22 +798,17 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
             }
             #[cfg(unix)]
             {
-                let mut poll = libc::pollfd {
-                    fd: listener.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
+                // `listener` is bound earlier in `serve` and borrowed by this loop, so its fd is
+                // open for the wait. The 20 ms timeout is a non-negative c_int.
+                let ready = match crate::platform::unix_ffi::poll_one(
+                    listener.as_raw_fd(),
+                    libc::POLLIN,
+                    20,
+                ) {
+                    Ok((ready, _)) => ready,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error.into()),
                 };
-                // SAFETY: `listener` is a UnixListener bound earlier in `serve` and borrowed
-                // by this loop, so its fd is open. `poll` is an initialised pollfd local to
-                // this block, and nfds is 1 to match that one entry. The 20 ms timeout is a
-                // non-negative c_int.
-                let ready = unsafe { libc::poll(&mut poll, 1, 20) };
-                if ready < 0 {
-                    if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    return Err(std::io::Error::last_os_error().into());
-                }
                 if ready == 0 {
                     continue;
                 }
@@ -1050,7 +1045,7 @@ mod peer_tests {
         let (left, right) = UnixStream::pair().unwrap();
         // SAFETY: geteuid takes no arguments, cannot fail, and reads no memory, so the
         // call has no pointer, lifetime or alignment requirement to uphold.
-        let owner = unsafe { libc::geteuid() };
+        let owner = crate::platform::unix_ffi::effective_uid();
         for peer in [&left, &right] {
             assert!(peer_has_uid(peer, owner));
             assert!(!peer_has_uid(peer, owner.wrapping_add(1)));

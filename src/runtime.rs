@@ -1263,10 +1263,9 @@ fn scan_child_statuses(
     for (index, managed) in children.0.iter_mut().enumerate() {
         drain_diagnostic(managed)?;
         if !managed.reaped {
-            if let Some(status) = managed.child.try_wait()? {
-                // An applet must stay alive until its work is complete.
-                // Reclaim descendants that outlive their owning applet.
-                kill_group(&managed.child);
+            // An applet must stay alive until its work is complete. Reclaim descendants
+            // that outlive their owning applet: reap_exited signals the group before reaping.
+            if let Some(status) = reap_exited(&mut managed.child)? {
                 managed.reaped = true;
                 let code = status.code();
                 let stderr = captured_stage_stderr(calls[index].0, calls[index].1, signals)
@@ -1663,6 +1662,26 @@ fn windows_file_info(
 /// Authorize and open one output target of a redirect or a detached launch. Every
 /// output file takes this path: the write grant and the persistence policy are
 /// checked before the hardened open, so no output target has its own rules.
+/// Open a directory for the run and authorize the path it resolves to. The returned
+/// handle records that resolved path, so relative paths joined onto it name the
+/// authorized directory even if the requested path is swapped later.
+fn enter_directory(
+    registry: &Registry,
+    requested: &Path,
+    cwd: &Path,
+) -> Result<crate::working_dir::WorkingDirectory> {
+    let opened = crate::working_dir::WorkingDirectory::open(requested)?;
+    let resolved = opened.resolved_path()?;
+    crate::capabilities::authorize_host_path(registry, &resolved, false, cwd)?;
+    if !opened.same_directory_as(&resolved)? {
+        bail!(
+            "folder changed while it was being opened: {}",
+            resolved.display()
+        );
+    }
+    Ok(opened.authorized(resolved))
+}
+
 /// Check that an opened file is the file the authorized, resolved path names. A link
 /// swapped in between the authorization and the open must not change what the grant
 /// covered. Unix compares device and inode; Windows has no equivalent check here yet
@@ -2319,19 +2338,10 @@ fn execute_group_with_sink(
             );
         }
         if let Some(stderr) = &children.0.last().unwrap().stderr {
-            let fd = stderr.as_raw_fd();
-            // SAFETY: `fd` is the stderr pipe of the child at the end of `children`. `stderr`
-            // borrows that pipe from `children`, and nothing is removed from `children` before
-            // these calls, so the descriptor is open. F_GETFL only reads the status flags.
-            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-            if flags == -1
-                // SAFETY: same descriptor as above. F_SETFL runs only when `flags` is not -1, so
-                // it adds O_NONBLOCK to the status flags of an open pipe.
-                || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
-            {
-                return Err(std::io::Error::last_os_error())
-                    .context("setting diagnostics nonblocking");
-            }
+            // `stderr` borrows the pipe from `children`, and nothing is removed from `children`
+            // before this call, so the descriptor is open.
+            crate::platform::unix_ffi::set_nonblocking(stderr.as_raw_fd())
+                .context("setting diagnostics nonblocking")?;
         }
         // Parameter values are deliberately omitted from traces (may be secrets).
         let pid = children.0.last().expect("just pushed child").child.id();
@@ -2360,16 +2370,10 @@ fn execute_group_with_sink(
     // directly between child descriptors; the interpreter never copies them.
     let (fd, mut eof) = if let Some(stdout) = stdout.as_ref() {
         let fd = stdout.as_raw_fd();
-        // SAFETY: `fd` is the stdout pipe of the previous stage. It is held in `stdout` for the
-        // whole loop, so it is open. F_GETFL only reads the status flags.
-        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-        // SAFETY: `fd` is still open. F_SETFL runs only when `flags` is not -1, because the `||`
-        // short-circuits, so it adds O_NONBLOCK to the status flags.
-        if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
-        {
-            return Err(std::io::Error::last_os_error())
-                .context("setting terminal pipe nonblocking");
-        }
+        // `fd` is the stdout pipe of the previous stage. It is held in `stdout` for the whole
+        // loop, so it is open while the flags change.
+        crate::platform::unix_ffi::set_nonblocking(fd)
+            .context("setting terminal pipe nonblocking")?;
         (fd, false)
     } else {
         (-1, true)
@@ -4428,7 +4432,7 @@ fn run_finite_state(
                 )?;
                 state = resumed.state;
             }
-            cwd = crate::working_dir::WorkingDirectory::plain(state.cwd);
+            cwd = enter_directory(registry, &state.cwd, &cwd)?;
             bindings = state.bindings;
             data = Input::Bytes(state.output);
             // A completed exit or fail is a terminal node: nothing after it ran,
@@ -4805,7 +4809,7 @@ fn run_finite_state(
                         binding: call.binding.as_deref(),
                         job_scope,
                         bindings: std::mem::replace(&mut bindings, child),
-                        cwd: cwd.to_path_buf(),
+                        cwd: cwd.duplicate()?,
                     });
                     if *connection == Connection::Start {
                         data = Input::Empty;
@@ -4827,7 +4831,7 @@ fn run_finite_state(
                     control_state.leave_call(index + 1)?;
                     let frame = call_frames.pop().context("program return without call")?;
                     bindings = frame.bindings;
-                    cwd = crate::working_dir::WorkingDirectory::plain(frame.cwd);
+                    cwd = frame.cwd;
                     if let Some(name) = frame.binding {
                         let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                             options.max_output_bytes,
@@ -4980,18 +4984,7 @@ fn run_finite_state(
                 StepKind::UseFolder { path } => {
                     let folder = path_value(path, &bindings, &cwd)?;
                     crate::capabilities::authorize_host_path(registry, &folder, false, &cwd)?;
-                    // Open first, then authorize the path the handle names. The directory that
-                    // was checked is then the directory the children enter.
-                    let opened = crate::working_dir::WorkingDirectory::open(&folder)?;
-                    let resolved = opened.resolved_path()?;
-                    crate::capabilities::authorize_host_path(registry, &resolved, false, &cwd)?;
-                    if !opened.same_directory_as(&resolved)? {
-                        bail!(
-                            "line {}: folder changed while it was being opened",
-                            step.line
-                        );
-                    }
-                    cwd = opened;
+                    cwd = enter_directory(registry, &folder, &cwd)?;
                     if !cwd.is_dir() {
                         bail!("line {}: use folder requires a directory", step.line);
                     }
@@ -5478,7 +5471,7 @@ fn run_finite_state(
                             argv.iter().map(|argument| OsStr::new(argument.as_str())),
                             registry,
                             &manifest.name,
-                            &crate::working_dir::WorkingDirectory::plain(cwd.to_path_buf()),
+                            &cwd,
                         )?;
                         match request {
                             handoff::ProcessRequest::HandOver => {
@@ -5547,17 +5540,8 @@ fn run_finite_state(
                         let args = manifest.build_arguments(&parameters)?;
                         let destination =
                             cwd.join(crate::capabilities::expand_home_path(&args[0])?);
-                        crate::capabilities::authorize_host_path(
-                            registry,
-                            &destination,
-                            false,
-                            &cwd,
-                        )?;
-                        cwd = crate::working_dir::WorkingDirectory::plain(
-                            fs::canonicalize(destination).with_context(|| {
-                                format!("line {}: cd to {:?}", step.line, args[0])
-                            })?,
-                        );
+                        cwd = enter_directory(registry, &destination, &cwd)
+                            .with_context(|| format!("line {}: cd to {:?}", step.line, args[0]))?;
                         if !cwd.is_dir() {
                             bail!("line {}: cd requires a directory", step.line);
                         }
@@ -6181,7 +6165,7 @@ fn apply_control_action<'a>(
                 .context("cancelling background jobs during reusable-program unwind")?;
             let frame = call_frames.pop().expect("call depth checked");
             *bindings = frame.bindings;
-            *cwd = crate::working_dir::WorkingDirectory::plain(frame.cwd);
+            *cwd = frame.cwd;
         }
         loop_frames.unwind_to(loop_depth, bindings)?;
         remove_bindings(bindings, drop_bindings);

@@ -194,3 +194,12 @@ Only changes to owned Rust sources, Cargo manifests/locks or Cargo/Rustfmt/Clipp
 trigger these checks. Vendored/generated-only changes are excluded. CI remains
 the authoritative platform matrix; the local hook checks its host and WASM.
 Run `python3 tests/staged_rust.py` to verify staging isolation and hook behavior.
+
+## Minimum supported Rust version
+
+The minimum supported Rust version is **1.89.0** for the full feature set
+(`cargo check --locked --features full --lib --bins --tests`). The platform workflow
+(`.github/workflows/platforms.yml`, job `msrv`) checks it on every scheduled run. Raising
+it needs a changelog entry and a reason, such as a dependency that requires a newer
+compiler. Continuous integration uses the current stable compiler and the pinned
+release-job compiler (1.99.1) for reproducible binaries.

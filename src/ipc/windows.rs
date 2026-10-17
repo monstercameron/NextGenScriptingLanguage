@@ -298,8 +298,8 @@ impl Pending {
         let security = PrivateSecurity::new().map_err(io_error)?;
         let attributes = security.attributes();
         // SAFETY: name is the NUL-terminated wide pipe name from name(), alive for the call.
-        // attributes points at the descriptor owned by security, which lives until the end
-        // of this function; the descriptor only has to outlive the call. Buffer sizes and
+        // attributes borrows security (its lifetime keeps the descriptor alive through this
+        // call), and CreateNamedPipeW reads the attributes only during the call. Buffer sizes and
         // nMaxInstances are advisory. FILE_FLAG_OVERLAPPED is set for the ConnectNamedPipe
         // below. INVALID_HANDLE_VALUE is checked before the handle is adopted.
         let raw = unsafe {
@@ -317,7 +317,7 @@ impl Pending {
                 65536,
                 65536,
                 0,
-                &attributes,
+                attributes.as_ptr(),
             )
         };
         if raw == INVALID_HANDLE_VALUE {

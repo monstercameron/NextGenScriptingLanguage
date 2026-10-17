@@ -126,7 +126,7 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
         return Ok(None);
     }
     use std::io::Write;
-    use std::os::unix::io::AsRawFd;
+    use std::os::unix::io::AsFd;
     let Ok(mut tty) = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -136,11 +136,16 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     };
     write!(tty, "{question}: ").context("writing the prompt")?;
     tty.flush().context("writing the prompt")?;
-    let echo = if secret {
-        Some(EchoOff::new(tty.as_raw_fd())?)
-    } else {
-        None
-    };
+    // The echo guard borrows its own duplicate of the terminal, so `tty` stays free for
+    // reading. Both descriptors name the same terminal, and tcsetattr applies to it.
+    let echo_fd = secret
+        .then(|| tty.try_clone())
+        .transpose()
+        .context("duplicating the terminal for echo control")?;
+    let echo = echo_fd
+        .as_ref()
+        .map(|fd| EchoOff::new(fd.as_fd()))
+        .transpose()?;
     let answer = read_answer(&mut tty);
     drop(echo);
     if secret {
@@ -214,29 +219,32 @@ pub fn terminal_ask(_question: &str, _secret: bool) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Turns terminal echo off for one descriptor and restores it when dropped.
+/// Turns terminal echo off for one borrowed descriptor and restores it when dropped. The
+/// borrow keeps the descriptor open for as long as the guard exists.
 #[cfg(unix)]
-struct EchoOff {
-    fd: std::os::unix::io::RawFd,
+struct EchoOff<'a> {
+    fd: std::os::unix::io::BorrowedFd<'a>,
     saved: libc::termios,
 }
 
 #[cfg(unix)]
-impl EchoOff {
-    fn new(fd: std::os::unix::io::RawFd) -> Result<Self> {
+impl<'a> EchoOff<'a> {
+    fn new(fd: std::os::unix::io::BorrowedFd<'a>) -> Result<Self> {
+        use std::os::unix::io::AsRawFd;
+        let raw = fd.as_raw_fd();
         // SAFETY: termios is plain data, and tcgetattr fills it in for a valid fd.
         let mut saved: libc::termios = unsafe { std::mem::zeroed() };
         // SAFETY: `saved` is a live, zero-initialized termios, and tcgetattr writes only through
-        // the pointer. A bad or non-terminal descriptor makes it return -1, which is checked.
-        if unsafe { libc::tcgetattr(fd, &mut saved) } != 0 {
+        // the pointer. `raw` is open because `fd` borrows it. A non-terminal descriptor makes
+        // tcgetattr return -1, which is checked.
+        if unsafe { libc::tcgetattr(raw, &mut saved) } != 0 {
             return Err(std::io::Error::last_os_error()).context("reading terminal settings");
         }
         let mut quiet = saved;
         quiet.c_lflag &= !libc::ECHO;
-        // SAFETY: `quiet` is a copy of `saved` that tcgetattr filled in, with ECHO cleared, and fd
-        // is the descriptor that call accepted. TCSANOW only reads `quiet`. The caller keeps fd
-        // open for this value's lifetime (`tty` in terminal_ask outlives `echo`).
-        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &quiet) } != 0 {
+        // SAFETY: `quiet` is a copy of `saved` that tcgetattr filled in, with ECHO cleared, and
+        // `raw` is open for the whole call because `fd` borrows it. TCSANOW only reads `quiet`.
+        if unsafe { libc::tcsetattr(raw, libc::TCSANOW, &quiet) } != 0 {
             return Err(std::io::Error::last_os_error()).context("turning echo off");
         }
         Ok(Self { fd, saved })
@@ -244,10 +252,12 @@ impl EchoOff {
 }
 
 #[cfg(unix)]
-impl Drop for EchoOff {
+impl Drop for EchoOff<'_> {
     fn drop(&mut self) {
-        // SAFETY: restores the settings that tcgetattr returned for this descriptor.
-        unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.saved) };
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: `self.fd` borrows a descriptor that is open for this guard's lifetime, and
+        // this restores the settings that tcgetattr returned for that same descriptor.
+        unsafe { libc::tcsetattr(self.fd.as_raw_fd(), libc::TCSANOW, &self.saved) };
     }
 }
 

@@ -926,7 +926,7 @@ impl Drop for PrivateRendererAssets {
 #[cfg(unix)]
 fn current_uid() -> u32 {
     // SAFETY: geteuid has no pointer arguments or other memory preconditions.
-    unsafe { libc::geteuid() }
+    crate::platform::unix_ffi::effective_uid()
 }
 
 #[cfg(unix)]

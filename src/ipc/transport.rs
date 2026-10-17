@@ -24,20 +24,12 @@ impl<'a> DeadlineIo<'a> {
         })?;
         #[cfg(unix)]
         let original_flags = {
+            // `stream` is exclusively borrowed for 'a, so its descriptor stays open for the life
+            // of this DeadlineIo. O_NONBLOCK is set only when clear, so Drop restores the flags.
             let fd = stream.as_raw_fd();
-            // SAFETY: fd is the descriptor of *stream, which is exclusively borrowed for 'a,
-            // so it stays open for the life of this DeadlineIo. F_GETFL takes no pointer.
-            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-            if flags < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            if flags & libc::O_NONBLOCK == 0
-                // SAFETY: fd is the borrowed stream's descriptor. flags is the F_GETFL result,
-                // checked non-negative above. F_SETFL takes an int and no pointers.
-                // The && sets O_NONBLOCK only when clear, so Drop restores the original flags.
-                && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
-            {
-                return Err(io::Error::last_os_error());
+            let flags = crate::platform::unix_ffi::status_flags(fd)?;
+            if flags & libc::O_NONBLOCK == 0 {
+                crate::platform::unix_ffi::set_status_flags(fd, flags | libc::O_NONBLOCK)?;
             }
             flags
         };
@@ -78,21 +70,17 @@ impl<'a> DeadlineIo<'a> {
                     let remaining = self.remaining()?;
                     let milliseconds = remaining.as_nanos().div_ceil(1_000_000);
                     let timeout = milliseconds.min(libc::c_int::MAX as u128) as libc::c_int;
-                    let mut descriptor = libc::pollfd {
-                        fd: self.stream.as_raw_fd(),
+                    // The stream's descriptor is borrowed. remaining() is non-zero, so the rounded-up
+                    // timeout is at least 1 ms and at most c_int::MAX; it is never 0 (non-blocking)
+                    // or -1 (infinite).
+                    match crate::platform::unix_ffi::poll_one(
+                        self.stream.as_raw_fd(),
                         events,
-                        revents: 0,
-                    };
-                    // SAFETY: descriptor is a live local pollfd; nfds 1 matches it.
-                    // fd is the borrowed stream's descriptor. remaining() is non-zero, so the
-                    // rounded-up timeout is at least 1 ms, and it is at most c_int::MAX.
-                    // It is never 0 (non-blocking) or -1 (infinite).
-                    let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
-                    if ready < 0 {
-                        let error = io::Error::last_os_error();
-                        if error.kind() != io::ErrorKind::Interrupted {
-                            return Err(error);
-                        }
+                        timeout,
+                    ) {
+                        Ok(_) => {}
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                        Err(error) => return Err(error),
                     }
                 }
                 _ => return Err(error),
@@ -118,15 +106,15 @@ impl<'a> DeadlineIo<'a> {
 impl Drop for DeadlineIo<'_> {
     fn drop(&mut self) {
         if self.original_flags & libc::O_NONBLOCK == 0 {
+            // self.stream is still borrowed, so its descriptor is open. original_flags is the
+            // flag snapshot from new(), and this runs only when O_NONBLOCK was clear in it.
             loop {
-                // SAFETY: self.stream is still borrowed, so fd is open. F_SETFL takes an int.
-                // original_flags is the F_GETFL snapshot from new(). This loop runs only when
-                // O_NONBLOCK was clear in that snapshot (see the guard above).
-                let result = unsafe {
-                    libc::fcntl(self.stream.as_raw_fd(), libc::F_SETFL, self.original_flags)
-                };
-                if result >= 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
-                    break;
+                match crate::platform::unix_ffi::set_status_flags(
+                    self.stream.as_raw_fd(),
+                    self.original_flags,
+                ) {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    _ => break,
                 }
             }
         }

@@ -8,15 +8,51 @@ struct ManagedChild {
 }
 #[derive(Default)]
 struct Children(Vec<ManagedChild>, Option<Arc<Mutex<Vec<bool>>>>);
-fn kill_group(child: &Child) {
+/// Kill the process group that `pid` leads. Callers use this only while the leader is still
+/// unreaped (see `reap_exited`), so `pid` still names the group that was spawned.
+fn kill_group(pid: u32) {
     // Each applet starts its own group. A negative PID addresses descendants
     // that retain that group, without touching the runner or its terminal.
-    // SAFETY: kill(2) takes no pointers. `child` was spawned with process_group(0), so its
-    // pid is its process group id, and -pid names that group. When `listen` calls this after
-    // reaping, the id is valid only while the group still has members.
+    // SAFETY: kill(2) takes no pointers. Applets are spawned with process_group(0), so `pid`
+    // is their process group id and -pid names that group. The pid is reserved while the
+    // leader is running or an unreaped zombie, so it cannot have been recycled for another
+    // process group.
     unsafe {
-        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
     }
+}
+
+/// Whether the child has exited without being reaped. `waitid` with WNOWAIT leaves the
+/// zombie in place, which keeps its pid reserved.
+fn exited_unreaped(pid: u32) -> std::io::Result<bool> {
+    // SAFETY: siginfo_t is plain data, and all-zero is a valid bit pattern for it.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // SAFETY: waitid writes only into `info`, a live siginfo_t. WNOWAIT leaves the child
+    // unreaped, and WNOHANG makes the call return at once. While the child runs, si_signo
+    // stays 0; once it has exited, si_signo is SIGCHLD.
+    if unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info.si_signo == libc::SIGCHLD)
+}
+
+/// Reap a child that has exited, signalling its process group first. The group signal
+/// happens while the leader is still a zombie, so its pid cannot be recycled in between.
+/// Returns Ok(None) while the child is still running.
+fn reap_exited(child: &mut Child) -> std::io::Result<Option<std::process::ExitStatus>> {
+    if !exited_unreaped(child.id())? {
+        return Ok(None);
+    }
+    kill_group(child.id());
+    child.wait().map(Some)
 }
 impl Drop for Children {
     fn drop(&mut self) {
@@ -29,7 +65,7 @@ impl Drop for Children {
         }
         for child in &mut self.0 {
             if !child.reaped {
-                kill_group(&child.child);
+                kill_group(child.child.id());
             }
         }
         for child in &mut self.0 {
@@ -95,14 +131,9 @@ fn write_input(
     // This is the newly created pipe's private write end, owned by this worker.
     // It must not hold the global stdout/trace lock while feeding native stdin.
     let fd = sink.as_raw_fd();
-    // SAFETY: `fd` is the write end of the pipe owned by `sink`, which is borrowed for the
-    // whole call and so stays open. F_GETFL only reads the file status flags.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    // SAFETY: the `||` short-circuits unless F_GETFL succeeded, so `flags` is a valid word.
-    // F_SETFL on the same open descriptor only adds O_NONBLOCK to those flags.
-    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        return Err(std::io::Error::last_os_error()).context("setting applet input nonblocking");
-    }
+    // `fd` is the write end of the pipe owned by `sink`, which is borrowed for the whole call
+    // and so stays open.
+    crate::platform::unix_ffi::set_nonblocking(fd).context("setting applet input nonblocking")?;
     let mut offset = 0;
     loop {
         check_deadline(deadline)?;
@@ -118,20 +149,15 @@ fn write_input(
             Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                let mut descriptor = libc::pollfd {
+                // Wait for `sink`'s open pipe to become writable. EINTR just retries the loop.
+                match crate::platform::unix_ffi::poll_one(
                     fd,
-                    events: libc::POLLOUT,
-                    revents: 0,
-                };
-                let ready =
-                    // SAFETY: `descriptor` is a live local pollfd and the count is 1, so poll
-                    // reads and sets only that entry. Its fd is `sink`'s open pipe.
-                    unsafe { libc::poll(&mut descriptor, 1, deadline_poll_timeout(deadline, 20)) };
-                if ready < 0 {
-                    let error = std::io::Error::last_os_error();
-                    if error.kind() != std::io::ErrorKind::Interrupted {
-                        return Err(error).context("waiting for applet input");
-                    }
+                    libc::POLLOUT,
+                    deadline_poll_timeout(deadline, 20),
+                ) {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => return Err(error).context("waiting for applet input"),
                 }
             }
             Err(error) => return Err(error).context("writing applet input"),
@@ -144,27 +170,20 @@ type StdinRemainder = (std::io::PipeWriter, Vec<u8>, usize);
 fn prefill_stdin_pipe(data: Vec<u8>) -> Result<(std::io::PipeReader, Option<StdinRemainder>)> {
     let (reader, mut pipe_writer) = std::io::pipe().context("creating applet stdin pipe")?;
     let fd = pipe_writer.as_raw_fd();
-    // SAFETY: `fd` is the write end of the pipe created above, owned by `pipe_writer`, which
-    // is still alive here. F_GETFL only reads its status flags.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags == -1 {
-        return Err(std::io::Error::last_os_error()).context("getting applet stdin pipe flags");
-    }
-    // SAFETY: `flags` was checked against -1 just above, so it is a valid flag word. F_SETFL
-    // on the still-open pipe only adds O_NONBLOCK to it.
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        return Err(std::io::Error::last_os_error())
-            .context("setting applet stdin pipe nonblocking");
-    }
+    // `fd` is the write end of the pipe created above, owned by `pipe_writer`, which is still
+    // alive here.
+    let flags =
+        crate::platform::unix_ffi::status_flags(fd).context("getting applet stdin pipe flags")?;
+    crate::platform::unix_ffi::set_status_flags(fd, flags | libc::O_NONBLOCK)
+        .context("setting applet stdin pipe nonblocking")?;
 
     // Exactly one nonblocking write is attempted. EINTR and WouldBlock leave
     // the unaccepted suffix for the post-spawn writer thread.
     let write_result = pipe_writer.write(&data);
-    // SAFETY: `flags` is the word read above and checked there, and `fd` is still the open
-    // pipe writer. This restores the blocking mode saved before the write.
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags) } == -1 {
-        return Err(std::io::Error::last_os_error()).context("restoring applet stdin pipe flags");
-    }
+    // `flags` is the word read above, and `fd` is still the open pipe writer. This restores the
+    // blocking mode saved before the write.
+    crate::platform::unix_ffi::set_status_flags(fd, flags)
+        .context("restoring applet stdin pipe flags")?;
     let written = match write_result {
         Ok(written) => written,
         Err(error)
@@ -559,19 +578,11 @@ fn drain_wake_pipe(pipe: &std::os::unix::net::UnixStream) {
 }
 
 fn wait_for_supervisor_wakeup(pipe: &std::os::unix::net::UnixStream) -> Result<()> {
-    let mut descriptor = libc::pollfd {
-        fd: pipe.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    // SAFETY: one valid descriptor entry is passed with its length.
-    let ready = unsafe { libc::poll(&mut descriptor, 1, -1) };
-    if ready < 0 {
-        let error = std::io::Error::last_os_error();
-        // A signal wakes the wait; the caller re-checks its flags.
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(error).context("waiting for the supervised workflow");
-        }
+    // A signal wakes the wait; the caller re-checks its flags.
+    match crate::platform::unix_ffi::poll_one(pipe.as_raw_fd(), libc::POLLIN, -1) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+        Err(error) => return Err(error).context("waiting for the supervised workflow"),
     }
     Ok(())
 }

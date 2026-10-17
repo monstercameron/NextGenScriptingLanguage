@@ -180,7 +180,8 @@ fn read_auth_token(
                     // SAFETY: geteuid(2) takes no arguments, cannot fail (POSIX), and has no
                     // memory preconditions. Its result is compared with the owner uid in
                     // `metadata`.
-                    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0
+                    if metadata.uid() != crate::platform::unix_ffi::effective_uid()
+                        || metadata.mode() & 0o077 != 0
                     {
                         return Err(RemoteError::new(
                             RemoteErrorKind::CredentialInvalid,

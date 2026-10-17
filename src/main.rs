@@ -207,12 +207,46 @@ fn daemon_forward(arguments: &[String]) -> Option<i32> {
 
 /// The entry point of a daemon child: the run as the normal path does it. A program that
 /// may take the terminal is declined before it runs, so the client runs it instead.
+/// Run a forwarded request. A plain `run` with no manifest or policy selectors uses the
+/// daemon's preloaded registry through the finite-check snapshot seam. Every other request
+/// takes the normal path, which loads its own registry.
+fn execute_forwarded(arguments: Vec<String>, registry: &Registry) -> Result<()> {
+    let Some(args) = parse_args(arguments.clone())? else {
+        return execute_arguments(arguments);
+    };
+    let plain_run = args.command == "run"
+        && args.manifest_dir.is_none()
+        && args.manifest_catalog.is_none()
+        && args.capability_policy.is_none()
+        && args.data_flow_policy.is_none();
+    if !plain_run {
+        return execute_arguments(arguments);
+    }
+    let source = fs::read_to_string(&args.file)
+        .with_context(|| format!("could not read workflow {}", args.file.display()))?;
+    execute_workflow(
+        args,
+        Some(FiniteCheckSnapshot {
+            source,
+            registry: registry.clone(),
+        }),
+    )
+}
+
+/// The registry a daemon serves from: the default manifests, loaded and fully parsed
+/// before the first request, so each forked run inherits the parsed applets.
+fn preload_daemon_registry() -> Result<Registry> {
+    let registry = load_registry(None, None)?;
+    registry.manifests()?;
+    Ok(registry)
+}
+
 fn forwarded_run(arguments: &[String], context: &mut flow::agent::daemon::RunContext) -> i32 {
     if program_takes_terminal(arguments) {
         context.decline("the program takes the terminal");
         return 0;
     }
-    match execute_arguments(arguments.to_vec()) {
+    match execute_forwarded(arguments.to_vec(), context.registry()) {
         Ok(()) => 0,
         Err(error) => report_error(&error),
     }
@@ -279,6 +313,16 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     if arguments.first().is_some_and(|a| a == "live") {
         return flow::live::cli(&arguments[1..], default_manifest_dir(), workflow_path);
     }
+    #[cfg(not(feature = "live"))]
+    if arguments
+        .first()
+        .is_some_and(|a| matches!(a.as_str(), "live" | "attach"))
+    {
+        bail!(
+            "`{}` needs the live control plane, and this build has none; use the full build",
+            arguments[0]
+        );
+    }
     if arguments.first().is_some_and(|a| a == "applets") {
         return applets_cli(&arguments[1..]);
     }
@@ -343,7 +387,11 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         std::process::exit(flow::agent::dap::cli(&arguments[1..])?);
     }
     if arguments.first().is_some_and(|a| a == "daemon") {
-        std::process::exit(flow::agent::daemon::cli(&arguments[1..], forwarded_run)?);
+        std::process::exit(flow::agent::daemon::cli(
+            &arguments[1..],
+            forwarded_run,
+            preload_daemon_registry,
+        )?);
     }
     let args = match parse_args(arguments)? {
         Some(args) => args,

@@ -371,7 +371,9 @@ fn open_private_file(path: &Path) -> io::Result<File> {
         use std::os::unix::fs::MetadataExt;
         // SAFETY: geteuid takes no arguments, cannot fail, and reads no memory, so the
         // call has no pointer, lifetime or alignment requirement to uphold.
-        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+        if metadata.uid() != crate::platform::unix_ffi::effective_uid()
+            || metadata.mode() & 0o077 != 0
+        {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "file is not private",

@@ -29,7 +29,7 @@ use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(windows)]
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::AsHandle;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 #[cfg(any(unix, windows))]
@@ -840,10 +840,12 @@ impl WorkerProcess {
             Some(input) => input,
             None => {
                 #[cfg(unix)]
-                kill_process_group(child.id());
+                let _ = UnreapedWorker { child: &mut child }.kill_group_and_reap();
                 #[cfg(windows)]
-                job.terminate();
-                let _ = child.wait();
+                {
+                    job.terminate();
+                    let _ = child.wait();
+                }
                 bail!("worker stdin pipe was not created");
             }
         };
@@ -851,17 +853,18 @@ impl WorkerProcess {
             Some(output) => output,
             None => {
                 #[cfg(unix)]
-                kill_process_group(child.id());
+                let _ = UnreapedWorker { child: &mut child }.kill_group_and_reap();
                 #[cfg(windows)]
-                job.terminate();
-                let _ = child.wait();
+                {
+                    job.terminate();
+                    let _ = child.wait();
+                }
                 bail!("worker stdout pipe was not created");
             }
         };
         #[cfg(unix)]
         if let Err(error) = set_nonblocking(&input).and_then(|()| set_nonblocking(&output)) {
-            kill_process_group(child.id());
-            let _ = child.wait();
+            let _ = UnreapedWorker { child: &mut child }.kill_group_and_reap();
             return Err(error).context("configuring worker protocol pipes");
         }
         #[cfg(windows)]
@@ -1096,13 +1099,12 @@ impl WorkerProcess {
         }
         #[cfg(windows)]
         {
-            let input =
-                crate::platform::windows::duplicate_handle_file(self.input.as_raw_handle() as _)
-                    .map_err(|error| ExchangeFailure {
-                        kind: WorkerErrorKind::IoError,
-                        message: format!("duplicating worker stdin handle: {error:#}"),
-                        transmitted: false,
-                    })?;
+            let input = crate::platform::windows::duplicate_handle_file(self.input.as_handle())
+                .map_err(|error| ExchangeFailure {
+                    kind: WorkerErrorKind::IoError,
+                    message: format!("duplicating worker stdin handle: {error:#}"),
+                    transmitted: false,
+                })?;
             let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel::<()>(1);
             let writer = std::thread::spawn(move || {
                 let _finished = WriterFinished(finished_tx);
@@ -1177,16 +1179,18 @@ impl Drop for WorkerProcess {
     fn drop(&mut self) {
         #[cfg(unix)]
         {
-            // The child remains unreaped until wait, so its process-group id cannot
-            // be recycled between the group kill and reaping the direct child.
-            kill_process_group(self.child.id());
+            // The group is signalled while the child is still unreaped; see UnreapedWorker.
+            let _ = UnreapedWorker {
+                child: &mut self.child,
+            }
+            .kill_group_and_reap();
         }
         #[cfg(windows)]
         {
             self.job.terminate();
             self.output.shutdown();
+            let _ = self.child.wait();
         }
-        let _ = self.child.wait();
     }
 }
 
@@ -1203,34 +1207,36 @@ fn exchange_failure(error: anyhow::Error, transmitted: bool) -> ExchangeFailure 
     }
 }
 
+/// A worker's direct child before it is reaped. While the child is unreaped, its pid names
+/// the worker's process group, so the group can be signalled only here. The only
+/// method signals and then reaps, consuming the value, so the group signal can never
+/// follow the reap.
 #[cfg(unix)]
-fn kill_process_group(pid: u32) {
-    // Each worker starts a private process group. Errors are expected if it
-    // already exited; wait below still owns and reaps the direct child.
-    // SAFETY: kill(2) reads only its two integer arguments. The group id is the child's pid, which
-    // is positive and fits pid_t, and the child was spawned with process_group(0), so that pid is
-    // its own group. Every caller reaches here before wait(), so the pid is not yet reaped and
-    // cannot have been reused for another process or group.
-    unsafe {
-        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+struct UnreapedWorker<'a> {
+    child: &'a mut std::process::Child,
+}
+
+#[cfg(unix)]
+impl UnreapedWorker<'_> {
+    /// Kill the worker's process group, then reap the direct child. Errors from the kill
+    /// are expected if the group already exited, and the reap still owns the child.
+    fn kill_group_and_reap(self) -> std::io::Result<std::process::ExitStatus> {
+        // Each worker starts a private process group.
+        // SAFETY: kill(2) reads only its two integer arguments. The group id is the child's pid,
+        // which is positive and fits pid_t, and the child was spawned with process_group(0), so
+        // that pid is its own group. The child is unreaped here, because this method consumes
+        // the value and reaps only afterwards, so the pid is reserved and not reused.
+        unsafe {
+            libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL);
+        }
+        self.child.wait()
     }
 }
 
 #[cfg(unix)]
 fn set_nonblocking(file: &impl std::os::fd::AsRawFd) -> std::io::Result<()> {
-    let descriptor = file.as_raw_fd();
-    // SAFETY: `descriptor` comes from `file`, which is borrowed for the whole call and so stays
-    // open. F_GETFL takes no argument and only reads the status flags.
-    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-    if flags == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `descriptor` is still open, and `flags` is the value F_GETFL returned, checked above
-    // not to be -1. F_SETFL changes only the file status flags, adding O_NONBLOCK.
-    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
+    // `file` is borrowed for the whole call, so its descriptor stays open while the flags change.
+    crate::platform::unix_ffi::set_nonblocking(file.as_raw_fd()).map(|_| ())
 }
 
 #[cfg(unix)]
@@ -1247,33 +1253,26 @@ fn wait_ready(
             .unwrap_or(IO_POLL_INTERVAL)
             .min(IO_POLL_INTERVAL);
         let millis = timeout.as_millis().min(i32::MAX as u128) as libc::c_int;
-        let mut descriptor_state = libc::pollfd {
-            fd: descriptor,
-            events,
-            revents: 0,
-        };
-        // SAFETY: poll reads and writes the one pollfd behind `&mut descriptor_state`, a live
-        // local, and the count 1 matches it. `millis` is a non-negative c_int, since it is clamped
-        // to 0..=i32::MAX above. An invalid descriptor is reported in revents (POLLNVAL) and
-        // handled by the check below.
-        let ready = unsafe { libc::poll(&mut descriptor_state, 1, millis) };
-        if ready < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::Interrupted {
-                continue;
+        // `millis` is clamped to 0..=i32::MAX above, so it is a valid poll timeout. An invalid
+        // descriptor is reported in revents (POLLNVAL) and handled by the check below.
+        let (ready, revents) = match crate::platform::unix_ffi::poll_one(descriptor, events, millis)
+        {
+            Ok(result) => result,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(WorkerError::new(
+                    WorkerErrorKind::IoError,
+                    false,
+                    None,
+                    format!("polling worker protocol pipe: {error}"),
+                )
+                .into());
             }
-            return Err(WorkerError::new(
-                WorkerErrorKind::IoError,
-                false,
-                None,
-                format!("polling worker protocol pipe: {error}"),
-            )
-            .into());
-        }
+        };
         if ready == 0 {
             continue;
         }
-        if descriptor_state.revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
+        if revents & (libc::POLLERR | libc::POLLNVAL) != 0 {
             return Err(WorkerError::new(
                 WorkerErrorKind::TransportError,
                 false,
@@ -1282,7 +1281,7 @@ fn wait_ready(
             )
             .into());
         }
-        if descriptor_state.revents & (events | libc::POLLHUP) != 0 {
+        if revents & (events | libc::POLLHUP) != 0 {
             return Ok(());
         }
     }

@@ -17,28 +17,19 @@ struct NonblockingFd {
 }
 impl NonblockingFd {
     fn new(fd: RawFd) -> Result<Self> {
-        // SAFETY: fd is the caller's open descriptor, which stays open for the whole write (see
-        // write_with_deadline). F_GETFL only reads the status flags and writes no memory. A bad
-        // fd makes it return -1 with errno set, and the check on the next lines reports that.
-        let original_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-        if original_flags == -1
-            // SAFETY: `||` short-circuits, so F_SETFL runs only when F_GETFL above succeeded and
-            // original_flags holds a real flag word. It is the same open descriptor as above.
-            || unsafe { libc::fcntl(fd, libc::F_SETFL, original_flags | libc::O_NONBLOCK) } == -1
-        {
-            return Err(io::Error::last_os_error()).context("setting output nonblocking");
-        }
+        // fd is the caller's open descriptor, which stays open for the whole write (see
+        // write_with_deadline). The wrapper reads the flags, then sets O_NONBLOCK on top of them.
+        let original_flags =
+            crate::platform::unix_ffi::set_nonblocking(fd).context("setting output nonblocking")?;
         Ok(Self { fd, original_flags })
     }
 }
 impl Drop for NonblockingFd {
     fn drop(&mut self) {
-        // SAFETY: self.fd is the descriptor this guard was built from. The caller keeps it open
-        // until write_with_deadline returns, and this guard drops before that. original_flags came
-        // from the successful F_GETFL in new(), so F_SETFL only restores that flag word.
-        unsafe {
-            libc::fcntl(self.fd, libc::F_SETFL, self.original_flags);
-        }
+        // self.fd is the descriptor this guard was built from. The caller keeps it open until
+        // write_with_deadline returns, and this guard drops before that. original_flags came from
+        // the successful read in new(), so restoring it only undoes the O_NONBLOCK change.
+        let _ = crate::platform::unix_ffi::set_status_flags(self.fd, self.original_flags);
     }
 }
 
@@ -97,20 +88,14 @@ pub fn write_with_deadline(
         match error.kind() {
             io::ErrorKind::Interrupted => continue,
             io::ErrorKind::WouldBlock => {
-                let mut descriptor = libc::pollfd {
-                    fd,
-                    events: libc::POLLOUT,
-                    revents: 0,
-                };
                 let timeout =
                     deadline.map_or(20, |deadline| poll_timeout_ms(deadline, Instant::now()));
-                // SAFETY: descriptor is a live local pollfd, and nfds is 1 for its one element.
                 // timeout is 20 or poll_timeout_ms(), which lies in 0..=20, a valid poll timeout.
-                let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
-                if ready == -1 {
-                    let error = io::Error::last_os_error();
-                    if error.kind() != io::ErrorKind::Interrupted {
-                        return Err(error).context("waiting for output to become writable");
+                match crate::platform::unix_ffi::poll_one(fd, libc::POLLOUT, timeout) {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) => {
+                        return Err(error).context("waiting for output to become writable")
                     }
                 }
             }
@@ -165,17 +150,9 @@ pub fn write_diagnostic(bytes: &[u8]) {
 
 /// Blocks until `fd` can accept output.
 fn wait_until_writable(fd: RawFd) {
-    let mut descriptor = libc::pollfd {
-        fd,
-        events: libc::POLLOUT,
-        revents: 0,
-    };
-    // SAFETY: descriptor is a live local pollfd, and nfds is 1 for its one element. A -1 timeout
-    // blocks until fd is ready or poll fails. poll writes only revents into that pollfd. The
-    // return value is ignored, and the caller's write loop retries the write afterwards.
-    unsafe {
-        libc::poll(&mut descriptor, 1, -1);
-    }
+    // A -1 timeout blocks until fd is ready or poll fails. The result is ignored, and the
+    // caller's write loop retries the write afterwards.
+    let _ = crate::platform::unix_ffi::poll_one(fd, libc::POLLOUT, -1);
 }
 
 /// Read inherited stdin without changing its shared open-file-description flags.
@@ -199,22 +176,14 @@ pub(super) fn capture_stdin(
             bail!("workflow cancelled by signal");
         }
         check_deadline(deadline)?;
-        let mut descriptor = libc::pollfd {
-            fd: libc::STDIN_FILENO,
-            events: libc::POLLIN,
-            revents: 0,
-        };
         let wait = deadline.map_or(20, |end| poll_timeout_ms(end, Instant::now()));
-        // SAFETY: descriptor is a live local pollfd, and nfds is 1 for its one element. wait is
-        // 20 or poll_timeout_ms(), which lies in 0..=20, so it is a valid bounded timeout.
-        let ready = unsafe { libc::poll(&mut descriptor, 1, wait) };
-        if ready < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(error).context("waiting for stdin");
-        }
+        // wait is 20 or poll_timeout_ms(), which lies in 0..=20, so it is a valid bounded timeout.
+        let (ready, revents) =
+            match crate::platform::unix_ffi::poll_one(libc::STDIN_FILENO, libc::POLLIN, wait) {
+                Ok(result) => result,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error).context("waiting for stdin"),
+            };
         if ready == 0 {
             continue;
         }
@@ -222,7 +191,7 @@ pub(super) fn capture_stdin(
             bail!("workflow cancelled by signal");
         }
         check_deadline(deadline)?;
-        if descriptor.revents & libc::POLLNVAL != 0 {
+        if revents & libc::POLLNVAL != 0 {
             bail!("stdin is not an open file descriptor");
         }
         let count =

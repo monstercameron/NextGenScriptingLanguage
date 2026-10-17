@@ -290,7 +290,7 @@ impl Supervisor {
         stages: &[JobStage],
         registry: &Registry,
         bindings: &BTreeMap<String, Value>,
-        cwd: &Path,
+        cwd: &crate::working_dir::WorkingDirectory,
         options: &RunOptions,
         outer_signals: &Signals,
     ) -> Result<usize> {
@@ -307,7 +307,8 @@ impl Supervisor {
                 execution_result::ExecutionKind::UnknownError,
             ));
         }
-        let cwd = fs::canonicalize(cwd)
+        let cwd = cwd
+            .duplicate()
             .with_context(|| format!("snapshotting working directory for job {name:?}"))?;
         let mut calls = Vec::with_capacity(stages.len());
         let mut prepared = Vec::with_capacity(stages.len());
@@ -375,7 +376,7 @@ impl Supervisor {
                 argv.iter().map(|argument| OsStr::new(argument.as_str())),
                 registry,
                 &manifest.name,
-                &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
+                &cwd,
             )
             .with_context(|| format!("line {}: preflighting job command", stage.line))?;
             prepared.push((binary, argv));
@@ -453,7 +454,7 @@ impl Supervisor {
                         Input::Empty,
                         None,
                         &BTreeMap::new(),
-                        &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
+                        &cwd,
                         &options,
                         &mut launched,
                         &signals,
@@ -968,7 +969,7 @@ mod tests {
             stages,
             &registry,
             &BTreeMap::new(),
-            directory.path(),
+            &crate::working_dir::WorkingDirectory::plain(directory.path()),
             &options,
             &signals,
         )?;
@@ -1040,7 +1041,7 @@ mod tests {
                 &stages,
                 &registry,
                 &BTreeMap::new(),
-                &cwd,
+                &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
                 &options,
                 &signals,
             );

@@ -221,3 +221,119 @@ mod use_folder_handle {
         }
     }
 }
+
+#[cfg(unix)]
+mod swap_after_use_folder {
+    //! A link is swapped after `use folder` authorized its target. A relative read in a
+    //! later step must still read the directory that was authorized, never the new target.
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn shown(output: &Output) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    }
+
+    /// A command applet with a version-1 contract, which a capability policy requires.
+    fn applet(
+        manifests: &Path,
+        name: &str,
+        binary: &str,
+        arguments: serde_json::Value,
+        accepts_stdin: bool,
+    ) {
+        let manifest = serde_json::json!({
+            "name": name,
+            "binary": binary,
+            "accepts_stdin": accepts_stdin,
+            "cacheable": false,
+            "parameters": {},
+            "arguments": arguments,
+            "contract": {
+                "version": 1,
+                "backend": "command",
+                "lifecycle": {"kind": "oneshot"},
+                "output": {"type": "text", "encoding": "raw", "trim_final_lf": false},
+                "outcomes": [{"status": 0, "name": "success", "kind": "success"}],
+                "capabilities": [],
+                "effects": []
+            }
+        });
+        fs::write(manifests.join(format!("{name}.json")), manifest.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_relative_read_after_a_swapped_link_reads_the_authorized_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let inside = root.path().join("inside");
+        fs::create_dir_all(inside.join("real")).unwrap();
+        fs::create_dir_all(root.path().join("outside")).unwrap();
+        fs::write(inside.join("real/secret.txt"), "INSIDE\n").unwrap();
+        fs::write(root.path().join("outside/secret.txt"), "OUTSIDE\n").unwrap();
+        symlink("real", inside.join("link")).unwrap();
+
+        let manifests = root.path().join("manifests");
+        fs::create_dir(&manifests).unwrap();
+        let swap = format!(
+            "ln -sfn '{}' '{}'",
+            root.path().join("outside").display(),
+            inside.join("link").display()
+        );
+        applet(
+            &manifests,
+            "swap.link",
+            "/bin/sh",
+            serde_json::json!([{"literal": "-c"}, {"literal": swap}]),
+            false,
+        );
+        applet(
+            &manifests,
+            "echo.stdin",
+            "/bin/cat",
+            serde_json::json!([]),
+            true,
+        );
+
+        let grant = inside.display().to_string();
+        let grant_entry = format!(
+            r#"{{"capabilities":["filesystem.read","filesystem.write"],"environment":[],"filesystem":{{"read":["{grant}"],"write":["{grant}"]}},"network":false,"network_origins":[],"sandbox_required":false}}"#
+        );
+        fs::write(
+            root.path().join("policy.json"),
+            format!(r#"{{"version":1,"applets":{{"swap.link":{grant_entry},"echo.stdin":{grant_entry}}}}}"#),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("main.program"),
+            "use folder \"inside/link\"\nrun swap.link\nread \"secret.txt\"\nrun echo.stdin\n",
+        )
+        .unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .args([
+                "run",
+                "main.program",
+                "--capability-policy",
+                "policy.json",
+                "--manifest-dir",
+            ])
+            .arg(&manifests)
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        let text = shown(&output);
+        assert!(
+            !text.contains("OUTSIDE"),
+            "the swapped target was read: {text}"
+        );
+        assert!(output.status.success(), "{text}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "INSIDE\n",
+            "{text}"
+        );
+    }
+}

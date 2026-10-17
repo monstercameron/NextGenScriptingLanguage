@@ -1,4 +1,4 @@
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::AsHandle;
 
 // Native child pipes can be observed directly. Only inherited stdin needs a
 // cancellable reader worker; a quiet producer must never block a worker join.
@@ -13,16 +13,14 @@ impl Read for WindowsListenerReader {
         }
         match self {
             Self::Stdin(reader) => reader.read(buffer),
-            Self::Child(reader) => {
-                match crate::platform::windows::available(reader.as_raw_handle())? {
-                    None => Ok(0),
-                    Some(0) => Err(std::io::ErrorKind::WouldBlock.into()),
-                    Some(count) => {
-                        let length = buffer.len().min(count);
-                        reader.read(&mut buffer[..length])
-                    }
+            Self::Child(reader) => match crate::platform::windows::available(reader.as_handle())? {
+                None => Ok(0),
+                Some(0) => Err(std::io::ErrorKind::WouldBlock.into()),
+                Some(count) => {
+                    let length = buffer.len().min(count);
+                    reader.read(&mut buffer[..length])
                 }
-            }
+            },
         }
     }
 }

@@ -85,6 +85,14 @@ impl WorkingDirectory {
         Ok(true)
     }
 
+    /// Record the path the directory was authorized under. Call it only after the
+    /// resolved path has been authorized and the handle checked against it, so that
+    /// relative paths joined onto `path()` name the authorized directory.
+    pub fn authorized(mut self, resolved: PathBuf) -> Self {
+        self.path = resolved;
+        self
+    }
+
     /// The directory's path, for diagnostics and for code that joins relative paths.
     pub fn path(&self) -> &Path {
         &self.path

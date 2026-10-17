@@ -168,7 +168,7 @@ fn sweep_stale(temp: &Path) {
 fn owned_by_current_user(meta: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     // SAFETY: geteuid has no preconditions and cannot fail.
-    meta.uid() == unsafe { libc::geteuid() }
+    meta.uid() == crate::platform::unix_ffi::effective_uid()
 }
 
 #[cfg(not(unix))]

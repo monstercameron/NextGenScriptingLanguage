@@ -20,6 +20,7 @@
 //! Only processes of the same user can connect, so the stall is a delay a user can cause
 //! to themselves, not a denial of service across users.
 
+use crate::manifest::Registry;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -31,13 +32,23 @@ pub const PROTOCOL: &str = "execute.daemon/1";
 /// callback runs the normal execute path; it may call `std::process::exit` itself.
 pub type RunCallback = fn(&[String], &mut RunContext) -> i32;
 
+/// The daemon's registry, loaded and parsed before it serves. Each forked run gets a copy
+/// of it, so its applets are already parsed.
+pub type RegistryPreload = fn() -> Result<Registry>;
+
 /// The client's connection, held by a forked run.
 pub struct RunContext {
     #[cfg(unix)]
     connection: std::os::unix::net::UnixStream,
+    registry: Registry,
 }
 
 impl RunContext {
+    /// The registry the daemon preloaded. A run that needs no other manifests can use it.
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
     /// Tell the client this daemon will not run the program. Call it before any output;
     /// the client then runs the program itself.
     #[cfg(unix)]
@@ -63,13 +74,14 @@ pub enum Forwarding {
 
 const USAGE: &str = "usage: execute daemon serve|status|stop [--socket PATH]";
 
-/// `execute daemon ...`. `run` is the callback a forked child calls for each request.
-pub fn cli(arguments: &[String], run: RunCallback) -> Result<i32> {
+/// `execute daemon ...`. `run` is the callback a forked child calls for each request, and
+/// `preload` builds the registry the daemon serves from; only `serve` calls it.
+pub fn cli(arguments: &[String], run: RunCallback, preload: RegistryPreload) -> Result<i32> {
     let (command, rest) = arguments.split_first().ok_or_else(|| anyhow!(USAGE))?;
     let socket = socket_option(rest)?;
     match command.as_str() {
         "serve" => {
-            imp::serve(&socket, run)?;
+            imp::serve(&socket, run, preload()?)?;
             Ok(0)
         }
         "status" => {
@@ -134,7 +146,8 @@ fn not_running(socket: &Path, reason: Option<String>) -> Value {
 #[cfg(unix)]
 mod imp {
     use super::{
-        not_running, Forwarding, Path, PathBuf, Result, RunCallback, RunContext, Value, PROTOCOL,
+        not_running, Forwarding, Path, PathBuf, Registry, Result, RunCallback, RunContext, Value,
+        PROTOCOL,
     };
     use crate::ipc::peer::peer_is_owner;
     use crate::ipc::transport::{read_message, write_message};
@@ -202,7 +215,7 @@ mod imp {
 
     pub(super) fn euid() -> u32 {
         // SAFETY: geteuid has no preconditions and cannot fail.
-        unsafe { libc::geteuid() }
+        crate::platform::unix_ffi::effective_uid()
     }
 
     /// Create the per-user directory with mode 0700 when asked, then check that it is a
@@ -329,7 +342,7 @@ mod imp {
     }
 
     /// Run the daemon in the foreground until a `stop` request arrives.
-    pub(super) fn serve(socket: &Path, run: RunCallback) -> Result<()> {
+    pub(super) fn serve(socket: &Path, run: RunCallback, registry: Registry) -> Result<()> {
         let directory = socket
             .parent()
             .ok_or_else(|| anyhow!("socket path {} has no directory", socket.display()))?;
@@ -355,6 +368,7 @@ mod imp {
         let mut server = Server {
             listener,
             run,
+            registry,
             children: Vec::new(),
             started: Instant::now(),
             served: 0,
@@ -401,6 +415,7 @@ mod imp {
     struct Server {
         listener: UnixListener,
         run: RunCallback,
+        registry: Registry,
         children: Vec<Child>,
         started: Instant,
         served: u64,
@@ -562,6 +577,7 @@ mod imp {
                 descriptors,
                 connection: stream,
                 run: self.run,
+                registry: self.registry.clone(),
                 request: run,
             };
             // SAFETY: the parent is single-threaded, so the child is a copy of one thread
@@ -769,6 +785,7 @@ mod imp {
         descriptors: Vec<OwnedFd>,
         connection: UnixStream,
         run: RunCallback,
+        registry: Registry,
         request: RunRequest,
     }
 
@@ -780,6 +797,7 @@ mod imp {
             descriptors,
             connection: inherited,
             run,
+            registry,
             request,
         } = setup;
         // Move every descriptor the child keeps above 2 first, so that dup2 onto 0, 1 and 2
@@ -826,7 +844,10 @@ mod imp {
         for (name, value) in &request.env {
             std::env::set_var(name, value);
         }
-        let mut context = RunContext { connection };
+        let mut context = RunContext {
+            connection,
+            registry,
+        };
         if let Err(reason) = apply_inherited_settings(&request) {
             // Declined before any output: the client runs the program under its own settings.
             context.decline(&reason);
@@ -868,13 +889,7 @@ mod imp {
 
     /// A new descriptor, at least 3, that refers to the same file as `fd`.
     fn duplicate_high(fd: RawFd) -> io::Result<OwnedFd> {
-        // SAFETY: F_DUPFD_CLOEXEC returns a new descriptor for the caller, or -1.
-        let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
-        if copy < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: copy is a fresh descriptor that nothing else owns.
-        Ok(unsafe { OwnedFd::from_raw_fd(copy) })
+        crate::platform::unix_ffi::duplicate_cloexec(fd, 3)
     }
 
     /// Whether the client has closed its end. Data it left unread is not a hangup.
@@ -1007,10 +1022,9 @@ mod imp {
             // SAFETY: each delivered descriptor is ours from here on, and is wrapped at once
             // so that an error path closes it.
             out.push(unsafe { OwnedFd::from_raw_fd(fd) });
-            // SAFETY: fcntl on a descriptor just received.
-            unsafe {
-                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
-            }
+            // The descriptor was just received and is owned above; a failed flag change only
+            // leaves it inheritable, as the call did before the wrapper.
+            let _ = crate::platform::unix_ffi::set_close_on_exec(fd);
         }
     }
 
@@ -1308,7 +1322,7 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use super::{not_running, Forwarding, Path, Result, RunCallback, Value};
+    use super::{not_running, Forwarding, Path, Registry, Result, RunCallback, Value};
     use anyhow::bail;
 
     pub(super) fn euid() -> u32 {
@@ -1323,7 +1337,7 @@ mod imp {
         bail!("the daemon needs Unix sockets; this build has none")
     }
 
-    pub(super) fn serve(_socket: &Path, _run: RunCallback) -> Result<()> {
+    pub(super) fn serve(_socket: &Path, _run: RunCallback, _registry: Registry) -> Result<()> {
         bail!("the daemon needs Unix sockets; this build has none")
     }
 

@@ -605,5 +605,70 @@ class WorkflowPins(unittest.TestCase):
         self.assertIsNone(self.PINNED.match(match[1]))
 
 
+class SoakAssertions(unittest.TestCase):
+    """The soak's resource assertions, tested on fixed samples (samples are rss_kb, threads, fds)."""
+
+    LIMITS = {"rss_growth_pct": 10.0, "fd_slack": 2, "thread_slack": 1}
+
+    def test_status_parsing_reads_resident_size_and_threads(self):
+        import soak
+
+        text = "Name:\texecute\nVmRSS:\t   12345 kB\nThreads:\t7\n"
+        self.assertEqual(soak.parse_status(text), (12345, 7))
+        with self.assertRaises(ValueError):
+            soak.parse_status("Name:\texecute\n")
+
+    def test_flat_samples_pass(self):
+        import soak
+
+        samples = [(1000, 4, 10)] + [(1005, 4, 10)] * 6
+        self.assertEqual(soak.violations(samples, 0, self.LIMITS), [])
+
+    def test_rss_growth_fails_after_warm_up(self):
+        import soak
+
+        samples = [(1000, 4, 10), (1000, 4, 10)] + [(1200, 4, 10)] * 3
+        failures = soak.violations(samples, 1, self.LIMITS)
+        self.assertTrue(any("RSS grew" in failure for failure in failures), failures)
+
+    def test_descriptor_and_thread_growth_fail(self):
+        import soak
+
+        samples = [(1000, 4, 10), (1000, 4, 10), (1000, 9, 20)]
+        failures = soak.violations(samples, 1, self.LIMITS)
+        self.assertTrue(any("descriptors rose" in failure for failure in failures), failures)
+        self.assertTrue(any("threads rose" in failure for failure in failures), failures)
+
+    def test_growth_during_warm_up_is_not_counted(self):
+        import soak
+
+        samples = [(500, 2, 5), (1000, 9, 30), (1000, 4, 10), (1001, 4, 10)]
+        self.assertEqual(soak.violations(samples, 2, self.LIMITS), [])
+
+
+class SoakRunAssertions(unittest.TestCase):
+    """The graph soak compares per-run peaks: first third against last third."""
+
+    LIMITS = {"rss_growth_pct": 10.0, "fd_slack": 2, "thread_slack": 1}
+
+    def test_flat_run_peaks_pass(self):
+        import soak
+
+        peaks = [(2000, 5, 12)] * 9
+        self.assertEqual(soak.run_peak_violations(peaks, self.LIMITS), [])
+
+    def test_run_peaks_that_drift_upward_fail(self):
+        import soak
+
+        peaks = [(2000, 5, 12)] * 3 + [(2000, 5, 12)] * 3 + [(3000, 5, 12)] * 3
+        failures = soak.run_peak_violations(peaks, self.LIMITS)
+        self.assertTrue(any("grew" in failure for failure in failures), failures)
+
+    def test_too_few_runs_is_a_failure_not_a_pass(self):
+        import soak
+
+        self.assertTrue(soak.run_peak_violations([(1, 1, 1)] * 3, self.LIMITS))
+
+
 if __name__ == "__main__":
     unittest.main()

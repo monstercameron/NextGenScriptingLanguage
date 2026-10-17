@@ -47,7 +47,9 @@ fn check_permissions(metadata: &fs::Metadata, label: &str) -> Result<()> {
     {
         // SAFETY: geteuid takes no arguments, has no preconditions and cannot fail, so the
         // comparison is against this process's effective uid.
-        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+        if metadata.uid() != crate::platform::unix_ffi::effective_uid()
+            || metadata.mode() & 0o077 != 0
+        {
             bail!("{label} must be owned by the current user and private");
         }
     }

@@ -383,6 +383,12 @@ fn warm_round_trip_and_forwarded_run_latency_are_measured() {
 /// Passing tests have their stderr captured, so the figures also go to the CI job summary
 /// when it is available, where they can be read without `--nocapture`.
 fn report_latency(line: &str) {
+    // Written to the process's stderr directly: the test harness captures `eprintln!` from
+    // passing tests, so this line is what reaches the CI log.
+    {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "LATENCY {line}");
+    }
     if let Some(summary) = std::env::var_os("GITHUB_STEP_SUMMARY") {
         use std::io::Write;
         if let Ok(mut file) = fs::OpenOptions::new()

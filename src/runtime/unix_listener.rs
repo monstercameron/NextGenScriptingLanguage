@@ -24,27 +24,19 @@ struct Nonblocking {
 }
 impl Nonblocking {
     fn set(fd: RawFd) -> Result<Self> {
-        // SAFETY: `set` gets the descriptor of the `reader` that `listen` owns. That reader is
-        // declared before the guard, so the fd stays open. F_GETFL only reads the flags.
-        let original = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-        if original == -1
-            // SAFETY: the `||` short-circuits unless F_GETFL succeeded, so `original` is a
-            // valid flag word. F_SETFL on the same open descriptor adds O_NONBLOCK to it.
-            || unsafe { libc::fcntl(fd, libc::F_SETFL, original | libc::O_NONBLOCK) } == -1
-        {
-            return Err(std::io::Error::last_os_error()).context("setting listener nonblocking");
-        }
+        // `set` gets the descriptor of the `reader` that `listen` owns. That reader is declared
+        // before the guard, so the fd stays open for the guard's whole life.
+        let original = crate::platform::unix_ffi::set_nonblocking(fd)
+            .context("setting listener nonblocking")?;
         Ok(Self { fd, original })
     }
 }
 impl Drop for Nonblocking {
     fn drop(&mut self) {
-        // SAFETY: `self.fd` is the descriptor given to `set`. Its owner, `reader`, is declared
-        // before this guard and so is dropped after it, leaving the fd open. F_SETFL restores
-        // the flags that F_GETFL saved.
-        unsafe {
-            libc::fcntl(self.fd, libc::F_SETFL, self.original);
-        }
+        // self.fd is the descriptor given to `set`. Its owner, `reader`, is declared before this
+        // guard and so is dropped after it, leaving the fd open. The restored flags are the ones
+        // that set read before adding O_NONBLOCK.
+        let _ = crate::platform::unix_ffi::set_status_flags(self.fd, self.original);
     }
 }
 
@@ -120,8 +112,7 @@ fn listen(
         stopped(signals)?;
         for managed in &mut children.0 {
             if !managed.reaped {
-                if let Some(status) = managed.child.try_wait()? {
-                    kill_group(&managed.child);
+                if let Some(status) = reap_exited(&mut managed.child)? {
                     managed.reaped = true;
                     if !source_manifest.is_some_and(|manifest| {
                         listener_source_exited_successfully(manifest, status)

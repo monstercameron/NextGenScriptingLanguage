@@ -560,3 +560,66 @@ pub fn interrupt_exit_code() -> Option<i32> {
 pub fn record_interrupt(signal: i32) {
     crate::platform::record_cancel_signal(signal);
 }
+
+/// Foreground ownership for one `interactively` command. The child leads its own
+/// process group and is the terminal's foreground group while this value lives.
+/// Dropping it returns the foreground to the parent's group and restores the
+/// parent's SIGTTOU disposition, on success and on error.
+struct TerminalForeground {
+    parent_group: libc::pid_t,
+    previous_ttou: libc::sighandler_t,
+}
+
+impl TerminalForeground {
+    /// Prepare `command` for the handoff. Returns `None` when stdin is not a
+    /// terminal; the command then runs like any other native command.
+    fn begin(command: &mut Command) -> Option<Self> {
+        // SAFETY: isatty only inspects descriptor 0.
+        if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
+            return None;
+        }
+        // SAFETY: getpgrp has no preconditions.
+        let parent_group = unsafe { libc::getpgrp() };
+        // A background process group may change the foreground only while
+        // SIGTTOU is ignored. The child inherits this until its pre-exec hook
+        // restores the default disposition.
+        // SAFETY: installing SIG_IGN has no memory safety preconditions.
+        let previous_ttou = unsafe { libc::signal(libc::SIGTTOU, libc::SIG_IGN) };
+        // SAFETY: the hook calls only async-signal-safe functions.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1
+                    || libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpid()) == -1
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                libc::signal(libc::SIGTTOU, libc::SIG_DFL);
+                Ok(())
+            });
+        }
+        Some(Self {
+            parent_group,
+            previous_ttou,
+        })
+    }
+
+    /// Make the spawned child the terminal's foreground process group.
+    fn give(&self, child: u32) -> std::io::Result<()> {
+        // SAFETY: tcsetpgrp reads descriptor 0 and the given group id only.
+        if unsafe { libc::tcsetpgrp(libc::STDIN_FILENO, child as libc::pid_t) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for TerminalForeground {
+    fn drop(&mut self) {
+        // SAFETY: as in `begin`. SIGTTOU stays ignored until after the parent
+        // has reclaimed the foreground, which a background process needs.
+        unsafe {
+            libc::tcsetpgrp(libc::STDIN_FILENO, self.parent_group);
+            libc::signal(libc::SIGTTOU, self.previous_ttou);
+        }
+    }
+}

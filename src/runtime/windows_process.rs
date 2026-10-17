@@ -296,6 +296,9 @@ fn execute_group_with_sink(
             let mut bytes = None;
             let stdin = if index > 0 {
                 Stdio::from(previous.take().expect("prior native stdout"))
+            } else if terminal::requested() {
+                // The command owns the console, so its input is the console.
+                Stdio::inherit()
             } else {
                 match input.take().expect("initial input") {
                     Input::File(file) => Stdio::from(file),

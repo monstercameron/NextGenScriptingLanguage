@@ -35,6 +35,7 @@ mod jobs;
 pub(crate) mod live;
 mod loops;
 pub mod observe;
+mod terminal;
 use observe::execute_call_group;
 mod program_backend;
 mod resume;
@@ -1423,6 +1424,15 @@ fn resolved_call_stdio(
     manifest: &Manifest,
     signals: &Signals,
 ) -> invocation_io::ResolvedStdio {
+    if terminal::requested() {
+        // An interactive command keeps all three streams of the terminal.
+        return invocation_io::ResolvedStdio::resolve(
+            None,
+            invocation_io::StdioDisposition::Inherit,
+            invocation_io::StdioDisposition::Inherit,
+        )
+        .discard_stderr(call.discard_stderr);
+    }
     let inherit = INHERIT_TERMINAL_STDOUT.with(|flag| flag.get())
         && manifest.execution_backend() == AppletBackend::Command;
     invocation_io::ResolvedStdio::resolve(
@@ -1731,6 +1741,7 @@ fn execute_group_with_sink(
             "line {terminal_line}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output"
         );
     }
+    let mut terminal_foreground: Option<TerminalForeground> = None;
     for (index, (call, manifest, line)) in calls.iter().enumerate() {
         check_native_abort(calls, &children, &observed_stages, signals)?;
         let (binary, argv) = if let Some(prepared) = &signals.prepared_job_commands {
@@ -1781,12 +1792,20 @@ fn execute_group_with_sink(
         command
             .current_dir(cwd)
             .stdout(invocation_io::process_stdio(stdout_disposition))
-            .stderr(invocation_io::process_stdio(resolved_io.stderr))
-            .process_group(0);
+            .stderr(invocation_io::process_stdio(resolved_io.stderr));
+        terminal_foreground = terminal::requested()
+            .then(|| TerminalForeground::begin(&mut command))
+            .flatten();
+        if terminal_foreground.is_none() {
+            command.process_group(0);
+        }
         let mut bytes = None;
         let mut prefilled_input = None;
         let stdin = if index != 0 {
             Stdio::from(previous.take().expect("prior child stdout"))
+        } else if terminal::requested() {
+            // The command owns the terminal, so its input is the terminal.
+            Stdio::inherit()
         } else {
             match input.take().expect("first input") {
                 Input::File(file) => Stdio::from(file),
@@ -1828,6 +1847,13 @@ fn execute_group_with_sink(
                 signals,
             )
         })?;
+        if let Some(foreground) = terminal_foreground.as_ref() {
+            if let Err(error) = foreground.give(child.id()) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error).context("handing the terminal to an interactive command");
+            }
+        }
         let observer_failed = child_observer
             .as_ref()
             .and_then(|observer| observer.observe(child.id()).err())
@@ -3849,6 +3875,7 @@ fn run_finite_state(
     let mut pending_redirect: Option<PendingRedirect> = None;
     // Set by an `Environment` step and consumed by the next command.
     let mut pending_env: Option<crate::capabilities::CommandEnvOverlay> = None;
+    let mut pending_handoff = false;
     let mut result = RunResult {
         output: Vec::new(),
         cache_hits: 0,
@@ -4603,12 +4630,9 @@ fn run_finite_state(
                     data = Input::Bytes(bytes);
                 }
                 StepKind::Interactive => {
-                    // Terminal handoff is validated but not yet executed. Fail
-                    // closed rather than running the command non-interactively.
-                    bail!(
-                        "line {}: terminal handoff (interactively) is not implemented yet",
-                        step.line
-                    );
+                    // The next native command takes the terminal; its Invoke step
+                    // consumes this request.
+                    pending_handoff = true;
                 }
                 StepKind::Environment { set, unset } => {
                     let mut overlay = crate::capabilities::CommandEnvOverlay {
@@ -4685,7 +4709,16 @@ fn run_finite_state(
                 StepKind::Invoke { call, connection } => {
                     let mut redirect = pending_redirect.take();
                     let env = pending_env.take();
+                    let handoff = std::mem::take(&mut pending_handoff);
                     let manifest = registry.resolve_call(call)?;
+                    if handoff
+                        && (manifest.execution_backend() != AppletBackend::Command || call.cache)
+                    {
+                        bail!(
+                            "line {}: interactively applies to one native command that is not cached",
+                            step.line
+                        );
+                    }
                     if manifest.builtin == Some(Builtin::Cd) {
                         let parameters = call
                             .parameters
@@ -4934,6 +4967,7 @@ fn run_finite_state(
                                 streamed && !observe::captures_streamed_stdout(),
                             );
                             let _env = crate::capabilities::CommandEnvScope::enter(env);
+                            let _handoff = terminal::Scope::enter(handoff);
                             let _stderr = ForceStderrCapture::enter(
                                 redirect
                                     .as_ref()

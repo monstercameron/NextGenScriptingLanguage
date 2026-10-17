@@ -62,7 +62,7 @@ pub(super) fn validate_shape(steps: &[Step], return_allowed: bool) -> Result<()>
                     bail!("line {}: invalid loop end", step.line);
                 }
             }
-            StepKind::If { otherwise, end, .. } => {
+            StepKind::If { otherwise, end, .. } | StepKind::IfCommand { otherwise, end, .. } => {
                 let finish = index
                     .checked_add(*end)
                     .context("conditional offset overflow")?;

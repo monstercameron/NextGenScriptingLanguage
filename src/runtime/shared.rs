@@ -38,6 +38,22 @@ fn validate_exit_operand(
         _ => bail!("{what} must be an integer literal or integer binding"),
     }
 }
+/// A command condition is an ordinary applet or executable call. It is type
+/// checked like any call; builtins change shell state and are not conditions.
+fn validate_command_condition(
+    call: &Invocation,
+    registry: &Registry,
+    flow: &control::FlowState,
+) -> Result<()> {
+    let manifest = registry.resolve_call(call)?;
+    if manifest.builtin.is_some() {
+        bail!(
+            "a command condition cannot run the builtin {:?}",
+            manifest.name_for(call)
+        );
+    }
+    manifest.validate_with_types(call, &flow.types)
+}
 /// Short, source-like rendering of an exit or fail operand for `explain`.
 fn describe_operand(value: &Value) -> String {
     match value {
@@ -338,6 +354,11 @@ fn validate_worker_support(program: &Program, registry: &Registry) -> Result<()>
                 StepKind::SpawnJob { stages, .. } => {
                     calls.extend(stages.iter().map(|stage| &stage.call))
                 }
+                StepKind::IfCommand { call, .. }
+                | StepKind::Loop {
+                    kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                    ..
+                } => calls.push(call),
                 _ => {}
             }
         }
@@ -399,6 +420,21 @@ pub(crate) fn validate_live(
     {
         bail!(
             "line {}: live programs keep their state between runs and cannot exit or fail",
+            step.line
+        );
+    }
+    if let Some(step) = program.steps.iter().find(|step| {
+        matches!(
+            step.kind,
+            StepKind::IfCommand { .. }
+                | StepKind::Loop {
+                    kind: crate::ast::LoopKind::WhileCommand { .. },
+                    ..
+                }
+        )
+    }) {
+        bail!(
+            "line {}: live programs do not support command conditions; use a value condition",
             step.line
         );
     }
@@ -617,6 +653,10 @@ fn validate_range(
         }
         if let StepKind::Loop { kind, end } = &step.kind {
             loops::validate(kind, flow).with_context(|| format!("line {}", step.line))?;
+            if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
+                validate_command_condition(call, registry, flow)
+                    .with_context(|| format!("line {}", step.line))?;
+            }
             let finish = index + end;
             let mut body = flow.clone();
             body.invariant
@@ -714,6 +754,50 @@ fn validate_range(
             flow.has_data = child.has_data;
             flow.stdout_unavailable = child.stdout_unavailable;
             flow.started = true;
+            index = finish;
+            continue;
+        }
+        if let StepKind::IfCommand {
+            call,
+            otherwise,
+            end,
+            ..
+        } = &step.kind
+        {
+            validate_command_condition(call, registry, flow)
+                .with_context(|| format!("line {}", step.line))?;
+            let finish = index + end;
+            let has_otherwise = otherwise != end;
+            let yes_end = if has_otherwise {
+                index + otherwise - 1
+            } else {
+                finish - 1
+            };
+            // A command condition binds no names, so each branch starts from the
+            // same entry flow and the two outcomes are merged afterwards.
+            let mut yes = flow.clone();
+            validate_range(
+                steps,
+                registry,
+                &mut yes,
+                index + 1..yes_end,
+                initial_has_data,
+                allow_rebinding,
+                return_allowed,
+            )?;
+            if has_otherwise {
+                validate_range(
+                    steps,
+                    registry,
+                    flow,
+                    index + otherwise..finish - 1,
+                    initial_has_data,
+                    allow_rebinding,
+                    return_allowed,
+                )?;
+            }
+            *flow = control::FlowState::merge(yes, flow)
+                .with_context(|| format!("line {}", step.line))?;
             index = finish;
             continue;
         }
@@ -832,6 +916,7 @@ fn validate_range(
                 StepKind::Loop { .. }
                 | StepKind::EndLoop { .. }
                 | StepKind::If { .. }
+                | StepKind::IfCommand { .. }
                 | StepKind::Otherwise { .. }
                 | StepKind::EndIf
                 | StepKind::CallProgram { .. }
@@ -1500,6 +1585,19 @@ pub fn explain_with_inputs(
     }
     for step in &program.steps {
         let description = match &step.kind {
+            StepKind::Loop {
+                kind:
+                    crate::ast::LoopKind::WhileCommand {
+                        call,
+                        expect_success,
+                    },
+                ..
+            } => format!(
+                "while run {:?} {}; command output discarded, stdin closed; shared {} entered-iteration limit",
+                call.operation,
+                if *expect_success { "succeeds" } else { "fails" },
+                loops::MAX_LOOP_ITERATIONS
+            ),
             StepKind::Loop { kind, .. } => format!(
                 "loop {kind:?}; shared {} entered-iteration limit",
                 loops::MAX_LOOP_ITERATIONS
@@ -1514,6 +1612,15 @@ pub fn explain_with_inputs(
                     crate::ast::ConditionOperator::Contains => "contains ",
                 },
                 condition.right
+            ),
+            StepKind::IfCommand {
+                call,
+                expect_success,
+                ..
+            } => format!(
+                "if run {:?} {}; command output discarded, stdin closed, pipeline value unchanged",
+                call.operation,
+                if *expect_success { "succeeds" } else { "fails" }
             ),
             StepKind::Otherwise { .. } => "otherwise".into(),
             StepKind::EndIf => "end conditional".into(),

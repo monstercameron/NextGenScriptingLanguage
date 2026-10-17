@@ -262,6 +262,33 @@ some effects: unsafe retry needs `--retry-uncertain`, and retries repeat the who
 block. This is conservative recovery, not exactly-once execution or per-command
 resume inside a branch.
 
+#### Command conditions
+
+`if run <command> succeeds` and `if run <command> fails` branch on one command's
+declared outcome instead of a value. `<command>` is an applet or quoted
+executable with its arguments, written as in `run`, with no pipe, binding, status
+or result capture, cache, or discarded stderr. Builtins such as `cd` are not
+conditions. `while run <command> succeeds|fails` checks the same way at each loop
+header.
+
+```text
+if run "test" with arguments ["-f", path] succeeds
+  run "head" with arguments ["-n", "10", "--", path]
+otherwise
+  run printf with message "missing"
+```
+
+The command runs with closed stdin, and its stdout and stderr are read and
+dropped; they never become the pipeline value, which is unchanged. A nonzero
+exit selects the `fails` branch; a success selects `succeeds`. A spawn failure,
+a missing executable, a timeout, cancellation, or a process that ends without an
+exit status is an error, not false. Output is still bounded by the normal output
+limit. `explain` shows the step, and `--trace` emits a `command_condition` event
+with the match. A command condition is one checkpoint node, like a value
+conditional, and its binary identity is part of that node. Graph nodes and live
+programs reject it at validation; a native stream pipeline rejects it because it
+allows only applet stages.
+
 [preview-if-present.program](../examples/preview-if-present.program) uses native `test` and
 `head`; [search-report.program](../examples/search-report.program) uses real
 `grep` codes to distinguish matches, no matches and an error, preserving an

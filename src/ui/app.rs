@@ -102,6 +102,24 @@ struct Completion {
     instance: usize,
     result: Result<runtime::RunResult>,
 }
+
+/// A handler whose program ends with `exit with status N` or `fail with message`
+/// is a failed handler when N is nonzero. Its output stays on the result, but the
+/// failure is reported as an ordinary handler error carrying the status.
+fn handler_run_result(result: Result<runtime::RunResult>) -> Result<runtime::RunResult> {
+    let result = result?;
+    match &result.exit {
+        Some(exit) if exit.status != 0 => {
+            let message = exit
+                .message
+                .as_deref()
+                .map(|message| format!(": {message}"))
+                .unwrap_or_default();
+            bail!("handler exited with status {}{message}", exit.status)
+        }
+        _ => Ok(result),
+    }
+}
 struct App {
     screen: Screen,
     instances: Vec<Instance>,
@@ -177,6 +195,15 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                     references(&condition.left, &mut needed);
                     references(&condition.right, &mut needed);
                 }
+                crate::ast::StepKind::IfCommand { call, .. }
+                | crate::ast::StepKind::Loop {
+                    kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                    ..
+                } => {
+                    for value in call.parameters.values() {
+                        references(value, &mut needed);
+                    }
+                }
                 crate::ast::StepKind::Loop { kind, .. } => match kind {
                     crate::ast::LoopKind::Repeat { count } => references(count, &mut needed),
                     crate::ast::LoopKind::ForEach { values, .. } => references(values, &mut needed),
@@ -184,6 +211,7 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                         references(&condition.left, &mut needed);
                         references(&condition.right, &mut needed);
                     }
+                    crate::ast::LoopKind::WhileCommand { .. } => {}
                 },
                 crate::ast::StepKind::TakeJson { source, .. }
                 | crate::ast::StepKind::EncodeJson { source } => references(source, &mut needed),
@@ -599,7 +627,7 @@ impl App {
                 let cancel = Arc::new(AtomicBool::new(false));
                 let token = cancel.clone();
                 let handle = thread::spawn(move || {
-                    let result = runtime::run_with_context(
+                    let result = handler_run_result(runtime::run_with_context(
                         &Program {
                             definitions: Default::default(),
                             inputs: Vec::new(),
@@ -611,7 +639,7 @@ impl App {
                         bindings,
                         input,
                         token,
-                    );
+                    ));
                     let _ = sender.send(Completion {
                         instance: i,
                         result,
@@ -1746,6 +1774,39 @@ pub fn run(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    fn run_result(exit: Option<runtime::ProgramExit>) -> runtime::RunResult {
+        runtime::RunResult {
+            output: b"partial".to_vec(),
+            cache_hits: 0,
+            launched_processes: 0,
+            executions: Vec::new(),
+            dropped_executions: 0,
+            dropped_stages: 0,
+            exit,
+        }
+    }
+
+    #[test]
+    fn handler_exit_reports_nonzero_status_and_keeps_success_for_zero() {
+        let failed = handler_run_result(Ok(run_result(Some(runtime::ProgramExit {
+            status: 7,
+            message: Some("disk full".into()),
+        }))))
+        .unwrap_err();
+        assert_eq!(
+            failed.to_string(),
+            "handler exited with status 7: disk full"
+        );
+
+        let zero = handler_run_result(Ok(run_result(Some(runtime::ProgramExit {
+            status: 0,
+            message: None,
+        }))))
+        .unwrap();
+        assert_eq!(zero.output, b"partial");
+        assert!(handler_run_result(Ok(run_result(None))).is_ok());
+    }
     fn legacy_snapshot_projection(app: &App) -> Json {
         let programs = app
             .instances

@@ -46,6 +46,7 @@ type BinaryDigests = HashMap<PathBuf, (BinaryIdentity, [u8; 32])>;
 
 pub(super) fn node_end(program: &Program, start: usize) -> usize {
     if let StepKind::If { end, .. }
+    | StepKind::IfCommand { end, .. }
     | StepKind::CallProgram { end, .. }
     | StepKind::Loop { end, .. } = program.steps[start].kind
     {
@@ -249,6 +250,17 @@ fn node_fingerprint_with_digests(
             serde_json::to_writer(&mut serialized, &step.kind)?;
         }
         hash_field(&mut hash, &serialized);
+        // A command condition's binary identity is part of its node, like an
+        // invocation's. Its node is always compound, so an absent binary is
+        // allowed here exactly as for other conditional bodies.
+        if let StepKind::IfCommand { call, .. }
+        | StepKind::Loop {
+            kind: crate::ast::LoopKind::WhileCommand { call, .. },
+            ..
+        } = &step.kind
+        {
+            manifest_identity(&mut hash, call, registry, cwd, binary_digests, true)?;
+        }
         if let StepKind::Invoke { call, .. } = &step.kind {
             manifest_identity(
                 &mut hash,
@@ -258,7 +270,10 @@ fn node_fingerprint_with_digests(
                 binary_digests,
                 matches!(
                     program.steps[start].kind,
-                    StepKind::If { .. } | StepKind::CallProgram { .. } | StepKind::Loop { .. }
+                    StepKind::If { .. }
+                        | StepKind::IfCommand { .. }
+                        | StepKind::CallProgram { .. }
+                        | StepKind::Loop { .. }
                 ),
             )?;
         }
@@ -283,7 +298,13 @@ pub(super) fn retry_safe(
         ) {
             return Ok(false);
         }
-        if let StepKind::Invoke { call, .. } = &step.kind {
+        if let StepKind::Invoke { call, .. }
+        | StepKind::IfCommand { call, .. }
+        | StepKind::Loop {
+            kind: crate::ast::LoopKind::WhileCommand { call, .. },
+            ..
+        } = &step.kind
+        {
             let manifest = registry.resolve_call(call)?;
             if manifest.builtin.is_none() && !manifest.cacheable {
                 return Ok(false);
@@ -308,7 +329,13 @@ pub(super) fn uncertain_on_failure(
     registry: &Registry,
 ) -> Result<bool> {
     for step in &program.steps[start..end] {
-        if let StepKind::Invoke { call, .. } = &step.kind {
+        if let StepKind::Invoke { call, .. }
+        | StepKind::IfCommand { call, .. }
+        | StepKind::Loop {
+            kind: crate::ast::LoopKind::WhileCommand { call, .. },
+            ..
+        } = &step.kind
+        {
             if registry.resolve_call(call)?.uncertain_on_failure {
                 return Ok(true);
             }
@@ -336,6 +363,7 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
     for step in &program.steps {
         match &step.kind {
             StepKind::If { .. }
+            | StepKind::IfCommand { .. }
             | StepKind::CallProgram { .. }
             | StepKind::Loop { .. }
             | StepKind::Try { .. } => nested += 1,
@@ -354,9 +382,10 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
     let mut depth = 0;
     for step in &program.steps {
         match &step.kind {
-            StepKind::If { .. } | StepKind::CallProgram { .. } | StepKind::Loop { .. } => {
-                depth += 1
-            }
+            StepKind::If { .. }
+            | StepKind::IfCommand { .. }
+            | StepKind::CallProgram { .. }
+            | StepKind::Loop { .. } => depth += 1,
             StepKind::EndIf | StepKind::EndCall | StepKind::EndLoop { .. } => depth -= 1,
             StepKind::UseFolder { .. } if depth > 0 => {
                 bail!(

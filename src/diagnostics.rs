@@ -334,6 +334,11 @@ fn collect_calls<'a>(steps: &'a [Step], calls: &mut Vec<(usize, &'a Invocation)>
             StepKind::SpawnJob { stages, .. } => {
                 calls.extend(stages.iter().map(|stage| (stage.line, &stage.call)));
             }
+            StepKind::IfCommand { call, .. }
+            | StepKind::Loop {
+                kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                ..
+            } => calls.push((step.line, call)),
             _ => {}
         }
     }

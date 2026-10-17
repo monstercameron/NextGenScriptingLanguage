@@ -253,9 +253,15 @@ pub(super) fn preflight(
     let mut loop_scopes = Vec::new();
     for step in &program.steps {
         match &step.kind {
+            StepKind::IfCommand { call, .. } => {
+                native(call, step.line, registry, &values, &types)?;
+            }
             StepKind::Loop { kind, .. } => {
                 loops::preflight(kind, &values)
                     .with_context(|| format!("line {}: loop inputs", step.line))?;
+                if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
+                    native(call, step.line, registry, &values, &types)?;
+                }
                 loop_scopes.push((
                     values.keys().cloned().collect::<BTreeSet<_>>(),
                     types.clone(),
@@ -668,9 +674,15 @@ mod tests {
         let mut loop_scopes = Vec::new();
         for step in &program.steps {
             match &step.kind {
+                StepKind::IfCommand { call, .. } => {
+                    native(call, step.line, registry, &values, &types)?;
+                }
                 StepKind::Loop { kind, .. } => {
                     loops::preflight(kind, &values)
                         .with_context(|| format!("line {}: loop inputs", step.line))?;
+                    if let crate::ast::LoopKind::WhileCommand { call, .. } = kind {
+                        native(call, step.line, registry, &values, &types)?;
+                    }
                     loop_scopes.push((
                         values.keys().cloned().collect::<BTreeSet<_>>(),
                         types.clone(),

@@ -2474,6 +2474,50 @@ fn execute_json_lines_worker(
     })
 }
 
+/// Run one command condition and report whether its declared outcome matched
+/// `expect_success`. Stdin is closed and the pipeline value is not touched; the
+/// captured output is dropped. Spawn failures, timeouts and cancellation are
+/// errors, and a command that ends without an exit status is also an error.
+#[allow(clippy::too_many_arguments)]
+fn run_command_condition(
+    call: &Invocation,
+    expect_success: bool,
+    bindings: &BTreeMap<String, Value>,
+    cwd: &Path,
+    options: &RunOptions,
+    launched: &mut usize,
+    signals: &Signals,
+    registry: &Registry,
+    line: usize,
+) -> Result<bool> {
+    let manifest = registry.resolve_call(call)?;
+    // A nonzero exit is the answer here, not an applet failure. Retaining the
+    // status is the process layer's switch for that; the placeholder name is
+    // never bound, and it is set only on this private copy.
+    let mut retained = call.clone();
+    retained.status_binding = Some(String::from("command condition"));
+    let completed = execute_call_group(
+        &[(&retained, manifest, line)],
+        Input::Empty,
+        None,
+        bindings,
+        cwd,
+        options,
+        launched,
+        signals,
+        registry,
+    )
+    .with_context(|| format!("line {line}: command condition {:?}", call.operation))?;
+    let status = completed.status.with_context(|| {
+        format!(
+            "line {line}: command condition {:?} ended without an exit status",
+            call.operation
+        )
+    })?;
+    let succeeded = manifest.outcome_for(status).kind == OutcomeKind::Success;
+    Ok(succeeded == expect_success)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_call_group(
     calls: &[(&Invocation, &Manifest, usize)],
@@ -2996,6 +3040,19 @@ pub(crate) fn workflow_sensitivity_floor(
                     )?;
                 }
             }
+            StepKind::IfCommand { call, .. }
+            | StepKind::Loop {
+                kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                ..
+            } => {
+                append_invocation_sensitivities(
+                    call,
+                    registry,
+                    cwd,
+                    &mut sensitivities,
+                    worker_pool,
+                )?;
+            }
             // Reusable calls are expanded into the step sequence before the
             // runtime; scanning its actual Invoke steps avoids unused defs.
             StepKind::CallProgram { .. }
@@ -3514,7 +3571,10 @@ fn run_finite_state(
             journal_end = Some(end);
             journal_uncertain = matches!(
                 step.kind,
-                StepKind::If { .. } | StepKind::CallProgram { .. } | StepKind::Loop { .. }
+                StepKind::If { .. }
+                    | StepKind::IfCommand { .. }
+                    | StepKind::CallProgram { .. }
+                    | StepKind::Loop { .. }
             ) || resume::uncertain_on_failure(program, index, end, registry)?;
             let module_session = current_module_session(signals)?;
             let fingerprint = resume::node_fingerprint_with_modules(
@@ -3545,7 +3605,24 @@ fn run_finite_state(
                 StepKind::Loop { kind, end } => {
                     control_state.enter_loop(index, index + end)?;
                     let entered = loop_frames
-                        .header(index, kind, &mut bindings)
+                        .header_with_commands(
+                            index,
+                            kind,
+                            &mut bindings,
+                            &mut |call, expect_success, values| {
+                                run_command_condition(
+                                    call,
+                                    expect_success,
+                                    values,
+                                    &cwd,
+                                    options,
+                                    &mut result.launched_processes,
+                                    signals,
+                                    registry,
+                                    step.line,
+                                )
+                            },
+                        )
                         .with_context(|| format!("line {}", step.line))?;
                     lazy_event(
                         options.trace,
@@ -3575,6 +3652,32 @@ fn run_finite_state(
                         options.trace,
                         signals,
                         || serde_json::json!({"event":"condition","line":step.line,"matched":matched}),
+                    )?;
+                    if !matched {
+                        jump_to = Some(index + otherwise);
+                    }
+                }
+                StepKind::IfCommand {
+                    call,
+                    expect_success,
+                    otherwise,
+                    ..
+                } => {
+                    let matched = run_command_condition(
+                        call,
+                        *expect_success,
+                        &bindings,
+                        &cwd,
+                        options,
+                        &mut result.launched_processes,
+                        signals,
+                        registry,
+                        step.line,
+                    )?;
+                    lazy_event(
+                        options.trace,
+                        signals,
+                        || serde_json::json!({"event":"command_condition","line":step.line,"command":call.operation,"matched":matched}),
                     )?;
                     if !matched {
                         jump_to = Some(index + otherwise);

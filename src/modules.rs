@@ -967,6 +967,11 @@ fn collect_step_invocations<'a>(steps: &'a [Step], calls: &mut Vec<&'a Invocatio
         match &step.kind {
             StepKind::Invoke { call, .. } => calls.push(call),
             StepKind::TaskGroup { tasks, .. } => calls.extend(tasks),
+            StepKind::IfCommand { call, .. }
+            | StepKind::Loop {
+                kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                ..
+            } => calls.push(call),
             _ => {}
         }
     }
@@ -977,6 +982,11 @@ fn collect_step_invocations_owned(steps: &[Step], calls: &mut Vec<Invocation>) {
         match &step.kind {
             StepKind::Invoke { call, .. } => calls.push(call.clone()),
             StepKind::TaskGroup { tasks, .. } => calls.extend(tasks.iter().cloned()),
+            StepKind::IfCommand { call, .. }
+            | StepKind::Loop {
+                kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                ..
+            } => calls.push(call.clone()),
             _ => {}
         }
     }
@@ -2369,6 +2379,22 @@ mod tests {
     use super::*;
     use crate::contracts::{OutputEncoding, ValueSchema};
     use tempfile::tempdir;
+
+    #[test]
+    fn program_module_definitions_cannot_exit_or_fail() {
+        // Graph nodes and other callers reach a module only as an applet, and an
+        // applet has no channel for an exit. Rejecting at load keeps that invariant.
+        for source in [
+            "define a program named stop\n  exit with status 2\n",
+            "define a program named stop\n  fail with message \"no\"\n",
+        ] {
+            let error = parse_module_source(source, Path::new("stop.program")).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("cannot exit or fail"),
+                "{error:#}"
+            );
+        }
+    }
 
     fn schema() -> OutputSchema {
         OutputSchema {

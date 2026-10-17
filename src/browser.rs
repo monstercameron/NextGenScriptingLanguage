@@ -217,6 +217,11 @@ impl BrowserSession {
                 StepKind::Exit { .. } | StepKind::Fail { .. } => {
                     Some("exit with status and fail with message")
                 }
+                StepKind::IfCommand { .. }
+                | StepKind::Loop {
+                    kind: crate::ast::LoopKind::WhileCommand { .. },
+                    ..
+                } => Some("command conditions"),
                 StepKind::Try { .. }
                 | StepKind::Catch { .. }
                 | StepKind::Finally
@@ -275,7 +280,14 @@ impl BrowserSession {
             let execution = (|| -> Result<()> {
                 match &step.kind {
                     StepKind::Loop { kind, end } => {
-                        if !loops.header(index, kind, &mut bindings)? {
+                        if !loops.header_with_commands(
+                            index,
+                            kind,
+                            &mut bindings,
+                            &mut |_, _, _| {
+                                bail!("command conditions are not supported in browser execution")
+                            },
+                        )? {
                             jump = Some(index + end);
                         }
                     }
@@ -308,6 +320,7 @@ impl BrowserSession {
                     | StepKind::EndTry
                     | StepKind::Exit { .. }
                     | StepKind::Fail { .. }
+                    | StepKind::IfCommand { .. }
                     | StepKind::TakeJsonDynamic { .. } => {
                         bail!("control flow feature was not validated for browser execution");
                     }

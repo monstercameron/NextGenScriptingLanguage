@@ -274,8 +274,13 @@ fn expand<'a>(
         let lowered = &mut steps[positions[index]].kind;
         match (&original.kind, lowered) {
             (
-                StepKind::If { otherwise, end, .. },
+                StepKind::If { otherwise, end, .. } | StepKind::IfCommand { otherwise, end, .. },
                 StepKind::If {
+                    otherwise: new_otherwise,
+                    end: new_end,
+                    ..
+                }
+                | StepKind::IfCommand {
                     otherwise: new_otherwise,
                     end: new_end,
                     ..

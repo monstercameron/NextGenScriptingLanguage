@@ -75,9 +75,21 @@ fn is_equals_operator(operator: &ConditionOperator) -> bool {
 /// A bounded loop; values resolve in the enclosing lexical scope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LoopKind {
-    Repeat { count: Value },
-    ForEach { binding: String, values: Value },
-    While { condition: Condition },
+    Repeat {
+        count: Value,
+    },
+    ForEach {
+        binding: String,
+        values: Value,
+    },
+    While {
+        condition: Condition,
+    },
+    /// `while run <command> succeeds|fails`: the command runs at each header.
+    WhileCommand {
+        call: Invocation,
+        expect_success: bool,
+    },
 }
 
 /// How a finite task group combines independently invoked applets.
@@ -151,6 +163,15 @@ pub enum StepKind {
     /// just beyond EndIf; `otherwise` points to its body, or equals `end`.
     If {
         condition: Condition,
+        otherwise: usize,
+        end: usize,
+    },
+    /// `if run <command> succeeds|fails`. Same offsets as `If`; the command runs
+    /// with closed stdin and its output is discarded, and the pipeline value is
+    /// unchanged. `expect_success` selects the branch taken on a match.
+    IfCommand {
+        call: Invocation,
+        expect_success: bool,
         otherwise: usize,
         end: usize,
     },

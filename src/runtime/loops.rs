@@ -71,6 +71,9 @@ pub(super) fn validate(kind: &LoopKind, flow: &control::FlowState) -> Result<()>
         LoopKind::While { condition } => {
             control::validate_condition(condition, &flow.names, &flow.types)?
         }
+        // The command's applet and arguments are validated by the caller, which
+        // owns the registry; a command loop has no values to check here.
+        LoopKind::WhileCommand { .. } => {}
     }
     Ok(())
 }
@@ -107,6 +110,7 @@ pub(super) fn preflight(kind: &LoopKind, values: &BTreeMap<String, Value>) -> Re
                 control::evaluate(&resolved, &BTreeMap::new())?;
             }
         }
+        LoopKind::WhileCommand { .. } => {}
     }
     Ok(())
 }
@@ -129,12 +133,31 @@ pub(super) struct LoopStack {
     frames: Vec<Frame>,
     entered: usize,
 }
+/// Runs a `while run <command>` header check: the invocation, the expected
+/// outcome and the current bindings. Returns whether the outcome matched.
+pub(super) type CommandCheck<'a> =
+    dyn FnMut(&crate::ast::Invocation, bool, &BTreeMap<String, Value>) -> Result<bool> + 'a;
+
 impl LoopStack {
+    /// Enter or re-check a loop whose header has no command condition.
+    #[cfg(test)]
     pub fn header(
         &mut self,
         index: usize,
         kind: &LoopKind,
         bindings: &mut BTreeMap<String, Value>,
+    ) -> Result<bool> {
+        self.header_with_commands(index, kind, bindings, &mut |_, _, _| {
+            bail!("command loop headers need a runtime to run their command")
+        })
+    }
+
+    pub fn header_with_commands(
+        &mut self,
+        index: usize,
+        kind: &LoopKind,
+        bindings: &mut BTreeMap<String, Value>,
+        command: &mut CommandCheck<'_>,
     ) -> Result<bool> {
         if self.frames.last().is_none_or(|frame| frame.header != index) {
             let iterations = match kind {
@@ -154,7 +177,7 @@ impl LoopStack {
                         items: items.into_iter(),
                     }
                 }
-                LoopKind::While { .. } => Iterations::While,
+                LoopKind::While { .. } | LoopKind::WhileCommand { .. } => Iterations::While,
             };
             self.frames.push(Frame {
                 header: index,
@@ -180,12 +203,14 @@ impl LoopStack {
                     false
                 }
             }
-            Iterations::While => {
-                let LoopKind::While { condition } = kind else {
-                    bail!("loop frame kind mismatch");
-                };
-                control::evaluate(condition, bindings)?
-            }
+            Iterations::While => match kind {
+                LoopKind::While { condition } => control::evaluate(condition, bindings)?,
+                LoopKind::WhileCommand {
+                    call,
+                    expect_success,
+                } => command(call, *expect_success, &*bindings)?,
+                _ => bail!("loop frame kind mismatch"),
+            },
         };
         if !active {
             let frame = self.frames.pop().expect("active loop frame");

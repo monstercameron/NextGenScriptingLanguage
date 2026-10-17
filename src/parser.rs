@@ -186,16 +186,28 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
             line.number
         );
     }
-    let condition = parse_condition(line.tokens, "if")
+    let head = parse_condition_head(line.tokens, "if")
         .map_err(|error| anyhow!("line {}: {error:#}", line.number))?;
     let start = steps.len();
-    steps.push(Step {
-        line: line.number,
-        kind: StepKind::If {
+    let kind = match head {
+        ConditionHead::Value(condition) => StepKind::If {
             condition,
             otherwise: 0,
             end: 0,
         },
+        ConditionHead::Command {
+            call,
+            expect_success,
+        } => StepKind::IfCommand {
+            call,
+            expect_success,
+            otherwise: 0,
+            end: 0,
+        },
+    };
+    steps.push(Step {
+        line: line.number,
+        kind,
     });
     *cursor += 1;
     let body_indent = line_at(*cursor)
@@ -237,9 +249,12 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
         kind: StepKind::EndIf,
     });
     let finish = steps.len();
-    if let StepKind::If { otherwise, end, .. } = &mut steps[start].kind {
-        *otherwise = alternative.map_or(finish, |index| index + 1) - start;
-        *end = finish - start;
+    match &mut steps[start].kind {
+        StepKind::If { otherwise, end, .. } | StepKind::IfCommand { otherwise, end, .. } => {
+            *otherwise = alternative.map_or(finish, |index| index + 1) - start;
+            *end = finish - start;
+        }
+        _ => {}
     }
     if let Some(index) = alternative {
         steps[index].kind = StepKind::Otherwise {
@@ -282,6 +297,48 @@ fn parse_condition(tokens: &[Token<'_>], keyword: &str) -> Result<Condition> {
     })
 }
 
+/// A conditional head is either a typed value comparison or one command whose
+/// outcome decides the branch. The `run` keyword selects the command form.
+enum ConditionHead {
+    Value(Condition),
+    Command {
+        call: Invocation,
+        expect_success: bool,
+    },
+}
+
+fn parse_condition_head(tokens: &[Token<'_>], keyword: &str) -> Result<ConditionHead> {
+    if !word_is(tokens.get(1), "run") {
+        return Ok(ConditionHead::Value(parse_condition(tokens, keyword)?));
+    }
+    let expect_success = match tokens.last() {
+        Some(Token::Word("succeeds")) if tokens.len() > 3 => true,
+        Some(Token::Word("fails")) if tokens.len() > 3 => false,
+        _ => {
+            bail!("expected `{keyword} run <command> succeeds` or `{keyword} run <command> fails`")
+        }
+    };
+    let StepKind::Invoke { call, connection } = parse_invocation(&tokens[1..tokens.len() - 1])?
+    else {
+        bail!("expected a command after `{keyword} run`");
+    };
+    if connection != Connection::Start
+        || call.binding.is_some()
+        || call.status_binding.is_some()
+        || call.result_binding.is_some()
+        || call.cache
+        || call.discard_stderr
+    {
+        bail!(
+            "a command condition takes only an applet or quoted executable with arguments; it cannot bind, keep status or result, cache, or discard stderr"
+        );
+    }
+    Ok(ConditionHead::Command {
+        call,
+        expect_success,
+    })
+}
+
 fn parse_loop<'arena, 'source: 'arena>(
     line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
     cursor: &mut usize,
@@ -316,9 +373,16 @@ fn parse_loop<'arena, 'source: 'arena>(
             ensure_end(line.tokens, token)?;
             Ok(LoopKind::ForEach { binding, values })
         } else {
-            Ok(LoopKind::While {
-                condition: parse_condition(line.tokens, "while")?,
-            })
+            match parse_condition_head(line.tokens, "while")? {
+                ConditionHead::Value(condition) => Ok(LoopKind::While { condition }),
+                ConditionHead::Command {
+                    call,
+                    expect_success,
+                } => Ok(LoopKind::WhileCommand {
+                    call,
+                    expect_success,
+                }),
+            }
         }
     })()
     .map_err(|error| anyhow!("line {}: {error:#}", line.number))?;

@@ -742,10 +742,12 @@ pub fn run_checkpointed(
     prepare_with_modules(program, registry, &journal, module_session.fingerprints())?;
     let already_finished = journal.is_finished();
     let result = run_finite_inner(
-        program,
-        registry,
-        options,
-        &signals,
+        FiniteRun {
+            program,
+            registry,
+            options,
+            signals: &signals,
+        },
         Input::Empty,
         None,
         Some(&mut journal),

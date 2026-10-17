@@ -316,14 +316,19 @@ fn fire(
     )?;
     let finite = if let Some(journal) = journal.as_deref_mut() {
         run_finite_inner_with_state_source(
-            body,
-            registry,
-            options,
-            signals,
-            input,
-            binding,
-            Some(journal),
-            state_source,
+            FiniteRun {
+                program: body,
+                registry,
+                options,
+                signals,
+            },
+            FiniteStart {
+                input,
+                bindings: binding.into_iter().collect(),
+                journal: Some(journal),
+                state_source,
+                state_out: None,
+            },
         )?
     } else {
         run_finite(body, registry, options, signals, input, binding)?

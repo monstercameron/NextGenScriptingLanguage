@@ -53,8 +53,8 @@ use spawn::{
     check_native_abort, native_output_limit_failure, native_spawn_failure, resolved_call_stdio,
 };
 use step_loop::{
-    run_finite, run_finite_inner, run_finite_inner_with_state_source, run_finite_state,
-    FiniteStateSource,
+    run_finite, run_finite_inner, run_finite_inner_with_state_source, run_finite_state, FiniteRun,
+    FiniteStart, FiniteStateSource,
 };
 pub(crate) mod statement_hook;
 mod temp;
@@ -3435,15 +3435,19 @@ pub fn run_with_context(
     signals.background_jobs_allowed = false;
     preload_program_modules(program, registry, &signals, &cwd)?;
     run_finite_state(
-        program,
-        registry,
-        options,
-        &signals,
-        Input::Bytes(input),
-        bindings,
-        None,
-        FiniteStateSource::Fresh,
-        None,
+        FiniteRun {
+            program,
+            registry,
+            options,
+            signals: &signals,
+        },
+        FiniteStart {
+            input: Input::Bytes(input),
+            bindings,
+            journal: None,
+            state_source: FiniteStateSource::Fresh,
+            state_out: None,
+        },
     )
 }
 #[cfg(unix)]
@@ -4630,10 +4634,12 @@ mod drain_tests {
                 .unwrap();
         signals.drain.store(state, Ordering::SeqCst);
         let result = run_finite_inner(
-            &program,
-            &registry,
-            &options(directory.path()),
-            &signals,
+            FiniteRun {
+                program: &program,
+                registry: &registry,
+                options: &options(directory.path()),
+                signals: &signals,
+            },
             Input::Empty,
             None,
             None,

@@ -56,15 +56,19 @@ pub(crate) fn execute_node(
         data: Vec::new(),
     };
     let result = run_finite_state(
-        node,
-        registry,
-        &options,
-        &signals,
-        Input::Bytes(state.data),
-        state.bindings,
-        None,
-        FiniteStateSource::Fresh,
-        Some(&mut final_state),
+        FiniteRun {
+            program: node,
+            registry,
+            options: &options,
+            signals: &signals,
+        },
+        FiniteStart {
+            input: Input::Bytes(state.data),
+            bindings: state.bindings,
+            journal: None,
+            state_source: FiniteStateSource::Fresh,
+            state_out: Some(&mut final_state),
+        },
     )?;
     Ok((result, final_state))
 }

@@ -3,6 +3,26 @@
 
 use super::*;
 
+/// What a finite run reads from its caller: the program, its registry and options, and the
+/// signals that can cancel it. Nested runs receive a copy, so it is `Copy`.
+#[derive(Clone, Copy)]
+pub(super) struct FiniteRun<'a> {
+    pub(super) program: &'a Program,
+    pub(super) registry: &'a Registry,
+    pub(super) options: &'a RunOptions,
+    pub(super) signals: &'a Signals,
+}
+
+/// How a finite run starts: its input and bindings, the checkpoint it journals to, and where
+/// its state is restored from or captured to.
+pub(super) struct FiniteStart<'a> {
+    pub(super) input: Input,
+    pub(super) bindings: BTreeMap<String, Value>,
+    pub(super) journal: Option<&'a mut checkpoint::Journal>,
+    pub(super) state_source: FiniteStateSource,
+    pub(super) state_out: Option<&'a mut live::NodeState>,
+}
+
 pub(super) fn run_finite(
     program: &Program,
     registry: &Registry,
@@ -12,10 +32,12 @@ pub(super) fn run_finite(
     initial_binding: Option<(String, Value)>,
 ) -> Result<RunResult> {
     run_finite_inner(
-        program,
-        registry,
-        options,
-        signals,
+        FiniteRun {
+            program,
+            registry,
+            options,
+            signals,
+        },
         initial_input,
         initial_binding,
         None,
@@ -28,70 +50,51 @@ pub(super) enum FiniteStateSource {
     Restore,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn run_finite_inner(
-    program: &Program,
-    registry: &Registry,
-    options: &RunOptions,
-    signals: &Signals,
+    run: FiniteRun<'_>,
     initial_input: Input,
     initial_binding: Option<(String, Value)>,
     journal: Option<&mut checkpoint::Journal>,
 ) -> Result<RunResult> {
-    handoff::validate(program, journal.is_some())?;
+    handoff::validate(run.program, journal.is_some())?;
     let state_source = if journal.is_some() {
         FiniteStateSource::Restore
     } else {
         FiniteStateSource::Fresh
     };
     run_finite_inner_with_state_source(
-        program,
-        registry,
-        options,
-        signals,
-        initial_input,
-        initial_binding,
-        journal,
-        state_source,
+        run,
+        FiniteStart {
+            input: initial_input,
+            bindings: initial_binding.into_iter().collect(),
+            journal,
+            state_source,
+            state_out: None,
+        },
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn run_finite_inner_with_state_source(
-    program: &Program,
-    registry: &Registry,
-    options: &RunOptions,
-    signals: &Signals,
-    initial_input: Input,
-    initial_binding: Option<(String, Value)>,
-    journal: Option<&mut checkpoint::Journal>,
-    state_source: FiniteStateSource,
+    run: FiniteRun<'_>,
+    start: FiniteStart<'_>,
 ) -> Result<RunResult> {
-    run_finite_state(
+    run_finite_state(run, start)
+}
+
+pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Result<RunResult> {
+    let FiniteRun {
         program,
         registry,
         options,
         signals,
-        initial_input,
-        initial_binding.into_iter().collect(),
-        journal,
+    } = run;
+    let FiniteStart {
+        input: initial_input,
+        bindings: initial_bindings,
+        mut journal,
         state_source,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn run_finite_state(
-    program: &Program,
-    registry: &Registry,
-    options: &RunOptions,
-    signals: &Signals,
-    initial_input: Input,
-    initial_bindings: BTreeMap<String, Value>,
-    mut journal: Option<&mut checkpoint::Journal>,
-    state_source: FiniteStateSource,
-    state_out: Option<&mut live::NodeState>,
-) -> Result<RunResult> {
+        state_out,
+    } = start;
     // Nested finite module and task calls share one admission/output budget.
     // The last returning lexical run drops the slot, so repeated service
     // handlers begin with a fresh per-run budget while sharing their Signals.

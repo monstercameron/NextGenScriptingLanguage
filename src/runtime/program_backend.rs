@@ -6,8 +6,8 @@
 //! runtime session.
 
 use super::{
-    configured_inputs, run_finite_inner, GroupOutput, Input, Manifest, Program, Registry,
-    RunOptions, Signals,
+    configured_inputs, run_finite_inner, FiniteRun, GroupOutput, Input, Manifest, Program,
+    Registry, RunOptions, Signals,
 };
 use crate::ast::{Invocation, Value};
 use crate::modules::LoadedProgramSource;
@@ -84,10 +84,12 @@ pub(super) fn execute(
         })?;
     let process_count_before = signals.process_launch_count();
     let child = run_finite_inner(
-        &child_program,
-        registry,
-        &configured,
-        signals,
+        FiniteRun {
+            program: &child_program,
+            registry,
+            options: &configured,
+            signals,
+        },
         input,
         None,
         None,

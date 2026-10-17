@@ -66,6 +66,8 @@ struct Args {
     record_dir: Option<PathBuf>,
     /// `run --control`: host the finite program under a live control endpoint.
     control: bool,
+    /// `run --control --break-at LINE`: pause before these source lines from the start.
+    break_at: Vec<usize>,
 }
 
 struct FiniteCheckSnapshot {
@@ -240,6 +242,9 @@ fn execute() -> Result<()> {
     }
     if arguments.first().is_some_and(|a| a == "attach") {
         std::process::exit(flow::agent::attach::cli(&arguments[1..])?);
+    }
+    if arguments.first().is_some_and(|a| a == "dap") {
+        std::process::exit(flow::agent::dap::cli(&arguments[1..])?);
     }
     let args = match parse_args(arguments)? {
         Some(args) => args,
@@ -1043,6 +1048,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let mut max_record_bytes = 65_536;
     let mut max_record_bytes_seen = false;
     let mut control = false;
+    let mut break_at: Vec<usize> = Vec::new();
     let mut index = first_argument;
     while index < arguments.len() {
         let argument = &arguments[index];
@@ -1355,6 +1361,10 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 }
                 control = true;
             }
+            "--break-at" if command == "run" => {
+                let line = parse_positive_usize(&arguments, &mut index, "--break-at")?;
+                break_at.push(line);
+            }
             value if value.starts_with('-') => bail!("unknown or unsupported option `{value}`"),
             _ => {
                 if file.replace(workflow_path(argument)?).is_some() {
@@ -1368,6 +1378,9 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
     let file = file.ok_or_else(|| anyhow!("missing workflow file\n{}", usage()))?;
     if command == "resume" && checkpoint_dir.is_none() {
         bail!("resume requires --checkpoint DIR");
+    }
+    if !break_at.is_empty() && !control {
+        bail!("--break-at requires --control");
     }
     Ok(Some(Args {
         inputs,
@@ -1403,6 +1416,7 @@ fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
         max_record_bytes_set: max_record_bytes_seen,
         record_dir,
         control,
+        break_at,
     }))
 }
 
@@ -1591,6 +1605,7 @@ fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
             .command_timeout
             .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
         max_output_bytes: args.max_output_bytes,
+        breakpoints: args.break_at.clone(),
     };
     // The host has already written the program's output and diagnostics. Exit with
     // the program's status, as plain run does; process::exit skips buffer drops.

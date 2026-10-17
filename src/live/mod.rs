@@ -65,6 +65,8 @@ pub struct HostRun {
     pub cache_dir: Option<PathBuf>,
     pub command_timeout_ms: Option<u64>,
     pub max_output_bytes: usize,
+    /// Source lines to pause before from the start (`--break-at`).
+    pub breakpoints: Vec<usize>,
 }
 
 /// Host a finite program under the live control endpoint for one run. It uses the
@@ -122,6 +124,11 @@ pub fn host_run(
         args.push("--command-timeout-ms".to_owned());
         args.push(timeout.to_string());
     }
+    if !run.breakpoints.is_empty() {
+        let lines: Vec<String> = run.breakpoints.iter().map(usize::to_string).collect();
+        args.push("--breakpoints".to_owned());
+        args.push(lines.join(","));
+    }
     let finished = dispatch(&args, default_manifests, path, Mode::Run)?;
     Ok(finished["exit_status"]
         .as_i64()
@@ -137,7 +144,7 @@ fn error_response(error: &anyhow::Error) -> Json {
 }
 fn schema() -> Json {
     json!({"ok":true,"protocol":"execute.live/1","execute_version":env!("CARGO_PKG_VERSION"),"commands":{
-        "serve":"execute live serve FILE --socket PATH [--paused] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR | --manifest-catalog FILE] [--capability-policy FILE] [--data-flow-policy FILE] [--agent-policy FILE] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
+        "serve":"execute live serve FILE --socket PATH [--paused] [--breakpoints LINES] [--headless] [--bindings JSON] [--state-file FILE] [--manifest-dir DIR | --manifest-catalog FILE] [--capability-policy FILE] [--data-flow-policy FILE] [--agent-policy FILE] [--working-dir DIR] [--cache-dir DIR] [--command-timeout-ms N] [--max-output-bytes N]",
         "token-create":"execute live token-create --agent ID --token-file FILE (creates a new private file and displays the token once)",
         "read":"execute live read [JSON_POINTER] --socket PATH [--agent ID --token-file FILE]",
         "create":"execute live create JSON_POINTER --json JSON --socket PATH [--if-revision N] [--agent ID --token-file FILE]",
@@ -201,6 +208,7 @@ fn options(args: &[String]) -> Result<Options> {
                 "--cache-dir",
                 "--command-timeout-ms",
                 "--max-output-bytes",
+                "--breakpoints",
                 "--json",
                 "--json-file",
                 "--text-file",
@@ -375,6 +383,7 @@ fn dispatch(
                 "--cache-dir",
                 "--command-timeout-ms",
                 "--max-output-bytes",
+                "--breakpoints",
             ],
             true,
         )?;
@@ -425,6 +434,7 @@ fn dispatch(
             doc.bindings =
                 serde_json::from_str(bindings).context("--bindings requires a JSON object")?;
         }
+        let breakpoints = debug::lines_text(opts.flags.get("--breakpoints").map(String::as_str))?;
         let max_bytes = usize::try_from(numeric(&opts, "--max-output-bytes")?.unwrap_or(262144))?;
         if max_bytes == 0 || max_bytes > MAX_MESSAGE {
             bail!("live max-output-bytes must be 1..1048576");
@@ -520,7 +530,10 @@ fn dispatch(
             cache_hits: 0,
             last_output: Data::default(),
             exit: None,
-            debug: Default::default(),
+            debug: debug::Control {
+                breakpoints,
+                ..Default::default()
+            },
             active_cancel: Arc::new(AtomicBool::new(false)),
             producer_cancel: Arc::new(AtomicBool::new(false)),
             producer_done: false,

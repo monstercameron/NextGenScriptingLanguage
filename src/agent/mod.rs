@@ -6,6 +6,8 @@ pub mod attach;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod checkpoint;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod dap;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod errors;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod explain;

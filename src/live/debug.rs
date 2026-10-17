@@ -23,10 +23,14 @@ pub(crate) struct Control {
     pub release: bool,
     /// The statement the run is paused before.
     pub paused: Option<Paused>,
+    /// Pauses so far. Each pause gets a new id, so a client can tell a new stop from a
+    /// revision that changed while the same pause was still in place.
+    pub pauses: u64,
 }
 
 #[derive(Clone)]
 pub(crate) struct Paused {
+    pub id: u64,
     pub line: usize,
     /// The bindings the statement will see, as JSON.
     pub bindings: BTreeMap<String, Json>,
@@ -38,6 +42,7 @@ impl Control {
         json!({
             "breakpoints": self.breakpoints.iter().collect::<Vec<_>>(),
             "paused": self.paused.as_ref().map(|paused| json!({
+                "id": paused.id,
                 "line": paused.line,
                 "bindings": paused.bindings,
             })),
@@ -62,6 +67,24 @@ pub(crate) fn lines(value: Option<&Json>) -> Result<BTreeSet<usize>> {
         .collect()
 }
 
+/// Parse the comma-separated lines of `serve --breakpoints` (`run --break-at`).
+pub(crate) fn lines_text(text: Option<&str>) -> Result<BTreeSet<usize>> {
+    let Some(text) = text else {
+        return Ok(BTreeSet::new());
+    };
+    text.split(',')
+        .map(|line| {
+            line.trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|line| *line >= 1)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("breakpoint lines must be positive integers, got {line:?}")
+                })
+        })
+        .collect()
+}
+
 /// The hook a live run installs on its worker thread.
 pub(crate) struct LiveHook {
     pub shared: Arc<Shared>,
@@ -77,7 +100,9 @@ impl StatementHook for LiveHook {
         }
         state.debug.stepping = false;
         state.debug.release = false;
+        state.debug.pauses += 1;
         state.debug.paused = Some(Paused {
+            id: state.debug.pauses,
             line,
             bindings: bindings
                 .iter()

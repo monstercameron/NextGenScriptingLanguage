@@ -13,6 +13,10 @@ mod platform {
     pub(crate) use crate::windows_platform as windows;
 }
 
+/// The included platform module records the cancelling signal through its
+/// parent; this harness does not report interrupt exit codes.
+pub(crate) fn record_cancel_signal(_signal: i32) {}
+
 mod capabilities {
     pub use flow::capabilities::*;
 }

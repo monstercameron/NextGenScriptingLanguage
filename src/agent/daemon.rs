@@ -1,10 +1,12 @@
 //! `execute daemon` (#77, first slice): a per-user process behind a Unix socket.
 //!
 //! The daemon answers `ping`, `status` and `stop`. It accepts only connections from its
-//! own user, and it keeps its socket in a private per-user directory. A client probes
-//! for it before any manifest or registry load, so `run --daemon` can tell at once
-//! whether a daemon is up. Running programs through the daemon is the next slice; until
-//! then a run always executes cold.
+//! own user, and it keeps its socket in a private per-user directory. Every client path
+//! goes through one request function that checks the directory and the socket before it
+//! connects, and checks the peer's uid after it connects. A client probes for the daemon
+//! before any manifest or registry load, so `run --daemon` can tell at once whether a
+//! daemon is up. Running programs through the daemon is the next slice; until then a run
+//! always executes cold.
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
@@ -23,9 +25,9 @@ pub enum Acceleration {
 /// What the probe found. A run only asks for it when `Acceleration::Daemon` was chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Probe {
-    /// A daemon of this user answered on the default socket.
+    /// A daemon of this user answered on a trusted socket.
     Running,
-    /// No daemon answered, or the socket directory is not private to this user.
+    /// No trusted daemon answered: none is up, or the path is not one this user controls.
     Absent,
 }
 
@@ -88,17 +90,25 @@ fn socket_option(arguments: &[String]) -> Result<PathBuf> {
     Ok(socket.unwrap_or_else(default_socket))
 }
 
-/// The status reply for a daemon that is not running.
-fn not_running(socket: &Path) -> Value {
-    json!({"ok": true, "protocol": PROTOCOL, "running": false, "socket": socket.to_string_lossy()})
+/// The status reply for a daemon that is not running, or whose socket cannot be trusted.
+fn not_running(socket: &Path, reason: Option<String>) -> Value {
+    json!({
+        "ok": true,
+        "protocol": PROTOCOL,
+        "running": false,
+        "socket": socket.to_string_lossy(),
+        "reason": reason,
+    })
 }
 
 #[cfg(unix)]
 mod imp {
-    use super::{json, not_running, Context, Path, PathBuf, Probe, Result, Value, PROTOCOL};
+    use super::{not_running, Path, PathBuf, Probe, Result, Value, PROTOCOL};
     use crate::live::peer_is_owner;
     use crate::live::transport::{read_message, write_message};
-    use anyhow::{anyhow, bail};
+    use anyhow::{anyhow, bail, Context};
+    use serde_json::json;
+    use std::fmt;
     use std::fs::{self, DirBuilder, Permissions};
     use std::io::ErrorKind;
     use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
@@ -108,6 +118,41 @@ mod imp {
     const IO_TIMEOUT: Duration = Duration::from_secs(2);
     const PROBE_TIMEOUT: Duration = Duration::from_millis(50);
     const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
+    /// Why a request to the daemon did not complete. Nothing is sent to a path that fails
+    /// the trust checks, so `Untrusted` means the request never left this process.
+    #[derive(Debug)]
+    pub(super) enum DaemonError {
+        /// The directory holding the socket, the socket itself, or the peer that answered
+        /// is not this user's. Nothing was sent.
+        Untrusted { path: PathBuf, reason: String },
+        /// The path is trusted but nothing is listening on it.
+        NotRunning { path: PathBuf },
+        /// A trusted daemon was reached but the exchange failed.
+        Protocol { path: PathBuf, detail: String },
+    }
+
+    impl fmt::Display for DaemonError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Untrusted { path, reason } => write!(
+                    formatter,
+                    "refusing to use the daemon socket {}: {reason}",
+                    path.display()
+                ),
+                Self::NotRunning { path } => {
+                    write!(formatter, "no daemon is running at {}", path.display())
+                }
+                Self::Protocol { path, detail } => write!(
+                    formatter,
+                    "the daemon at {} failed: {detail}",
+                    path.display()
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for DaemonError {}
 
     pub(super) fn euid() -> u32 {
         // SAFETY: geteuid has no preconditions and cannot fail.
@@ -146,13 +191,61 @@ mod imp {
             .is_ok_and(|metadata| metadata.file_type().is_socket() && metadata.uid() == euid())
     }
 
-    pub(super) fn probe(socket: &Path) -> Probe {
-        let Some(directory) = socket.parent() else {
-            return Probe::Absent;
+    /// The checks a path must pass before anything is sent to it: its directory is
+    /// private to this user, and the path is a socket this user owns.
+    fn check_trusted(socket: &Path) -> std::result::Result<(), DaemonError> {
+        let untrusted = |reason: String| DaemonError::Untrusted {
+            path: socket.to_owned(),
+            reason,
         };
-        if private_directory(directory, false).is_err() || !owned_socket(socket) {
-            return Probe::Absent;
+        let directory = socket
+            .parent()
+            .ok_or_else(|| untrusted("the path has no directory".to_owned()))?;
+        private_directory(directory, false).map_err(|error| untrusted(format!("{error:#}")))?;
+        if !owned_socket(socket) {
+            return Err(untrusted(
+                "it is not a socket owned by you (it may be absent)".to_owned(),
+            ));
         }
+        Ok(())
+    }
+
+    /// Send one request and read its reply, each step within `timeout`. The directory and
+    /// socket are checked before connecting, and the peer's uid is checked after.
+    fn request(
+        socket: &Path,
+        operation: &str,
+        timeout: Duration,
+    ) -> std::result::Result<Value, DaemonError> {
+        check_trusted(socket)?;
+        let mut stream = UnixStream::connect(socket).map_err(|error| match error.kind() {
+            ErrorKind::ConnectionRefused | ErrorKind::NotFound => DaemonError::NotRunning {
+                path: socket.to_owned(),
+            },
+            _ => DaemonError::Protocol {
+                path: socket.to_owned(),
+                detail: format!("connecting failed: {error}"),
+            },
+        })?;
+        if !peer_is_owner(&stream) {
+            return Err(DaemonError::Untrusted {
+                path: socket.to_owned(),
+                reason: "the process listening there is not owned by you".to_owned(),
+            });
+        }
+        let protocol_error = |detail: String| DaemonError::Protocol {
+            path: socket.to_owned(),
+            detail,
+        };
+        let message = format!("{}\n", json!({"protocol": PROTOCOL, "op": operation}));
+        write_message(&mut stream, message.as_bytes(), timeout)
+            .map_err(|error| protocol_error(format!("sending failed: {error:#}")))?;
+        let reply = read_message(&mut stream, MAX_MESSAGE_BYTES, timeout)
+            .map_err(|error| protocol_error(format!("reading failed: {error:#}")))?;
+        serde_json::from_slice(&reply).map_err(|_| protocol_error("reply is not JSON".to_owned()))
+    }
+
+    pub(super) fn probe(socket: &Path) -> Probe {
         match request(socket, "ping", PROBE_TIMEOUT) {
             Ok(reply) if reply["ok"] == true => Probe::Running,
             _ => Probe::Absent,
@@ -160,26 +253,19 @@ mod imp {
     }
 
     pub(super) fn status(socket: &Path) -> Value {
-        request(socket, "status", IO_TIMEOUT).unwrap_or_else(|_| not_running(socket))
+        match request(socket, "status", IO_TIMEOUT) {
+            Ok(reply) => reply,
+            Err(DaemonError::Untrusted { reason, .. }) => not_running(socket, Some(reason)),
+            Err(_) => not_running(socket, None),
+        }
     }
 
     pub(super) fn stop(socket: &Path) -> Result<()> {
-        let reply = request(socket, "stop", IO_TIMEOUT)
-            .with_context(|| format!("no daemon is running at {}", socket.display()))?;
+        let reply = request(socket, "stop", IO_TIMEOUT)?;
         if reply["ok"] != true {
             bail!("the daemon refused to stop: {reply}");
         }
         Ok(())
-    }
-
-    /// Send one request and read its reply, each step within `timeout`.
-    fn request(socket: &Path, operation: &str, timeout: Duration) -> Result<Value> {
-        let mut stream = UnixStream::connect(socket)
-            .with_context(|| format!("connecting to {}", socket.display()))?;
-        let message = format!("{}\n", json!({"protocol": PROTOCOL, "op": operation}));
-        write_message(&mut stream, message.as_bytes(), timeout)?;
-        let reply = read_message(&mut stream, MAX_MESSAGE_BYTES, timeout)?;
-        serde_json::from_slice(&reply).context("daemon reply is not JSON")
     }
 
     /// Run the daemon in the foreground until a `stop` request arrives.
@@ -325,7 +411,7 @@ mod imp {
     }
 
     pub(super) fn status(socket: &Path) -> Value {
-        not_running(socket)
+        not_running(socket, None)
     }
 
     pub(super) fn stop(_socket: &Path) -> Result<()> {

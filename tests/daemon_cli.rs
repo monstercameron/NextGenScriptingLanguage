@@ -2,10 +2,15 @@
 //! `run --daemon` probe. Program output must match a cold run exactly.
 #![cfg(unix)]
 
+use serde_json::Value;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -182,4 +187,49 @@ fn daemon_status_reports_not_running_without_creating_a_missing_directory() {
     let reply: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(reply["running"], false);
     assert!(!missing.exists());
+}
+
+#[test]
+fn a_socket_in_a_non_private_directory_is_never_contacted() {
+    let runtime = tempfile::tempdir().unwrap();
+    let directory = runtime.path().join("open");
+    fs::create_dir(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+    let socket = directory.join("daemon.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let contacted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&contacted);
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let mut line = String::new();
+            let _ = BufReader::new(&stream).read_line(&mut line);
+            let _ = stream
+                .write_all(b"{\"ok\":true,\"protocol\":\"execute.daemon/1\",\"running\":true}\n");
+        }
+    });
+    let path = socket.to_str().unwrap();
+
+    let status = daemon_output(runtime.path(), &["status", "--socket", path]);
+    assert!(status.status.success(), "{:?}", status);
+    let reply: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(reply["running"], false, "{reply}");
+    let reason = reply["reason"].as_str().unwrap_or_default();
+    assert!(reason.contains("private"), "{reply}");
+
+    let stop = daemon_output(runtime.path(), &["stop", "--socket", path]);
+    assert!(!stop.status.success(), "stop must not succeed: {:?}", stop);
+    let stderr = String::from_utf8_lossy(&stop.stderr);
+    assert!(
+        stderr.contains("refusing to use the daemon socket"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(path), "{stderr}");
+
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        contacted.load(Ordering::SeqCst),
+        0,
+        "a request reached the untrusted socket"
+    );
 }

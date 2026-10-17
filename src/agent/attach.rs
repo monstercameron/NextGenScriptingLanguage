@@ -23,6 +23,7 @@ const CONTROL_ACTIONS: &[&str] = &[
     "pause",
     "resume",
     "step",
+    "continue",
     "cancel",
     "retry",
     "reset",

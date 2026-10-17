@@ -511,6 +511,8 @@ pub(crate) struct State {
     pub doc: Document,
     /// Set by a run-mode program's `exit with`/`fail with`, or by a failed command.
     pub exit: Option<ExitRecord>,
+    /// Breakpoints and the statement a run is paused before.
+    pub debug: super::debug::Control,
     pub plan: Plan,
     pub revision: u64,
     pub running: bool,
@@ -548,6 +550,7 @@ impl State {
     }
     fn runtime(&self, output: bool) -> Json {
         let mut value = json!({"pid":std::process::id(),"execute_version":env!("CARGO_PKG_VERSION"),"status":self.status,"running":self.running,"in_flight":self.in_flight,"active_node":self.active,"effects_may_be_incomplete":self.uncertain,"error":self.error,"runs_completed":self.runs,"nodes_completed":self.nodes,"completed_native_launches":self.launches,"cache_hits":self.cache_hits,"producer_done":self.producer_done,"producer_error":self.producer_error,"frame":self.ui_frame,"ui_applied_revision":self.ui_applied_revision,"ui_errors":self.ui_errors});
+        value["debug"] = self.debug.json();
         if output {
             value["last_output"] = json!(self.last_output);
         }
@@ -826,6 +829,22 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                 .as_deref()
                 .context("control requires action")?
             {
+                "breakpoint" => {
+                    state.debug.breakpoints = super::debug::lines(request.value.as_ref())?;
+                }
+                "continue" if state.debug.paused.is_none() => {
+                    return Err(fail(
+                        "not_paused",
+                        "continue applies only to a run paused at a breakpoint",
+                    ));
+                }
+                // Paused at a breakpoint: release the statement. `step` pauses again
+                // before the next one; `continue` runs to the next breakpoint.
+                "resume" | "step" | "continue" if state.debug.paused.is_some() => {
+                    state.debug.stepping = request.action.as_deref() == Some("step");
+                    state.debug.release = true;
+                    shared.wake.notify_all();
+                }
                 "pause" => {
                     state.running = false;
                     if !state.in_flight {

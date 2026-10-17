@@ -365,13 +365,21 @@ pub(super) fn run(shared: Arc<Shared>, options: RunOptions) {
         shared.wake.notify_all();
         drop(state);
         // A run-mode node streams uncaptured stdout to this terminal, as plain run does.
-        let result = if shared.run_mode {
-            runtime::with_streamed_stdout(|| {
-                runtime::live::execute_node(&node, &shared.registry, &options, context, token)
-            })
-        } else {
-            runtime::live::execute_node(&node, &shared.registry, &options, context, token)
-        };
+        // Breakpoints pause the node at statement boundaries through the runtime hook.
+        let hook: Arc<dyn runtime::statement_hook::StatementHook> =
+            Arc::new(super::debug::LiveHook {
+                shared: shared.clone(),
+                cancel: token.clone(),
+            });
+        let result = runtime::statement_hook::with_statement_hook(hook, || {
+            let execute =
+                || runtime::live::execute_node(&node, &shared.registry, &options, context, token);
+            if shared.run_mode {
+                runtime::with_streamed_stdout(execute)
+            } else {
+                execute()
+            }
+        });
         let mut state = shared.state.lock().unwrap();
         state.in_flight = false;
         state.active = None;

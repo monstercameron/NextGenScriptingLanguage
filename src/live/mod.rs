@@ -1,5 +1,6 @@
 //! Local, opt-in JSON control plane for real program execution state.
 pub(crate) mod auth;
+mod debug;
 pub(crate) mod state;
 mod transport;
 #[cfg(windows)]
@@ -155,7 +156,7 @@ fn schema() -> Json {
         "read_only":["/runtime","/events"],"runtime_fields":["status","in_flight","active_node","effects_may_be_incomplete","error","runs_completed","nodes_completed","completed_native_launches","cache_hits","last_output","frame","ui_applied_revision","ui_errors"],
         "authorization":{"mode":"same_user_trusted_without_policy","opt_in":"serve --agent-policy FILE requires every request to carry an authorized --agent ID --token-file FILE credential; policy stores token hashes; credentials are not persisted or echoed","boundary":"same-UID clients remain inside the existing OS ownership boundary; bearer-token scopes are cooperative client authorization and do not isolate a hostile same-UID process that can read private token files","permissions":["read","edit","control","input","stop"]},
         "capability_policy_scope":"--capability-policy grants applet capabilities only; use --data-flow-policy to enforce remote-origin and persistence data-flow grants",
-        "semantics":{"revision":"monotonic; if_revision protects atomic writes against concurrent edits and execution","create":"requires absent object key; arrays insert at index or -","update":"requires existing path","delete":"requires existing path; required document fields cannot be removed","patch":"atomic RFC 6902 add/replace/remove/test operations; all changes validate before commit","pause":"finish the current native group, then pause; streams pause at their next emitted record","cancel":"cancel/reap the active native group; retry explicitly acknowledges possibly incomplete effects","source":"in-memory replacement only; source file is not rewritten; changing the native listener source/cwd restarts its producer and may replay input; handler-only edits preserve it","reset":"reset cursor/cwd/input and local result bindings; preserves external bindings and user metadata; does not undo effects","restart":"reset and run; may repeat effects","completed":"the control server remains alive for inspection and edits until stop","stream":"native argv is fixed for the lifetime of a stream; cancel and wait before editing/restarting its pipeline","ui":"actual renderer state under /ui/programs/NAME/widgets/ID; edit text, items/selection, table rows, bars, chart series and focus; component input changes invoke .program handlers; event dispatch supports press/submit/choose/open; source replacement changes layout and widget identities","durability":"ephemeral live state; separate from durable checkpoints; completed effects are never rolled back"},
+        "semantics":{"revision":"monotonic; if_revision protects atomic writes against concurrent edits and execution","create":"requires absent object key; arrays insert at index or -","update":"requires existing path","delete":"requires existing path; required document fields cannot be removed","patch":"atomic RFC 6902 add/replace/remove/test operations; all changes validate before commit","breakpoint":"control breakpoint LINE... pauses before those source lines; with no lines it clears them; a paused run shows /runtime/debug (line and bindings)","continue":"while paused at a breakpoint, run to the next breakpoint; otherwise refused","step":"while paused at a breakpoint, run one statement and pause before the next; otherwise run one native node","pause":"finish the current native group, then pause; streams pause at their next emitted record","cancel":"cancel/reap the active native group; retry explicitly acknowledges possibly incomplete effects","source":"in-memory replacement only; source file is not rewritten; changing the native listener source/cwd restarts its producer and may replay input; handler-only edits preserve it","reset":"reset cursor/cwd/input and local result bindings; preserves external bindings and user metadata; does not undo effects","restart":"reset and run; may repeat effects","completed":"the control server remains alive for inspection and edits until stop","stream":"native argv is fixed for the lifetime of a stream; cancel and wait before editing/restarting its pipeline","ui":"actual renderer state under /ui/programs/NAME/widgets/ID; edit text, items/selection, table rows, bars, chart series and focus; component input changes invoke .program handlers; event dispatch supports press/submit/choose/open; source replacement changes layout and widget identities","durability":"ephemeral live state; separate from durable checkpoints; completed effects are never rolled back"},
         "limits":{"request_bytes":MAX_MESSAGE,"state_bytes":MAX_STATE,"inbox_records":MAX_QUEUE,"event_history":64,"concurrent_clients":16,"wait_timeout_ms":10000,"request_read_timeout_ms":2000,"response_write_timeout_ms":2000,"client_response_timeout_ms":12000},
         "supported":["finite","interval","calendar","stdin listener via send/inbox","native applet listener","persistent native stream","interactive TUI","persistent headless TUI"]})
 }
@@ -519,6 +520,7 @@ fn dispatch(
             cache_hits: 0,
             last_output: Data::default(),
             exit: None,
+            debug: Default::default(),
             active_cancel: Arc::new(AtomicBool::new(false)),
             producer_cancel: Arc::new(AtomicBool::new(false)),
             producer_done: false,
@@ -608,10 +610,28 @@ fn dispatch(
             request["value"] = supplied.context("send requires a text/bytes record")?;
         }
         "control" => {
-            if opts.positional.len() != 1 {
+            let action = opts
+                .positional
+                .first()
+                .context("control requires one action")?;
+            if action == "breakpoint" {
+                // `control breakpoint 4 9` sets breakpoints on lines 4 and 9; none clears them.
+                let lines = opts.positional[1..]
+                    .iter()
+                    .map(|line| {
+                        line.parse::<u64>()
+                            .ok()
+                            .filter(|line| *line >= 1)
+                            .with_context(|| {
+                                format!("breakpoint line {line:?} must be a positive integer")
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                request["value"] = json!(lines);
+            } else if opts.positional.len() != 1 {
                 bail!("control requires one action");
             }
-            request["action"] = json!(opts.positional[0]);
+            request["action"] = json!(action);
         }
         "wait" => {
             if opts.positional.len() > 1 {
@@ -1003,7 +1023,7 @@ fn handle(mut stream: UnixStream, shared: &Shared) {
             "create" | "update" => &["op", "path", "value", "if_revision"],
             "delete" => &["op", "path", "if_revision"],
             "patch" => &["op", "operations", "if_revision"],
-            "control" => &["op", "action", "if_revision"],
+            "control" => &["op", "action", "value", "if_revision"],
             "send" | "event" => &["op", "value", "if_revision"],
             "wait" => &["op", "path", "after", "timeout_ms"],
             _ => bail!("unknown operation"),

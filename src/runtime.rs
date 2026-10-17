@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 #[cfg(all(test, unix))]
 use std::process::Command;
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -35,6 +35,7 @@ mod jobs;
 pub(crate) mod live;
 mod loops;
 pub mod observe;
+pub(crate) mod statement_hook;
 mod terminal;
 use observe::execute_call_group;
 mod program_backend;
@@ -330,6 +331,8 @@ include!("runtime/windows_process.rs");
 
 pub(crate) struct Signals {
     cancelled: Arc<AtomicBool>,
+    /// Interrupt drain state (`platform::DRAIN_*`); shared with cleanup scopes.
+    drain: Arc<AtomicU8>,
     registrations: Vec<signal_hook::SigId>,
     capture_diagnostics: bool,
     deadline: Option<Instant>,
@@ -424,8 +427,19 @@ impl AppletInvocationContext {
 
 impl Signals {
     pub(crate) fn register_with_deadline(deadline: Option<Instant>) -> Result<Self> {
+        Self::register(deadline, false)
+    }
+
+    /// Like `register_with_deadline`, but the first interrupt drains the run rather
+    /// than cancelling it; a second interrupt cancels.
+    pub(crate) fn register_with_drain(deadline: Option<Instant>) -> Result<Self> {
+        Self::register(deadline, true)
+    }
+
+    fn register(deadline: Option<Instant>, drain: bool) -> Result<Self> {
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
+            drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
             deadline,
@@ -448,7 +462,8 @@ impl Signals {
             #[cfg(test)]
             job_panic_before_ack: None,
         };
-        guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
+        let armed = drain.then(|| Arc::clone(&guard.drain));
+        guard.registrations = crate::platform::signals(guard.cancelled.clone(), armed)?;
         Ok(guard)
     }
 
@@ -457,7 +472,7 @@ impl Signals {
         deadline: Option<Instant>,
     ) -> Result<Self> {
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
-        guard.registrations = crate::platform::signals(guard.cancelled.clone())?;
+        guard.registrations = crate::platform::signals(guard.cancelled.clone(), None)?;
         Ok(guard)
     }
 
@@ -3998,6 +4013,18 @@ fn run_finite_state(
         };
         let signals = cleanup_signals.as_ref().unwrap_or(parent_signals);
         let step = &program.steps[index];
+        // Markers only steer control flow; the statements they close are the stops.
+        if depth == 0
+            && !matches!(
+                step.kind,
+                StepKind::EndLoop { .. }
+                    | StepKind::EndIf
+                    | StepKind::EndCall
+                    | StepKind::Otherwise { .. }
+            )
+        {
+            statement_hook::before_statement(step.line, &bindings)?;
+        }
         if let Some(journal) = journal.as_deref_mut().filter(|_| journal_end.is_none()) {
             let end = resume::node_end(program, index);
             journal_end = Some(end);

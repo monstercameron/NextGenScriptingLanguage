@@ -284,8 +284,8 @@ pub fn required_permission(
         "control" => match action {
             Some("stop") => Ok(AgentPermission::Stop),
             Some(
-                "pause" | "resume" | "step" | "cancel" | "retry" | "reset" | "restart"
-                | "restart-source",
+                "pause" | "resume" | "step" | "continue" | "breakpoint" | "cancel" | "retry"
+                | "reset" | "restart" | "restart-source",
             ) => Ok(AgentPermission::Control),
             _ => Err(AuthError::InvalidRequest),
         },

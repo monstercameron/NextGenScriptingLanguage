@@ -1052,6 +1052,8 @@ thread_local! {
     static FINITE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Set only while one native command whose stdout has no consumer runs.
     static INHERIT_TERMINAL_STDOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set only while a redirected native command runs; its stderr is captured.
+    static FORCE_STDERR_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Run a top-level finite program so that a `run` whose stdout has no consumer
@@ -1149,6 +1151,82 @@ fn streams_terminal_stdout(program: &Program, index: usize) -> bool {
     }
 }
 
+/// Scopes forced stderr capture to one redirected native command.
+struct ForceStderrCapture(bool);
+impl ForceStderrCapture {
+    fn enter(on: bool) -> Self {
+        Self(FORCE_STDERR_CAPTURE.with(|flag| flag.replace(on)))
+    }
+}
+impl Drop for ForceStderrCapture {
+    fn drop(&mut self) {
+        FORCE_STDERR_CAPTURE.with(|flag| flag.set(self.0));
+    }
+}
+
+/// A `Redirect` step waiting for the command that follows it.
+struct PendingRedirect {
+    target: crate::ast::RedirectTarget,
+    destination: Option<PathBuf>,
+}
+
+impl PendingRedirect {
+    fn captures_stderr(&self) -> bool {
+        !matches!(self.target, crate::ast::RedirectTarget::StdoutToStderr)
+    }
+
+    fn destination(&self) -> Result<&Path> {
+        self.destination
+            .as_deref()
+            .context("redirection has no file target")
+    }
+
+    /// Write the command's stderr to its file target after it has completed or
+    /// failed with stderr. A merged or stdout target leaves the file alone.
+    fn write_stderr(&self, stderr: &[u8]) -> Result<()> {
+        match self.target {
+            crate::ast::RedirectTarget::StderrFile => atomic_write(self.destination()?, stderr),
+            crate::ast::RedirectTarget::StderrAppend => append_file(self.destination()?, stderr),
+            _ => Ok(()),
+        }
+    }
+
+    /// Route a completed command's output and return the stdout that remains in
+    /// the pipeline. Stdout to stderr leaves nothing for the pipeline to read.
+    fn route(&self, stdout: Vec<u8>, stderr: &[u8], signals: &Signals) -> Result<Vec<u8>> {
+        match self.target {
+            crate::ast::RedirectTarget::StderrMerged => {
+                let mut merged = stdout;
+                merged.extend_from_slice(stderr);
+                Ok(merged)
+            }
+            crate::ast::RedirectTarget::StdoutToStderr => {
+                write_with_deadline(2, &stdout, &signals.cancelled, signals.deadline)
+                    .context("could not write redirected stdout to stderr")?;
+                Ok(Vec::new())
+            }
+            _ => {
+                self.write_stderr(stderr)?;
+                Ok(stdout)
+            }
+        }
+    }
+}
+
+/// Append bytes to a file, creating it when needed, and make them durable.
+fn append_file(destination: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(destination)
+        .with_context(|| format!("opening {} for append", destination.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("appending to {}", destination.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing {}", destination.display()))
+}
+
 /// Write one streamed step's captured bytes. Native commands that inherit
 /// stdout produce no bytes here, so nothing is written twice.
 fn write_streamed_stdout(bytes: &[u8], signals: &Signals) -> Result<()> {
@@ -1173,7 +1251,7 @@ fn resolved_call_stdio(
         } else {
             invocation_io::StdioDisposition::Capture
         },
-        if signals.capture_diagnostics {
+        if signals.capture_diagnostics || FORCE_STDERR_CAPTURE.with(|flag| flag.get()) {
             invocation_io::StdioDisposition::Capture
         } else {
             invocation_io::StdioDisposition::Inherit
@@ -3209,7 +3287,9 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::TakeJson { .. }
             | StepKind::TakeJsonDynamic { .. }
             | StepKind::EncodeJson { .. }
-            | StepKind::Save { .. } => {}
+            | StepKind::Save { .. }
+            | StepKind::Append { .. }
+            | StepKind::Redirect { .. } => {}
         }
     }
     if let Some(crate::ast::Trigger::Listen {
@@ -3585,6 +3665,8 @@ fn run_finite_state(
         !initial_bindings.is_empty() && state_source == FiniteStateSource::Fresh;
     let mut bindings = initial_bindings;
     let mut data = initial_input;
+    // Set by a `Redirect` step and consumed by the very next `Invoke`.
+    let mut pending_redirect: Option<PendingRedirect> = None;
     let mut result = RunResult {
         output: Vec::new(),
         cache_hits: 0,
@@ -4308,6 +4390,57 @@ fn run_finite_state(
                         || serde_json::json!({"event":"job_cancel","line":step.line,"job":name}),
                     )?;
                 }
+                StepKind::Append { path } => {
+                    let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
+                        options.max_output_bytes,
+                        signals,
+                        options.command_timeout,
+                    )?;
+                    let destination = path_value(path, &bindings, &cwd)?;
+                    crate::capabilities::authorize_host_path(registry, &destination, true, &cwd)?;
+                    crate::security::authorize_persistence_set(
+                        registry,
+                        "workflow.append",
+                        crate::security::PersistenceKind::Save,
+                        &signals.sensitivity_floor(),
+                    )?;
+                    append_file(&destination, &bytes)?;
+                    if journal.is_some() {
+                        File::open(destination.parent().unwrap_or(&cwd))?.sync_all()?;
+                    }
+                    lazy_event(
+                        options.trace,
+                        signals,
+                        || serde_json::json!({"event":"append","line":step.line,"bytes":bytes.len()}),
+                    )?;
+                    // Like save, the appended value remains the pipeline value.
+                    data = Input::Bytes(bytes);
+                }
+                StepKind::Redirect { target, path } => {
+                    let destination = match path {
+                        Some(path) => {
+                            let destination = path_value(path, &bindings, &cwd)?;
+                            crate::capabilities::authorize_host_path(
+                                registry,
+                                &destination,
+                                true,
+                                &cwd,
+                            )?;
+                            crate::security::authorize_persistence_set(
+                                registry,
+                                "workflow.redirect",
+                                crate::security::PersistenceKind::Save,
+                                &signals.sensitivity_floor(),
+                            )?;
+                            Some(destination)
+                        }
+                        None => None,
+                    };
+                    pending_redirect = Some(PendingRedirect {
+                        target: *target,
+                        destination,
+                    });
+                }
                 StepKind::Save { path, .. } => {
                     let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                         options.max_output_bytes,
@@ -4335,6 +4468,7 @@ fn run_finite_state(
                     data = Input::Bytes(bytes);
                 }
                 StepKind::Invoke { call, connection } => {
+                    let redirect = pending_redirect.take();
                     let manifest = registry.resolve_call(call)?;
                     if manifest.builtin == Some(Builtin::Cd) {
                         let parameters = call
@@ -4362,7 +4496,11 @@ fn run_finite_state(
                         } else {
                             Input::Empty
                         };
-                        let streamed = stream_top && streams_terminal_stdout(program, index);
+                        // A redirected command's stdout is pipeline data, so it is
+                        // never inherited or streamed.
+                        let streamed = redirect.is_none()
+                            && stream_top
+                            && streams_terminal_stdout(program, index);
                         let mut calls = vec![(call, manifest, step.line)];
                         while pipe_at(program, index + 1) {
                             index += 1;
@@ -4574,7 +4712,12 @@ fn run_finite_state(
                             }
                         } else {
                             let _inherit = InheritTerminalStdout::enter(streamed);
-                            let completed = execute_call_group(
+                            let _stderr = ForceStderrCapture::enter(
+                                redirect
+                                    .as_ref()
+                                    .is_some_and(PendingRedirect::captures_stderr),
+                            );
+                            let completed = match execute_call_group(
                                 &calls,
                                 input,
                                 None,
@@ -4584,7 +4727,22 @@ fn run_finite_state(
                                 &mut result.launched_processes,
                                 signals,
                                 registry,
-                            )?;
+                            ) {
+                                Ok(completed) => completed,
+                                Err(error) => {
+                                    // A failed command's stderr still goes to its
+                                    // file target before the failure propagates.
+                                    if let (Some(redirect), Some(failure)) =
+                                        (redirect.as_ref(), error.downcast_ref::<CommandFailed>())
+                                    {
+                                        let stderr = failure.stderr.clone().unwrap_or_else(|| {
+                                            failure.diagnostic.clone().into_bytes()
+                                        });
+                                        redirect.write_stderr(&stderr)?;
+                                    }
+                                    return Err(error);
+                                }
+                            };
                             (
                                 completed.bytes,
                                 completed.status,
@@ -4597,6 +4755,15 @@ fn run_finite_state(
                             .iter()
                             .rev()
                             .find_map(|stage| stage.stderr.as_deref());
+                        // Taken before `stages` moves into the execution record.
+                        let redirected_stderr = match &redirect {
+                            Some(_) => stages
+                                .iter()
+                                .rev()
+                                .find_map(|stage| stage.stderr.clone())
+                                .unwrap_or_default(),
+                            None => Vec::new(),
+                        };
                         if let Some(name) = &call.status_binding {
                             let code = status.context("applet finished without an exit code")?;
                             bindings.insert(name.clone(), Value::Integer(i64::from(code)));
@@ -4694,6 +4861,10 @@ fn run_finite_state(
                                 bindings.insert(name.clone(), record);
                             }
                         }
+                        let bytes = match &redirect {
+                            Some(redirect) => redirect.route(bytes, &redirected_stderr, signals)?,
+                            None => bytes,
+                        };
                         if streamed {
                             // Nothing consumes this value, so it is written now
                             // and the pipeline value becomes empty.

@@ -1,6 +1,6 @@
 use crate::ast::{
     Condition, ConditionOperator, Connection, InputDeclaration, InputSource, InputType, Invocation,
-    ListenSource, LoopKind, Program, Step, StepKind, Trigger, Value,
+    ListenSource, LoopKind, Program, RedirectTarget, Step, StepKind, Trigger, Value,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use std::borrow::Cow;
@@ -171,12 +171,14 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
         return tasks::parse_group(line_at, cursor, indent, steps);
     }
     if !word_is(line.tokens.first(), "if") {
-        let kind =
-            parse_line(line.tokens).map_err(|error| anyhow!("line {}: {error}", line.number))?;
-        steps.push(Step {
-            line: line.number,
-            kind,
-        });
+        for kind in parse_simple_statement(line.tokens)
+            .map_err(|error| anyhow!("line {}: {error}", line.number))?
+        {
+            steps.push(Step {
+                line: line.number,
+                kind,
+            });
+        }
         *cursor += 1;
         return Ok(());
     }
@@ -1003,6 +1005,9 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
     if word_is(tokens.first(), "then") && word_is(tokens.get(1), "save") {
         return parse_save(tokens);
     }
+    if word_is(tokens.first(), "then") && word_is(tokens.get(1), "append") {
+        return parse_append(tokens);
+    }
     if tokens.first().is_some_and(|token| {
         matches!(token, Token::Word(word) if matches!(*word, "repeat" | "for" | "while" | "if" | "otherwise" | "else" | "loop"))
     }) {
@@ -1119,6 +1124,154 @@ fn parse_read(tokens: &[Token<'_>]) -> Result<StepKind> {
         Some(path) => StepKind::Read { path, binding },
         None => StepKind::ReadStdin { binding },
     })
+}
+
+fn parse_append(tokens: &[Token<'_>]) -> Result<StepKind> {
+    let mut cursor = 2;
+    if !word_is(tokens.get(cursor), "to") {
+        bail!("expected `then append to <value>`");
+    }
+    cursor += 1;
+    let path = parse_value(tokens, &mut cursor)?;
+    ensure_end(tokens, cursor)?;
+    Ok(StepKind::Append { path })
+}
+
+/// One trailing redirection suffix on a native command.
+enum RedirectSuffix<'source> {
+    Stdin(Token<'source>),
+    Output {
+        target: RedirectTarget,
+        path: Option<Token<'source>>,
+    },
+}
+
+/// Recognize `and stdin from V`, `and stderr to V`, `and stderr appended to V`,
+/// `and stderr merged`, or `and stdout to stderr` at `index`. Returns the suffix
+/// and how many tokens it spans.
+fn redirect_suffix<'source>(
+    tokens: &[Token<'source>],
+    index: usize,
+) -> Option<(RedirectSuffix<'source>, usize)> {
+    if !word_is(tokens.get(index), "and") {
+        return None;
+    }
+    let at = |offset: usize| tokens.get(index + offset);
+    if word_is(at(1), "stdin") && word_is(at(2), "from") {
+        let path = at(3)?.clone();
+        return Some((RedirectSuffix::Stdin(path), 4));
+    }
+    if word_is(at(1), "stderr") && word_is(at(2), "to") {
+        let path = at(3)?.clone();
+        return Some((
+            RedirectSuffix::Output {
+                target: RedirectTarget::StderrFile,
+                path: Some(path),
+            },
+            4,
+        ));
+    }
+    if word_is(at(1), "stderr") && word_is(at(2), "appended") && word_is(at(3), "to") {
+        let path = at(4)?.clone();
+        return Some((
+            RedirectSuffix::Output {
+                target: RedirectTarget::StderrAppend,
+                path: Some(path),
+            },
+            5,
+        ));
+    }
+    if word_is(at(1), "stderr") && word_is(at(2), "merged") {
+        return Some((
+            RedirectSuffix::Output {
+                target: RedirectTarget::StderrMerged,
+                path: None,
+            },
+            3,
+        ));
+    }
+    if word_is(at(1), "stdout") && word_is(at(2), "to") && word_is(at(3), "stderr") {
+        return Some((
+            RedirectSuffix::Output {
+                target: RedirectTarget::StdoutToStderr,
+                path: None,
+            },
+            4,
+        ));
+    }
+    None
+}
+
+/// A redirection path is exactly one literal or binding token.
+fn single_value(token: &Token<'_>) -> Result<Value> {
+    let tokens = std::slice::from_ref(token);
+    let mut cursor = 0;
+    let value = parse_value(tokens, &mut cursor)?;
+    ensure_end(tokens, cursor)?;
+    Ok(value)
+}
+
+/// Parse one ordinary statement into its steps. Redirection suffixes on a native
+/// command become, in order, a file read for stdin, a `Redirect` step, and the
+/// command. The command then stays the only `Invoke` for its line.
+fn parse_simple_statement(tokens: &[Token<'_>]) -> Result<Vec<StepKind>> {
+    let mut kept = Vec::with_capacity(tokens.len());
+    let mut stdin = None;
+    let mut output = None;
+    let mut index = 0;
+    while index < tokens.len() {
+        match redirect_suffix(tokens, index) {
+            Some((RedirectSuffix::Stdin(path), span)) => {
+                if stdin.replace(path).is_some() {
+                    bail!("only one `and stdin from` redirection is allowed");
+                }
+                index += span;
+            }
+            Some((RedirectSuffix::Output { target, path }, span)) => {
+                if output.replace((target, path)).is_some() {
+                    bail!("only one stderr or stdout redirection is allowed per command");
+                }
+                index += span;
+            }
+            None => {
+                kept.push(tokens[index].clone());
+                index += 1;
+            }
+        }
+    }
+    if stdin.is_none() && output.is_none() {
+        return Ok(vec![parse_line(tokens)?]);
+    }
+    let StepKind::Invoke { call, connection } = parse_invocation(&kept)? else {
+        bail!("redirection applies only to a native command");
+    };
+    let mut steps = Vec::with_capacity(3);
+    if let Some(path) = stdin {
+        if connection != Connection::Start {
+            bail!("`and stdin from` applies only to a command that starts a pipeline statement");
+        }
+        steps.push(StepKind::Read {
+            path: single_value(&path)?,
+            binding: None,
+        });
+    }
+    let consumer = if steps.is_empty() {
+        connection
+    } else {
+        Connection::Then
+    };
+    if let Some((target, path)) = output {
+        if connection == Connection::Pipe {
+            bail!("stderr and stdout redirection apply to a single command, not a pipe stage");
+        }
+        let path = path.as_ref().map(single_value).transpose()?;
+        steps.push(StepKind::Redirect { target, path });
+    }
+    steps.push(StepKind::Invoke {
+        call,
+        connection: consumer,
+    });
+    Ok(steps)
 }
 
 fn parse_save(tokens: &[Token<'_>]) -> Result<StepKind> {

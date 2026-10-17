@@ -45,6 +45,12 @@ impl From<std::fs::Metadata> for BinaryIdentity {
 type BinaryDigests = HashMap<PathBuf, (BinaryIdentity, [u8; 32])>;
 
 pub(super) fn node_end(program: &Program, start: usize) -> usize {
+    // A redirect is one node with the command it routes, which validation keeps
+    // as the single following invocation. Splitting them would let resume run the
+    // command without its routing state.
+    if matches!(program.steps[start].kind, StepKind::Redirect { .. }) {
+        return start + 2;
+    }
     if let StepKind::If { end, .. }
     | StepKind::IfCommand { end, .. }
     | StepKind::CallProgram { end, .. }
@@ -294,7 +300,11 @@ pub(super) fn retry_safe(
     for step in &program.steps[start..end] {
         if matches!(
             step.kind,
-            StepKind::Save { .. } | StepKind::ReadStdin { .. } | StepKind::CallProgram { .. }
+            StepKind::Save { .. }
+                | StepKind::Append { .. }
+                | StepKind::Redirect { .. }
+                | StepKind::ReadStdin { .. }
+                | StepKind::CallProgram { .. }
         ) {
             return Ok(false);
         }

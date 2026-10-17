@@ -260,6 +260,31 @@ pub enum StepKind {
         path: Value,
         connection: Connection,
     },
+    /// `then append to <value>`: append the pipeline value to a file, keeping it
+    /// as the pipeline value. Unlike `save`, the file is not replaced.
+    Append {
+        path: Value,
+    },
+    /// Routes the next command's stderr or stdout. It must immediately precede
+    /// one `Invoke` that starts a fresh, unpiped command.
+    Redirect {
+        target: RedirectTarget,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<Value>,
+    },
+}
+
+/// Where a `Redirect` step sends the next command's output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RedirectTarget {
+    /// `and stderr to <path>`: replace the file with the command's stderr.
+    StderrFile,
+    /// `and stderr appended to <path>`: append the command's stderr to the file.
+    StderrAppend,
+    /// `and stderr merged`: add the command's stderr after its stdout.
+    StderrMerged,
+    /// `and stdout to stderr`: write the command's stdout to this stderr.
+    StdoutToStderr,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

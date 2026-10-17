@@ -688,6 +688,34 @@ and reports all unresolved ones together. A run that resumes from a checkpoint
 does not repeat this check. Once a working-directory change makes relative names
 unknown, later calls are resolved when they run.
 
+### Redirection
+
+A native command accepts these trailing suffixes. Each is checked before effects
+and appears in `explain`:
+
+```text
+run "tool" with arguments ["-v"] and keep status as code and stderr to "err.log"
+run "tool" with arguments ["-v"] and stderr appended to "run.log"
+run "tool" with arguments ["-v"] and stderr merged
+run "tool" with arguments ["-v"] and stdout to stderr
+run "wc" with arguments ["-l"] and stdin from "input.txt"
+then append to "run.log"
+```
+
+`and stderr to <path>` replaces the file with the command's stderr. `appended to`
+adds it to the file, and `merged` appends stderr after stdout in the pipeline
+value. `and stdout to stderr` writes stdout to this process's stderr and leaves
+the pipeline empty. Stderr is captured under the normal capture limit, so a very
+large stderr is truncated as before. A failing command still writes its captured
+stderr to a file target. Only one stderr or stdout redirection applies per
+command, and it cannot be combined with `discard stderr`, `cache`, `keep result`,
+or a pipe stage. `and stdin from <path>` reads the file as the command's stdin; it
+applies to a command that starts a statement, and it is a `read` followed by the
+command as a consumer. `then append to <path>` adds the pipeline value to the file
+and keeps it as the pipeline value. Unlike `save`, it does not replace the file.
+Redirection to a file is a persistence sink for data-flow policy. Live programs
+reject these forms.
+
 `run`, `then`, `pipe to`, `stream from`, and `listen to` accept these calls, as do
 native statements inside schedules and TUI handlers. Direct calls share the
 existing process supervision, timeouts, cancellation, output bounds and native

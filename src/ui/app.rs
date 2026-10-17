@@ -160,7 +160,12 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
             match &step.kind {
                 crate::ast::StepKind::UseFolder { path }
                 | crate::ast::StepKind::Read { path, .. }
-                | crate::ast::StepKind::Save { path, .. } => references(path, &mut needed),
+                | crate::ast::StepKind::Save { path, .. }
+                | crate::ast::StepKind::Append { path } => references(path, &mut needed),
+                crate::ast::StepKind::Redirect {
+                    path: Some(path), ..
+                } => references(path, &mut needed),
+                crate::ast::StepKind::Redirect { path: None, .. } => {}
                 crate::ast::StepKind::Invoke { call, .. }
                 | crate::ast::StepKind::CallProgram { call, .. } => {
                     for value in call.parameters.values() {

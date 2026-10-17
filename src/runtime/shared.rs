@@ -119,6 +119,13 @@ fn validate_command_condition(
     }
     manifest.validate_with_types(call, &flow.types)
 }
+/// A file path as `explain` shows it: resolved text, or the unresolved value.
+fn describe_path(value: &Value, known: &BTreeMap<String, Value>) -> String {
+    match resolve(value, known).unwrap_or_else(|_| value.clone()) {
+        Value::String(text) => text,
+        other => format!("{other:?}"),
+    }
+}
 /// Short, source-like rendering of an exit or fail operand for `explain`.
 fn describe_operand(value: &Value) -> String {
     match value {
@@ -485,6 +492,17 @@ pub(crate) fn validate_live(
     {
         bail!(
             "line {}: live programs keep their state between runs and cannot exit or fail",
+            step.line
+        );
+    }
+    if let Some(step) = program.steps.iter().find(|step| {
+        matches!(
+            step.kind,
+            StepKind::Append { .. } | StepKind::Redirect { .. }
+        )
+    }) {
+        bail!(
+            "line {}: live programs do not support file redirection or append",
             step.line
         );
     }
@@ -1554,6 +1572,39 @@ fn validate_range(
                         && !terminal_stdout_captured;
                     flow.started |= manifest.builtin.is_none();
                 }
+                StepKind::Append { path } => {
+                    check_path(path, &flow.names)?;
+                    if !flow.has_data {
+                        bail!("append requires preceding output");
+                    }
+                }
+                StepKind::Redirect { target, path } => {
+                    if let Some(path) = path {
+                        check_path(path, &flow.names)?;
+                    }
+                    let Some(crate::ast::Step {
+                        kind: StepKind::Invoke { call, connection },
+                        ..
+                    }) = steps.get(index + 1)
+                    else {
+                        bail!("redirection must immediately precede one native command");
+                    };
+                    if *connection == Connection::Pipe || pipe_in_steps(steps, index + 2) {
+                        bail!("redirection applies to a single command; it cannot feed or precede a pipe to stage");
+                    }
+                    if call.discard_stderr || call.cache {
+                        bail!("redirection cannot be combined with discard stderr or cache");
+                    }
+                    if call.result_binding.is_some()
+                        || (call.binding.is_some()
+                            && *target == crate::ast::RedirectTarget::StdoutToStderr)
+                    {
+                        bail!("redirected stdout is pipeline data; it cannot be bound with `keep result`, or with `as` for stdout to stderr");
+                    }
+                    if registry.resolve_call(call)?.builtin.is_some() {
+                        bail!("a builtin cannot be redirected");
+                    }
+                }
                 StepKind::Save { path, connection } => {
                     check_path(path, &flow.names)?;
                     if !flow.has_data {
@@ -1808,6 +1859,27 @@ pub fn explain_with_inputs(
                 "save finite output to {:?}",
                 resolve(path, &known).unwrap_or_else(|_| path.clone())
             ),
+            StepKind::Append { path } => format!(
+                "append finite output to {}; the value stays the pipeline value",
+                describe_path(path, &known)
+            ),
+            StepKind::Redirect { target, path } => {
+                let destination = path
+                    .as_ref()
+                    .map(|path| describe_path(path, &known));
+                match (target, destination) {
+                    (crate::ast::RedirectTarget::StderrFile, Some(path)) => format!(
+                        "next command's stderr replaces file {path:?}; stdout is unchanged"
+                    ),
+                    (crate::ast::RedirectTarget::StderrAppend, Some(path)) => format!(
+                        "next command's stderr appends to file {path:?}; stdout is unchanged"
+                    ),
+                    (crate::ast::RedirectTarget::StderrMerged, _) => {
+                        "next command's stderr follows its stdout in the pipeline value".into()
+                    }
+                    _ => "next command's stdout goes to stderr; the pipeline value is empty".into(),
+                }
+            }
             StepKind::Invoke { call, connection } => {
                 let manifest = registry.resolve_call(call)?;
                 let argv = match arguments_for_call(call, manifest, &known) {

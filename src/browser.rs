@@ -220,6 +220,9 @@ impl BrowserSession {
                 StepKind::Interactive => Some("terminal handoff (interactively)"),
                 StepKind::HandOver => Some("hand over to (replaces the script)"),
                 StepKind::LaunchDetached { .. } => Some("launch detached"),
+                StepKind::TempScope { .. } | StepKind::EndTempScope { .. } => {
+                    Some("temporary file and directory scopes")
+                }
                 StepKind::OnInterrupt { .. } => Some("on interrupt drain"),
                 StepKind::CaptureBytes { .. } | StepKind::UseBytes { .. } => Some("byte captures"),
                 StepKind::Exit { .. } | StepKind::Fail { .. } => {
@@ -341,6 +344,8 @@ impl BrowserSession {
                     | StepKind::Interactive
                     | StepKind::HandOver
                     | StepKind::LaunchDetached { .. }
+                    | StepKind::TempScope { .. }
+                    | StepKind::EndTempScope { .. }
                     | StepKind::TakeJsonDynamic { .. } => {
                         bail!("control flow feature was not validated for browser execution");
                     }

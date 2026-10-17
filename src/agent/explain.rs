@@ -242,6 +242,15 @@ impl Walker<'_> {
             _ => {}
         }
         match kind {
+            StepKind::TempScope { kind: temp, .. } => {
+                // The scope creates a path other commands write to, so it is a write.
+                let kind = match temp {
+                    crate::ast::TempKind::File => "temporary_file",
+                    crate::ast::TempKind::Directory => "temporary_directory",
+                };
+                self.file_write(line, kind, None, scope);
+            }
+            StepKind::EndTempScope { .. } => self.push_plain(line, "end_temporary", scope),
             StepKind::TaskGroup { tasks, .. } => {
                 for call in tasks {
                     self.invocation(line, "task_group", call, scope, true);

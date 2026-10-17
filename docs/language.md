@@ -927,6 +927,24 @@ use separate programs or explicitly save the results you need.
 
 Both forms take one fresh native program named by a quoted path. They reject redirection, stdin, environment changes, result bindings, `discard stderr`, and caching. They are refused under `--checkpoint`, under `run --control`, in live programs (including live source edits, which check the whole program), in triggered, service and listener programs, in browser programs, and in TUI handlers. A run may start at most 64 detached programs; the next one is an error. On Unix a waiter thread reaps each detached child when it exits. On Windows, `CREATE_BREAKAWAY_FROM_JOB` escapes an outer job only when that job permits breakaway; where it does not, the child stays in the outer job and that job's close can end it.
 
+### Temporary files and directories
+
+`with temporary file as NAME` and `with temporary directory as NAME` bind NAME to a fresh, private, empty path for the indented body. The path is under the system temporary directory, is created owner-only, and is removed when the body ends. The removal also happens when the body fails, when an `exit` or `fail` leaves it, and when the run is drained or interrupted. A process killed with SIGKILL cannot run that cleanup, so the first temporary scope a later process creates removes scope directories whose owner process no longer exists. That sweep runs lazily, not at startup, and touches only directories owned by the current user.
+
+Process substitution has no direct form. `diff <(sort a) <(sort b)` ports as two saves into temporaries followed by one `run "diff"` on their paths:
+
+```text
+with temporary file as left
+  with temporary file as right
+    run "sort" with arguments ["a"]
+    then save to left
+    run "sort" with arguments ["b"]
+    then save to right
+    run "diff" with arguments [left, right]
+```
+
+FIFOs and stdout-to-path job routing are not part of this version. Temporary scopes are refused under `--checkpoint`, in live programs, in browser programs, and in TUI handlers, because a checkpoint cannot replay a path that a previous run created.
+
 ## Finite stdin and Unix composition
 
 Finite programs accept explicit stdin input. The historical 0.8.0 binary

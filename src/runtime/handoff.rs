@@ -35,6 +35,20 @@ pub(crate) enum ProcessRequest {
 /// The parser already limits each marker to one fresh native command; this adds
 /// the mode and placement rules that need the whole program.
 pub(crate) fn validate(program: &Program, checkpointed: bool) -> Result<()> {
+    // Temporary scopes hold paths that a checkpoint cannot replay, so they are refused
+    // under one, as hand-over and detached launch are.
+    if checkpointed {
+        if let Some(step) = program
+            .steps
+            .iter()
+            .find(|step| matches!(step.kind, StepKind::TempScope { .. }))
+        {
+            bail!(
+                "line {}: temporary scopes are not supported under --checkpoint",
+                step.line
+            );
+        }
+    }
     for (index, step) in program.steps.iter().enumerate() {
         let verb = match step.kind {
             StepKind::HandOver => "hand over to",
@@ -112,11 +126,11 @@ pub(crate) fn reject_in_live(program: &Program) -> Result<()> {
     if let Some(step) = program.steps.iter().find(|step| {
         matches!(
             step.kind,
-            StepKind::HandOver | StepKind::LaunchDetached { .. }
+            StepKind::HandOver | StepKind::LaunchDetached { .. } | StepKind::TempScope { .. }
         )
     }) {
         bail!(
-            "line {}: live programs do not support hand over or detached launch",
+            "line {}: live programs do not support hand over, detached launch, or temporary scopes",
             step.line
         );
     }

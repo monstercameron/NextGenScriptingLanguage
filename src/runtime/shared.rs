@@ -1168,6 +1168,15 @@ fn validate_range(
                     flow.stdout_unavailable = false;
                     flow.started = true;
                 }
+                StepKind::TempScope { binding: name, .. } => {
+                    binding(
+                        &Some(name.clone()),
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
+                    flow.bind_type(name, crate::ast::InputType::Text)?;
+                }
+                StepKind::EndTempScope { .. } => {}
                 StepKind::CaptureBytes { binding: name } => {
                     if !flow.has_data {
                         bail!("capture bytes requires preceding output");
@@ -2056,6 +2065,14 @@ pub fn explain_with_inputs(
                 resolve(path, &known).unwrap_or_else(|_| path.clone())
             ),
             StepKind::Interactive => "interactive (terminal handoff)".into(),
+            StepKind::TempScope { kind, binding, .. } => {
+                let kind = match kind {
+                    crate::ast::TempKind::File => "file",
+                    crate::ast::TempKind::Directory => "directory",
+                };
+                format!("with temporary {kind} as {binding}")
+            }
+            StepKind::EndTempScope { .. } => "end temporary scope".into(),
             StepKind::HandOver => "hand over to (replaces the script)".into(),
             StepKind::LaunchDetached { output } => match output {
                 Some(path) => format!("launch detached (output to {path:?})"),

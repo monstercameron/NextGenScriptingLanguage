@@ -55,6 +55,7 @@ mod control_flow;
 mod jobs;
 mod reusable;
 mod tasks;
+mod temp_scope;
 
 /// Lower one indented statement into relative control instructions. Offsets remain
 /// valid when a complete block is copied into a managed execution node.
@@ -234,6 +235,9 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
             "line {}: catch and finally must belong to a try block",
             line.number
         );
+    }
+    if word_is(line.tokens.first(), "with") && word_is(line.tokens.get(1), "temporary") {
+        return temp_scope::parse_temp_scope(line_at, cursor, indent, steps, depth, scope);
     }
     if matches!(
         line.tokens.first(),

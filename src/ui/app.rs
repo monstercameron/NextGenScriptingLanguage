@@ -183,6 +183,8 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                 crate::ast::StepKind::Interactive
                 | crate::ast::StepKind::HandOver
                 | crate::ast::StepKind::LaunchDetached { .. }
+                | crate::ast::StepKind::TempScope { .. }
+                | crate::ast::StepKind::EndTempScope { .. }
                 | crate::ast::StepKind::CaptureBytes { .. }
                 | crate::ast::StepKind::UseBytes { .. } => {}
                 crate::ast::StepKind::Environment { set, .. } => {

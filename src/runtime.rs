@@ -39,6 +39,7 @@ pub(crate) mod live;
 mod loops;
 pub mod observe;
 pub(crate) mod statement_hook;
+mod temp;
 mod terminal;
 use observe::execute_call_group;
 mod program_backend;
@@ -3876,7 +3877,9 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::Environment { .. }
             | StepKind::Interactive
             | StepKind::HandOver
-            | StepKind::LaunchDetached { .. } => {}
+            | StepKind::LaunchDetached { .. }
+            | StepKind::TempScope { .. }
+            | StepKind::EndTempScope { .. } => {}
         }
     }
     if let Some(crate::ast::Trigger::Listen {
@@ -4285,6 +4288,7 @@ fn run_finite_state(
     let mut index = 0;
     let mut call_frames: Vec<calls::Frame<'_>> = Vec::new();
     let mut loop_frames = loops::LoopStack::default();
+    let mut temp_scopes = temp::ScopeStack::default();
     let mut control_state = control_flow::RuntimeState::default();
     if let Some(journal) = journal.as_deref_mut() {
         if state_source == FiniteStateSource::Restore {
@@ -4447,6 +4451,7 @@ fn run_finite_state(
                 StepKind::EndLoop { .. }
                     | StepKind::EndIf
                     | StepKind::EndCall
+                    | StepKind::EndTempScope { .. }
                     | StepKind::Otherwise { .. }
                     | StepKind::OnInterrupt { .. }
             )
@@ -4540,6 +4545,31 @@ fn run_finite_state(
                         control_state.leave_loop(index)?;
                         jump_to = Some(index + end);
                     }
+                }
+                StepKind::TempScope { kind, binding, .. } => {
+                    if bindings.contains_key(binding) {
+                        bail!(
+                            "line {}: temporary binding {binding:?} is already defined",
+                            step.line
+                        );
+                    }
+                    let path = temp_scopes
+                        .open(index, *kind)
+                        .with_context(|| format!("line {}", step.line))?;
+                    let path = path.into_os_string().into_string().map_err(|_| {
+                        anyhow!("line {}: temporary path is not valid UTF-8", step.line)
+                    })?;
+                    bindings.insert(binding.clone(), Value::String(path));
+                }
+                StepKind::EndTempScope { back } => {
+                    let header = index
+                        .checked_sub(*back)
+                        .context("invalid temporary scope end")?;
+                    if let StepKind::TempScope { binding, .. } = &program.steps[header].kind {
+                        bindings.remove(binding);
+                    }
+                    // Removes this scope's path now, and any scope a jump left open.
+                    temp_scopes.close(header);
                 }
                 StepKind::EndLoop { back } => {
                     let header = index.checked_sub(*back).context("invalid loop back edge")?;

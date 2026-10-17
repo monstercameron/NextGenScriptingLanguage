@@ -238,6 +238,18 @@ pub enum StepKind {
     },
     Finally,
     EndTry,
+    /// `with temporary file|directory as NAME`: binds NAME to a fresh private path
+    /// that is removed when the body ends, on every exit from the run. `end` is the
+    /// offset from this step to the matching EndTempScope, past it.
+    TempScope {
+        kind: TempKind,
+        binding: String,
+        end: usize,
+    },
+    /// Closes a TempScope. `back` is the offset from this step to its TempScope.
+    EndTempScope {
+        back: usize,
+    },
     /// A reusable body's first `read from stdin` reads its call input.
     ReadCallInput {
         binding: Option<String>,
@@ -331,6 +343,13 @@ pub enum StepKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<Value>,
     },
+}
+
+/// What a temporary scope creates: an empty file or an empty directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TempKind {
+    File,
+    Directory,
 }
 
 /// Where a `Redirect` step sends the next command's output.

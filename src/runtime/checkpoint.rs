@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
@@ -19,7 +19,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod leaf_cursor;
 
 const LEGACY_JOURNAL_VERSION: u32 = 1;
-const JOURNAL_VERSION: u32 = 2;
+/// Version 2 keeps completed nodes inline in the journal.
+const INLINE_JOURNAL_VERSION: u32 = 2;
+/// Version 3 keeps completed nodes in the append-only `completed.jsonl` log and
+/// records only how many lines are committed, plus their chain digest.
+const JOURNAL_VERSION: u32 = 3;
+const COMPLETED_LOG: &str = "completed.jsonl";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Settings for one checkpoint directory. The directory holds an exclusive lock,
@@ -208,11 +213,35 @@ pub(super) struct ListenerEventCursor {
     pub last_committed_sha256: Option<String>,
 }
 
+/// The version 3 journal body. Completed nodes are not inline: `completed_count`
+/// lines of the completed-node log are committed, and `completed_chain` digests them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JournalDisk {
+    version: u32,
+    identity: Identity,
+    status: Status,
+    completed_count: usize,
+    completed_chain: String,
+    in_flight: Option<InFlightNode>,
+    snapshot: SnapshotRef,
+    error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    listener_cursor: Option<ListenerEventCursor>,
+}
+
+/// The envelope around any version's body. The body stays raw, so the checksum is
+/// verified against the shape of the version the body declares.
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct JournalEnvelope {
     checksum: String,
-    data: JournalData,
+    data: Box<serde_json::value::RawValue>,
+}
+
+#[derive(Deserialize)]
+struct JournalVersion {
+    version: u32,
 }
 
 /// Reference encoder for the envelope layout, used to prove `encode_envelope`
@@ -221,7 +250,7 @@ struct JournalEnvelope {
 #[derive(Serialize)]
 struct JournalEnvelopeRef<'a> {
     checksum: String,
-    data: &'a JournalData,
+    data: &'a JournalDisk,
 }
 
 #[derive(Default)]
@@ -249,6 +278,10 @@ pub(super) struct Journal {
     persistence_failed: bool,
     preloaded_state: Option<ExecutionState>,
     data: JournalData,
+    /// Chain digest over the committed completed-node log lines.
+    completed_chain: String,
+    /// Bytes of the completed-node log covered by the committed count.
+    completed_log_bytes: u64,
     _lock: File,
 }
 
@@ -333,7 +366,7 @@ impl Journal {
         let journal_path = directory.join("journal.json");
         let blobs_directory = directory.join("blobs");
         if options.resume {
-            let mut data = read_journal(&journal_path)?;
+            let (mut data, log) = read_journal_parts(&journal_path)?;
             let expected = Identity {
                 program_path: EncodedPath::from_path(&program_path),
                 initial_cwd: EncodedPath::from_path(&initial_cwd),
@@ -345,13 +378,9 @@ impl Journal {
                     "checkpoint belongs to a different program, directory, execution mode, or program inputs"
                 );
             }
-            if data.version != JOURNAL_VERSION && data.version != LEGACY_JOURNAL_VERSION {
-                bail!("unsupported checkpoint version {}", data.version);
-            }
-            let migrate_legacy = data.version == LEGACY_JOURNAL_VERSION;
-            if migrate_legacy {
-                data.version = JOURNAL_VERSION;
-            }
+            // Versions 1 and 2 keep completed nodes inline; this resume moves them to the log.
+            let migrate_legacy = data.version != JOURNAL_VERSION;
+            data.version = JOURNAL_VERSION;
             real_directory(&blobs_directory, "checkpoint blob", false)?;
             restrict_directory(&blobs_directory)?;
             let mut journal = Self {
@@ -363,6 +392,8 @@ impl Journal {
                 persistence_failed: false,
                 preloaded_state: None,
                 data,
+                completed_chain: log.chain.clone(),
+                completed_log_bytes: log.bytes,
                 _lock: lock,
             };
             // Fail at open on truncated, missing, oversized, or corrupt state blobs.
@@ -374,8 +405,10 @@ impl Journal {
                 journal.preloaded_state = Some(restored);
             }
             if migrate_legacy {
-                // The new optional cursor field is omitted when absent, so the
-                // old v1 checksum verifies before this atomic v2 rewrite.
+                // The log is written before the journal that counts its lines, so a
+                // crash in between leaves the inline journal valid.
+                let (lines, _) = encode_completed_log(&journal.data.completed)?;
+                atomic_write(&journal.directory, COMPLETED_LOG, "", &lines)?;
                 journal.persist()?;
             }
             Ok(journal)
@@ -421,6 +454,8 @@ impl Journal {
                 persistence_failed: false,
                 preloaded_state: None,
                 data,
+                completed_chain: chain_start(),
+                completed_log_bytes: 0,
                 _lock: lock,
             };
             journal.persist()?;
@@ -571,6 +606,8 @@ impl Journal {
         )?;
         let previous_status = self.data.status;
         let previous_completed = std::mem::take(&mut self.data.completed);
+        let previous_chain = std::mem::replace(&mut self.completed_chain, chain_start());
+        let previous_log_bytes = std::mem::replace(&mut self.completed_log_bytes, 0);
         let previous_in_flight = self.data.in_flight.take();
         let previous_snapshot = std::mem::replace(&mut self.data.snapshot, snapshot);
         let previous_error = self.data.error.take();
@@ -592,6 +629,8 @@ impl Journal {
         if let Err(error) = self.persist() {
             self.data.status = previous_status;
             self.data.completed = previous_completed;
+            self.completed_chain = previous_chain;
+            self.completed_log_bytes = previous_log_bytes;
             self.data.in_flight = previous_in_flight;
             self.data.snapshot = previous_snapshot;
             self.data.error = previous_error;
@@ -679,13 +718,25 @@ impl Journal {
                 return Err(error);
             }
         };
+        let line = serde_json::to_vec(&completed).context("encoding completed node")?;
+        let previous_chain = self.completed_chain.clone();
+        let previous_log_bytes = self.completed_log_bytes;
+        if let Err(error) = self.append_completed_line(&line) {
+            // The node ran but its record is not committed; keep the durable in-flight record.
+            self.persistence_failed = true;
+            return Err(error);
+        }
         let previous_completed_len = self.data.completed.len();
         self.data.completed.push(completed);
+        self.completed_chain = chain_step(&previous_chain, &line);
+        self.completed_log_bytes = previous_log_bytes + line.len() as u64 + 1;
         let previous_in_flight = self.data.in_flight.take();
         let previous_snapshot = std::mem::replace(&mut self.data.snapshot, snapshot);
         let previous_error = self.data.error.take();
         if let Err(error) = self.persist() {
             self.data.completed.truncate(previous_completed_len);
+            self.completed_chain = previous_chain;
+            self.completed_log_bytes = previous_log_bytes;
             self.data.in_flight = previous_in_flight;
             self.data.snapshot = previous_snapshot;
             self.data.error = previous_error;
@@ -812,10 +863,40 @@ impl Journal {
         }
     }
 
+    /// Append one completed-node line. Bytes past the committed prefix, left by an
+    /// earlier failed append, are discarded first.
+    fn append_completed_line(&mut self, line: &[u8]) -> Result<()> {
+        let mut file = open_regular(
+            &self.directory.join(COMPLETED_LOG),
+            "checkpoint completed log",
+            true,
+        )?;
+        restrict_file(&file)?;
+        file.set_len(self.completed_log_bytes)
+            .context("truncating checkpoint completed log")?;
+        file.seek(SeekFrom::Start(self.completed_log_bytes))
+            .context("seeking checkpoint completed log")?;
+        file.write_all(line)
+            .and_then(|()| file.write_all(b"\n"))
+            .and_then(|()| file.sync_data())
+            .context("appending checkpoint completed node")
+    }
+
     fn persist(&mut self) -> Result<()> {
-        // Serialize the data once. The checksum covers exactly these bytes, which
+        // Serialize the body once. The checksum covers exactly these bytes, which
         // are the ones embedded in the envelope.
-        let data = serde_json::to_vec(&self.data).context("encoding checkpoint journal")?;
+        let body = JournalDisk {
+            version: JOURNAL_VERSION,
+            identity: self.data.identity.clone(),
+            status: self.data.status,
+            completed_count: self.data.completed.len(),
+            completed_chain: self.completed_chain.clone(),
+            in_flight: self.data.in_flight.clone(),
+            snapshot: self.data.snapshot.clone(),
+            error: self.data.error.clone(),
+            listener_cursor: self.data.listener_cursor.clone(),
+        };
+        let data = serde_json::to_vec(&body).context("encoding checkpoint journal")?;
         let bytes = encode_envelope(&hex_digest(&data), &data);
         if bytes.len() > 16 * 1024 * 1024 {
             bail!("checkpoint journal exceeds 16 MiB");
@@ -952,6 +1033,16 @@ pub fn read_repair_state(directory: &Path) -> Result<RepairState> {
 }
 
 fn read_journal(path: &Path) -> Result<JournalData> {
+    read_journal_parts(path).map(|(data, _)| data)
+}
+
+/// The completed-node log that a journal's committed count and chain describe.
+struct CompletedLog {
+    chain: String,
+    bytes: u64,
+}
+
+fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
     let file = open_regular(path, "checkpoint journal", false)?;
     restrict_file(&file)?;
     let mut bytes = Vec::new();
@@ -961,14 +1052,47 @@ fn read_journal(path: &Path) -> Result<JournalData> {
     }
     let envelope: JournalEnvelope =
         serde_json::from_slice(&bytes).context("checkpoint journal is malformed or corrupt")?;
-    if serialized_digest(&envelope.data)? != envelope.checksum {
-        bail!("checkpoint journal checksum mismatch");
-    }
-    if envelope.data.version != JOURNAL_VERSION && envelope.data.version != LEGACY_JOURNAL_VERSION {
-        bail!("unsupported checkpoint version {}", envelope.data.version);
-    }
-    if let Some(cursor) = &envelope.data.listener_cursor {
-        if !envelope.data.identity.mode.starts_with("service:") {
+    let body = envelope.data.get();
+    let version = serde_json::from_str::<JournalVersion>(body)
+        .context("checkpoint journal is malformed or corrupt")?
+        .version;
+    let (data, log) = if version == LEGACY_JOURNAL_VERSION || version == INLINE_JOURNAL_VERSION {
+        let data: JournalData =
+            serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
+        if serialized_digest(&data)? != envelope.checksum {
+            bail!("checkpoint journal checksum mismatch");
+        }
+        let (_, log) = encode_completed_log(&data.completed)?;
+        (data, log)
+    } else if version == JOURNAL_VERSION {
+        let disk: JournalDisk =
+            serde_json::from_str(body).context("checkpoint journal is malformed or corrupt")?;
+        if serialized_digest(&disk)? != envelope.checksum {
+            bail!("checkpoint journal checksum mismatch");
+        }
+        let directory = path
+            .parent()
+            .context("checkpoint journal has no directory")?;
+        let (completed, log) =
+            read_completed_log(directory, disk.completed_count, &disk.completed_chain)?;
+        let data = JournalData {
+            version: disk.version,
+            identity: disk.identity,
+            status: disk.status,
+            completed,
+            in_flight: disk.in_flight,
+            snapshot: disk.snapshot,
+            error: disk.error,
+            listener_cursor: disk.listener_cursor,
+        };
+        (data, log)
+    } else {
+        bail!(
+            "unsupported checkpoint version {version}; this build reads versions {LEGACY_JOURNAL_VERSION} through {JOURNAL_VERSION}"
+        );
+    };
+    if let Some(cursor) = &data.listener_cursor {
+        if !data.identity.mode.starts_with("service:") {
             bail!("checkpoint journal contains a listener cursor outside service mode");
         }
         let pending = cursor.pending_sha256.as_deref();
@@ -993,23 +1117,104 @@ fn read_journal(path: &Path) -> Result<JournalData> {
             bail!("checkpoint journal contains an invalid listener event cursor");
         }
     }
-    if envelope
-        .data
-        .completed
-        .iter()
-        .any(|node| node.start >= node.end)
-    {
+    if data.completed.iter().any(|node| node.start >= node.end) {
         bail!("checkpoint journal contains an invalid completed node range");
     }
-    if envelope
-        .data
+    if data
         .in_flight
         .as_ref()
         .is_some_and(|node| node.start >= node.end)
     {
         bail!("checkpoint journal contains an invalid in-flight node range");
     }
-    Ok(envelope.data)
+    Ok((data, log))
+}
+
+const COMPLETED_CHAIN_START: &str = "execute-checkpoint-completed-log/v3";
+
+fn chain_start() -> String {
+    hex_digest(COMPLETED_CHAIN_START.as_bytes())
+}
+
+/// Each line extends the chain with its own bytes, so a log that disagrees with
+/// the journal's count or digest is detected.
+fn chain_step(previous: &str, line: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(previous.as_bytes());
+    digest.update(b"\n");
+    digest.update(line);
+    format!("{:x}", digest.finalize())
+}
+
+/// Encode completed nodes as the log lines a fresh log would hold.
+fn encode_completed_log(nodes: &[CompletedNode]) -> Result<(Vec<u8>, CompletedLog)> {
+    let mut bytes = Vec::new();
+    let mut chain = chain_start();
+    for node in nodes {
+        let line = serde_json::to_vec(node).context("encoding completed node")?;
+        chain = chain_step(&chain, &line);
+        bytes.extend_from_slice(&line);
+        bytes.push(b'\n');
+    }
+    let length = bytes.len() as u64;
+    Ok((
+        bytes,
+        CompletedLog {
+            chain,
+            bytes: length,
+        },
+    ))
+}
+
+/// Read the committed prefix of the log. Lines past `count` are uncommitted and
+/// ignored; the prefix must match the journal's chain exactly.
+fn read_completed_log(
+    directory: &Path,
+    count: usize,
+    expected_chain: &str,
+) -> Result<(Vec<CompletedNode>, CompletedLog)> {
+    if count == 0 {
+        if expected_chain != chain_start() {
+            bail!("checkpoint completed log checksum mismatch");
+        }
+        return Ok((
+            Vec::new(),
+            CompletedLog {
+                chain: chain_start(),
+                bytes: 0,
+            },
+        ));
+    }
+    let file = open_regular(
+        &directory.join(COMPLETED_LOG),
+        "checkpoint completed log",
+        false,
+    )
+    .context("checkpoint completed log is missing")?;
+    let mut reader = io::BufReader::new(file);
+    let mut nodes = Vec::with_capacity(count.min(4096));
+    let mut chain = chain_start();
+    let mut bytes = 0u64;
+    let mut line = Vec::new();
+    for _ in 0..count {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 || line.last() != Some(&b'\n') {
+            bail!("checkpoint completed log is shorter than its journal records");
+        }
+        line.pop();
+        chain = chain_step(&chain, &line);
+        let node: CompletedNode = serde_json::from_slice(&line)
+            .context("checkpoint completed log is malformed or corrupt")?;
+        if node.start >= node.end {
+            bail!("checkpoint completed log contains an invalid completed node range");
+        }
+        nodes.push(node);
+        bytes += line.len() as u64 + 1;
+    }
+    if chain != expected_chain {
+        bail!("checkpoint completed log checksum mismatch");
+    }
+    Ok((nodes, CompletedLog { chain, bytes }))
 }
 
 fn store_snapshot(
@@ -1397,10 +1602,12 @@ mod tests {
     #[test]
     fn checkpoint_v1_without_cursor_migrates_to_v2_on_explicit_resume() {
         let (_temp, mut options, cwd) = setup();
-        let mut journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
-        journal.data.version = LEGACY_JOURNAL_VERSION;
-        journal.persist().unwrap();
+        let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
         drop(journal);
+        let journal_path = options.directory.join("journal.json");
+        let mut legacy = read_journal(&journal_path).unwrap();
+        legacy.version = LEGACY_JOURNAL_VERSION;
+        write_inline_journal(&journal_path, &legacy);
 
         options.resume = true;
         let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
@@ -1408,6 +1615,65 @@ mod tests {
         assert_eq!(journal.listener_event_cursor(), None);
         let persisted = read_journal(&options.directory.join("journal.json")).unwrap();
         assert_eq!(persisted.version, JOURNAL_VERSION);
+    }
+
+    #[test]
+    fn inline_v2_completed_nodes_migrate_to_the_log_and_survive_reopen() {
+        let (_temp, mut options, cwd) = setup();
+        let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        drop(journal);
+        let journal_path = options.directory.join("journal.json");
+        let mut inline = read_journal(&journal_path).unwrap();
+        inline.version = INLINE_JOURNAL_VERSION;
+        inline.completed = vec![
+            CompletedNode {
+                fingerprint: "first".to_owned(),
+                start: 0,
+                end: 1,
+                cwd_before: cwd.clone(),
+            },
+            CompletedNode {
+                fingerprint: "second".to_owned(),
+                start: 1,
+                end: 2,
+                cwd_before: cwd.clone(),
+            },
+        ];
+        write_inline_journal(&journal_path, &inline);
+
+        options.resume = true;
+        let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        assert_eq!(journal.completed_nodes().len(), 2);
+        assert_eq!(journal.completed_nodes()[1].fingerprint, "second");
+        drop(journal);
+        let log = fs::read_to_string(options.directory.join(COMPLETED_LOG)).unwrap();
+        assert_eq!(log.lines().count(), 2);
+        let reopened = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        assert_eq!(reopened.completed_nodes().len(), 2);
+        assert_eq!(reopened.completed_nodes()[0].fingerprint, "first");
+    }
+
+    #[test]
+    fn unknown_checkpoint_version_is_refused_with_a_version_message() {
+        let (_temp, mut options, cwd) = setup();
+        let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        drop(journal);
+        let journal_path = options.directory.join("journal.json");
+        let mut future = read_journal(&journal_path).unwrap();
+        future.version = JOURNAL_VERSION + 1;
+        write_inline_journal(&journal_path, &future);
+
+        options.resume = true;
+        let error = Journal::open(&options, &cwd, "finite", 1024)
+            .err()
+            .expect("a future checkpoint version must be refused");
+        assert!(
+            error.to_string().contains(&format!(
+                "unsupported checkpoint version {}",
+                JOURNAL_VERSION + 1
+            )),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -1453,17 +1719,24 @@ mod tests {
         assert_eq!(resumed.restored_state().unwrap(), completed_state);
     }
 
+    /// Write a version 1 or 2 journal with completed nodes inline.
+    fn write_inline_journal(path: &Path, data: &JournalData) {
+        let body = serde_json::to_vec(data).unwrap();
+        fs::write(path, encode_envelope(&hex_digest(&body), &body)).unwrap();
+    }
+
     #[test]
     fn persisted_checksum_matches_canonical_journal_data() {
         let (_temp, options, cwd) = setup();
         let _journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
         let bytes = fs::read(options.directory.join("journal.json")).unwrap();
         let envelope: JournalEnvelope = serde_json::from_slice(&bytes).unwrap();
-        let canonical = serde_json::to_vec(&envelope.data).unwrap();
+        let body: JournalDisk = serde_json::from_str(envelope.data.get()).unwrap();
+        let canonical = serde_json::to_vec(&body).unwrap();
         assert_eq!(envelope.checksum, hex_digest(&canonical));
         let reference = serde_json::to_vec(&JournalEnvelopeRef {
             checksum: envelope.checksum.clone(),
-            data: &envelope.data,
+            data: &body,
         })
         .unwrap();
         assert_eq!(bytes, reference, "envelope layout must not change");

@@ -61,11 +61,15 @@ pub fn summarize(directory: &Path) -> Result<Value> {
         .get("status")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("checkpoint journal has no status"))?;
-    let completed_nodes = data
-        .get("completed")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .ok_or_else(|| anyhow!("checkpoint journal has no completed list"))?;
+    // Version 3 journals count completed nodes; older journals list them inline.
+    let completed_nodes = match data.get("completed").and_then(Value::as_array) {
+        Some(nodes) => nodes.len(),
+        None => data
+            .get("completed_count")
+            .and_then(Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or_else(|| anyhow!("checkpoint journal has no completed count"))?,
+    };
     let in_flight = data
         .get("in_flight")
         .filter(|value| !value.is_null())

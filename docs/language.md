@@ -429,6 +429,45 @@ becomes the reported error and retains the earlier failure as context. A transfe
 inside finally overrides a pending ordinary failure or transfer. These rules do
 not make external effects reversible or exactly once.
 
+### Explicit exit and failure
+
+`exit with status <value>` ends the finite run with that process status. The
+value is an integer literal from 0 to 255 or an integer binding; a binding is
+range-checked when it runs, before the exit takes effect. `fail with message
+<value> [and status <value>]` writes the text to stderr followed by a newline
+and ends the run with status 1 unless `and status` gives 1 to 255. The message
+is a quoted text literal or text binding.
+
+```text
+accept partial as boolean with default true
+run printf with message "processed 10 records, 2 skipped"
+if partial is true
+  exit with status 2
+fail with message "no records" and status 3
+```
+
+Both steps are valid in finite programs, including inside `if`, `repeat`, `for`
+and `while` bodies, `try` blocks and reusable programs. Inside a reusable
+program they end the whole run, not just that call. Services and listeners
+reject them during validation, because a handler failure is per record and an
+exit would end the whole service. Imported program modules reject them as well,
+since a module runs as one applet inside its caller.
+
+An exit is not an error. It is not caught by `catch`, but it runs every pending
+`finally` block, like `return`. Owned background jobs are cancelled and reaped,
+not awaited, so an exit satisfies the rule that every job is observed. The
+pipeline output at that point is still delivered. `fail` writes its message
+after that output. `exit with status 0` exits zero. Cancellation, a timeout and a
+failing cleanup step still take precedence over an exit that is pending in a
+`finally` block. The trace records an `exit` or `fail` event, and `explain`
+shows the step.
+
+Checkpointed programs (`--checkpoint`) accept an exit or fail only as a
+top-level statement. A completed exit is a terminal checkpoint node: `resume`
+does not run any later step and reports the same status, re-derived from the
+restored bindings. Validation rejects nested exits in a checkpointed program
+before any effect.
+
 ### Structured JSON
 
 ```text

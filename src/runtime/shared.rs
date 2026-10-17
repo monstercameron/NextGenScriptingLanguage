@@ -16,6 +16,50 @@ fn check_value(value: &Value, names: &BTreeSet<String>) -> Result<()> {
     }
     Ok(())
 }
+/// Exit status operands are literal integers in range or integer bindings.
+/// The range check happens before any effect; a binding is type-checked here.
+fn validate_exit_operand(
+    value: &Value,
+    flow: &control::FlowState,
+    minimum: i64,
+    what: &str,
+) -> Result<()> {
+    check_value(value, &flow.names)?;
+    match value {
+        Value::Integer(status) if (minimum..=255).contains(status) => Ok(()),
+        Value::Integer(status) => {
+            bail!("{what} must be between {minimum} and 255, received {status}")
+        }
+        Value::Reference(name) => match flow.types.get(name) {
+            Some(crate::ast::InputType::Integer) => Ok(()),
+            Some(kind) => bail!("{what} {name:?} must be integer, received {kind}"),
+            None => bail!("{what} {name:?} has no known integer type"),
+        },
+        _ => bail!("{what} must be an integer literal or integer binding"),
+    }
+}
+/// Short, source-like rendering of an exit or fail operand for `explain`.
+fn describe_operand(value: &Value) -> String {
+    match value {
+        Value::Integer(number) => number.to_string(),
+        Value::String(text) => format!("{text:?}"),
+        Value::Reference(name) => format!("binding {name}"),
+        other => format!("{other:?}"),
+    }
+}
+/// Fail messages are quoted text or text bindings; nothing is coerced.
+fn validate_text_operand(value: &Value, flow: &control::FlowState, what: &str) -> Result<()> {
+    check_value(value, &flow.names)?;
+    match value {
+        Value::String(_) => Ok(()),
+        Value::Reference(name) => match flow.types.get(name) {
+            Some(crate::ast::InputType::Text) => Ok(()),
+            Some(kind) => bail!("{what} {name:?} must be text, received {kind}"),
+            None => bail!("{what} {name:?} has no known text type"),
+        },
+        _ => bail!("{what} must be a quoted text literal or text binding"),
+    }
+}
 fn check_path(value: &Value, names: &BTreeSet<String>) -> Result<()> {
     check_value(value, names)?;
     if matches!(value, Value::String(path) if path.contains('\0')) {
@@ -126,6 +170,18 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
             bail!("native background jobs are supported only in finite programs; services and listeners have separate lifetimes");
         }
         let (setup, body) = service::split_program(program);
+        // A handler failure is recoverable per record, and exit would end the
+        // whole service. Keep those lifetimes separate: fail the program here.
+        if let Some(step) = body
+            .steps
+            .iter()
+            .find(|step| matches!(step.kind, StepKind::Exit { .. } | StepKind::Fail { .. }))
+        {
+            bail!(
+                "line {}: exit and fail end a finite run; service and listener handlers cannot use them",
+                step.line
+            );
+        }
         if let Some(step) = body
             .steps
             .iter()
@@ -335,6 +391,16 @@ pub(crate) fn validate_live(
 ) -> Result<()> {
     if has_job_operations(program) {
         bail!("live programs do not support finite-scope background job handles");
+    }
+    if let Some(step) = program
+        .steps
+        .iter()
+        .find(|step| matches!(step.kind, StepKind::Exit { .. } | StepKind::Fail { .. }))
+    {
+        bail!(
+            "line {}: live programs keep their state between runs and cannot exit or fail",
+            step.line
+        );
     }
     validate_inputs(program, registry, names, has_data, true)
 }
@@ -790,6 +856,21 @@ fn validate_range(
                             "line {}: return is only valid inside a reusable program",
                             step.line
                         );
+                    }
+                    flow.jobs.clear();
+                    flow.unresolved_jobs.clear();
+                }
+                StepKind::Exit { status } => {
+                    validate_exit_operand(status, flow, 0, "exit status")?;
+                    // Exit cancels and reaps every owned job, so it satisfies the
+                    // explicit await-or-cancel rule just as return does.
+                    flow.jobs.clear();
+                    flow.unresolved_jobs.clear();
+                }
+                StepKind::Fail { message, status } => {
+                    validate_text_operand(message, flow, "fail message")?;
+                    if let Some(status) = status {
+                        validate_exit_operand(status, flow, 1, "fail status")?;
                     }
                     flow.jobs.clear();
                     flow.unresolved_jobs.clear();
@@ -1446,6 +1527,17 @@ pub fn explain_with_inputs(
                 "finish the current iteration and continue the innermost loop".into()
             }
             StepKind::Return => "return from the current reusable program".into(),
+            StepKind::Exit { status } => format!(
+                "exit with status {}; run pending finally blocks, cancel and reap jobs, keep output",
+                describe_operand(status)
+            ),
+            StepKind::Fail { message, status } => format!(
+                "fail with message {} and status {}; write message to stderr, run finally blocks, cancel and reap jobs",
+                describe_operand(message),
+                status
+                    .as_ref()
+                    .map_or_else(|| "1".to_owned(), describe_operand)
+            ),
             StepKind::Try { catch, finally, .. } => format!(
                 "try body; catch={}; finally={}; cleanup is bounded",
                 catch.is_some(),

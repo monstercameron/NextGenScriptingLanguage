@@ -170,6 +170,60 @@ pub struct RunResult {
     pub executions: Vec<execution_result::ExecutionRecord>,
     pub dropped_executions: usize,
     pub dropped_stages: usize,
+    /// Set when the program ended with `exit with status` or `fail with message`.
+    /// `output` still holds the pipeline output at that point.
+    pub exit: Option<ProgramExit>,
+}
+
+/// An explicit, deliberate end of a finite run. It is not an error: output is
+/// still delivered, and the CLI uses `status` as the process exit code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramExit {
+    /// 0-255. `exit with status` may use 0; `fail with message` uses 1-255.
+    pub status: u8,
+    /// Text written to stderr followed by a newline; set only by `fail`.
+    pub message: Option<String>,
+}
+
+/// Evaluate an exit or fail step's operands without any effect. Shared by live
+/// execution and checkpoint restore, which re-derives a completed exit.
+fn program_exit(
+    kind: &StepKind,
+    bindings: &BTreeMap<String, Value>,
+) -> Result<Option<ProgramExit>> {
+    fn status(value: &Value, bindings: &BTreeMap<String, Value>, minimum: i64) -> Result<u8> {
+        let Value::Integer(code) = resolve(value, bindings)? else {
+            bail!("exit status must be an integer");
+        };
+        u8::try_from(code)
+            .ok()
+            .filter(|code| i64::from(*code) >= minimum)
+            .with_context(|| {
+                format!("exit status must be between {minimum} and 255, received {code}")
+            })
+    }
+    Ok(match kind {
+        StepKind::Exit { status: code } => Some(ProgramExit {
+            status: status(code, bindings, 0)?,
+            message: None,
+        }),
+        StepKind::Fail {
+            message,
+            status: code,
+        } => {
+            let Value::String(text) = resolve(message, bindings)? else {
+                bail!("fail message must be text");
+            };
+            Some(ProgramExit {
+                status: match code {
+                    Some(code) => status(code, bindings, 1)?,
+                    None => 1,
+                },
+                message: Some(text),
+            })
+        }
+        _ => None,
+    })
 }
 
 /// Result of one explicit applet invocation through its declared backend.
@@ -2954,6 +3008,8 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::BreakLoop
             | StepKind::ContinueLoop
             | StepKind::Return
+            | StepKind::Exit { .. }
+            | StepKind::Fail { .. }
             | StepKind::Try { .. }
             | StepKind::Catch { .. }
             | StepKind::Finally
@@ -3340,6 +3396,7 @@ fn run_finite_state(
         executions: Vec::new(),
         dropped_executions: 0,
         dropped_stages: 0,
+        exit: None,
     };
     let mut execution_history = execution_result::ExecutionHistory::default();
     let mut index = 0;
@@ -3353,6 +3410,21 @@ fn run_finite_state(
             cwd = state.cwd;
             bindings = state.bindings;
             data = Input::Bytes(state.output);
+            // A completed exit or fail is a terminal node: nothing after it ran,
+            // so the restored run ends here with the same status. Its operands
+            // are already in the restored bindings.
+            let terminal = journal
+                .completed_nodes()
+                .last()
+                .filter(|node| node.end == node.start + 1)
+                .and_then(|node| program.steps.get(node.start))
+                .map(|step| program_exit(&step.kind, &bindings))
+                .transpose()?
+                .flatten();
+            if let Some(exit) = terminal {
+                control_state.set_exit(exit);
+                index = program.steps.len();
+            }
             if index == program.steps.len() {
                 journal.discard_removed_tail()?;
             }
@@ -3611,6 +3683,36 @@ fn run_finite_state(
                         target.end_marker,
                         control_flow::UnwindTo::new(target.call_depth, target.loop_depth),
                     )?;
+                    match apply_control_action(action, control_context!())? {
+                        AppliedControl::Continue => {}
+                        AppliedControl::Jump(target) => jump_to = Some(target),
+                        AppliedControl::Rethrow(error) => control_rethrow = Some(error),
+                    }
+                }
+                StepKind::Exit { .. } | StepKind::Fail { .. } => {
+                    let exit = program_exit(&step.kind, &bindings)
+                        .with_context(|| format!("line {}", step.line))?
+                        .context("exit handler received a non-exit step")?;
+                    lazy_event(options.trace, signals, || match &exit.message {
+                        Some(message) => {
+                            serde_json::json!({"event":"fail","line":step.line,"status":exit.status,"message_bytes":message.len()})
+                        }
+                        None => {
+                            serde_json::json!({"event":"exit","line":step.line,"status":exit.status})
+                        }
+                    })?;
+                    // Like return, the transfer unwinds crossed finally blocks and
+                    // call scopes. Unlike an error it is not caught, and it reaches
+                    // the end of the run instead of a loop or call boundary.
+                    let action = control_state.transfer(
+                        control_flow::TransferKind::Exit,
+                        program.steps.len(),
+                        control_flow::UnwindTo::new(0, 0),
+                    )?;
+                    // A cancelled cleanup ignores the transfer; then nothing exits.
+                    if !matches!(action, control_flow::ControlAction::Continue { .. }) {
+                        control_state.set_exit(exit);
+                    }
                     match apply_control_action(action, control_context!())? {
                         AppliedControl::Continue => {}
                         AppliedControl::Jump(target) => jump_to = Some(target),
@@ -4395,10 +4497,14 @@ fn run_finite_state(
                 }
             }
         }
+        // An exit ends the run at the program boundary. Checkpoint validation
+        // allows it only as a top-level statement, so the in-flight node is the
+        // exit step itself and completes here as the terminal node.
+        let exited = control_state.exit_pending();
         index = jump_to.unwrap_or(index + 1);
         if let Some(journal) = journal
             .as_deref_mut()
-            .filter(|_| journal_end == Some(index))
+            .filter(|_| journal_end == Some(index) || (exited && journal_end.is_some()))
         {
             journal_end = None;
             journal_uncertain = false;
@@ -4421,9 +4527,19 @@ fn run_finite_state(
             )?;
         }
     }
-    job_supervisor
-        .finish_scope(0)
-        .context("closing finite-program background job scope")?;
+    let exit = control_state.take_exit();
+    if exit.is_some() {
+        // An explicit exit owns its remaining jobs: cancel and reap them rather
+        // than requiring each handle to be awaited first.
+        job_supervisor
+            .cancel_scope(0)
+            .context("cancelling background jobs at program exit")?;
+    } else {
+        job_supervisor
+            .finish_scope(0)
+            .context("closing finite-program background job scope")?;
+    }
+    result.exit = exit;
     result.output = std::mem::replace(&mut data, Input::Empty).materialize(
         options.max_output_bytes,
         signals,

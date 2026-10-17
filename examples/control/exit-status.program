@@ -1,0 +1,6 @@
+# Exit with a chosen status after output. Partial success exits 2 with no sh -c.
+accept partial as boolean with default true
+run printf with message "processed 10 records, 2 skipped"
+if partial is true
+  exit with status 2
+run printf with message "all records processed"

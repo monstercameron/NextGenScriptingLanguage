@@ -214,6 +214,9 @@ impl BrowserSession {
                 StepKind::BreakLoop | StepKind::ContinueLoop | StepKind::Return => {
                     Some("loop transfers and reusable-program return")
                 }
+                StepKind::Exit { .. } | StepKind::Fail { .. } => {
+                    Some("exit with status and fail with message")
+                }
                 StepKind::Try { .. }
                 | StepKind::Catch { .. }
                 | StepKind::Finally
@@ -303,6 +306,8 @@ impl BrowserSession {
                     | StepKind::Catch { .. }
                     | StepKind::Finally
                     | StepKind::EndTry
+                    | StepKind::Exit { .. }
+                    | StepKind::Fail { .. }
                     | StepKind::TakeJsonDynamic { .. } => {
                         bail!("control flow feature was not validated for browser execution");
                     }

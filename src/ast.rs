@@ -172,6 +172,18 @@ pub enum StepKind {
     ContinueLoop,
     /// Exit the current reusable program call after unwinding its local scopes.
     Return,
+    /// End the whole finite run with an explicit status (0-255) after running
+    /// pending finally blocks and reaping owned jobs. Not catchable.
+    Exit {
+        status: Value,
+    },
+    /// Write the message to stderr and end the whole finite run. The status
+    /// defaults to 1 and must be 1-255.
+    Fail {
+        message: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<Value>,
+    },
     /// Structured error and cleanup block. Offsets are relative to this header;
     /// catch/finally point at their marker steps and end points past EndTry.
     Try {

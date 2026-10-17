@@ -1325,6 +1325,22 @@ fn parse_module_source(source: &str, source_path: &Path) -> Result<Program> {
             "program module source may contain definitions only; top-level executable statements are not allowed"
         );
     }
+    // A module runs as one applet inside its caller. An exit there would have
+    // to cross that applet boundary, so it is rejected before any effect.
+    for definition in program.definitions.values() {
+        if let Some(step) = definition.steps.iter().find(|step| {
+            matches!(
+                step.kind,
+                crate::ast::StepKind::Exit { .. } | crate::ast::StepKind::Fail { .. }
+            )
+        }) {
+            bail!(
+                "line {}: program module {} cannot exit or fail; return output from the module instead",
+                step.line,
+                source_path.display()
+            );
+        }
+    }
     Ok(program)
 }
 

@@ -1,0 +1,5 @@
+# Stop with a message on stderr and status 1 (or the status given by "and status").
+accept source as text with default "missing.txt"
+if source is "missing.txt"
+  fail with message "source file not provided" and status 3
+run printf with message "source accepted\n"

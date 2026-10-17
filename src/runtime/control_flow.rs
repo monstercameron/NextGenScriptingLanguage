@@ -1,4 +1,5 @@
 //! Runtime state for lexical loop/call exits and `try` cleanup.
+use super::ProgramExit;
 use anyhow::{anyhow, bail, Context, Error, Result};
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,9 @@ pub(crate) enum TransferKind {
     Break,
     Continue,
     Return,
+    /// Unwinds to the end of the finite run. The pending exit record supplies
+    /// the status. Unlike an error, it is never caught.
+    Exit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,9 +133,24 @@ pub(crate) struct RuntimeState {
     tries: Vec<TryFrame>,
     cleanup_deadline: Option<Instant>,
     cleanup_steps: usize,
+    /// The exit that ends the run once its unwinding reaches the end. Errors
+    /// and non-exit transfers that replace it clear this record.
+    exit: Option<ProgramExit>,
 }
 
 impl RuntimeState {
+    pub(crate) fn set_exit(&mut self, exit: ProgramExit) {
+        self.exit = Some(exit);
+    }
+
+    pub(crate) fn exit_pending(&self) -> bool {
+        self.exit.is_some()
+    }
+
+    pub(crate) fn take_exit(&mut self) -> Option<ProgramExit> {
+        self.exit.take()
+    }
+
     pub(crate) fn enter_call(&mut self, end_marker: usize) {
         self.calls.push(CallFrame {
             end_marker,
@@ -327,6 +346,11 @@ impl RuntimeState {
         target: usize,
         mut unwind: UnwindTo,
     ) -> Result<ControlAction> {
+        // A break, continue or return that replaces a pending exit (for example
+        // from finally) cancels it; the exit transfer itself keeps its record.
+        if kind != TransferKind::Exit {
+            self.exit = None;
+        }
         loop {
             let Some(frame) = self.tries.last_mut() else {
                 unwind.call_depth = unwind.call_depth.min(self.calls.len());
@@ -402,6 +426,8 @@ impl RuntimeState {
     }
 
     pub(crate) fn fail(&mut self, error: Error, mut cancellation: bool) -> Result<ControlAction> {
+        // An error or cancellation supersedes a pending explicit exit.
+        self.exit = None;
         let mut error = error;
         let mut drop_bindings = Vec::new();
         loop {

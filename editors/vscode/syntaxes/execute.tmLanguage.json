@@ -333,6 +333,14 @@
               "name": "keyword.control.transfer.execute"
             }
           }
+        },
+        {
+          "match": "^[ \\t]*(exit|fail)(?=[ \\t]+with[ \\t]+(?:status|message)\\b)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.transfer.execute"
+            }
+          }
         }
       ]
     },

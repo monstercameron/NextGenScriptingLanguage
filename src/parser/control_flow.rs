@@ -1,10 +1,10 @@
 //! Source syntax for lexical transfers and structured error/cleanup blocks.
 use super::{
-    ensure_end, parse_binding_identifier, parse_statement_in_scope, BlockLine, StatementScope,
-    Token, MAX_CONTROL_DEPTH,
+    ensure_end, parse_binding_identifier, parse_statement_in_scope, parse_value, word_is,
+    BlockLine, StatementScope, Token, MAX_CONTROL_DEPTH,
 };
-use crate::ast::{Step, StepKind};
-use anyhow::{anyhow, bail, Result};
+use crate::ast::{Step, StepKind, Value};
+use anyhow::{anyhow, bail, Context, Result};
 
 pub(super) fn parse_transfer(
     tokens: &[Token<'_>],
@@ -33,9 +33,61 @@ pub(super) fn parse_transfer(
             }
             Some(StepKind::Return)
         }
+        Some(Token::Word("exit"))
+            if word_is(tokens.get(1), "with") && word_is(tokens.get(2), "status") =>
+        {
+            Some(parse_exit(tokens).map_err(|error| anyhow!("line {line}: {error:#}"))?)
+        }
+        Some(Token::Word("fail"))
+            if word_is(tokens.get(1), "with") && word_is(tokens.get(2), "message") =>
+        {
+            Some(parse_fail(tokens).map_err(|error| anyhow!("line {line}: {error:#}"))?)
+        }
         _ => None,
     };
     Ok(kind)
+}
+
+/// `exit with status <integer literal or integer binding>`.
+fn parse_exit(tokens: &[Token<'_>]) -> Result<StepKind> {
+    let mut cursor = 3;
+    let status = parse_value(tokens, &mut cursor).context("exit status")?;
+    ensure_end(tokens, cursor)?;
+    check_status_operand(&status, 0, "exit status")?;
+    Ok(StepKind::Exit { status })
+}
+
+/// `fail with message <text> [and status <integer>]`; the status defaults to 1.
+fn parse_fail(tokens: &[Token<'_>]) -> Result<StepKind> {
+    let mut cursor = 3;
+    let message = parse_value(tokens, &mut cursor).context("fail message")?;
+    if !matches!(message, Value::String(_) | Value::Reference(_)) {
+        bail!("fail message must be a quoted text literal or text binding");
+    }
+    let status = if word_is(tokens.get(cursor), "and") && word_is(tokens.get(cursor + 1), "status")
+    {
+        cursor += 2;
+        let status = parse_value(tokens, &mut cursor).context("fail status")?;
+        check_status_operand(&status, 1, "fail status")?;
+        Some(status)
+    } else {
+        None
+    };
+    ensure_end(tokens, cursor)?;
+    Ok(StepKind::Fail { message, status })
+}
+
+/// Literal statuses are range-checked before any effect; references are
+/// type-checked against the binding table during validation.
+fn check_status_operand(value: &Value, minimum: i64, what: &str) -> Result<()> {
+    match value {
+        Value::Integer(status) if (minimum..=255).contains(status) => Ok(()),
+        Value::Integer(status) => {
+            bail!("{what} must be between {minimum} and 255, received {status}")
+        }
+        Value::Reference(_) => Ok(()),
+        _ => bail!("{what} must be an integer literal or integer binding"),
+    }
 }
 
 pub(super) fn parse_try<'arena, 'source: 'arena>(

@@ -194,6 +194,13 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
                     references(source, &mut needed);
                 }
                 crate::ast::StepKind::ParseJson { .. } => {}
+                crate::ast::StepKind::Exit { status } => references(status, &mut needed),
+                crate::ast::StepKind::Fail { message, status } => {
+                    references(message, &mut needed);
+                    if let Some(status) = status {
+                        references(status, &mut needed);
+                    }
+                }
                 crate::ast::StepKind::ReadStdin { .. }
                 | crate::ast::StepKind::ReadCallInput { .. }
                 | crate::ast::StepKind::EndCall

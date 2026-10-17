@@ -363,6 +363,8 @@ test('try clauses, lexical transfers, and bounded task groups match current sour
   for (const transfer of ['break', 'continue', 'return']) {
     scope(transfer, transfer, 'keyword.control.transfer');
   }
+  scope('exit with status 2', 'exit', 'keyword.control.transfer');
+  scope('fail with message "x"', 'fail', 'keyword.control.transfer');
   const header = 'parallel at most 3 as results';
   scope(header, 'parallel', 'keyword.control.task-group');
   scope(header, 'at most', 'keyword.other.task-group');

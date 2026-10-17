@@ -329,6 +329,28 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
             "checkpointed and resumed programs do not support non-serializable background job handles"
         );
     }
+    // Checkpoints record one node per top-level statement. An exit nested in a
+    // compound node, a try block or a reusable call would end partway through
+    // a node that resume cannot re-enter, so only top-level exits are supported.
+    let mut nested = 0usize;
+    for step in &program.steps {
+        match &step.kind {
+            StepKind::If { .. }
+            | StepKind::CallProgram { .. }
+            | StepKind::Loop { .. }
+            | StepKind::Try { .. } => nested += 1,
+            StepKind::EndIf | StepKind::EndCall | StepKind::EndLoop { .. } | StepKind::EndTry => {
+                nested = nested.saturating_sub(1)
+            }
+            StepKind::Exit { .. } | StepKind::Fail { .. } if nested > 0 => {
+                bail!(
+                    "line {}: checkpointed programs can exit or fail only at top level; move it out of if, loop, try and reusable-program bodies",
+                    step.line
+                );
+            }
+            _ => {}
+        }
+    }
     let mut depth = 0;
     for step in &program.steps {
         match &step.kind {
@@ -397,7 +419,15 @@ pub(super) fn prepare_with_modules(
         }
         start = end;
     }
-    if journal.is_finished() && start != program.steps.len() {
+    // A completed top-level exit or fail is terminal: the steps after it never
+    // run, so the chain legitimately stops before the end of the program.
+    let terminal = journal.completed_nodes().last().is_some_and(|node| {
+        node.end == node.start + 1
+            && program.steps.get(node.start).is_some_and(|step| {
+                matches!(step.kind, StepKind::Exit { .. } | StepKind::Fail { .. })
+            })
+    });
+    if journal.is_finished() && !terminal && start != program.steps.len() {
         bail!("completed checkpoint program changed: use a fresh checkpoint for additional steps");
     }
     journal.ensure_retry_allowed()

@@ -416,3 +416,136 @@ mod pidfd_observer_tests {
         assert!(child.wait().expect("waiting for child").success());
     }
 }
+
+/// PID 1 mode for `run --init`. The supervisor starts the workflow as a worker
+/// process and never runs runtime children itself, so reaping unrelated exits
+/// with `waitpid(-1)` here cannot consume a status the runtime is waiting for.
+/// It forwards SIGINT, SIGTERM and SIGHUP to the worker, reaps orphans, and
+/// returns the worker's status: its exit code, or 128 plus the signal number.
+pub fn supervise_init(worker_arguments: &[String]) -> Result<i32> {
+    let executable = std::env::current_exe().context("locating the running interpreter")?;
+    #[cfg(target_os = "linux")]
+    {
+        // Orphans of the worker re-parent to this process even when it is not
+        // PID 1. Kernels older than 3.4 refuse the request; orphans then go to
+        // PID 1 as usual.
+        // SAFETY: prctl with these arguments only sets this process's flag.
+        unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
+    }
+    // Flags record delivery; the wake-up pipe interrupts the wait loop. Both are
+    // needed because the pipe carries no signal number.
+    let forwarded = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP]
+        .into_iter()
+        .map(|signal| {
+            let flag = Arc::new(AtomicBool::new(false));
+            signal_hook::flag::register(signal, Arc::clone(&flag))
+                .context("registering supervisor signal forwarding")?;
+            Ok((signal, flag))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let (wake_read, wake_write) =
+        std::os::unix::net::UnixStream::pair().context("creating supervisor wake-up pipe")?;
+    wake_read
+        .set_nonblocking(true)
+        .context("configuring supervisor wake-up pipe")?;
+    wake_write
+        .set_nonblocking(true)
+        .context("configuring supervisor wake-up pipe")?;
+    for signal in [libc::SIGCHLD, libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+        let writer = wake_write
+            .try_clone()
+            .context("configuring supervisor wake-up pipe")?;
+        signal_hook::low_level::pipe::register(signal, writer)
+            .context("registering supervisor wake-up")?;
+    }
+
+    let worker = Command::new(&executable)
+        .args(worker_arguments)
+        .spawn()
+        .context("starting the workflow worker")?;
+    let worker_pid = worker.id() as libc::pid_t;
+    let mut worker_status = None;
+    loop {
+        drain_wake_pipe(&wake_read);
+        if worker_status.is_none() {
+            for (signal, flag) in &forwarded {
+                if flag.swap(false, Ordering::SeqCst) {
+                    // SAFETY: the worker is not reaped yet, so its pid still names it.
+                    unsafe { libc::kill(worker_pid, *signal) };
+                }
+            }
+        }
+        loop {
+            let mut status: libc::c_int = 0;
+            // SAFETY: the status pointer refers to a valid local.
+            let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+            if pid == 0 {
+                break;
+            }
+            if pid < 0 {
+                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                break;
+            }
+            if pid == worker_pid {
+                worker_status = Some(status);
+            }
+        }
+        if let Some(status) = worker_status {
+            return Ok(supervised_exit_code(status));
+        }
+        wait_for_supervisor_wakeup(&wake_read)?;
+    }
+}
+
+fn drain_wake_pipe(pipe: &std::os::unix::net::UnixStream) {
+    let mut buffer = [0u8; 64];
+    let mut reader = pipe;
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+    }
+}
+
+fn wait_for_supervisor_wakeup(pipe: &std::os::unix::net::UnixStream) -> Result<()> {
+    let mut descriptor = libc::pollfd {
+        fd: pipe.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid descriptor entry is passed with its length.
+    let ready = unsafe { libc::poll(&mut descriptor, 1, -1) };
+    if ready < 0 {
+        let error = std::io::Error::last_os_error();
+        // A signal wakes the wait; the caller re-checks its flags.
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error).context("waiting for the supervised workflow");
+        }
+    }
+    Ok(())
+}
+
+fn supervised_exit_code(status: libc::c_int) -> i32 {
+    if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else if libc::WIFSIGNALED(status) {
+        128 + libc::WTERMSIG(status)
+    } else {
+        1
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod supervisor_tests {
+    use super::*;
+
+    #[test]
+    fn signal_and_exit_statuses_map_to_shell_codes() {
+        // Status words for exit 5 and for death by SIGTERM (15).
+        assert_eq!(supervised_exit_code(5 << 8), 5);
+        assert_eq!(supervised_exit_code(15), 128 + 15);
+    }
+}

@@ -101,6 +101,18 @@ fn execute() -> Result<()> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    if let Some(worker_arguments) = init_worker_arguments(&arguments)? {
+        #[cfg(unix)]
+        {
+            let code = runtime::supervise_init(&worker_arguments)?;
+            std::process::exit(code);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = worker_arguments;
+            bail!("--init is available only on Unix");
+        }
+    }
     if arguments
         .first()
         .is_some_and(|argument| argument == "__remote_resolve")
@@ -203,6 +215,47 @@ fn execute() -> Result<()> {
         return Ok(());
     }
     execute_workflow(args, None)
+}
+
+/// `--init` before `--` runs the workflow under the PID 1 supervisor. Returns
+/// the worker's arguments, with the flag removed, or `None` when it is absent.
+fn init_worker_arguments(arguments: &[String]) -> Result<Option<Vec<String>>> {
+    let literal_start = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(arguments.len());
+    if !arguments[..literal_start]
+        .iter()
+        .any(|argument| argument == "--init")
+    {
+        return Ok(None);
+    }
+    if arguments.first().is_some_and(|first| {
+        matches!(
+            first.as_str(),
+            "check"
+                | "explain"
+                | "inspect"
+                | "resume"
+                | "applets"
+                | "modules"
+                | "service"
+                | "lsp"
+                | "live"
+                | "model"
+                | "__remote_resolve"
+        )
+    }) {
+        bail!("--init applies only to `run`");
+    }
+    Ok(Some(
+        arguments
+            .iter()
+            .enumerate()
+            .filter(|(index, argument)| *index >= literal_start || argument.as_str() != "--init")
+            .map(|(_, argument)| argument.clone())
+            .collect(),
+    ))
 }
 
 fn remote_resolve(arguments: &[String]) -> Result<()> {
@@ -1770,7 +1823,7 @@ fn default_manifest_dir() -> PathBuf {
 }
 
 fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory or one legacy JSON file containing applet manifests\n  --manifest-catalog FILE Explicit packed catalog; mutually exclusive with --manifest-dir\n  --capability-policy FILE Enforce a strict, versioned applet policy (check/explain/inspect/run/resume/live serve)\n  --data-flow-policy FILE Enforce origin and persistence data-flow grants\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --once                  Run one activation of a calendar-triggered handler and exit (run only)\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --missed-ticks POLICY   Trigger backlog policy: skip, coalesce, or catch-up (run/resume)\n  --max-catch-up N         Bound catch-up runs to 1..64 (requires catch-up)\n  --calendar-dedup MODE   Calendar fold policy: instant or local (run/resume)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory or one legacy JSON file containing applet manifests\n  --manifest-catalog FILE Explicit packed catalog; mutually exclusive with --manifest-dir\n  --capability-policy FILE Enforce a strict, versioned applet policy (check/explain/inspect/run/resume/live serve)\n  --data-flow-policy FILE Enforce origin and persistence data-flow grants\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --once                  Run one activation of a calendar-triggered handler and exit (run only)\n  --init                  Run as PID 1: supervise the worker, reap orphans, forward SIGINT/SIGTERM/SIGHUP (run only, Unix)\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --missed-ticks POLICY   Trigger backlog policy: skip, coalesce, or catch-up (run/resume)\n  --max-catch-up N         Bound catch-up runs to 1..64 (requires catch-up)\n  --calendar-dedup MODE   Calendar fold policy: instant or local (run/resume)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --max-record-bytes N     Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "battery status is sent as a low-urgency notice",
+      "fakes": {
+        "omarchy-battery-status": {"stdout": "Battery 80% (discharging)\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "battery status fails and prints nothing",
+      "fakes": {
+        "omarchy-battery-status": {"status": 1},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "notification fails, its status is the exit",
+      "fakes": {
+        "omarchy-battery-status": {"stdout": "Battery 45%\n", "status": 0},
+        "omarchy-notification-send": {"status": 2}
+      }
+    }
+  ]
+}

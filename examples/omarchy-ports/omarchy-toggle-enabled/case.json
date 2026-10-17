@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "flag file exists, exits zero",
+      "argv": ["screensaver-off"],
+      "files": {
+        "home/.local/state/omarchy/toggles/screensaver-off": ""
+      }
+    },
+    {
+      "name": "flag file missing, exits one",
+      "argv": ["screensaver-off"]
+    },
+    {
+      "name": "no flag name, exits one",
+      "argv": []
+    },
+    {
+      "name": "empty flag name, exits one",
+      "argv": [""],
+      "files": {
+        "home/.local/state/omarchy/toggles/screensaver-off": ""
+      }
+    },
+    {
+      "name": "other flag present, requested flag missing",
+      "argv": ["screensaver-off"],
+      "files": {
+        "home/.local/state/omarchy/toggles/suspend-off": ""
+      }
+    }
+  ]
+}

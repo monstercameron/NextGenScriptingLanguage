@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "terminal directory is passed to Files",
+      "fakes": {
+        "omarchy-cmd-terminal-cwd": {"stdout": "/home/cam/project\n", "status": 0},
+        "setsid": {"status": 0}
+      }
+    },
+    {
+      "name": "no terminal directory still launches Files",
+      "fakes": {
+        "omarchy-cmd-terminal-cwd": {"status": 1},
+        "setsid": {"status": 0}
+      }
+    },
+    {
+      "name": "launch failure is the exit status",
+      "fakes": {
+        "omarchy-cmd-terminal-cwd": {"stdout": "/home/cam\n", "status": 0},
+        "setsid": {"status": 2}
+      }
+    }
+  ]
+}

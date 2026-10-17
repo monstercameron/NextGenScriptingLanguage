@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "every named package is installed",
+      "argv": ["git", "curl"],
+      "fakes": {
+        "pacman": {"body": "if [ \"$3\" = missing ]; then exit 1; fi"}
+      }
+    },
+    {
+      "name": "first missing package stops the check",
+      "argv": ["git", "missing", "curl"],
+      "fakes": {
+        "pacman": {"body": "if [ \"$3\" = missing ]; then exit 1; fi"}
+      }
+    },
+    {
+      "name": "no package names exits zero without asking pacman",
+      "argv": [],
+      "fakes": {
+        "pacman": {"body": "if [ \"$3\" = missing ]; then exit 1; fi"}
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "user-installed theme wins",
+      "argv": ["tokyo-night"],
+      "env": {"OMARCHY_PATH": "/opt/omarchy"},
+      "files": {
+        "home/.config/omarchy/themes/tokyo-night/colors.toml": "x\n"
+      }
+    },
+    {
+      "name": "falls back to the installed theme directory",
+      "argv": ["catppuccin"],
+      "env": {"OMARCHY_PATH": "/opt/omarchy"}
+    },
+    {
+      "name": "no theme name prints usage and exits one",
+      "argv": [],
+      "env": {"OMARCHY_PATH": "/opt/omarchy"}
+    },
+    {
+      "name": "empty theme name prints usage and exits one",
+      "argv": [""],
+      "env": {"OMARCHY_PATH": "/opt/omarchy"}
+    },
+    {
+      "name": "unset OMARCHY_PATH gives a path with no prefix",
+      "argv": ["catppuccin"]
+    }
+  ]
+}

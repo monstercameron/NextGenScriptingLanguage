@@ -1,0 +1,7 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-update-user-notify (see original.sh). A compatibility wrapper: it
+# hands every argument to omarchy-migrate-notify and exits with that status.
+execute 1
+accept arguments as list of text from arguments
+run "omarchy-migrate-notify" with arguments arguments and keep status as migrated
+exit with status migrated

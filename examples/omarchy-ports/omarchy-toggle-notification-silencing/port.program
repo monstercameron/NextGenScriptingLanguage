@@ -1,0 +1,6 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-toggle-notification-silencing (see original.sh).
+execute 1
+run "omarchy-shell" with arguments ["notifications", "toggleDnd"] as state and discard stderr and keep status as dnd_status
+run "omarchy-shell" with arguments ["-q", "omarchy.indicators", "refresh"] and keep status as refresh_status
+exit with status refresh_status

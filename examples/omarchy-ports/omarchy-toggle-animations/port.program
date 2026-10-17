@@ -1,0 +1,25 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-toggle-animations (see original.sh).
+# The flag records animations being off, so on and off swap on the way through.
+execute 1
+accept arguments as list of text from arguments
+accept requested as text from argument 1 with default ""
+run text.default_if_empty with text requested and default "toggle" as mode
+if mode is "toggle"
+  run "omarchy-hyprland-toggle" with arguments ["no-animations", "toggle"] and keep status as set_status
+otherwise if mode is "on"
+  run "omarchy-hyprland-toggle" with arguments ["no-animations", "off"] and keep status as set_status
+otherwise if mode is "off"
+  run "omarchy-hyprland-toggle" with arguments ["no-animations", "on"] and keep status as set_status
+otherwise
+  fail with message "Usage: omarchy-toggle-animations [toggle|on|off]" and status 1
+if run "omarchy-hyprland-toggle-enabled" with arguments ["no-animations"] succeeds
+  run "omarchy-i18n" with arguments ["animations.disabled"] as label and keep status as label_status
+  run text.trim_final_lf with text label as message
+  run "omarchy-notification-send" with arguments ["-g", "󰗘", message] and keep status as sent
+  exit with status sent
+otherwise
+  run "omarchy-i18n" with arguments ["animations.enabled"] as label and keep status as label_status
+  run text.trim_final_lf with text label as message
+  run "omarchy-notification-send" with arguments ["-g", "󰗘", message] and keep status as sent
+  exit with status sent

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "toggle, flag now off, notice says disabled",
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Screensaver disabled\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "toggle, flag now on, notice says enabled",
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 1},
+        "omarchy-i18n": {"stdout": "Screensaver enabled\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "toggle and notification both fail",
+      "fakes": {
+        "omarchy-toggle": {"status": 3},
+        "omarchy-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Screensaver disabled\n", "status": 0},
+        "omarchy-notification-send": {"status": 4}
+      }
+    },
+    {
+      "name": "translation fails and prints nothing",
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"status": 1},
+        "omarchy-notification-send": {"status": 0}
+      }
+    }
+  ]
+}

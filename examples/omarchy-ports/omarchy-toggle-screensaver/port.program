@@ -1,0 +1,15 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-toggle-screensaver (see original.sh). Toggles the screensaver
+# flag, then reports the new state with a translated notification.
+execute 1
+run "omarchy-toggle" with arguments ["screensaver-off"] and keep status as toggled
+if run "omarchy-toggle-enabled" with arguments ["screensaver-off"] succeeds
+  run "omarchy-i18n" with arguments ["screensaver.disabled"] as label and keep status as label_status
+  run text.trim_final_lf with text label as message
+  run "omarchy-notification-send" with arguments ["-g", "󱄄", message] and keep status as sent
+  exit with status sent
+otherwise
+  run "omarchy-i18n" with arguments ["screensaver.enabled"] as label and keep status as label_status
+  run text.trim_final_lf with text label as message
+  run "omarchy-notification-send" with arguments ["-g", "󱄄", message] and keep status as sent
+  exit with status sent

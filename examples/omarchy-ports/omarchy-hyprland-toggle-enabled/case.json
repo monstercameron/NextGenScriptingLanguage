@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "Hyprland flag file exists, exits zero",
+      "argv": ["window-no-gaps"],
+      "files": {
+        "home/.local/state/omarchy/toggles/hypr/window-no-gaps.lua": ""
+      }
+    },
+    {
+      "name": "Hyprland flag file missing, exits one",
+      "argv": ["window-no-gaps"]
+    },
+    {
+      "name": "no flag name, exits one",
+      "argv": []
+    },
+    {
+      "name": "other Hyprland flag present, requested flag missing",
+      "argv": ["window-no-gaps"],
+      "files": {
+        "home/.local/state/omarchy/toggles/hypr/other.lua": ""
+      }
+    }
+  ]
+}

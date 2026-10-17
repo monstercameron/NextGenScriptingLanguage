@@ -1,0 +1,9 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-launch-nautilus-cwd (see original.sh). The original execs Files in
+# the active terminal's directory; the directory's final newline is removed first, as
+# command substitution does.
+execute 1
+run "omarchy-cmd-terminal-cwd" as cwd_raw and keep status as cwd_status
+run text.trim_final_lf with text cwd_raw as cwd
+run "setsid" with arguments ["uwsm-app", "--", "nautilus", "--new-window", cwd] and keep status as launched
+exit with status launched

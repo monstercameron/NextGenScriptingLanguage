@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "default toggles the bar and nudges the shell",
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-shell": {"status": 0}
+      }
+    },
+    {
+      "name": "on, nudge fails, its status is the exit",
+      "argv": ["on"],
+      "fakes": {
+        "omarchy-toggle": {"status": 4},
+        "omarchy-shell": {"status": 1}
+      }
+    },
+    {
+      "name": "off, nudge succeeds",
+      "argv": ["off"],
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-shell": {"status": 0}
+      }
+    },
+    {
+      "name": "empty argument means toggle",
+      "argv": [""],
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-shell": {"status": 0}
+      }
+    },
+    {
+      "name": "extra arguments are ignored",
+      "argv": ["toggle", "junk"],
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-shell": {"status": 0}
+      }
+    }
+  ]
+}

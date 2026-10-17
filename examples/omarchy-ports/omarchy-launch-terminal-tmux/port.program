@@ -1,0 +1,6 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-launch-terminal-tmux (see original.sh). The original execs the
+# terminal launcher, so the launcher's exit status is the script's exit status.
+execute 1
+run "omarchy-launch-terminal" with arguments ["bash", "-c", "tmux attach || tmux new -s Work"] and keep status as launched
+exit with status launched

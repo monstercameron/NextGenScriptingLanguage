@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "no arguments are passed through",
+      "fakes": {
+        "omarchy-migrate-notify": {"status": 0}
+      }
+    },
+    {
+      "name": "arguments with spaces reach the target unchanged",
+      "argv": ["--force", "two words"],
+      "fakes": {
+        "omarchy-migrate-notify": {"status": 0}
+      }
+    },
+    {
+      "name": "the target's status is the exit status",
+      "argv": ["x"],
+      "fakes": {
+        "omarchy-migrate-notify": {"status": 4}
+      }
+    }
+  ]
+}

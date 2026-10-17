@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "do-not-disturb toggled and indicators refreshed",
+      "fakes": {
+        "omarchy-shell": {
+          "body": "if [ \"$1\" = -q ]; then exit \"${REFRESH_STATUS:-0}\"; fi\nif [ -n \"${DND_FAIL:-}\" ]; then echo 'no shell' >&2; exit 1; fi\nprintf 'on\\n'"
+        }
+      }
+    },
+    {
+      "name": "shell not running, its stderr is discarded, refresh status is the exit",
+      "env": {"DND_FAIL": "1", "REFRESH_STATUS": "3"},
+      "fakes": {
+        "omarchy-shell": {
+          "body": "if [ \"$1\" = -q ]; then exit \"${REFRESH_STATUS:-0}\"; fi\nif [ -n \"${DND_FAIL:-}\" ]; then echo 'no shell' >&2; exit 1; fi\nprintf 'on\\n'"
+        }
+      }
+    },
+    {
+      "name": "toggle fails but refresh succeeds",
+      "env": {"DND_FAIL": "1"},
+      "fakes": {
+        "omarchy-shell": {
+          "body": "if [ \"$1\" = -q ]; then exit \"${REFRESH_STATUS:-0}\"; fi\nif [ -n \"${DND_FAIL:-}\" ]; then echo 'no shell' >&2; exit 1; fi\nprintf 'on\\n'"
+        }
+      }
+    }
+  ]
+}

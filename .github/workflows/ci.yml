@@ -59,6 +59,9 @@ jobs:
           cargo build --locked --release --bin execute --no-default-features
           python3 tools/check_binary_size.py target/release/execute tools/linux-minimal-binary-budget.json
           cargo test --locked --no-default-features --lib
+      - name: Compare Omarchy ports with their Bash originals
+        if: runner.os == 'Linux'
+        run: python3 tools/port_compare.py --binary target/release/execute
       - name: Measure Linux latency budget
         if: runner.os == 'Linux'
         run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests

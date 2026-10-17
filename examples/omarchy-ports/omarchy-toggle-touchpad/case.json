@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "default toggles the touchpad",
+      "fakes": {
+        "omarchy-toggle-input-device": {"status": 0}
+      }
+    },
+    {
+      "name": "on passes through and exits zero",
+      "argv": ["on"],
+      "fakes": {
+        "omarchy-toggle-input-device": {"status": 0}
+      }
+    },
+    {
+      "name": "off passes the device status through",
+      "argv": ["off"],
+      "fakes": {
+        "omarchy-toggle-input-device": {"status": 7}
+      }
+    },
+    {
+      "name": "empty argument means toggle",
+      "argv": [""],
+      "fakes": {
+        "omarchy-toggle-input-device": {"status": 0}
+      }
+    },
+    {
+      "name": "unknown mode is left to the device script",
+      "argv": ["bogus"],
+      "fakes": {
+        "omarchy-toggle-input-device": {"status": 2, "stdout": "device says no\n"}
+      }
+    }
+  ]
+}

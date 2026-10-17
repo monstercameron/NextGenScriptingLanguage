@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "theme sync now on, notice says enabled",
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Theme sync on\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "theme sync now off, notice says disabled",
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 1},
+        "omarchy-i18n": {"stdout": "Theme sync off\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "notification fails, script reports its status",
+      "fakes": {
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 1},
+        "omarchy-i18n": {"stdout": "Theme sync off\n", "status": 0},
+        "omarchy-notification-send": {"status": 6}
+      }
+    }
+  ]
+}

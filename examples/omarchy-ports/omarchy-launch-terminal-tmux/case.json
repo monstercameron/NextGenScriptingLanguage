@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "terminal opens and its status is the exit",
+      "fakes": {
+        "omarchy-launch-terminal": {"status": 0}
+      }
+    },
+    {
+      "name": "terminal launcher fails, its status is passed on",
+      "fakes": {
+        "omarchy-launch-terminal": {"status": 3}
+      }
+    }
+  ]
+}

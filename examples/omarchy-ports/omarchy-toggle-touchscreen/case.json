@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "default toggles the touchscreen",
+      "fakes": {
+        "omarchy-toggle-input-device": {"status": 0}
+      }
+    },
+    {
+      "name": "on passes through and exits zero",
+      "argv": ["on"],
+      "fakes": {
+        "omarchy-toggle-input-device": {"status": 0}
+      }
+    },
+    {
+      "name": "off passes the device status through",
+      "argv": ["off"],
+      "fakes": {
+        "omarchy-toggle-input-device": {"status": 5}
+      }
+    },
+    {
+      "name": "empty argument means toggle",
+      "argv": [""],
+      "fakes": {
+        "omarchy-toggle-input-device": {"status": 0}
+      }
+    }
+  ]
+}

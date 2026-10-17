@@ -1,0 +1,9 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-toggle-touchscreen (see original.sh). The original execs the
+# device toggle, so its exit status is the script's exit status.
+execute 1
+accept arguments as list of text from arguments
+accept requested as text from argument 1 with default ""
+run text.default_if_empty with text requested and default "toggle" as mode
+run "omarchy-toggle-input-device" with arguments ["touchscreen", mode] and keep status as device_status
+exit with status device_status

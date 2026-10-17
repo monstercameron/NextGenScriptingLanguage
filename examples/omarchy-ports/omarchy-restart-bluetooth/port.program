@@ -1,0 +1,8 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-restart-bluetooth (see original.sh). The script's exit status is
+# the status of its last command, the rfkill list.
+execute 1
+run "printf" with arguments ["Unblocking bluetooth...\n\n"]
+run "rfkill" with arguments ["unblock", "bluetooth"] and keep status as unblocked
+run "rfkill" with arguments ["list", "bluetooth"] and keep status as listed
+exit with status listed

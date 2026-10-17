@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "default toggles, animations now enabled",
+      "fakes": {
+        "omarchy-hyprland-toggle": {"status": 0},
+        "omarchy-hyprland-toggle-enabled": {"status": 1},
+        "omarchy-i18n": {"stdout": "Animations enabled\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "on, animations now disabled",
+      "argv": ["on"],
+      "fakes": {
+        "omarchy-hyprland-toggle": {"status": 0},
+        "omarchy-hyprland-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Animations disabled\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "off, animations now enabled",
+      "argv": ["off"],
+      "fakes": {
+        "omarchy-hyprland-toggle": {"status": 0},
+        "omarchy-hyprland-toggle-enabled": {"status": 1},
+        "omarchy-i18n": {"stdout": "Animations enabled\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "empty mode argument means toggle",
+      "argv": [""],
+      "fakes": {
+        "omarchy-hyprland-toggle": {"status": 0},
+        "omarchy-hyprland-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Animations disabled\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "extra arguments are ignored",
+      "argv": ["on", "extra"],
+      "fakes": {
+        "omarchy-hyprland-toggle": {"status": 0},
+        "omarchy-hyprland-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Animations disabled\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "unknown mode prints usage and exits 1",
+      "argv": ["bogus"],
+      "fakes": {
+        "omarchy-hyprland-toggle": {"status": 0},
+        "omarchy-hyprland-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "unused\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "hyprland flag change fails, notice still sent",
+      "argv": ["toggle"],
+      "fakes": {
+        "omarchy-hyprland-toggle": {"status": 2},
+        "omarchy-hyprland-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Animations disabled\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    }
+  ]
+}

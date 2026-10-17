@@ -1,0 +1,15 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-theme-dir (see original.sh). Prefers a user-installed theme copy.
+execute 1
+accept arguments as list of text from arguments
+accept theme_arg as text from argument 1 with default ""
+accept home_dir as text from environment "HOME" with default ""
+accept omarchy_path as text from environment "OMARCHY_PATH" with default ""
+if run "test" with arguments ["-z", theme_arg] succeeds
+  fail with message "Usage: omarchy-theme-dir <theme-name>" and status 1
+run text.concat with parts [home_dir, "/.config/omarchy/themes/", theme_arg] as user_dir
+if run "test" with arguments ["-d", user_dir] succeeds
+  run "printf" with arguments ["%s\n", user_dir]
+otherwise
+  run text.concat with parts [omarchy_path, "/themes/", theme_arg] as system_dir
+  run "printf" with arguments ["%s\n", system_dir]

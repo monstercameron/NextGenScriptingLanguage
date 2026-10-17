@@ -1,0 +1,14 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-toggle-theme-sync (see original.sh).
+execute 1
+run "omarchy-toggle" with arguments ["herdr-theme-sync"] and keep status as toggled
+if run "omarchy-toggle-enabled" with arguments ["herdr-theme-sync"] succeeds
+  run "omarchy-i18n" with arguments ["themeSync.enabled"] as label and keep status as label_status
+  run text.trim_final_lf with text label as message
+  run "omarchy-notification-send" with arguments ["-g", "󰸌", message] and keep status as sent
+  exit with status sent
+otherwise
+  run "omarchy-i18n" with arguments ["themeSync.disabled"] as label and keep status as label_status
+  run text.trim_final_lf with text label as message
+  run "omarchy-notification-send" with arguments ["-g", "󰸌", message] and keep status as sent
+  exit with status sent

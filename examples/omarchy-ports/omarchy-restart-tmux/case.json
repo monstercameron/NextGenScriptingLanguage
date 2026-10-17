@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "server running, configuration reloaded",
+      "fakes": {
+        "tmux": {"body": "if [ \"$1\" = has-session ]; then echo 'no server running' >&2; exit \"${HAS_SESSION:-0}\"; fi\nexit \"${SOURCE_STATUS:-0}\""}
+      }
+    },
+    {
+      "name": "reload fails, its status is the exit",
+      "env": {"SOURCE_STATUS": "3"},
+      "fakes": {
+        "tmux": {"body": "if [ \"$1\" = has-session ]; then echo 'no server running' >&2; exit \"${HAS_SESSION:-0}\"; fi\nexit \"${SOURCE_STATUS:-0}\""}
+      }
+    },
+    {
+      "name": "no server running, nothing reloaded",
+      "env": {"HAS_SESSION": "1"},
+      "fakes": {
+        "tmux": {"body": "if [ \"$1\" = has-session ]; then echo 'no server running' >&2; exit \"${HAS_SESSION:-0}\"; fi\nexit \"${SOURCE_STATUS:-0}\""}
+      }
+    }
+  ]
+}

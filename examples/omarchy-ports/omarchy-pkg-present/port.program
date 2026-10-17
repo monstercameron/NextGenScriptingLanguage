@@ -1,0 +1,9 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-pkg-present (see original.sh). Exit 0 only when every named package
+# is installed; the first missing one exits 1.
+execute 1
+accept packages as list of text from arguments
+for each package in packages
+  if run "pacman" with arguments ["-Q", "--", package] fails
+    exit with status 1
+exit with status 0

@@ -1,0 +1,8 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-notification-battery (see original.sh). The battery text is
+# passed as one argument, with its final newline removed as command substitution does.
+execute 1
+run "omarchy-battery-status" as battery and keep status as battery_status
+run text.trim_final_lf with text battery as message
+run "omarchy-notification-send" with arguments ["-g", "󰁹", "-u", "low", message] and keep status as sent
+exit with status sent

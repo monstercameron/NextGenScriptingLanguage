@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "theme name is title-cased",
+      "files": {
+        "home/.local/state/omarchy/current/theme.name": "tokyo-night\n"
+      }
+    },
+    {
+      "name": "no theme file prints Unknown",
+      "files": {}
+    },
+    {
+      "name": "file without a final newline",
+      "files": {
+        "home/.local/state/omarchy/current/theme.name": "catppuccin-latte"
+      }
+    },
+    {
+      "name": "empty theme file prints nothing",
+      "files": {
+        "home/.local/state/omarchy/current/theme.name": ""
+      }
+    }
+  ]
+}

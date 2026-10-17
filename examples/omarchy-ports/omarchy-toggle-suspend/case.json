@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "machine forbids suspend, script exits zero without toggling",
+      "fakes": {
+        "omarchy-sleep-disabled": {"status": 0},
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Suspend is off on this machine\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "machine forbids suspend and the notice fails, still exits zero",
+      "fakes": {
+        "omarchy-sleep-disabled": {"status": 0},
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Suspend is off on this machine\n", "status": 0},
+        "omarchy-notification-send": {"status": 5}
+      }
+    },
+    {
+      "name": "suspend now removed from menu",
+      "fakes": {
+        "omarchy-sleep-disabled": {"status": 1},
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 0},
+        "omarchy-i18n": {"stdout": "Suspend removed from menu\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    },
+    {
+      "name": "suspend now available in menu",
+      "fakes": {
+        "omarchy-sleep-disabled": {"status": 1},
+        "omarchy-toggle": {"status": 0},
+        "omarchy-toggle-enabled": {"status": 1},
+        "omarchy-i18n": {"stdout": "Suspend available in menu\n", "status": 0},
+        "omarchy-notification-send": {"status": 0}
+      }
+    }
+  ]
+}

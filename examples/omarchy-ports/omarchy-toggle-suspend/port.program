@@ -1,0 +1,19 @@
+#!/usr/bin/env -S execute --
+# Port of bin/omarchy-toggle-suspend (see original.sh).
+execute 1
+if run "omarchy-sleep-disabled" succeeds
+  run "omarchy-i18n" with arguments ["suspend.turnedOffOnMachine"] as machine_label and keep status as machine_label_status
+  run text.trim_final_lf with text machine_label as machine_message
+  run "omarchy-notification-send" with arguments ["-g", "󰒲", machine_message] and keep status as machine_sent
+  exit with status 0
+run "omarchy-toggle" with arguments ["suspend-off"] and keep status as toggled
+if run "omarchy-toggle-enabled" with arguments ["suspend-off"] succeeds
+  run "omarchy-i18n" with arguments ["suspend.removedFromMenu"] as label and keep status as label_status
+  run text.trim_final_lf with text label as message
+  run "omarchy-notification-send" with arguments ["-g", "󰒲", message] and keep status as sent
+  exit with status sent
+otherwise
+  run "omarchy-i18n" with arguments ["suspend.availableInMenu"] as label and keep status as label_status
+  run text.trim_final_lf with text label as message
+  run "omarchy-notification-send" with arguments ["-g", "󰒲", message] and keep status as sent
+  exit with status sent

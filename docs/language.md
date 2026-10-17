@@ -735,7 +735,8 @@ finite output limit when the native result is small; `checksum-stdin.program`
 uses this to checksum a binary stream. A terminal capture, save, cached call,
 checkpoint boundary, or `read from stdin as name` materializes bytes subject to
 `--max-output-bytes`. Named results require UTF-8; unnamed bytes remain exact.
-This is finite composition, not an unlimited final-output streaming mode.
+Uncaptured stdout is a separate rule, described under
+[Uncaptured stdout](#uncaptured-stdout).
 
 Finite stdin captures poll for input, observe cancellation and
 `--command-timeout-ms`, and preserve the inherited descriptor's flags. Native
@@ -744,6 +745,27 @@ nor inspection reads stdin. A completed checkpoint restores captured bytes;
 resuming an interrupted read requires `--retry-uncertain`, since consumed input
 cannot be rewound. The caller must supply appropriate replacement input when
 explicitly retrying.
+
+### Uncaptured stdout
+
+A top-level `run` from the CLI's `run` or `resume` command writes its stdout to
+the terminal as it runs when nothing consumes that stdout. Consumers are a
+binding (`as`), `keep result`, `cache`, a following `pipe to`, or any later
+statement that could read the pipeline value. Consumed output keeps the buffered
+behavior and is printed once when it is the program's final value.
+
+A `run` is treated as unconsumed when the next statement starts a fresh command
+or the program ends, because a fresh command replaces the value. Inside `if`,
+`repeat`, `for`, `while`, and `try` bodies, output is buffered unless that rule
+holds inside the body, so a block boundary never streams. Native commands inherit
+the terminal stdout. Other applets write their captured bytes after success. A
+failing step has already written any inherited output; its error goes to stderr.
+
+Only the CLI's top-level finite run streams. Library runs, program modules, TUI
+handlers, services, and listeners keep capture. Streamed output is not bounded by
+`--max-output-bytes`, because it is not captured. A checkpointed run streams the
+same way, but resume does not replay streamed output: a completed run whose final
+output streamed resumes with empty output.
 
 The syntax is distinct from `read stdin`, which still refers to a binding named
 `stdin`. Services use `listen to stdin` for UTF-8 records, managed programs use

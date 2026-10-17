@@ -1045,14 +1045,117 @@ struct GroupOutput {
     stages: Vec<execution_result::StageResult>,
 }
 
+thread_local! {
+    /// Set by the CLI around a top-level finite run. Nested runs never see it.
+    static STREAM_REQUEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Finite-program nesting on this thread; only depth zero may stream.
+    static FINITE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Set only while one native command whose stdout has no consumer runs.
+    static INHERIT_TERMINAL_STDOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run a top-level finite program so that a `run` whose stdout has no consumer
+/// writes to this process's stdout as it runs. Library callers keep capture.
+pub fn with_streamed_stdout<T>(run: impl FnOnce() -> T) -> T {
+    let previous = STREAM_REQUEST.with(|request| request.replace(true));
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STREAM_REQUEST.with(|request| request.set(self.0));
+        }
+    }
+    let _restore = Restore(previous);
+    run()
+}
+
+/// Tracks finite-program nesting for the current thread while a run is active.
+struct FiniteDepth;
+impl FiniteDepth {
+    fn enter() -> (Self, usize) {
+        let depth = FINITE_DEPTH.with(|depth| depth.replace(depth.get() + 1));
+        (Self, depth)
+    }
+}
+impl Drop for FiniteDepth {
+    fn drop(&mut self) {
+        FINITE_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+/// Scopes the inherit flag to one native command; restored even on error.
+struct InheritTerminalStdout(bool);
+impl InheritTerminalStdout {
+    fn enter(on: bool) -> Self {
+        Self(INHERIT_TERMINAL_STDOUT.with(|flag| flag.replace(on)))
+    }
+}
+impl Drop for InheritTerminalStdout {
+    fn drop(&mut self) {
+        INHERIT_TERMINAL_STDOUT.with(|flag| flag.set(self.0));
+    }
+}
+
+/// Static consumer rule for uncaptured stdout. A fresh `run` whose output can
+/// only be replaced, or that ends the program, has no consumer and may stream.
+/// Anything that could read the pipeline value (`then`, `pipe to` continuation,
+/// structured steps, enclosing block boundaries) keeps today's buffering.
+fn streams_terminal_stdout(program: &Program, index: usize) -> bool {
+    let Some(crate::ast::Step {
+        kind:
+            StepKind::Invoke {
+                call,
+                connection: Connection::Start,
+            },
+        ..
+    }) = program.steps.get(index)
+    else {
+        return false;
+    };
+    if call.cache || call.binding.is_some() || call.result_binding.is_some() {
+        return false;
+    }
+    let mut end = index + 1;
+    while pipe_at(program, end) {
+        end += 1;
+    }
+    match program.steps.get(end).map(|step| &step.kind) {
+        None => true,
+        Some(StepKind::Invoke {
+            connection: Connection::Start,
+            ..
+        })
+        | Some(StepKind::CallProgram {
+            connection: Connection::Start,
+            ..
+        }) => true,
+        Some(_) => false,
+    }
+}
+
+/// Write one streamed step's captured bytes. Native commands that inherit
+/// stdout produce no bytes here, so nothing is written twice.
+fn write_streamed_stdout(bytes: &[u8], signals: &Signals) -> Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    write_with_deadline(1, bytes, &signals.cancelled, signals.deadline)
+        .context("could not stream workflow stdout")
+}
+
 fn resolved_call_stdio(
     call: &Invocation,
     manifest: &Manifest,
     signals: &Signals,
 ) -> invocation_io::ResolvedStdio {
+    let inherit = INHERIT_TERMINAL_STDOUT.with(|flag| flag.get())
+        && manifest.execution_backend() == AppletBackend::Command;
     invocation_io::ResolvedStdio::resolve(
         manifest.stdio(),
-        invocation_io::StdioDisposition::Capture,
+        if inherit {
+            invocation_io::StdioDisposition::Inherit
+        } else {
+            invocation_io::StdioDisposition::Capture
+        },
         if signals.capture_diagnostics {
             invocation_io::StdioDisposition::Capture
         } else {
@@ -3418,6 +3521,10 @@ fn run_finite_state(
     // Nested finite module and task calls share one admission/output budget.
     // The last returning lexical run drops the slot, so repeated service
     // handlers begin with a fresh per-run budget while sharing their Signals.
+    let (_finite_depth, depth) = FiniteDepth::enter();
+    // Only the CLI's top-level run streams. Module, handler and library runs
+    // keep capturing, because their callers consume the bytes.
+    let stream_top = depth == 0 && STREAM_REQUEST.with(|request| request.get());
     let _job_run = signals.begin_job_run(options.max_output_bytes)?;
     let mut cwd = fs::canonicalize(&options.working_directory)?;
     let module_session = preload_program_modules(program, registry, signals, &cwd)?;
@@ -4223,6 +4330,7 @@ fn run_finite_state(
                         } else {
                             Input::Empty
                         };
+                        let streamed = stream_top && streams_terminal_stdout(program, index);
                         let mut calls = vec![(call, manifest, step.line)];
                         while pipe_at(program, index + 1) {
                             index += 1;
@@ -4433,6 +4541,7 @@ fn run_finite_state(
                                 )
                             }
                         } else {
+                            let _inherit = InheritTerminalStdout::enter(streamed);
                             let completed = execute_call_group(
                                 &calls,
                                 input,
@@ -4553,7 +4662,14 @@ fn run_finite_state(
                                 bindings.insert(name.clone(), record);
                             }
                         }
-                        data = Input::Bytes(bytes);
+                        if streamed {
+                            // Nothing consumes this value, so it is written now
+                            // and the pipeline value becomes empty.
+                            write_streamed_stdout(&bytes, signals)?;
+                            data = Input::Empty;
+                        } else {
+                            data = Input::Bytes(bytes);
+                        }
                     }
                 }
             }

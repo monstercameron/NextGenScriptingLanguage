@@ -797,11 +797,14 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     )?;
                 }
             } else {
-                let result = if let Some(checkpoint) = checkpoint.as_ref() {
-                    runtime::run_checkpointed(&program, &registry, &options, checkpoint)?
-                } else {
-                    runtime::run(&program, &registry, &options)?
-                };
+                // Uncaptured stdout streams to this terminal as it is produced.
+                let result = runtime::with_streamed_stdout(|| {
+                    if let Some(checkpoint) = checkpoint.as_ref() {
+                        runtime::run_checkpointed(&program, &registry, &options, checkpoint)
+                    } else {
+                        runtime::run(&program, &registry, &options)
+                    }
+                })?;
                 io::stdout()
                     .write_all(&result.output)
                     .context("could not write workflow output")?;

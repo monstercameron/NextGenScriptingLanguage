@@ -358,7 +358,8 @@ fn parallel_for_each_bounds_concurrent_direct_executables() -> Result<()> {
         "parallel for each n in [\"1\", \"2\", \"3\", \"4\", \"5\", \"6\"] at most 2 as results\n  run {} with arguments [n]\n",
         quote_path(&worker)?
     );
-    let result = run_program(&source, directory.path(), directory.path())?;
+    let manifests = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    let result = run_program(&source, &manifests, directory.path())?;
     let value: serde_json::Value = serde_json::from_slice(&result.output)?;
     assert_eq!(value["succeeded"], 6);
     assert_eq!(value["items"][3]["output_text"], "done 4\n");

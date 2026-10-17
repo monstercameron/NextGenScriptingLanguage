@@ -11,6 +11,11 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::manifest::Registry;
+#[cfg(not(target_arch = "wasm32"))]
+use anyhow::{bail, Result};
+
 #[derive(Debug)]
 pub struct WorkingDirectory {
     path: PathBuf,
@@ -179,4 +184,25 @@ fn path_of_descriptor(_fd: std::os::fd::RawFd) -> io::Result<PathBuf> {
         io::ErrorKind::Unsupported,
         "this platform cannot name an open directory",
     ))
+}
+
+/// Open a directory for the run and authorize the path it resolves to. The returned
+/// handle records that resolved path, so relative paths joined onto it name the
+/// authorized directory even if the requested path is swapped later.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn enter_directory(
+    registry: &Registry,
+    requested: &Path,
+    cwd: &Path,
+) -> Result<crate::working_dir::WorkingDirectory> {
+    let opened = crate::working_dir::WorkingDirectory::open(requested)?;
+    let resolved = opened.resolved_path()?;
+    crate::capabilities::authorize_host_path(registry, &resolved, false, cwd)?;
+    if !opened.same_directory_as(&resolved)? {
+        bail!(
+            "folder changed while it was being opened: {}",
+            resolved.display()
+        );
+    }
+    Ok(opened.authorized(resolved))
 }

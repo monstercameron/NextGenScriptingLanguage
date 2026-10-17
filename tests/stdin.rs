@@ -154,12 +154,16 @@ fn check_explain_and_inspect_never_read_a_quiet_stdin_pipe() {
 fn quiet_stdin_captures_observe_deadlines_and_signals() {
     let root = tempfile::tempdir().unwrap();
     let script = root.path().join("job.program");
+    // `ready.txt` is written just before the run's stdin read, which then blocks because
+    // nothing writes to or closes the pipe. A cancelled run waits for that marker.
     for source in [
-        "read from stdin\nthen save to \"forbidden\"\n",
-        "read from stdin\npipe to \"cat\"\nthen save to \"forbidden\"\n",
+        "run printf with message \"ready\"\nthen save to file \"ready.txt\"\nread from stdin\nthen save to \"forbidden\"\n",
+        "run printf with message \"ready\"\nthen save to file \"ready.txt\"\nread from stdin\npipe to \"cat\"\nthen save to \"forbidden\"\n",
     ] {
         fs::write(&script, source).unwrap();
         for cancel in [false, true] {
+            let ready = root.path().join("ready.txt");
+            let _ = fs::remove_file(&ready);
             let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
             command
                 .arg(&script)
@@ -172,10 +176,14 @@ fn quiet_stdin_captures_observe_deadlines_and_signals() {
             }
             let mut child = OwnedChild(command.spawn().unwrap());
             if cancel {
-                thread::sleep(Duration::from_millis(50));
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while !ready.exists() {
+                    assert!(Instant::now() < deadline, "the run never reached its stdin read");
+                    thread::sleep(Duration::from_millis(5));
+                }
                 // SAFETY: kill takes only integers. `child` was spawned just above and has not
-                // been waited on (the only call since is thread::sleep), so its pid still names
-                // that process.
+                // been waited on (the only waits since are the marker polls), so its pid still
+                // names that process.
                 assert_eq!(unsafe { libc::kill(child.0.id() as i32, libc::SIGTERM) }, 0);
             }
             child.wait();

@@ -10,6 +10,23 @@
     "protocol": { "const": "execute.explain/1" },
     "language_version": { "const": 1 },
     "program": { "type": "string" },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "name", "alias", "input", "type", "default", "description"],
+        "properties": {
+          "kind": { "enum": ["flag", "option"] },
+          "name": { "type": "string" },
+          "alias": { "type": ["string", "null"] },
+          "input": { "type": "string" },
+          "type": { "type": "string" },
+          "default": {},
+          "description": { "type": ["string", "null"] }
+        }
+      }
+    },
     "inputs": {
       "type": "array",
       "items": {

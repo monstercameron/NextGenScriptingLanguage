@@ -4,6 +4,12 @@
   "scopeName": "source.execute",
   "patterns": [
     {
+      "include": "#flag-source"
+    },
+    {
+      "include": "#flag-alias"
+    },
+    {
       "include": "#comments"
     },
     {
@@ -1576,6 +1582,21 @@
           "name": "keyword.control.program.execute"
         }
       }
+    },
+    "flag-source": {
+      "match": "\\b(from)[ \\t]+(flag|option)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.control.io.execute"
+        },
+        "2": {
+          "name": "keyword.control.flag.execute"
+        }
+      }
+    },
+    "flag-alias": {
+      "match": "\\b(alias)\\b",
+      "name": "keyword.control.flag.execute"
     }
   }
 }

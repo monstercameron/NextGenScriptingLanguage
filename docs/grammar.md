@@ -29,6 +29,8 @@ option      = "with" "default" value | "described" "as" TEXT
 choices     = "[" TEXT { "," TEXT } "]"
 source      = "environment" TEXT | "arguments" | "argument" INTEGER
             | "program" ( "directory" | "path" )
+            | "flag" TEXT [ "alias" TEXT ]          (boolean inputs only)
+            | "option" TEXT [ "alias" TEXT ]        (text or integer inputs only)
             | [ "secret" ] "prompt" TEXT
 TYPE        = "text" | "integer" | "boolean" | "list" "of" "text" | "json"
 ```
@@ -56,6 +58,8 @@ accept greeting as text described as "Who to greet"
 accept repeats as integer described as "Repeat count" with default 3
 accept mode as text one of ["light", "dark"] with default "light" described as "Theme"
 accept here as text from program directory
+accept verbose as boolean from flag "--verbose" alias "-v"
+accept output as text from option "--output" alias "-o" with default "out.txt"
 ```
 
 `one of` applies only to `text` inputs. Its choices are nonempty, unique, NUL-free

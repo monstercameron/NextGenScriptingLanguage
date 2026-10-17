@@ -114,26 +114,48 @@ fn poll_timeout_ms(deadline: Instant, now: Instant) -> libc::c_int {
     milliseconds.min(MAX_WAIT_MS) as libc::c_int
 }
 
-/// Best-effort final diagnostics must not block shutdown on a full trace pipe.
+/// Final diagnostics, written as the process exits. The whole message is written: partial
+/// writes are retried, and a full or nonblocking descriptor is waited on rather than
+/// abandoned, so a slow reader cannot cut the message short or drop it. The write does not
+/// change the descriptor's flags, which another worker may rely on. The exit status is
+/// already non-zero, so a failed write leaves nothing else to report.
 pub fn write_diagnostic(bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    // Final diagnostics are best effort, including when another worker owns
-    // stderr. They must not undo that worker's nonblocking descriptor flags.
-    let _write_lock = match WRITES.try_lock() {
-        Ok(guard) => guard,
-        Err(TryLockError::Poisoned(error)) => error.into_inner(),
-        Err(TryLockError::WouldBlock) => return,
-    };
-    if let Ok(_guard) = NonblockingFd::new(libc::STDERR_FILENO) {
-        unsafe {
+    let _write_lock = WRITES.lock().unwrap_or_else(|error| error.into_inner());
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let count = unsafe {
             libc::write(
                 libc::STDERR_FILENO,
-                bytes.as_ptr().cast(),
-                bytes.len().min(4096),
-            );
+                bytes[offset..].as_ptr().cast(),
+                bytes.len() - offset,
+            )
+        };
+        if count < 0 {
+            match io::Error::last_os_error().kind() {
+                io::ErrorKind::Interrupted => {}
+                io::ErrorKind::WouldBlock => wait_until_writable(libc::STDERR_FILENO),
+                _ => return,
+            }
+        } else if count == 0 {
+            return;
+        } else {
+            offset += count as usize;
         }
+    }
+}
+
+/// Blocks until `fd` can accept output.
+fn wait_until_writable(fd: RawFd) {
+    let mut descriptor = libc::pollfd {
+        fd,
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    unsafe {
+        libc::poll(&mut descriptor, 1, -1);
     }
 }
 

@@ -24,8 +24,8 @@
 //! are not containment guarantees. Enforcement is the capability policy.
 
 use crate::ast::{
-    Connection, Invocation, LoopKind, Program, RedirectTarget, ReusableProgram, Step, StepKind,
-    Value,
+    Connection, InputDeclaration, InputSource, Invocation, LoopKind, Program, RedirectTarget,
+    ReusableProgram, Step, StepKind, Value,
 };
 use crate::manifest::{Builtin, Registry};
 use crate::privilege::is_privileged_invocation;
@@ -137,6 +137,28 @@ impl Row {
     }
 }
 
+/// One declared flag or option: the command-line spelling an agent must use, and the
+/// input it sets. Positional inputs are not listed here.
+fn flag_entry(input: &InputDeclaration) -> Option<Json> {
+    let (kind, name, alias) = match &input.source {
+        Some(InputSource::Flag { name, alias }) => ("flag", name, alias),
+        Some(InputSource::Option { name, alias }) => ("option", name, alias),
+        _ => return None,
+    };
+    Some(json!({
+        "kind": kind,
+        "name": name,
+        "alias": alias,
+        "input": input.name,
+        "type": input.kind.to_string(),
+        "default": input
+            .default
+            .as_ref()
+            .and_then(|value| crate::structured::to_json(value).ok()),
+        "description": input.description,
+    }))
+}
+
 /// Build the explain object for a parsed program. `program_path` is shown as
 /// given. The caller validates the program first.
 pub fn explain_json(program: &Program, registry: &Registry, program_path: &str) -> Result<Json> {
@@ -157,6 +179,7 @@ pub fn explain_json(program: &Program, registry: &Registry, program_path: &str) 
     walker.steps(&program.steps, None);
     let mut plan = summary_object(program_path, &walker.rows);
     plan["inputs"] = program.inputs.iter().map(input_summary).collect();
+    plan["flags"] = program.inputs.iter().filter_map(flag_entry).collect();
     Ok(plan)
 }
 

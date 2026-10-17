@@ -175,3 +175,21 @@ fn a_program_without_flags_keeps_its_arguments_positional() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output).trim_end(), "-x");
 }
+
+#[test]
+fn explain_lists_each_flag_and_option_for_callers() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = run(directory.path(), "explain", TOOL, &["--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let flags = plan["flags"].as_array().unwrap();
+    assert_eq!(flags.len(), 3);
+    assert_eq!(flags[0]["kind"], "flag");
+    assert_eq!(flags[0]["name"], "--verbose");
+    assert_eq!(flags[0]["alias"], "-v");
+    assert_eq!(flags[0]["input"], "verbose");
+    assert_eq!(flags[1]["kind"], "option");
+    assert_eq!(flags[1]["default"], "out.txt");
+    assert_eq!(flags[1]["description"], "Where to write");
+    assert_eq!(flags[2]["alias"], Value::Null);
+}

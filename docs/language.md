@@ -1141,12 +1141,47 @@ prompt.
 
 A secret answer is never printed or recorded. `inspect` reports `value_withheld`
 instead of the value, and a run's record keeps a `withheld` marker in place of it. A
-checkpoint records a keyed HMAC of the answer under the per-user key, not the answer.
+checkpoint records a keyed HMAC of the answer under the per-user key, not the answer,
+and `--checkpoint` is refused for a run with a secret prompt input.
 A replay of a run with a withheld answer is refused, because the answer is needed
 again. A secret prompt must be `text` and cannot declare `one of`, since a choice
 error would quote the answer. The answer is still on the command line when given
 with `--input`, as any `--input` value is, so unattended use should prefer
 `--answers`.
+
+### Flags and options
+
+An input can be set from the command line after `--`, by a named flag or option
+instead of by position:
+
+```text
+accept verbose as boolean from flag "--verbose" alias "-v" described as "Print progress"
+accept output as text from option "--output" alias "-o" with default "out.txt"
+accept count as integer from option "--count"
+```
+
+A `flag` is a `boolean`: it is `true` when present and `false` when absent, unless it
+has a default. It takes no value. An `option` is `text` or `integer`, and takes its
+value as the next argument or as `--name=VALUE`. Its `alias` is one dash and one letter
+or digit. An option without a default must be given.
+
+```text
+execute tool.program -- --verbose --output=report.txt --count 3
+```
+
+Arguments are split before positional inputs are bound. A flag or option that the
+program does not declare is refused before any step runs, and the error lists the
+declared spellings. A flag or option given twice, a value given to a flag, or an
+option without its value is refused the same way. An undeclared argument that starts
+with `--` is an error. An undeclared single-dash argument stays positional, so negative
+numbers still work. A program with no flags or options keeps every argument positional.
+
+Names must start with `--` and use lowercase letters, digits and hyphens. The spellings
+`--help` and `-h` belong to the generated help. `--help` after `--` prints it for a
+program that declares flags or options, even though arguments after `--` are normally
+literal. `-h` does the same only for programs that declare flags. `inspect` reports each
+flag with its source kind, name and alias. `explain --json` lists the flags in its
+`flags` array, with the input each one sets, its type, its default and its description.
 
 ### Agent interface discovery
 

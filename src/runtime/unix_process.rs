@@ -554,3 +554,9 @@ mod supervisor_tests {
 pub fn interrupt_exit_code() -> Option<i32> {
     crate::platform::cancel_exit_code()
 }
+
+/// Record the signal that interrupted a run, so `main` can exit with 128 plus it.
+/// Intended for handlers that only perform atomic stores.
+pub fn record_interrupt(signal: i32) {
+    crate::platform::record_cancel_signal(signal);
+}

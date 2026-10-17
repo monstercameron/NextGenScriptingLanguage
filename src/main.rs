@@ -63,9 +63,20 @@ fn register_cancellation_signal(
     let signal = signal_hook::consts::SIGTERM;
     #[cfg(not(windows))]
     let signal = signal_hook::consts::SIGINT;
-    signal_hook::flag::register(signal, cancelled)
-        .map(SignalRegistration)
-        .context("registering graph cancellation handler")
+    // An interrupt is reported as SIGINT on every platform (Ctrl-C: 130).
+    #[cfg(windows)]
+    let reported = signal_hook::consts::SIGINT;
+    #[cfg(not(windows))]
+    let reported = signal;
+    // SAFETY: the action only performs atomic stores, which are async-signal-safe.
+    unsafe {
+        signal_hook::low_level::register(signal, move || {
+            runtime::record_interrupt(reported);
+            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        })
+    }
+    .map(SignalRegistration)
+    .context("registering graph cancellation handler")
 }
 
 fn main() {

@@ -212,8 +212,11 @@ fn forwarded_run(arguments: &[String], context: &mut flow::agent::daemon::RunCon
     }
 }
 
-/// Whether a run may take the terminal. The check is textual and conservative: a program
-/// whose source cannot be read, or that mentions either form, is declined.
+/// Whether a run may take the terminal: `interactively`, `hand over`, or a prompt input
+/// (`from prompt`). A forked daemon child is not in the terminal's foreground process
+/// group, so a terminal read there would get SIGTTIN. The check is textual, with spacing
+/// normalized, and conservative: a program whose source cannot be read is declined, and so
+/// is one that mentions a form even inside a string.
 fn program_takes_terminal(arguments: &[String]) -> bool {
     let Ok(Some(args)) = parse_args(arguments.to_vec()) else {
         return true;
@@ -221,8 +224,14 @@ fn program_takes_terminal(arguments: &[String]) -> bool {
     let Ok(source) = fs::read_to_string(&args.file) else {
         return true;
     };
-    let source = source.to_lowercase();
-    source.contains("interactively") || source.contains("hand over")
+    let normalized = source
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    ["interactively", "hand over", "from prompt"]
+        .iter()
+        .any(|form| normalized.contains(form))
 }
 
 fn execute() -> Result<()> {

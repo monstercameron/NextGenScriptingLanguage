@@ -11,6 +11,14 @@
 //!
 //! Every client path checks the socket directory and the socket before it connects, and
 //! checks the peer's uid after it connects.
+//!
+//! The accept stall: the parent reads each request on its accepting thread, with a
+//! 2 s timeout (`IO_TIMEOUT`). A client that connects and sends nothing therefore holds
+//! the accept loop for up to 2 s before its connection is dropped, and other clients wait
+//! in the listen queue meanwhile. The parent must stay single-threaded because it forks,
+//! and fork in a multithreaded process is unsafe, so the read cannot move to a thread.
+//! Only processes of the same user can connect, so the stall is a delay a user can cause
+//! to themselves, not a denial of service across users.
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
@@ -620,11 +628,36 @@ mod imp {
         }
     }
 
+    /// The resource limits a run inherits from its client. A run must have all of them.
+    const LIMIT_NAMES: [&str; 6] = ["nofile", "nproc", "as", "cpu", "fsize", "core"];
+
+    /// The `setrlimit` resource for one of `LIMIT_NAMES`.
+    fn limit_resource(name: &str) -> Option<libc::c_int> {
+        Some(match name {
+            "nofile" => libc::RLIMIT_NOFILE as _,
+            "nproc" => libc::RLIMIT_NPROC as _,
+            "as" => libc::RLIMIT_AS as _,
+            "cpu" => libc::RLIMIT_CPU as _,
+            "fsize" => libc::RLIMIT_FSIZE as _,
+            "core" => libc::RLIMIT_CORE as _,
+            _ => return None,
+        })
+    }
+
+    /// One client limit: its soft and hard values, as `getrlimit` reports them.
+    struct Limit {
+        name: &'static str,
+        soft: u64,
+        hard: u64,
+    }
+
     /// The run request, after validation.
     struct RunRequest {
         argv: Vec<String>,
         cwd: String,
         env: Vec<(String, String)>,
+        umask: u32,
+        limits: Vec<Limit>,
     }
 
     impl RunRequest {
@@ -657,8 +690,60 @@ mod imp {
                     _ => return Err("env entries must be name and value strings".to_owned()),
                 }
             }
-            Ok(Self { argv, cwd, env })
+            let umask = request["umask"]
+                .as_u64()
+                .and_then(|mask| u32::try_from(mask).ok())
+                .filter(|mask| *mask <= 0o777)
+                .ok_or("umask must be a number from 0 to 0777")?;
+            let object = request["limits"]
+                .as_object()
+                .ok_or("limits must be an object")?;
+            let mut limits = Vec::with_capacity(LIMIT_NAMES.len());
+            for name in LIMIT_NAMES {
+                let pair = object
+                    .get(name)
+                    .and_then(Value::as_array)
+                    .filter(|pair| pair.len() == 2)
+                    .ok_or("each limit must be a [soft, hard] pair")?;
+                let (Some(soft), Some(hard)) = (pair[0].as_u64(), pair[1].as_u64()) else {
+                    return Err(format!("the {name} limit must hold two numbers"));
+                };
+                limits.push(Limit { name, soft, hard });
+            }
+            Ok(Self {
+                argv,
+                cwd,
+                env,
+                umask,
+                limits,
+            })
         }
+    }
+
+    /// Apply the client's umask and limits in the child. Any failure is returned as the
+    /// reason to decline, because a run under different limits is not the same run.
+    fn apply_inherited_settings(request: &RunRequest) -> std::result::Result<(), String> {
+        // SAFETY: umask has no failure mode, and the child is single-threaded.
+        unsafe {
+            libc::umask(request.umask as _);
+        }
+        for limit in &request.limits {
+            let resource = limit_resource(limit.name)
+                .ok_or_else(|| format!("unknown limit {}", limit.name))?;
+            let value = libc::rlimit {
+                rlim_cur: limit.soft as _,
+                rlim_max: limit.hard as _,
+            };
+            // SAFETY: setrlimit reads value, which lives for the call.
+            if unsafe { libc::setrlimit(resource as _, &value) } != 0 {
+                return Err(format!(
+                    "cannot apply the client's {} limit: {}",
+                    limit.name,
+                    io::Error::last_os_error()
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn strings(value: &Value) -> Option<Vec<String>> {
@@ -734,6 +819,11 @@ mod imp {
             std::env::set_var(name, value);
         }
         let mut context = RunContext { connection };
+        if let Err(reason) = apply_inherited_settings(&request) {
+            // Declined before any output: the client runs the program under its own settings.
+            context.decline(&reason);
+            std::process::exit(0);
+        }
         let status = (run)(&request.argv, &mut context);
         let _ = io::stdout().flush();
         let _ = io::stderr().flush();
@@ -888,11 +978,11 @@ mod imp {
             return;
         }
         // SAFETY: header points at a complete control message inside the buffer.
-        let (level, kind, length) = unsafe {
+        let (level, kind, length): (libc::c_int, libc::c_int, usize) = unsafe {
             (
                 (*header).cmsg_level,
                 (*header).cmsg_type,
-                (*header).cmsg_len as usize,
+                (*header).cmsg_len as _,
             )
         };
         if level != libc::SOL_SOCKET || kind != libc::SCM_RIGHTS {
@@ -1013,6 +1103,38 @@ mod imp {
         }
     }
 
+    /// This process's umask. Reading it sets a temporary mask and restores the old one, which
+    /// is safe because the client is single-threaded here.
+    fn client_umask() -> u32 {
+        // SAFETY: umask has no failure mode; the client is single-threaded.
+        unsafe {
+            let previous = libc::umask(0);
+            libc::umask(previous);
+            previous as _
+        }
+    }
+
+    /// This process's soft and hard limits for each of `LIMIT_NAMES`.
+    fn client_limits() -> std::result::Result<serde_json::Map<String, Value>, String> {
+        let mut limits = serde_json::Map::new();
+        for name in LIMIT_NAMES {
+            let resource = limit_resource(name).ok_or_else(|| format!("unknown limit {name}"))?;
+            let mut value = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: getrlimit writes into value, which lives for the call.
+            if unsafe { libc::getrlimit(resource as _, &mut value) } != 0 {
+                return Err(format!(
+                    "could not read the {name} limit ({}); running here",
+                    io::Error::last_os_error()
+                ));
+            }
+            limits.insert(name.to_owned(), json!([value.rlim_cur, value.rlim_max]));
+        }
+        Ok(limits)
+    }
+
     /// Send a `run` request and relay the daemon's events until the run ends.
     pub(super) fn forward(arguments: &[String], socket: &Path) -> Forwarding {
         let environment = match environment_for_daemon() {
@@ -1029,6 +1151,11 @@ mod imp {
                     note: Some("the working directory is not valid UTF-8; running here".to_owned()),
                 }
             }
+        };
+        let umask = client_umask();
+        let limits = match client_limits() {
+            Ok(limits) => limits,
+            Err(note) => return Forwarding::Cold { note: Some(note) },
         };
         let mut stream = match connect_trusted(socket) {
             Ok(stream) => stream,
@@ -1062,6 +1189,8 @@ mod imp {
             "argv": arguments,
             "cwd": cwd,
             "env": environment,
+            "umask": umask,
+            "limits": limits,
         });
         let mut line = header.to_string().into_bytes();
         line.push(b'\n');

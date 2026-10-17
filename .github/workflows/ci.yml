@@ -53,6 +53,9 @@ jobs:
         run: |
           cargo build --locked --release --bin execute
           python3 tools/check_binary_size.py target/release/execute tools/linux-binary-budget.json
+      - name: Measure Linux latency budget
+        if: runner.os == 'Linux'
+        run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests
       - run: make unix-smoke
       - run: make proof-smoke
       - run: npm run package

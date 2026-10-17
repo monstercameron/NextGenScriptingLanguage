@@ -1,0 +1,5 @@
+{
+  "one_line_median_ms": null,
+  "ten_step_median_ms": null,
+  "note": "Set each budget to about 150% of the median the first Linux CI run prints for it. Until then the step reports the timings without enforcing them."
+}

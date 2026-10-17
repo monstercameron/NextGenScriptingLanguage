@@ -215,6 +215,9 @@ struct JournalEnvelope {
     data: JournalData,
 }
 
+/// Reference encoder for the envelope layout, used to prove `encode_envelope`
+/// writes identical bytes.
+#[cfg(test)]
 #[derive(Serialize)]
 struct JournalEnvelopeRef<'a> {
     checksum: String,
@@ -810,11 +813,10 @@ impl Journal {
     }
 
     fn persist(&mut self) -> Result<()> {
-        let envelope = JournalEnvelopeRef {
-            checksum: serialized_digest(&self.data).context("encoding checkpoint journal")?,
-            data: &self.data,
-        };
-        let bytes = serde_json::to_vec(&envelope).context("encoding checkpoint envelope")?;
+        // Serialize the data once. The checksum covers exactly these bytes, which
+        // are the ones embedded in the envelope.
+        let data = serde_json::to_vec(&self.data).context("encoding checkpoint journal")?;
+        let bytes = encode_envelope(&hex_digest(&data), &data);
         if bytes.len() > 16 * 1024 * 1024 {
             bail!("checkpoint journal exceeds 16 MiB");
         }
@@ -828,6 +830,19 @@ impl Journal {
             }
         }
     }
+}
+
+/// Assemble `{"checksum":…,"data":…}` exactly as `JournalEnvelopeRef` serializes
+/// it, around data that is already encoded. The checksum is lowercase hex, so it
+/// needs no JSON escaping.
+fn encode_envelope(checksum: &str, data: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(checksum.len() + data.len() + 32);
+    bytes.extend_from_slice(br#"{"checksum":""#);
+    bytes.extend_from_slice(checksum.as_bytes());
+    bytes.extend_from_slice(br#"","data":"#);
+    bytes.extend_from_slice(data);
+    bytes.push(b'}');
+    bytes
 }
 
 fn real_directory(path: &Path, label: &str, create: bool) -> Result<fs::Metadata> {
@@ -1411,6 +1426,12 @@ mod tests {
         let envelope: JournalEnvelope = serde_json::from_slice(&bytes).unwrap();
         let canonical = serde_json::to_vec(&envelope.data).unwrap();
         assert_eq!(envelope.checksum, hex_digest(&canonical));
+        let reference = serde_json::to_vec(&JournalEnvelopeRef {
+            checksum: envelope.checksum.clone(),
+            data: &envelope.data,
+        })
+        .unwrap();
+        assert_eq!(bytes, reference, "envelope layout must not change");
     }
 
     #[test]

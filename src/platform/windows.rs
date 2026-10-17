@@ -114,32 +114,11 @@ impl Job {
             {
                 return Err(std::io::Error::last_os_error()).context("assigning child job");
             }
-            let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-            if snapshot == INVALID_HANDLE_VALUE {
-                return Err(std::io::Error::last_os_error())
-                    .context("enumerating suspended primary thread");
+            let thread = suspended_primary_thread(&child)?;
+            if unsafe { ResumeThread(thread.as_raw_handle()) } == u32::MAX {
+                return Err(std::io::Error::last_os_error()).context("resuming child");
             }
-            let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
-            let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
-            entry.dwSize = std::mem::size_of_val(&entry) as u32;
-            let mut available = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) };
-            while available != 0 {
-                if entry.th32OwnerProcessID == child.id() {
-                    let thread =
-                        unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-                    if thread.is_null() {
-                        return Err(std::io::Error::last_os_error())
-                            .context("opening suspended child thread");
-                    }
-                    let thread = unsafe { OwnedHandle::from_raw_handle(thread) };
-                    if unsafe { ResumeThread(thread.as_raw_handle()) } == u32::MAX {
-                        return Err(std::io::Error::last_os_error()).context("resuming child");
-                    }
-                    return Ok(());
-                }
-                available = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
-            }
-            bail!("suspended primary thread not found")
+            Ok(())
         })();
         if let Err(error) = setup {
             job.terminate();
@@ -149,6 +128,89 @@ impl Job {
         }
         Ok((child, job))
     }
+}
+
+// Undocumented but exported by every supported ntdll; enumerates only the
+// threads of one process. Used by standard process inspection tools.
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    fn NtGetNextThread(
+        process_handle: HANDLE,
+        thread_handle: HANDLE,
+        desired_access: u32,
+        handle_attributes: u32,
+        flags: u32,
+        new_thread_handle: *mut HANDLE,
+    ) -> i32;
+}
+
+const STATUS_NO_MORE_ENTRIES: i32 = 0x8000_001A_u32 as i32;
+
+/// Primary thread of a child created suspended. A Toolhelp thread snapshot
+/// lists every thread on the system and costs tens of milliseconds per launch,
+/// so the child's own thread list is consulted first. That answer is accepted
+/// only when it holds exactly one thread owned by the child, which is the
+/// suspended primary thread; any other outcome uses the documented snapshot.
+fn suspended_primary_thread(child: &Child) -> Result<OwnedHandle> {
+    if let Some(thread) = process_only_primary_thread(child.as_raw_handle(), child.id()) {
+        return Ok(thread);
+    }
+    snapshot_primary_thread(child.id())
+}
+
+fn process_only_primary_thread(process: HANDLE, pid: u32) -> Option<OwnedHandle> {
+    let access = THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION;
+    let mut first: HANDLE = std::ptr::null_mut();
+    // SAFETY: the process handle is owned by the live child; the output
+    // pointer refers to a local handle slot.
+    let status =
+        unsafe { NtGetNextThread(process, std::ptr::null_mut(), access, 0, 0, &mut first) };
+    if status != 0 || first.is_null() {
+        return None;
+    }
+    // SAFETY: a successful NtGetNextThread transfers one owned handle.
+    let first = unsafe { OwnedHandle::from_raw_handle(first) };
+    let mut second: HANDLE = std::ptr::null_mut();
+    // SAFETY: `first` is an open thread handle with the access requested above.
+    let next =
+        unsafe { NtGetNextThread(process, first.as_raw_handle(), access, 0, 0, &mut second) };
+    if next == 0 {
+        // SAFETY: a successful call transferred a second owned handle.
+        drop(unsafe { OwnedHandle::from_raw_handle(second) });
+        return None;
+    }
+    if next != STATUS_NO_MORE_ENTRIES {
+        return None;
+    }
+    // SAFETY: the thread handle is open and the query needs no output buffer.
+    if unsafe { GetProcessIdOfThread(first.as_raw_handle()) } != pid {
+        return None;
+    }
+    Some(first)
+}
+
+fn snapshot_primary_thread(pid: u32) -> Result<OwnedHandle> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error())
+            .context("enumerating suspended primary thread");
+    }
+    let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
+    let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of_val(&entry) as u32;
+    let mut available = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) };
+    while available != 0 {
+        if entry.th32OwnerProcessID == pid {
+            let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+            if thread.is_null() {
+                return Err(std::io::Error::last_os_error())
+                    .context("opening suspended child thread");
+            }
+            return Ok(unsafe { OwnedHandle::from_raw_handle(thread) });
+        }
+        available = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
+    }
+    bail!("suspended primary thread not found")
 }
 
 /// Nonblocking observation of an owned anonymous/named pipe. Reading at most
@@ -487,5 +549,49 @@ impl Pump {
 impl Drop for Pump {
     fn drop(&mut self) {
         self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::process::CommandExt;
+
+    fn snapshot_owned_thread_ids(pid: u32) -> Vec<u32> {
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        assert_ne!(snapshot, INVALID_HANDLE_VALUE);
+        let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
+        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of_val(&entry) as u32;
+        let mut ids = Vec::new();
+        let mut more = unsafe { Thread32First(snapshot.as_raw_handle(), &mut entry) };
+        while more != 0 {
+            if entry.th32OwnerProcessID == pid {
+                ids.push(entry.th32ThreadID);
+            }
+            more = unsafe { Thread32Next(snapshot.as_raw_handle(), &mut entry) };
+        }
+        ids
+    }
+
+    #[test]
+    fn process_only_lookup_agrees_with_snapshot_for_a_suspended_child() {
+        let mut child = Command::new("cmd")
+            .args(["/C", "exit 0"])
+            .creation_flags(CREATE_SUSPENDED)
+            .spawn()
+            .expect("spawning suspended child");
+        let fast = process_only_primary_thread(child.as_raw_handle(), child.id())
+            .expect("per-process thread lookup");
+        // Owners from the system snapshot, the same source the fallback uses.
+        let owned = snapshot_owned_thread_ids(child.id());
+        assert_eq!(owned.len(), 1, "a suspended child has one thread");
+        assert_eq!(
+            unsafe { GetThreadId(fast.as_raw_handle()) },
+            owned[0],
+            "per-process lookup must name the suspended primary thread"
+        );
+        assert_eq!(unsafe { ResumeThread(fast.as_raw_handle()) }, 1);
+        assert!(child.wait().expect("waiting for child").success());
     }
 }

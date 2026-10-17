@@ -217,40 +217,57 @@ impl Registry {
 
     /// Load one JSON manifest file or all `.json` files in a directory.
     pub fn load(path: &Path) -> Result<Self> {
+        // Each entry records whether it is a plain file (not a symlink or a
+        // directory). Such a file inside the canonical directory is its own
+        // canonical path, so it needs no separate canonicalize call.
         let paths = if path.is_dir() {
             let mut entries = fs::read_dir(path)
                 .with_context(|| format!("reading manifest directory {}", path.display()))?
-                .map(|entry| entry.map(|e| e.path()))
+                .map(|entry| {
+                    entry.map(|e| {
+                        let plain = e.file_type().is_ok_and(|kind| kind.is_file());
+                        (e.path(), plain)
+                    })
+                })
                 .collect::<std::io::Result<Vec<_>>>()?;
-            entries.retain(|p| p.extension().is_some_and(|ext| ext == "json"));
+            entries.retain(|(p, _)| p.extension().is_some_and(|ext| ext == "json"));
             entries.sort();
             entries
         } else {
-            vec![path.to_path_buf()]
+            vec![(path.to_path_buf(), false)]
         };
         if paths.is_empty() {
             bail!("no JSON manifests found in {}", path.display());
         }
 
-        let module_root = Some(if path.is_dir() {
-            fs::canonicalize(path)
-                .with_context(|| format!("canonicalizing manifest root {}", path.display()))?
+        let canonical_dir = if path.is_dir() {
+            Some(
+                fs::canonicalize(path)
+                    .with_context(|| format!("canonicalizing manifest root {}", path.display()))?,
+            )
         } else {
-            fs::canonicalize(path)
+            None
+        };
+        let module_root = Some(match &canonical_dir {
+            Some(root) => root.clone(),
+            None => fs::canonicalize(path)
                 .with_context(|| format!("canonicalizing manifest {}", path.display()))?
                 .parent()
                 .ok_or_else(|| anyhow!("manifest path has no parent directory"))?
-                .to_path_buf()
+                .to_path_buf(),
         });
         let mut data = RegistryData {
             module_root,
             ..RegistryData::default()
         };
-        for path in paths {
+        for (path, plain) in paths {
             let raw = fs::read_to_string(&path)
                 .with_context(|| format!("reading manifest {}", path.display()))?;
-            let origin = fs::canonicalize(&path)
-                .with_context(|| format!("canonicalizing manifest {}", path.display()))?;
+            let origin = match (&canonical_dir, path.file_name(), plain) {
+                (Some(root), Some(name), true) => root.join(name),
+                _ => fs::canonicalize(&path)
+                    .with_context(|| format!("canonicalizing manifest {}", path.display()))?,
+            };
             Self::insert_source(&mut data, &raw, Some(origin))
                 .with_context(|| format!("invalid manifest {}", path.display()))?;
         }

@@ -136,3 +136,10 @@ never establish compatibility. Contract version 1 declares no converter cost
 or losslessness, so plans make neither claim. They check interfaces only; an
 applet may still reject particular values at runtime. The matcher does not
 infer contracts or semantics from executable help text.
+
+Diagnostics with a suggested repair carry a `fixes` array in `execute check --json`:
+each fix has a message and `edits`, and each edit has a `span` and a `replacement`.
+The language server offers each fix as a `quickfix` code action (`codeActionProvider`),
+for diagnostics whose range overlaps the request. Current suggestions cover misspelled
+parameter names, applet names, and statement keywords, and quoting an unknown applet
+phrase as a direct executable.

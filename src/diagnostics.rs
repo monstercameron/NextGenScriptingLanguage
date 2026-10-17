@@ -8,6 +8,7 @@ use crate::ast::{Connection, Invocation, Program, Step, StepKind, Value};
 use crate::contracts::{OutputType, ValueSchema};
 use crate::manifest::{Manifest, Registry};
 use crate::parser::{self, Token};
+use crate::suggest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeSet;
@@ -47,6 +48,41 @@ pub struct Diagnostic {
     pub code: String,
     pub message: String,
     pub span: SourceSpan,
+    /// Machine-applicable repairs, most likely first. Each fix is independent:
+    /// applying one should resolve the diagnostic it is attached to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixes: Vec<SuggestedFix>,
+}
+
+/// A repair described as text replacements over the checked source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuggestedFix {
+    pub message: String,
+    pub edits: Vec<TextEdit>,
+}
+
+/// Replace the text covered by `span` with `replacement`. Span offsets are the same
+/// UTF-8 byte offsets used by diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextEdit {
+    pub span: SourceSpan,
+    pub replacement: String,
+}
+
+impl SuggestedFix {
+    fn replace(
+        message: impl Into<String>,
+        span: SourceSpan,
+        replacement: impl Into<String>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            edits: vec![TextEdit {
+                span,
+                replacement: replacement.into(),
+            }],
+        }
+    }
 }
 
 impl Diagnostic {
@@ -56,6 +92,7 @@ impl Diagnostic {
             code: code.into(),
             message: message.into(),
             span,
+            fixes: Vec::new(),
         }
     }
 }
@@ -104,11 +141,32 @@ pub fn analyze_source(source: &str, registry: &Registry) -> Vec<Diagnostic> {
         }
         if let Err(error) = parser::parse_line(&tokens) {
             let message = format!("{error:#}");
-            diagnostics.push(Diagnostic::error(
+            let mut diagnostic = Diagnostic::error(
                 syntax_code(&message),
                 message,
                 line_span(source, line_number),
-            ));
+            );
+            let line_start_offset = line_start(source, line_number);
+            let content_start = line_start_offset + (uncommented.len() - content.len());
+            if let Some(first) = content.split_whitespace().next() {
+                if let Some(keyword) = suggest::keyword_for(first) {
+                    let span = span_at(
+                        source,
+                        content_start,
+                        content_start + first.len(),
+                        SpanPrecision::Token,
+                    );
+                    diagnostic
+                        .message
+                        .push_str(&format!("; did you mean {keyword:?}?"));
+                    diagnostic.fixes.push(SuggestedFix::replace(
+                        format!("replace {first:?} with the keyword {keyword:?}"),
+                        span,
+                        keyword,
+                    ));
+                }
+            }
+            diagnostics.push(diagnostic);
             local_error_lines.insert(line_number);
         }
     }
@@ -311,16 +369,110 @@ fn collect_program_diagnostics(
         let manifest = match registry.resolve_call(call) {
             Ok(manifest) => manifest,
             Err(_) => {
-                diagnostics.push(Diagnostic::error(
-                    "applet.unknown",
-                    format!("unknown applet {:?}; use a declared applet name or quote a direct executable", call.operation),
-                    find_phrase_span(source, line, &call.operation).unwrap_or_else(|| line_span(source, line)),
+                let span = find_phrase_span(source, line, &call.operation)
+                    .unwrap_or_else(|| line_span(source, line));
+                diagnostics.push(unknown_applet_diagnostic(
+                    source, line, call, span, registry,
                 ));
                 continue;
             }
         };
         validate_call(source, line, call, manifest, diagnostics);
     }
+}
+
+/// An unknown applet phrase, with at most one repair. Priority: a misspelled
+/// statement keyword, then a near applet name, then quoting the phrase as a direct
+/// executable. The quote repair needs a phrase of plain words and nothing else on
+/// the line, so its replacement is exact.
+fn unknown_applet_diagnostic(
+    source: &str,
+    line: usize,
+    call: &Invocation,
+    span: SourceSpan,
+    registry: &Registry,
+) -> Diagnostic {
+    let phrase = call.operation.as_str();
+    let words = phrase.split_whitespace().collect::<Vec<_>>();
+    let token = span.precision == SpanPrecision::Token;
+    let mut message = format!(
+        "unknown applet {phrase:?}; use a declared applet name or quote a direct executable"
+    );
+    let mut fix = None;
+
+    if let (true, Some(first)) = (words.len() > 1 && token, words.first()) {
+        if let Some(keyword) = suggest::keyword_for(first) {
+            if source[span.start_byte..].starts_with(first) {
+                let first_span = span_at(
+                    source,
+                    span.start_byte,
+                    span.start_byte + first.len(),
+                    SpanPrecision::Token,
+                );
+                message = format!(
+                    "unknown applet {phrase:?}; did you mean the statement keyword {keyword:?}?"
+                );
+                fix = Some(SuggestedFix::replace(
+                    format!("replace {first:?} with {keyword:?}"),
+                    first_span,
+                    keyword,
+                ));
+            }
+        }
+    }
+
+    if fix.is_none() && token {
+        if let Some(name) = suggest::closest(
+            phrase,
+            registry
+                .manifests()
+                .iter()
+                .map(|manifest| manifest.name.as_str()),
+        ) {
+            message = format!("unknown applet {phrase:?}; did you mean {name:?}?");
+            fix = Some(SuggestedFix::replace(
+                format!("use applet {name:?}"),
+                span.clone(),
+                name,
+            ));
+        }
+    }
+
+    if fix.is_none() && token {
+        let rest = source[span.end_byte..].split('\n').next().unwrap_or("");
+        let plain = source[span.start_byte..span.end_byte] == *phrase
+            && !phrase.contains(['"', '\\'])
+            && parser::strip_comment(rest).trim().is_empty();
+        if let (true, Some(executable)) = (plain, words.first()) {
+            let mut replacement = format!("\"{executable}\"");
+            if words.len() > 1 {
+                let arguments = words[1..]
+                    .iter()
+                    .map(|word| format!("\"{word}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                replacement.push_str(&format!(" with arguments [{arguments}]"));
+            }
+            let at_statement_start = source[line_start(source, line)..span.start_byte]
+                .trim()
+                .is_empty();
+            if at_statement_start {
+                replacement = format!("run {replacement}");
+            }
+            message = format!(
+                "unknown applet {phrase:?}; to run it as an executable, quote its name: {replacement}"
+            );
+            fix = Some(SuggestedFix::replace(
+                format!("quote {executable:?} as a direct executable"),
+                span.clone(),
+                replacement,
+            ));
+        }
+    }
+
+    let mut diagnostic = Diagnostic::error("applet.unknown", message, span);
+    diagnostic.fixes.extend(fix);
+    diagnostic
 }
 
 fn collect_calls<'a>(steps: &'a [Step], calls: &mut Vec<(usize, &'a Invocation)>) {
@@ -367,11 +519,27 @@ fn validate_call(
 
     for (name, value) in &call.parameters {
         let Some(schema) = properties.get(name) else {
-            diagnostics.push(Diagnostic::error(
+            let span =
+                find_parameter_span(source, line, name).unwrap_or_else(|| line_span(source, line));
+            let mut diagnostic = Diagnostic::error(
                 "applet.parameter.unknown",
                 format!("applet {:?} has no parameter {name:?}", manifest.name),
-                find_parameter_span(source, line, name).unwrap_or_else(|| line_span(source, line)),
-            ));
+                span.clone(),
+            );
+            if let Some(suggestion) = suggest::closest(name, properties.keys().map(String::as_str))
+            {
+                diagnostic
+                    .message
+                    .push_str(&format!("; did you mean {suggestion:?}?"));
+                if span.precision == SpanPrecision::Token {
+                    diagnostic.fixes.push(SuggestedFix::replace(
+                        format!("rename parameter {name:?} to {suggestion:?}"),
+                        span,
+                        suggestion,
+                    ));
+                }
+            }
+            diagnostics.push(diagnostic);
             continue;
         };
         if !matches!(value, Value::Reference(_)) && !value_matches_schema(value, schema) {

@@ -100,7 +100,8 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
                     "hoverProvider": true,
                     "definitionProvider": true,
                     "referencesProvider": true,
-                    "renameProvider": { "prepareProvider": true }
+                    "renameProvider": { "prepareProvider": true },
+                    "codeActionProvider": { "codeActionKinds": ["quickfix"] }
                 },
                 "serverInfo": { "name": "execute-language-server", "version": env!("CARGO_PKG_VERSION") }
             })),
@@ -218,6 +219,7 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
             "textDocument/references" => Some(references(&params, &documents)),
             "textDocument/prepareRename" => Some(prepare_rename(&params, &documents)),
             "textDocument/rename" => Some(rename(&params, &documents)),
+            "textDocument/codeAction" => Some(code_actions(&params, &documents, &registry)),
             _ if id.is_some() => {
                 write_error(
                     &mut writer,
@@ -451,6 +453,62 @@ fn read_position(value: Option<&JsonValue>) -> Result<Position> {
         line: usize::try_from(line).context("position line is out of range")?,
         character: usize::try_from(character).context("position character is out of range")?,
     })
+}
+
+/// Quick fixes from the static diagnostics whose span touches the requested range.
+/// Each suggested fix becomes one action that edits only the document's text.
+fn code_actions(
+    params: &JsonValue,
+    documents: &BTreeMap<String, Document>,
+    registry: &Registry,
+) -> JsonValue {
+    let Some(uri) = params
+        .pointer("/textDocument/uri")
+        .and_then(JsonValue::as_str)
+    else {
+        return json!([]);
+    };
+    let Some(document) = documents.get(uri) else {
+        return json!([]);
+    };
+    let source = document.text.as_str();
+    let requested = params.get("range").and_then(|range| {
+        let start = position_to_byte(source, read_position(range.get("start")).ok()?)?;
+        let end = position_to_byte(source, read_position(range.get("end")).ok()?)?;
+        Some((start, end))
+    });
+    let mut actions = Vec::new();
+    for diagnostic in analyze_source(source, registry) {
+        if diagnostic.fixes.is_empty() {
+            continue;
+        }
+        if let Some((start, end)) = requested {
+            if diagnostic.span.end_byte < start || diagnostic.span.start_byte > end {
+                continue;
+            }
+        }
+        let lsp = lsp_diagnostic(source, diagnostic.clone());
+        for (index, fix) in diagnostic.fixes.iter().enumerate() {
+            let edits = fix
+                .edits
+                .iter()
+                .map(|edit| {
+                    json!({
+                        "range": range_from_offsets(source, edit.span.start_byte, edit.span.end_byte),
+                        "newText": edit.replacement,
+                    })
+                })
+                .collect::<Vec<_>>();
+            actions.push(json!({
+                "title": fix.message,
+                "kind": "quickfix",
+                "diagnostics": [lsp.clone()],
+                "isPreferred": index == 0,
+                "edit": { "changes": { uri: edits } },
+            }));
+        }
+    }
+    JsonValue::Array(actions)
 }
 
 fn text_document_position(params: &JsonValue) -> Option<(&str, Position)> {
@@ -1080,6 +1138,45 @@ mod tests {
             messages.push(message);
         }
         messages
+    }
+
+    #[test]
+    fn code_actions_offer_each_suggested_fix_as_a_quickfix() {
+        let mut input = frame(request(1, "initialize", json!({ "capabilities": {} })));
+        input.extend(frame(json!({
+            "jsonrpc": "2.0", "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": "file:///tmp/typo.program", "languageId": "execute-program", "version": 1, "text": "echo hello\n" } }
+        })));
+        input.extend(frame(request(2, "textDocument/codeAction", json!({
+            "textDocument": { "uri": "file:///tmp/typo.program" },
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 4 } },
+            "context": { "diagnostics": [] }
+        }))));
+        input.extend(frame(request(3, "shutdown", JsonValue::Null)));
+        input.extend(frame(json!({ "jsonrpc": "2.0", "method": "exit" })));
+
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let messages = decode_frames(&output);
+        assert_eq!(
+            messages[0]["result"]["capabilities"]["codeActionProvider"]["codeActionKinds"][0],
+            "quickfix"
+        );
+        let actions = messages
+            .iter()
+            .find(|message| message["id"] == 2)
+            .expect("codeAction response")["result"]
+            .as_array()
+            .expect("an array of actions")
+            .clone();
+        assert_eq!(actions.len(), 1, "{actions:#?}");
+        let action = &actions[0];
+        assert_eq!(action["kind"], "quickfix");
+        assert_eq!(action["diagnostics"][0]["code"], "applet.unknown");
+        let edit = &action["edit"]["changes"]["file:///tmp/typo.program"][0];
+        assert_eq!(edit["newText"], "run \"echo\" with arguments [\"hello\"]");
+        assert_eq!(edit["range"]["start"]["character"], 0);
+        assert_eq!(edit["range"]["end"]["character"], 10);
     }
 
     #[test]

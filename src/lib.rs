@@ -33,6 +33,7 @@ pub mod security;
 pub mod service_deployment;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stream;
+pub mod suggest;
 mod structured;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tasks;

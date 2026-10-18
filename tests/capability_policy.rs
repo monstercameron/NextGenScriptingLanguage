@@ -111,6 +111,7 @@ fn remote_endpoint_policy_matches_exact_canonical_origin() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("remote.lookup".into(), remote)]),
     }));
     authorize_network_endpoint(
@@ -145,6 +146,7 @@ fn grants_require_canonical_allowlist_and_exact_contract_capabilities() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), grant(&["filesystem.read"]))]),
     };
     let capabilities = vec!["filesystem.read".to_owned()];
@@ -203,6 +205,7 @@ fn process_backends_require_a_separate_process_exec_grant() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.command".into(), grant(&[]))]),
     }));
     let error = preflight(&program, &registry, directory.path()).unwrap_err();
@@ -214,6 +217,7 @@ fn process_backends_require_a_separate_process_exec_grant() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.command".into(), grant(&["process.exec"]))]),
     }));
     preflight(&program, &registry, directory.path()).unwrap();
@@ -227,6 +231,7 @@ fn strict_policy_allows_shipped_pure_json_transformations() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("json.parse".into(), grant(&["json.convert"]))]),
     }));
     let program = flow::parser::parse("run json.parse with text \"{}\"\n").unwrap();
@@ -246,6 +251,7 @@ fn binary_pin_is_checked_and_policy_identity_changes_with_grants() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), pinned)]),
     };
     let capabilities = Vec::new();
@@ -278,6 +284,7 @@ fn binary_pin_is_checked_and_policy_identity_changes_with_grants() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), changed)]),
     }));
     let second = policy_fingerprint(&registry, "fixture.read").unwrap();
@@ -299,6 +306,7 @@ fn environment_is_cleared_to_the_applet_allowlist() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), configured)]),
     }));
     let filtered = filter_environment(
@@ -347,6 +355,7 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.env".into(), applet_grant)]),
     }));
 
@@ -387,6 +396,7 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.denied".into(), grant(&[]))]),
     }));
     let error = effective_environment(&denied_registry, "fixture.denied").unwrap_err();
@@ -416,6 +426,7 @@ fn decisions_record_approvals_and_denials_without_paths_or_environment_names() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), configured)]),
     }));
 
@@ -455,6 +466,7 @@ fn host_path_grants_are_canonical_and_directional() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.read".into(), configured)]),
     }));
     let cwd = directory.path();
@@ -530,6 +542,7 @@ fn applet_file_reads_cannot_borrow_another_applets_path_grant() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([
             ("allowed.reader".into(), reader),
             ("remote.lookup".into(), remote),
@@ -573,6 +586,7 @@ fn cache_directory_requires_applet_scoped_read_and_write_grants() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.cache".into(), allowed.clone())]),
     }));
     preflight_with_cache_directory(
@@ -588,6 +602,7 @@ fn cache_directory_requires_applet_scoped_read_and_write_grants() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.cache".into(), allowed)]),
     }));
     assert!(preflight_with_cache_directory(
@@ -632,6 +647,7 @@ fn whole_program_preflight_denies_later_applet_before_prior_spawn() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("allowed.first".into(), grant(&["process.exec"]))]),
     }));
     let program = parser::parse("run allowed.first\nrun denied.later\n").unwrap();
@@ -684,6 +700,7 @@ fn policy_preflight_rejects_later_unlisted_applet_before_prior_save() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("allowed.first".into(), allowed)]),
     }));
     let program =
@@ -748,6 +765,7 @@ fn strict_policy_rejects_effectful_in_process_alias_before_prior_spawn() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([
             ("allowed.first".into(), grant(&["process.exec"])),
             ("fs.read".into(), read_grant),
@@ -789,6 +807,7 @@ fn required_sandbox_rejects_in_process_backend_during_preflight() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.in_process".into(), required)]),
     }));
     let program = parser::parse("run fixture.in_process\n").unwrap();

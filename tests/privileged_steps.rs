@@ -372,6 +372,7 @@ fn deny_all_privileged_registry(manifests: &[serde_json::Value]) -> Registry {
         applets: BTreeMap::new(),
         deny_privileged: true,
         allow_wrappers: BTreeSet::new(),
+        host_environment: BTreeSet::new(),
     }));
     registry
 }

@@ -10,6 +10,7 @@
 //! record entry is replaced by a marker.
 
 use crate::ast::{InputDeclaration, InputSource, Value};
+use crate::terminal_text::escape_controls;
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -134,7 +135,7 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     else {
         return Ok(None);
     };
-    write!(tty, "{question}: ").context("writing the prompt")?;
+    write!(tty, "{}: ", escape_controls(question)).context("writing the prompt")?;
     tty.flush().context("writing the prompt")?;
     // The echo guard borrows its own duplicate of the terminal, so `tty` stays free for
     // reading. Both descriptors name the same terminal, and tcsetattr applies to it.
@@ -173,7 +174,7 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     let Ok(mut output) = std::fs::OpenOptions::new().write(true).open("CONOUT$") else {
         return Ok(None);
     };
-    write!(output, "{question}: ").context("writing the prompt")?;
+    write!(output, "{}: ", escape_controls(question)).context("writing the prompt")?;
     output.flush().context("writing the prompt")?;
     let handle = input.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
     let mut mode = 0u32;

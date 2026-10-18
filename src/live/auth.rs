@@ -85,7 +85,9 @@ impl AgentCredential {
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt;
-            options.custom_flags(
+            use windows_sys::Win32::Foundation::GENERIC_WRITE;
+            use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+            options.access_mode(GENERIC_WRITE | WRITE_DAC).custom_flags(
                 windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
             );
         }
@@ -94,6 +96,8 @@ impl AgentCredential {
             .map_err(|_| AuthError::CredentialUnavailable)?;
         #[cfg(windows)]
         if crate::platform::windows::restrict_file(&file).is_err() {
+            drop(file);
+            let _ = std::fs::remove_file(path);
             return Err(AuthError::CredentialUnavailable);
         }
         if file
@@ -102,6 +106,8 @@ impl AgentCredential {
             .and_then(|()| file.sync_all())
             .is_err()
         {
+            drop(file);
+            let _ = std::fs::remove_file(path);
             return Err(AuthError::CredentialUnavailable);
         }
         Ok(Self { agent, token })
@@ -575,5 +581,18 @@ mod tests {
                 .token_sha256(),
             credential.token_sha256()
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn generated_windows_token_can_be_reopened_and_is_not_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent.token");
+        let credential = AgentCredential::create_token_file("editor", &path).unwrap();
+        assert_eq!(credential.token.len(), 64);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 65);
+        let loaded = AgentCredential::from_token_file("editor", &path).unwrap();
+        assert_eq!(loaded.token_sha256(), credential.token_sha256());
+        assert!(AgentCredential::create_token_file("editor", &path).is_err());
     }
 }

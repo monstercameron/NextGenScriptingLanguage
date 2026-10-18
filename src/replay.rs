@@ -12,6 +12,7 @@ use crate::manifest::Registry;
 use crate::record::{StoredRecord, StoredStep};
 use crate::runtime::observe::{Observer, StepRequest, StepResult};
 use crate::security::{self, SecretRedactor};
+use crate::terminal_text::escape_controls;
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value as Json;
 use std::path::Path;
@@ -219,12 +220,15 @@ fn describe(line: usize, applets: &[String], argv: &[Vec<String>]) -> String {
         .map(|argv| format!("{argv:?}"))
         .collect::<Vec<_>>()
         .join(" | ");
-    format!("line {line} {} with argv {argv}", applets.join(" | "))
+    escape_controls(&format!(
+        "line {line} {} with argv {argv}",
+        applets.join(" | ")
+    ))
 }
 
 /// Why a program cannot be replayed faithfully, if it cannot. Triggered programs,
-/// background jobs and cached steps either run outside the observed path or touch
-/// files a replay must not write, so they are refused up front.
+/// background jobs, detached launches, handoffs and cached steps either run outside
+/// the observed path or touch files a replay must not write, so they are refused up front.
 pub fn unsupported_reason(program: &Program) -> Option<&'static str> {
     if program.trigger.is_some() {
         return Some("triggered programs (listeners, schedules and intervals)");
@@ -235,6 +239,15 @@ pub fn unsupported_reason(program: &Program) -> Option<&'static str> {
     let debug = format!("{:?}", program.steps);
     if debug.contains("SpawnJob") {
         return Some("background jobs (spawn)");
+    }
+    if debug.contains("LaunchDetached") {
+        return Some("detached launches (launch detached)");
+    }
+    if debug.contains("HandOver") {
+        return Some("handovers (hand over to)");
+    }
+    if debug.contains("Interactive") {
+        return Some("interactive steps");
     }
     if debug.contains("cache: true") {
         return Some("cached steps (and cache)");
@@ -279,10 +292,31 @@ mod tests {
     }
 
     #[test]
+    fn divergence_descriptions_escape_c1_and_bidi_text() {
+        let description = describe(
+            4,
+            &["tool\u{009b}\u{202e}".to_owned()],
+            &[vec!["tool\u{009b}".to_owned()]],
+        );
+        assert!(!description.contains('\u{009b}'));
+        assert!(!description.contains('\u{202e}'));
+        assert!(description.contains(r"\u{9b}"));
+        assert!(description.contains(r"\u{202e}"));
+    }
+
+    #[test]
     fn triggered_programs_are_refused() {
         let program = crate::parser::parse("every 1 hour\n  run \"true\"\n").unwrap();
         assert!(unsupported_reason(&program).is_some());
         let plain = crate::parser::parse("run \"true\"\n").unwrap();
         assert!(unsupported_reason(&plain).is_none());
+    }
+
+    #[test]
+    fn replay_refuses_detached_launches_and_handovers() {
+        for source in ["launch detached \"true\"\n", "hand over to \"true\"\n"] {
+            let program = crate::parser::parse(source).unwrap();
+            assert!(unsupported_reason(&program).is_some(), "{source}");
+        }
     }
 }

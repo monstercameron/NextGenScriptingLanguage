@@ -6,6 +6,7 @@ use flow::ast::{Program, Value};
 use flow::record::{self, RecordStart, Recorder, RunSummary, StoredRecord};
 use flow::replay::{self, Replayer, Stop};
 use flow::runtime::{self, RunOptions, RunResult};
+use flow::terminal_text::escape_controls;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
@@ -76,6 +77,11 @@ pub fn show_run(arguments: &[String]) -> Result<()> {
     }
     let directory = directory.context("usage: execute show-run RECORD [--json]")?;
     let text = record::show_run(&directory, as_json)?;
+    let text = if as_json {
+        text
+    } else {
+        escape_controls(&text)
+    };
     io::stdout().write_all(text.as_bytes())?;
     Ok(())
 }

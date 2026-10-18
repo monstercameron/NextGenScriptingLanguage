@@ -128,6 +128,17 @@ fn render_for_workflow_with_launchd_home_and_catalog(
         request.inputs,
         request.program_arguments,
     )?;
+    for declaration in &program.inputs {
+        if (crate::ast::is_sensitive(declaration)
+            || matches!(declaration.source, Some(InputSource::Environment(_))))
+            && request.inputs.contains_key(&declaration.name)
+        {
+            bail!(
+                "service generation refuses to embed sensitive or environment input {:?} in the unit command line; secure --answers file support is required",
+                declaration.name
+            );
+        }
+    }
     validate_service_inputs(&program.inputs, &supplied, request.program_arguments.len())?;
 
     if request.persistent && request.format != ServiceFormat::SystemdTimer {
@@ -811,6 +822,22 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("needs input"));
+
+        let workflow = directory.path().join("secret.program");
+        fs::write(
+            &workflow,
+            "accept token as text from secret prompt \"Token\"\nevery 1 minute\n  then encode \"body\" as json\n",
+        )
+        .unwrap();
+        let sensitive_inputs = BTreeMap::from([("token".to_owned(), "CANARY".to_owned())]);
+        request.workflow_path = &workflow;
+        request.inputs = &sensitive_inputs;
+        let error = render_for_workflow(&request).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("refuses to embed sensitive or environment input"),
+            "{error:#}"
+        );
+        assert!(!format!("{error:#}").contains("CANARY"));
     }
 
     #[test]

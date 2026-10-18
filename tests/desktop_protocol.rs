@@ -433,6 +433,7 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("desktop.quickshell".to_owned(), grant)]),
     }));
     let cwd = std::env::current_dir().unwrap();
@@ -459,6 +460,7 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::new(),
     }));
     assert!(flow::capabilities::command_for(

@@ -36,6 +36,10 @@ pub struct CapabilityPolicy {
     pub version: u8,
     #[serde(default)]
     pub applets: BTreeMap<String, AppletGrant>,
+    /// Host environment variables workflow inputs may read with from environment.
+    /// Empty by default so programs cannot inspect ambient secrets under a policy.
+    #[serde(default)]
+    pub host_environment: BTreeSet<String>,
     /// Refuse privileged steps before any effect: every privilege elevator, and every
     /// wrapper or shell that is not named in `allow_wrappers`. See `privilege`.
     #[serde(default)]
@@ -236,6 +240,10 @@ impl CapabilityPolicy {
                 validate_policy_path(path)
                     .with_context(|| format!("applet {name:?} filesystem grant"))?;
             }
+        }
+        for variable in &self.host_environment {
+            validate_environment_name(variable)
+                .context("host_environment contains an invalid environment name")?;
         }
         for name in &self.allow_wrappers {
             // Only a listed wrapper or shell can be allowed, by its plain name.
@@ -1756,6 +1764,31 @@ fn preflight_host_paths(
     cwd: &Path,
     cwd_mode: CwdMode,
 ) -> Result<()> {
+    for declaration in &program.inputs {
+        if let Some(crate::ast::InputSource::Environment(name)) = &declaration.source {
+            let allowed = policy.host_environment.contains(name);
+            record_policy_decision(
+                registry,
+                "<workflow>",
+                "environment.read",
+                None,
+                PolicyRisk::Elevated,
+                if allowed {
+                    PolicyDecisionOutcome::Approved
+                } else {
+                    PolicyDecisionOutcome::Denied
+                },
+                if allowed {
+                    PolicyDecisionReason::PolicyMatched
+                } else {
+                    PolicyDecisionReason::CapabilityNotGranted
+                },
+            );
+            if !allowed {
+                bail!("capability policy denies reading environment variable {name:?}");
+            }
+        }
+    }
     fn check_steps(
         steps: &[Step],
         registry: &Registry,

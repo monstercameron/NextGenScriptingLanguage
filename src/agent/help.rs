@@ -5,6 +5,7 @@
 //! until then every input reports `description: null`.
 
 use crate::ast::{InputDeclaration, InputSource, InputType, Program, Value as ProgramValue};
+use crate::terminal_text::escape_controls;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -187,7 +188,7 @@ fn render_text(description: &Value) -> String {
             push_description(&mut text, input);
         }
     }
-    text
+    escape_controls(&text)
 }
 
 fn requirement(input: &Value) -> String {
@@ -203,4 +204,32 @@ fn push_description(text: &mut String, input: &Value) {
         text.push_str(&format!("  {description}"));
     }
     text.push('\n');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_text;
+    use serde_json::json;
+
+    #[test]
+    fn help_text_escapes_untrusted_descriptions_and_input_names() {
+        let description = json!({
+            "usage": "execute program",
+            "inputs": [{
+                "type": "text",
+                "required": true,
+                "default": null,
+                "description": "clear\u{001b}\u{202e}",
+                "name": "x\u{009b}",
+                "source": null
+            }]
+        });
+        let rendered = render_text(&description);
+        assert!(!rendered.contains('\u{001b}'));
+        assert!(!rendered.contains('\u{202e}'));
+        assert!(!rendered.contains('\u{009b}'));
+        assert!(rendered.contains(r"\u{1b}"));
+        assert!(rendered.contains(r"\u{202e}"));
+        assert!(rendered.contains(r"\u{9b}"));
+    }
 }

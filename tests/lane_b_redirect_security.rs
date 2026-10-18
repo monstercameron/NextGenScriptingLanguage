@@ -57,6 +57,7 @@ fn stderr_redirect_without_a_write_grant_is_refused_before_effects() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.echo".into(), grant(&["process.exec"], Vec::new()))]),
     }));
     let program = parser::parse("run fixture.echo and stderr to \"x\"\n").unwrap();
@@ -73,6 +74,7 @@ fn append_without_a_write_grant_is_refused_before_effects() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.echo".into(), grant(&["process.exec"], Vec::new()))]),
     }));
     let program = parser::parse("run fixture.echo\nthen append to \"x\"\n").unwrap();
@@ -97,6 +99,7 @@ fn a_symlinked_redirect_target_is_refused_and_not_written() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([(
             "fixture.echo".into(),
             grant(&["process.exec", "filesystem.write"], vec![allowed.clone()]),
@@ -124,6 +127,7 @@ fn a_symlinked_append_target_is_refused_and_not_written() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([(
             "fixture.echo".into(),
             grant(&["process.exec", "filesystem.write"], vec![allowed.clone()]),
@@ -168,6 +172,7 @@ fn a_new_redirect_file_is_owner_only() {
         version: 1,
         deny_privileged: false,
         allow_wrappers: Default::default(),
+        host_environment: Default::default(),
         applets: BTreeMap::from([(
             "fixture.echo".into(),
             grant(&["process.exec", "filesystem.write"], vec![allowed.clone()]),

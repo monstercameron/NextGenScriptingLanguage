@@ -13,9 +13,9 @@
 //! checks the peer's uid after it connects.
 //!
 //! The accept stall: the parent reads each request on its accepting thread, with a
-//! 2 s timeout (`IO_TIMEOUT`). A client that connects and sends nothing therefore holds
-//! the accept loop for up to 2 s before its connection is dropped, and other clients wait
-//! in the listen queue meanwhile. The parent must stay single-threaded because it forks,
+//! 2 s total deadline (`IO_TIMEOUT`). A client that connects and trickles bytes cannot
+//! extend that deadline; other clients wait in the listen queue for at most 2 s. The
+//! parent must stay single-threaded because it forks,
 //! and fork in a multithreaded process is unsafe, so the read cannot move to a thread.
 //! Only processes of the same user can connect, so the stall is a delay a user can cause
 //! to themselves, not a denial of service across users.
@@ -1105,10 +1105,36 @@ mod imp {
     /// Receive one request line and any descriptors sent with it. The descriptors are
     /// owned from the moment they arrive, so an error here closes them.
     fn receive_request(stream: &UnixStream) -> std::result::Result<(Value, Vec<OwnedFd>), String> {
+        let deadline = Instant::now() + IO_TIMEOUT;
         let mut buffer = Vec::new();
         let mut descriptors = Vec::new();
         let mut chunk = [0u8; 4096];
         loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("reading the request timed out".to_owned());
+            }
+            let mut descriptor = libc::pollfd {
+                fd: stream.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let timeout_ms = remaining
+                .as_nanos()
+                .div_ceil(1_000_000)
+                .min(i32::MAX as u128) as libc::c_int;
+            // SAFETY: descriptor points to one initialized pollfd and remains live for the call.
+            let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+            if ready == 0 {
+                return Err("reading the request timed out".to_owned());
+            }
+            if ready < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(format!("waiting for the request failed: {error}"));
+            }
             let mut control = [0u64; CONTROL_WORDS];
             let mut iov = libc::iovec {
                 iov_base: chunk.as_mut_ptr().cast(),
@@ -1484,6 +1510,30 @@ mod imp {
                 );
                 Forwarding::Ran(1)
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod request_deadline_tests {
+        use super::receive_request;
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        #[test]
+        fn trickling_request_hits_one_total_deadline() {
+            let (server, mut client) = UnixStream::pair().unwrap();
+            let writer = thread::spawn(move || {
+                for _ in 0..6 {
+                    thread::sleep(Duration::from_millis(500));
+                    let _ = client.write_all(b" ");
+                }
+            });
+            let started = Instant::now();
+            assert!(receive_request(&server).is_err());
+            assert!(started.elapsed() < Duration::from_millis(2_500));
+            writer.join().unwrap();
         }
     }
 }

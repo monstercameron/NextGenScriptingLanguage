@@ -16,9 +16,11 @@ use anyhow::{bail, Result};
 use std::collections::BTreeSet;
 
 const HEADER: &str = "execute-policy:";
+const HEADER_WORD: &str = "execute-policy";
 
 /// The categories a program's leading `# execute-policy:` header approves.
 pub fn header_categories(source: &str) -> Result<BTreeSet<String>> {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut headers = Vec::new();
     for line in source.lines() {
         let trimmed = line.trim();
@@ -30,6 +32,10 @@ pub fn header_categories(source: &str) -> Result<BTreeSet<String>> {
         }
         if let Some(rest) = header_rest(trimmed) {
             headers.push(rest.trim().to_owned());
+        } else if trimmed.contains(HEADER_WORD) {
+            // A leading comment that names the policy but does not parse as the header
+            // is an error, not a comment, so a typo cannot switch enforcement off.
+            bail!("malformed `# {HEADER}` header: {trimmed}");
         }
     }
     match headers.as_slice() {
@@ -77,7 +83,10 @@ pub fn enforce_header(
     bail!("execute-policy header denies effects: {violations}")
 }
 
+/// Whether the leading comments mention the policy header at all, well-formed or not;
+/// `header_categories` then refuses a malformed one.
 fn has_leading_header(source: &str) -> bool {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     for line in source.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -86,7 +95,7 @@ fn has_leading_header(source: &str) -> bool {
         if !trimmed.starts_with('#') {
             return false;
         }
-        if header_rest(trimmed).is_some() {
+        if trimmed.contains(HEADER_WORD) {
             return true;
         }
     }

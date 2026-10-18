@@ -146,7 +146,9 @@ pub(crate) fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> 
     // with FILE_SHARE_DELETE (std's default share mode, and the checkpoint readers'),
     // which MoveFileExW refuses with access denied. File systems without it (FAT,
     // older Windows) fall back to MoveFileExW below.
-    if posix_replace(source, target)? {
+    // Any failure of the POSIX rename falls through to MoveFileExW, which reports its
+    // own error if the replace really cannot happen.
+    if matches!(posix_replace(source, target), Ok(true)) {
         return Ok(());
     }
     let (source, target) = (wide(source.as_os_str()), wide(target.as_os_str()));

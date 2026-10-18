@@ -212,7 +212,16 @@ fn input_covered(context: &RunSettings<'_>) -> Result<Value> {
 /// contents, so the report stays small.
 fn resolved_executables(plan: &Value, cwd: &Path) -> Result<Value> {
     let mut executables = BTreeMap::<String, Value>::new();
+    // A relative executable path, or a PATH lookup through a relative PATH entry,
+    // resolves against the folder current at that step. After a folder change the
+    // review cannot know that folder, so it refuses to bind such an executable.
+    let relative_path_entry = std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|entry| !entry.is_absolute()));
+    let mut folder_changed = false;
     for row in plan["steps"].as_array().into_iter().flatten() {
+        if row["cwd_change"] == true {
+            folder_changed = true;
+        }
         if row["process"] == false {
             continue;
         }
@@ -228,6 +237,16 @@ fn resolved_executables(plan: &Value, cwd: &Path) -> Result<Value> {
         let Some(binary) = row["binary"].as_str() else {
             continue;
         };
+        let has_separator = binary.contains('/') || binary.contains('\\');
+        if folder_changed
+            && !Path::new(binary).is_absolute()
+            && (has_separator || relative_path_entry)
+        {
+            bail!(
+                "cannot bind the executable {binary:?} for line {} after a folder change: it resolves relative to a folder the review cannot know",
+                row["line"].as_u64().unwrap_or(0)
+            );
+        }
         let resolved = crate::runtime::binary_path(binary, cwd)
             .with_context(|| format!("resolving executable {binary:?} for review"))?;
         let canonical = fs::canonicalize(&resolved)

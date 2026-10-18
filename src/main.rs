@@ -707,6 +707,18 @@ fn remote_resolve(arguments: &[String]) -> Result<()> {
 /// effect runs: a static plan with effects outside the declared categories is refused.
 /// A build without the policy checker refuses a program that declares a header rather
 /// than run it unchecked.
+/// Whether a source's leading comments mention an `execute-policy` header (after an
+/// optional BOM), well-formed or not.
+fn declares_policy_header(source: &str) -> bool {
+    source
+        .strip_prefix('\u{feff}')
+        .unwrap_or(source)
+        .lines()
+        .map(str::trim)
+        .take_while(|line| line.is_empty() || line.starts_with('#'))
+        .any(|line| line.contains("execute-policy"))
+}
+
 fn enforce_policy_header(
     source: &str,
     program: &flow::ast::Program,
@@ -720,12 +732,7 @@ fn enforce_policy_header(
     #[cfg(not(feature = "agent-advisory"))]
     {
         let _ = (program, registry, path);
-        let declares_header = source
-            .lines()
-            .map(str::trim)
-            .take_while(|line| line.is_empty() || line.starts_with('#'))
-            .any(|line| line.contains("execute-policy:"));
-        if declares_header {
+        if declares_policy_header(source) {
             bail!("this build cannot enforce the program's execute-policy header; rebuild with the agent-advisory feature");
         }
         Ok(())
@@ -805,6 +812,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             bail!(
                 "--checkpoint cannot be used with a secret prompt input: a journal would keep the answer or data computed from it"
             );
+        }
+        // Graph plans are not checked against an execute-policy header yet, so a graph
+        // that declares one is refused rather than run unchecked.
+        if args.command == "run" && !args.what_if && declares_policy_header(&source) {
+            bail!("execute-policy headers are not enforced for graphs yet; remove the header or express the work as a program");
         }
         // A capability policy decides which environment variables a graph may read,
         // before any input is resolved.

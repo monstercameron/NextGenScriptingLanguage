@@ -47,3 +47,30 @@ fn a_program_without_a_header_is_unaffected() {
     );
     assert!(directory.path().join("written.txt").exists());
 }
+
+#[test]
+fn a_header_after_a_bom_is_still_enforced() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = run(
+        directory.path(),
+        "\u{feff}# execute-policy: allow none\nuse value \"x\"\nthen save to \"written.txt\"\n",
+    );
+    assert!(!output.status.success());
+    assert!(!directory.path().join("written.txt").exists());
+}
+
+#[test]
+fn a_malformed_header_refuses_the_run() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = run(
+        directory.path(),
+        "# execute-policy allow everything\nuse value \"x\"\nthen save to \"written.txt\"\n",
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("malformed"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!directory.path().join("written.txt").exists());
+}

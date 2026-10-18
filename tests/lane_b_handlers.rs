@@ -121,17 +121,24 @@ fn duplicate_and_triggered_handlers_are_rejected() {
 }
 
 #[test]
-fn on_exit_is_allowed_with_checkpoints_but_on_interrupt_is_not() {
+fn on_exit_and_on_interrupt_are_refused_with_checkpoints() {
+    // A resume re-entered handler blocks without their frame, so both are refused with
+    // --checkpoint until checkpointed runs support them.
     let directory = tempfile::tempdir().unwrap();
     let checkpoint = directory.path().join("ckpt");
-    let plain = run_script(
+    let exit = run_script(
         directory.path(),
         "run",
         "on exit\n  run printf with message \"exit\"\nrun printf with message \"main\"\n",
         &["--checkpoint", checkpoint.to_str().unwrap()],
     );
-    assert_eq!(plain.status.code(), Some(0), "{}", stderr(&plain));
-    assert_eq!(stdout(&plain), "exit\n");
+    assert_ne!(exit.status.code(), Some(0));
+    assert!(
+        stderr(&exit).contains("not supported with checkpointed runs"),
+        "{}",
+        stderr(&exit)
+    );
+    assert_eq!(stdout(&exit), "", "a refused run must not run the program");
 
     let interrupt = run_script(
         directory.path(),

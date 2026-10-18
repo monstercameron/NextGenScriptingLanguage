@@ -349,7 +349,7 @@ fn loop_variables_are_mapped_to_private_shell_names() {
 }
 
 #[test]
-fn pipelines_fail_on_any_stage_and_refuse_shells_without_pipefail() {
+fn pipeline_stages_record_their_statuses_without_pipefail() {
     let directory = tempdir().unwrap();
     let (script, output) = compile(directory.path(), "run \"false\"\npipe to \"cat\"\n");
     assert!(
@@ -358,22 +358,171 @@ fn pipelines_fail_on_any_stage_and_refuse_shells_without_pipefail() {
         String::from_utf8_lossy(&output.stderr)
     );
     let text = fs::read_to_string(script).unwrap();
+    // dash has no pipefail, so no script may depend on it.
+    assert!(!text.contains("pipefail"), "{text}");
+    // Each stage writes its own status; only the first stage gets a closed stdin, and
+    // the second reads the pipe.
     assert!(
-        text.contains("(set -o pipefail) 2>/dev/null || {"),
+        text.contains(
+            "{ if 'false' < /dev/null; then echo 0 >\"$__execute_dir/1\"; else echo \"$?\" >\"$__execute_dir/1\"; fi; } \
+             | { if 'cat'; then echo 0 >\"$__execute_dir/2\"; else echo \"$?\" >\"$__execute_dir/2\"; fi; }"
+        ),
         "{text}"
     );
-    assert!(text.contains("\nset -o pipefail\n"), "{text}");
-    // Only the first stage gets a closed stdin; the second reads the pipe.
-    assert!(text.contains("'false' < /dev/null | 'cat'"), "{text}");
     assert!(!text.contains("'cat' < /dev/null"), "{text}");
+    // One private directory per script, removed on exit.
+    assert_eq!(text.matches("mktemp -d").count(), 1, "{text}");
+    assert!(text.contains("  exit 70\n"), "{text}");
+    assert!(
+        text.contains("trap 'rm -rf \"$__execute_dir\"' EXIT"),
+        "{text}"
+    );
+    // A SIGPIPE status is forgiven for the producer, never for the last stage.
+    assert!(
+        text.contains(
+            "read -r __execute_stage <\"$__execute_dir/1\"\ncase $__execute_stage in 0|141) ;;"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "read -r __execute_stage <\"$__execute_dir/2\"\ncase $__execute_stage in 0) ;;"
+        ),
+        "{text}"
+    );
 }
 
 #[test]
-fn single_commands_do_not_require_pipefail() {
+fn single_commands_need_no_status_directory() {
     let directory = tempdir().unwrap();
     let (script, output) = compile(directory.path(), "run \"true\"\n");
     assert!(output.status.success());
-    assert!(!fs::read_to_string(script).unwrap().contains("pipefail"));
+    let text = fs::read_to_string(script).unwrap();
+    assert!(!text.contains("pipefail"), "{text}");
+    assert!(!text.contains("mktemp"), "{text}");
+    assert!(!text.contains("__execute_dir"), "{text}");
+}
+
+#[test]
+fn closed_stdin_is_exempted_from_shellcheck_for_the_whole_script() {
+    let directory = tempdir().unwrap();
+    let (script, output) = compile(directory.path(), "run \"printf\" with arguments [\"x\"]\n");
+    assert!(output.status.success());
+    // A directive right after the shebang applies to the whole script.
+    assert!(fs::read_to_string(script)
+        .unwrap()
+        .starts_with("#!/bin/sh\n# shellcheck disable=SC2217\n"));
+}
+
+/// A POSIX sh to run compiled scripts: dash where it is installed (Debian, Ubuntu,
+/// macOS, Git for Windows), otherwise sh. None when neither runs.
+fn posix_sh() -> Option<&'static str> {
+    ["dash", "sh"].into_iter().find(|shell| {
+        matches!(
+            Command::new(shell).args(["-c", "exit 0"]).output(),
+            Ok(output) if output.status.success()
+        )
+    })
+}
+
+/// Compile `text` and run the script under a POSIX sh with TMPDIR inside `directory`,
+/// then check the script removed its status directory. None when no sh is available.
+fn run_compiled(directory: &Path, text: &str) -> Option<Output> {
+    let Some(shell) = posix_sh() else {
+        eprintln!("note: neither dash nor sh is on PATH; the compiled script was not run");
+        return None;
+    };
+    let (script, output) = compile(directory, text);
+    assert!(
+        output.status.success(),
+        "compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let temporary = directory.join("tmp");
+    fs::create_dir_all(&temporary).unwrap();
+    let run = Command::new(shell)
+        .arg(&script)
+        .env("TMPDIR", &temporary)
+        .current_dir(directory)
+        .output()
+        .unwrap();
+    let left: Vec<_> = fs::read_dir(&temporary).unwrap().collect();
+    assert!(left.is_empty(), "the script left {left:?} behind");
+    Some(run)
+}
+
+#[test]
+fn a_failing_first_stage_fails_the_pipeline() {
+    let directory = tempdir().unwrap();
+    let Some(run) = run_compiled(directory.path(), "run \"false\"\npipe to \"cat\"\n") else {
+        return;
+    };
+    assert_eq!(run.status.code(), Some(1), "{run:?}");
+    assert_eq!(run.stdout, b"");
+}
+
+#[test]
+fn a_failing_last_stage_fails_the_pipeline() {
+    let directory = tempdir().unwrap();
+    let Some(run) = run_compiled(
+        directory.path(),
+        "run \"printf\" with arguments [\"a\"]\npipe to \"false\"\n",
+    ) else {
+        return;
+    };
+    assert_eq!(run.status.code(), Some(1), "{run:?}");
+}
+
+#[test]
+fn a_producer_stopped_by_sigpipe_does_not_fail_the_pipeline() {
+    let directory = tempdir().unwrap();
+    let Some(run) = run_compiled(
+        directory.path(),
+        "run \"yes\"\npipe to \"head\" with arguments [\"-n\", \"1\"]\n",
+    ) else {
+        return;
+    };
+    assert_eq!(run.status.code(), Some(0), "{run:?}");
+    assert_eq!(run.stdout, b"y\n");
+}
+
+#[test]
+fn a_captured_pipeline_keeps_its_output_as_the_value() {
+    let directory = tempdir().unwrap();
+    let Some(run) = run_compiled(
+        directory.path(),
+        "run \"printf\" with arguments [\"a\\n\\n\"]\npipe to \"tr\" with arguments [\"a\", \"b\"]\nexit with status 0\n",
+    ) else {
+        return;
+    };
+    assert_eq!(run.status.code(), Some(0), "{run:?}");
+    assert_eq!(run.stdout, b"b\n\n");
+}
+
+#[test]
+fn a_failed_captured_pipeline_prints_the_earlier_value_and_keeps_the_status() {
+    let directory = tempdir().unwrap();
+    let Some(run) = run_compiled(
+        directory.path(),
+        "run \"printf\" with arguments [\"kept\"]\nrepeat 1 times\n  run \"sh\" with arguments [\"-c\", \"exit 3\"]\n  pipe to \"cat\"\n",
+    ) else {
+        return;
+    };
+    assert_eq!(run.status.code(), Some(3), "{run:?}");
+    assert_eq!(run.stdout, b"kept");
+}
+
+#[cfg(unix)]
+#[test]
+fn pipeline_failures_and_sigpipe_match_execute() {
+    for text in [
+        "run \"false\"\npipe to \"cat\"\n",
+        "run \"printf\" with arguments [\"a\"]\npipe to \"false\"\n",
+        "run \"yes\"\npipe to \"head\" with arguments [\"-n\", \"1\"]\n",
+    ] {
+        let directory = tempdir().unwrap();
+        assert_matches_execute(directory.path(), text);
+    }
 }
 
 #[test]

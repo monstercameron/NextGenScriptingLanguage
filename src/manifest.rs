@@ -501,9 +501,15 @@ impl Registry {
         })?;
         let base_len = self.data.manifests.len();
         let mut manifests = self.data.manifests.to_parsed()?;
+        let mut names = (*self.data.names).clone();
+        if let Manifests::Bundled { index, .. } = self.data.manifests.as_ref() {
+            for (key, position) in index.names() {
+                names.insert((*key).to_owned(), usize::from(*position));
+            }
+        }
         let mut data = RegistryData {
             manifests: Arc::new(Manifests::default()),
-            names: Arc::clone(&self.data.names),
+            names: Arc::new(names),
             module_root: self.data.module_root.clone(),
             scope_identity: None,
             host_state: Arc::clone(&self.data.host_state),
@@ -571,7 +577,7 @@ impl Registry {
                     cells,
                     verified,
                 }),
-                names: Arc::new(index.names().clone()),
+                names: Arc::new(BTreeMap::new()),
                 module_root: Some(root),
                 ..RegistryData::default()
             }),
@@ -632,11 +638,11 @@ impl Registry {
     }
 
     pub fn resolve(&self, name_or_phrase: &str) -> Result<&Manifest> {
-        let &index = self
-            .data
-            .names
-            .get(name_or_phrase)
-            .ok_or_else(|| anyhow!("unknown applet {name_or_phrase:?}"))?;
+        let index = match self.data.manifests.as_ref() {
+            Manifests::Bundled { index, .. } => index.lookup(name_or_phrase),
+            Manifests::Parsed(_) => self.data.names.get(name_or_phrase).copied(),
+        }
+        .ok_or_else(|| anyhow!("unknown applet {name_or_phrase:?}"))?;
         self.data.manifests.get(index)
     }
 

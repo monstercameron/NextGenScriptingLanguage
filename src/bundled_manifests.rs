@@ -1,11 +1,9 @@
 //! The bundled manifest set, indexed at build time.
 //!
-//! `src/bundled_manifests/index.tsv` lists every bundled manifest with its file name,
-//! byte size, canonical name, phrases, and where its body sits in `bodies.bin`. Each
-//! body is a DEFLATE stream of the file's exact bytes, so inflating it reproduces the
-//! source and the typed parse runs the same code as a file load. The index is
-//! immutable and shared: every registry built from it reads the same static data, and
-//! each manifest is parsed on first use.
+//! `src/bundled_manifests/index.rs` is generated from the manifest directory and holds
+//! static metadata and lookup keys. Each body is a separate DEFLATE stream in
+//! `bodies.bin`; resolving one manifest inflates only that manifest, then the typed
+//! parse runs the same code as a file load.
 //!
 //! A registry uses the index only when the directory it was asked for holds exactly
 //! the indexed file names as plain files; any other directory takes the full load.
@@ -16,21 +14,22 @@
 //! registry already in use). The check is by name and size: equal-size edits are
 //! not seen.
 //!
-//! `generate` rebuilds both artifacts from a manifest directory after a full load has
+//! `generate` rebuilds all artifacts from a manifest directory after a full load has
 //! validated every file. A test fails when the checked-in artifacts no longer match
 //! the manifests; `EXECUTE_UPDATE_BUNDLED_INDEX=1 cargo test` rewrites them.
 
 use crate::manifest::Registry;
 use anyhow::{anyhow, bail, Context, Result};
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::OnceLock;
 
-const FORMAT_LINE: &str = "execute.bundled-manifests\t1";
-const INDEX_TEXT: &str = include_str!("bundled_manifests/index.tsv");
+const FORMAT_LINE: &str = "execute.bundled-manifests\t2";
+#[cfg(test)]
+const INDEX_TSV: &str = include_str!("bundled_manifests/index.tsv");
 const BODIES: &[u8] = include_bytes!("bundled_manifests/bodies.bin");
+include!("bundled_manifests/index.rs");
 /// Separates phrases inside one index field. Unit separator: never in a manifest name.
 const PHRASE_SEPARATOR: char = '\u{1f}';
 
@@ -40,9 +39,10 @@ pub struct BundledEntry {
     file: &'static str,
     bytes: u64,
     name: &'static str,
-    phrases: Vec<&'static str>,
+    phrases: &'static [&'static str],
     offset: usize,
     length: usize,
+    body: OnceLock<std::result::Result<String, String>>,
 }
 
 impl BundledEntry {
@@ -59,26 +59,32 @@ impl BundledEntry {
     }
 
     pub fn phrases(&self) -> &[&'static str] {
-        &self.phrases
+        self.phrases
     }
 }
 
 /// The immutable bundled index. Every registry built from it shares this one value.
 /// `bodies` holds every manifest's exact source, concatenated and inflated once.
 pub struct BundledIndex {
-    entries: Vec<BundledEntry>,
-    names: BTreeMap<String, usize>,
-    bodies: OnceLock<std::result::Result<String, String>>,
+    entries: &'static [BundledEntry],
+    names: &'static [(&'static str, u16)],
 }
 
 impl BundledIndex {
     pub fn entries(&self) -> &[BundledEntry] {
-        &self.entries
+        self.entries
     }
 
     /// Canonical names and phrases mapped to entry positions.
-    pub fn names(&self) -> &BTreeMap<String, usize> {
-        &self.names
+    pub fn lookup(&self, name: &str) -> Option<usize> {
+        self.names
+            .binary_search_by_key(&name, |(key, _)| *key)
+            .ok()
+            .map(|position| usize::from(self.names[position].1))
+    }
+
+    pub fn names(&self) -> &[(&'static str, u16)] {
+        self.names
     }
 
     /// The exact source text of one bundled manifest.
@@ -91,10 +97,14 @@ impl BundledIndex {
             .offset
             .checked_add(entry.length)
             .ok_or_else(|| anyhow!("bundled manifest {} has an invalid range", entry.file))?;
-        self.bodies
+        let source = entry
+            .body
             .get_or_init(|| -> std::result::Result<String, String> {
                 let mut bodies = Vec::new();
-                flate2::read::DeflateDecoder::new(BODIES)
+                let compressed = BODIES.get(entry.offset..end).ok_or_else(|| {
+                    format!("bundled manifest {} is outside the bodies", entry.file)
+                })?;
+                flate2::read::DeflateDecoder::new(compressed)
                     .read_to_end(&mut bodies)
                     .context("inflating bundled manifest bodies")
                     .map_err(|error| format!("{error:#}"))?;
@@ -104,69 +114,19 @@ impl BundledIndex {
             })
             .as_ref()
             .map_err(|message: &String| anyhow!("{message}"))?
-            .get(entry.offset..end)
-            .ok_or_else(|| anyhow!("bundled manifest {} is outside the bodies", entry.file))
+            .as_str();
+        Ok(source)
     }
 }
 
-static INDEX: OnceLock<std::result::Result<BundledIndex, String>> = OnceLock::new();
+static INDEX: BundledIndex = BundledIndex {
+    entries: &ENTRIES,
+    names: &NAMES,
+};
 
 /// The embedded index and bodies, read once for the process.
 pub fn index() -> Result<&'static BundledIndex> {
-    INDEX
-        .get_or_init(|| load_embedded().map_err(|error| format!("{error:#}")))
-        .as_ref()
-        .map_err(|message| anyhow!("{message}"))
-}
-
-fn load_embedded() -> Result<BundledIndex> {
-    parse_index(INDEX_TEXT)
-}
-
-fn parse_index(text: &'static str) -> Result<BundledIndex> {
-    let mut lines = text.lines();
-    let header = lines.next().context("bundled manifest index is empty")?;
-    if header != FORMAT_LINE {
-        bail!("unsupported bundled manifest index header {header:?}");
-    }
-    let mut entries = Vec::new();
-    let mut names = BTreeMap::new();
-    for line in lines {
-        if line.is_empty() {
-            continue;
-        }
-        let fields: Vec<&'static str> = line.split('\t').collect();
-        let [file, bytes, name, phrases, offset, length] = fields.as_slice() else {
-            bail!(
-                "bundled manifest index line has {} fields, expected 6",
-                fields.len()
-            );
-        };
-        let phrases: Vec<&'static str> = if phrases.is_empty() {
-            Vec::new()
-        } else {
-            phrases.split(PHRASE_SEPARATOR).collect()
-        };
-        let index = entries.len();
-        for key in std::iter::once(*name).chain(phrases.iter().copied()) {
-            if names.insert(key.to_owned(), index).is_some() {
-                bail!("bundled manifest index repeats the name or phrase {key:?}");
-            }
-        }
-        entries.push(BundledEntry {
-            file,
-            bytes: bytes.parse().context("bundled manifest size")?,
-            name,
-            phrases,
-            offset: offset.parse().context("bundled manifest offset")?,
-            length: length.parse().context("bundled manifest length")?,
-        });
-    }
-    Ok(BundledIndex {
-        entries,
-        names,
-        bodies: OnceLock::new(),
-    })
+    Ok(&INDEX)
 }
 
 /// Whether `root` holds exactly the indexed files by name and plain-file type.
@@ -236,13 +196,14 @@ fn directory_matches_with<P: ManifestDirectoryProbe>(
     Ok(found.len() == index.entries.len()
         && found
             .iter()
-            .zip(&index.entries)
+            .zip(index.entries.iter())
             .all(|(name, entry)| name == entry.file))
 }
 
-/// Both artifacts generated from one manifest directory.
+/// Artifacts generated from one manifest directory.
 pub struct Generated {
     pub index: String,
+    pub index_rust: String,
     pub bodies: Vec<u8>,
 }
 
@@ -271,7 +232,9 @@ pub fn generate(dir: &Path) -> Result<Generated> {
     }
     files.sort();
     let mut index = format!("{FORMAT_LINE}\n");
-    let mut bodies = String::new();
+    let mut body_data = Vec::new();
+    let mut entries = Vec::new();
+    let mut names = Vec::new();
     for (file, path) in &files {
         let raw = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         let value: serde_json::Value =
@@ -279,20 +242,22 @@ pub fn generate(dir: &Path) -> Result<Generated> {
         let name = value
             .get("name")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| anyhow!("{} has no string name", path.display()))?;
+            .ok_or_else(|| anyhow!("{} has no string name", path.display()))?
+            .to_owned();
         let phrases = match value.get("phrases") {
             None => Vec::new(),
             Some(serde_json::Value::Array(items)) => items
                 .iter()
                 .map(|item| {
                     item.as_str()
+                        .map(str::to_owned)
                         .ok_or_else(|| anyhow!("{} has a non-string phrase", path.display()))
                 })
                 .collect::<Result<Vec<_>>>()?,
             Some(_) => bail!("{} has a non-array phrases field", path.display()),
         };
         let phrases = phrases.join(&PHRASE_SEPARATOR.to_string());
-        for field in [file.as_str(), name, phrases.as_str()] {
+        for field in [file.as_str(), name.as_str(), phrases.as_str()] {
             if field.contains(['\t', '\n', '\r']) {
                 bail!(
                     "{} has a tab or line break in an indexed field",
@@ -300,22 +265,57 @@ pub fn generate(dir: &Path) -> Result<Generated> {
                 );
             }
         }
-        let source = String::from_utf8(raw.clone())
+        String::from_utf8(raw.clone())
             .with_context(|| format!("{} is not UTF-8", path.display()))?;
-        let offset = bodies.len();
-        bodies.push_str(&source);
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&raw)?;
+        let compressed = encoder.finish()?;
+        let offset = body_data.len();
+        let length = compressed.len();
+        body_data.extend_from_slice(&compressed);
+        let position = entries.len();
+        let position_u16 = u16::try_from(position)
+            .context("bundled manifest count exceeds static lookup capacity")?;
+        names.push((name.to_owned(), position_u16));
+        names.extend(
+            phrases
+                .split(PHRASE_SEPARATOR)
+                .filter(|phrase| !phrase.is_empty())
+                .map(|phrase| (phrase.to_owned(), position_u16)),
+        );
         index.push_str(&format!(
-            "{file}\t{}\t{name}\t{phrases}\t{offset}\t{}\n",
+            "{file}\t{}\t{name}\t{phrases}\t{offset}\t{length}\n",
             raw.len(),
-            raw.len()
+        ));
+        entries.push((file.clone(), raw.len(), name, phrases, offset, length));
+    }
+    names.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut index_rust = String::from("static ENTRIES: [BundledEntry; ");
+    index_rust.push_str(&entries.len().to_string());
+    index_rust.push_str("] = [\n");
+    for (file, bytes, name, phrases, offset, length) in &entries {
+        let phrase_list = phrases
+            .split(PHRASE_SEPARATOR)
+            .filter(|phrase| !phrase.is_empty())
+            .map(|phrase| format!("{phrase:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        index_rust.push_str(&format!(
+            "    BundledEntry {{ file: {file:?}, bytes: {bytes}, name: {name:?}, phrases: &[{phrase_list}], offset: {offset}, length: {length}, body: OnceLock::new() }},\n"
         ));
     }
-    let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
-    encoder.write_all(bodies.as_bytes())?;
-    let compressed = encoder.finish()?;
+    index_rust.push_str("];\nstatic NAMES: [(&str, u16); ");
+    index_rust.push_str(&names.len().to_string());
+    index_rust.push_str("] = [\n");
+    for (name, position) in names {
+        index_rust.push_str(&format!("    ({name:?}, {position}),\n"));
+    }
+    index_rust.push_str("];\n");
     Ok(Generated {
         index,
-        bodies: compressed,
+        index_rust,
+        bodies: body_data,
     })
 }
 
@@ -323,9 +323,61 @@ pub fn generate(dir: &Path) -> Result<Generated> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::time::Instant;
 
     fn manifests_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
+    }
+
+    #[test]
+    #[ignore = "manual bundled registry timing benchmark"]
+    fn bundled_registry_timing_1000_iterations() {
+        let dir = manifests_dir();
+        let legacy_start = Instant::now();
+        for _ in 0..1000 {
+            std::hint::black_box(parse_legacy_index_for_timing(INDEX_TSV));
+        }
+        eprintln!("1000 legacy TSV index parses: {:?}", legacy_start.elapsed());
+        let static_start = Instant::now();
+        for _ in 0..1000 {
+            std::hint::black_box(index().expect("static index"));
+        }
+        eprintln!("1000 static index accesses: {:?}", static_start.elapsed());
+        let start = Instant::now();
+        for _ in 0..1000 {
+            Registry::load_default(&dir, crate::manifest::ManifestCheck::Lazy)
+                .expect("load bundled registry")
+                .resolve("cat")
+                .expect("resolve cat");
+        }
+        eprintln!(
+            "1000 bundled load_default + resolve iterations: {:?}",
+            start.elapsed()
+        );
+    }
+
+    fn parse_legacy_index_for_timing(text: &str) -> usize {
+        let mut lines = text.lines();
+        assert_eq!(lines.next(), Some(FORMAT_LINE));
+        let mut entries = Vec::new();
+        let mut names = std::collections::BTreeMap::new();
+        for line in lines {
+            let fields: Vec<&str> = line.split('\t').collect();
+            let [file, _bytes, name, phrases, _offset, _length] = fields.as_slice() else {
+                panic!("bad legacy index line");
+            };
+            let phrases: Vec<&str> = if phrases.is_empty() {
+                Vec::new()
+            } else {
+                phrases.split(PHRASE_SEPARATOR).collect()
+            };
+            let position = entries.len();
+            for key in std::iter::once(*name).chain(phrases.iter().copied()) {
+                names.insert(key.to_owned(), position);
+            }
+            entries.push((*file, *name));
+        }
+        entries.len() + names.len()
     }
 
     /// The checked-in artifacts describe the manifests directory exactly: every file's
@@ -338,9 +390,27 @@ mod tests {
             let generated = generate(&dir).expect("generate bundled manifest index");
             let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bundled_manifests");
             fs::write(root.join("index.tsv"), generated.index).expect("write index");
+            fs::write(root.join("index.rs"), generated.index_rust).expect("write Rust index");
             fs::write(root.join("bodies.bin"), generated.bodies).expect("write bodies");
             panic!("bundled manifest index rewritten; rerun without EXECUTE_UPDATE_BUNDLED_INDEX");
         }
+        let generated = generate(&dir).expect("generate bundled manifest index");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bundled_manifests");
+        assert_eq!(
+            fs::read_to_string(root.join("index.tsv")).expect("read index"),
+            generated.index,
+            "bundled index is stale; run with EXECUTE_UPDATE_BUNDLED_INDEX=1"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("index.rs")).expect("read Rust index"),
+            generated.index_rust,
+            "bundled Rust index is stale; run with EXECUTE_UPDATE_BUNDLED_INDEX=1"
+        );
+        assert_eq!(
+            fs::read(root.join("bodies.bin")).expect("read bodies"),
+            generated.bodies,
+            "bundled bodies are stale; run with EXECUTE_UPDATE_BUNDLED_INDEX=1"
+        );
         let index = index().expect("embedded index parses");
         assert!(
             directory_matches(&dir, index).expect("list manifests"),

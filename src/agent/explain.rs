@@ -74,6 +74,9 @@ struct Row {
     direct: bool,
     applet: Option<String>,
     binary: Option<String>,
+    builtin: Option<bool>,
+    process: Option<bool>,
+    resolved_path: Option<String>,
     argv: Option<Vec<String>>,
     effects: Option<Vec<String>>,
     capabilities: Option<Vec<String>>,
@@ -116,6 +119,9 @@ impl Row {
             "direct": self.direct,
             "applet": self.applet,
             "binary": self.binary,
+            "builtin": self.builtin,
+            "process": self.process,
+            "resolved_path": self.resolved_path,
             "argv": self.argv,
             "effects": self.effects,
             "capabilities": self.capabilities,
@@ -544,6 +550,13 @@ impl Walker<'_> {
         if call.direct {
             // A quoted executable bypasses the catalog, so its effects are unknown.
             row.binary = Some(call.operation.clone());
+            row.process = Some(true);
+            if let Ok(cwd) = std::env::current_dir() {
+                row.resolved_path = crate::runtime::binary_path(&call.operation, &cwd)
+                    .ok()
+                    .and_then(|path| std::fs::canonicalize(path).ok())
+                    .map(|path| path.to_string_lossy().into_owned());
+            }
             row.undeclared = true;
             self.rows.push(row);
             return;
@@ -558,6 +571,16 @@ impl Walker<'_> {
         row.resolved = Some(true);
         row.applet = Some(manifest.name_for(call).to_owned());
         row.binary = Some(manifest.binary_for(call).to_owned());
+        row.builtin = Some(manifest.builtin.is_some());
+        row.process = Some(
+            manifest.builtin.is_none()
+                && !matches!(
+                    manifest.execution_backend(),
+                    crate::contracts::AppletBackend::InProcess
+                        | crate::contracts::AppletBackend::ProgramModule
+                        | crate::contracts::AppletBackend::Remote
+                ),
+        );
         row.argv = if call.parameters.values().any(has_reference) {
             None
         } else {

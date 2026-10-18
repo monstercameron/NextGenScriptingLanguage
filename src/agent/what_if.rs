@@ -12,11 +12,12 @@
 
 use crate::agent::what_if_key::{self, hmac_sha256};
 use crate::ast::{InputDeclaration, InputSource, Value as ProgramValue};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Protocol identifier of the `--what-if` object.
@@ -209,12 +210,56 @@ fn input_covered(context: &RunSettings<'_>) -> Result<Value> {
 
 /// The settings a review covers, without the plan. Their digests stand in for file
 /// contents, so the report stays small.
-fn settings_covered(context: &RunSettings<'_>) -> Result<Value> {
+fn resolved_executables(plan: &Value, cwd: &Path) -> Result<Value> {
+    let mut executables = BTreeMap::<String, Value>::new();
+    for row in plan["steps"].as_array().into_iter().flatten() {
+        if row["process"] == false {
+            continue;
+        }
+        if row["builtin"] == true {
+            continue;
+        }
+        if row["environment_tainted"] == true {
+            bail!(
+                "cannot bind the executable for line {} after a run-time environment change",
+                row["line"].as_u64().unwrap_or(0)
+            );
+        }
+        let Some(binary) = row["binary"].as_str() else {
+            continue;
+        };
+        let resolved = crate::runtime::binary_path(binary, cwd)
+            .with_context(|| format!("resolving executable {binary:?} for review"))?;
+        let canonical = fs::canonicalize(&resolved)
+            .with_context(|| format!("canonicalizing executable {}", resolved.display()))?;
+        let mut file = fs::File::open(&canonical)
+            .with_context(|| format!("reading executable {}", canonical.display()))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let count = file
+                .read(&mut buffer)
+                .with_context(|| format!("hashing executable {}", canonical.display()))?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        executables.insert(
+            binary.to_owned(),
+            json!({ "path": canonical.to_string_lossy(), "sha256": hex(&hasher.finalize()) }),
+        );
+    }
+    Ok(Value::Object(executables.into_iter().collect()))
+}
+
+fn settings_covered(plan: &Value, context: &RunSettings<'_>) -> Result<Value> {
     let cwd = fs::canonicalize(context.cwd)
         .with_context(|| format!("resolving {}", context.cwd.display()))?;
     Ok(json!({
         "inputs": input_covered(context)?,
         "cwd": cwd.to_string_lossy(),
+        "executables": resolved_executables(plan, context.cwd)?,
         "capability_policy": file_digest(context.capability_policy)?,
         "data_flow_policy": file_digest(context.data_flow_policy)?,
         "manifests": manifest_digests(context)?,
@@ -225,7 +270,7 @@ fn settings_covered(context: &RunSettings<'_>) -> Result<Value> {
 /// The fingerprint of a plan and the settings it runs under, and the settings that
 /// the fingerprint covers.
 pub fn fingerprint(plan: &Value, context: &RunSettings<'_>) -> Result<(String, Value)> {
-    let settings = settings_covered(context)?;
+    let settings = settings_covered(plan, context)?;
     let covered = json!({ "plan": plan, "settings": settings });
     Ok((digest(&serde_json::to_vec(&covered)?), settings))
 }
@@ -315,5 +360,52 @@ mod tests {
         fs::write(dependency.join("dep.program"), "changed dependency source").unwrap();
         let third = fingerprint(&plan, &context).unwrap().0;
         assert_ne!(second, third, "dependency source");
+    }
+
+    #[test]
+    fn resolved_executable_path_and_digest_are_part_of_review_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory
+            .path()
+            .join(if cfg!(windows) { "first.exe" } else { "first" });
+        let second = directory.path().join(if cfg!(windows) {
+            "second.exe"
+        } else {
+            "second"
+        });
+        fs::write(&first, b"first executable").unwrap();
+        fs::write(&second, b"second executable").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for path in [&first, &second] {
+                fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        let first_settings = resolved_executables(
+            &json!({"steps":[{"binary":first.to_string_lossy(),"direct":true}]}),
+            directory.path(),
+        )
+        .unwrap();
+        let second_settings = resolved_executables(
+            &json!({"steps":[{"binary":second.to_string_lossy(),"direct":true}]}),
+            directory.path(),
+        )
+        .unwrap();
+        assert_ne!(first_settings, second_settings);
+        assert!(first_settings.to_string().contains("sha256"));
+    }
+
+    #[test]
+    fn review_refuses_executable_resolution_after_environment_taint() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = resolved_executables(
+            &json!({"steps":[{"binary":"tool","process":true,"environment_tainted":true,"line":2}]}),
+            directory.path(),
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("after a run-time environment change"));
     }
 }

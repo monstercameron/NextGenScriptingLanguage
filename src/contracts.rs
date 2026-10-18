@@ -6,7 +6,8 @@
 
 use crate::ast::{InputType, Value};
 use anyhow::{anyhow, bail, Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::de::{MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
 use std::fmt;
@@ -489,7 +490,7 @@ pub struct OutputSchema {
         skip_serializing_if = "Option::is_none"
     )]
     pub items: Option<Box<ValueSchema>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_unique_map")]
     pub fields: BTreeMap<String, ValueSchema>,
     #[serde(default)]
     pub required: Vec<String>,
@@ -568,7 +569,11 @@ pub struct ValueSchema {
         skip_serializing_if = "Option::is_none"
     )]
     pub items: Option<Box<ValueSchema>>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_unique_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub fields: BTreeMap<String, ValueSchema>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required: Vec<String>,
@@ -625,12 +630,56 @@ pub enum PortDelivery {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppletPorts {
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_unique_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub inputs: BTreeMap<String, AppletPort>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_unique_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub outputs: BTreeMap<String, AppletPort>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_unique_map",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub events: BTreeMap<String, AppletPort>,
+}
+
+fn deserialize_unique_map<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct UniqueMapVisitor<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for UniqueMapVisitor<T> {
+        type Value = BTreeMap<String, T>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("an object with unique keys")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            let mut values = BTreeMap::new();
+            while let Some((key, value)) = map.next_entry::<String, T>()? {
+                if values.contains_key(&key) {
+                    return Err(serde::de::Error::custom(format!("duplicate key {key:?}")));
+                }
+                values.insert(key, value);
+            }
+            Ok(values)
+        }
+    }
+    deserializer.deserialize_map(UniqueMapVisitor(std::marker::PhantomData))
 }
 
 impl ValueSchema {
@@ -2286,3 +2335,23 @@ impl fmt::Display for RemoteError {
 }
 
 impl StdError for RemoteError {}
+
+#[cfg(test)]
+mod duplicate_map_tests {
+    use super::AppletPorts;
+
+    #[test]
+    fn contract_port_and_nested_field_maps_reject_duplicate_keys() {
+        for source in [
+            r#"{"inputs":{"a":{"schema":{"type":"text"},"delivery":"single"},"a":{"schema":{"type":"text"},"delivery":"single"}}}"#,
+            r#"{"outputs":{"a":{"schema":{"type":"text"},"delivery":"single"},"a":{"schema":{"type":"text"},"delivery":"single"}}}"#,
+            r#"{"events":{"a":{"schema":{"type":"text"},"delivery":"single"},"a":{"schema":{"type":"text"},"delivery":"single"}}}"#,
+        ] {
+            let error = serde_json::from_str::<AppletPorts>(source).unwrap_err();
+            assert!(error.to_string().contains("duplicate key \"a\""), "{error}");
+        }
+        let source = r#"{"type":"record","encoding":"json","fields":{"a":{"type":"text"},"a":{"type":"text"}}}"#;
+        let error = serde_json::from_str::<super::OutputSchema>(source).unwrap_err();
+        assert!(error.to_string().contains("duplicate key \"a\""), "{error}");
+    }
+}

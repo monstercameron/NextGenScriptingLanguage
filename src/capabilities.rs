@@ -1764,31 +1764,7 @@ fn preflight_host_paths(
     cwd: &Path,
     cwd_mode: CwdMode,
 ) -> Result<()> {
-    for declaration in &program.inputs {
-        if let Some(crate::ast::InputSource::Environment(name)) = &declaration.source {
-            let allowed = policy.host_environment.contains(name);
-            record_policy_decision(
-                registry,
-                "<workflow>",
-                "environment.read",
-                None,
-                PolicyRisk::Elevated,
-                if allowed {
-                    PolicyDecisionOutcome::Approved
-                } else {
-                    PolicyDecisionOutcome::Denied
-                },
-                if allowed {
-                    PolicyDecisionReason::PolicyMatched
-                } else {
-                    PolicyDecisionReason::CapabilityNotGranted
-                },
-            );
-            if !allowed {
-                bail!("capability policy denies reading environment variable {name:?}");
-            }
-        }
-    }
+    authorize_environment_inputs(&program.inputs, registry)?;
     fn check_steps(
         steps: &[Step],
         registry: &Registry,
@@ -1828,26 +1804,58 @@ fn preflight_host_paths(
                 _ => continue,
             };
             let Value::String(path) = path else {
-                bail!(
-                    "capability policy requires literal host filesystem paths that can be checked before effects"
-                );
+                bail!("capability policy requires literal host filesystem paths that can be checked before effects");
             };
             let path = expand_home_path(path)?;
-            // A relative target after a working-directory change is authorized when the
-            // step runs, joined onto the directory it actually names.
             if !cwd_mode.is_dynamic() || path.is_absolute() {
                 authorize_host_path(registry, &path, access, cwd)?;
             }
         }
-        // `policy` is passed explicitly to make it clear this scan is active
-        // only after a policy was installed; it is also used by future path
-        // schema extensions without changing the caller contract.
         let _ = policy;
         Ok(())
     }
     check_steps(&program.steps, registry, policy, cwd, cwd_mode)?;
     for definition in program.definitions.values() {
         check_steps(&definition.steps, registry, policy, cwd, cwd_mode)?;
+    }
+    Ok(())
+}
+
+/// Check environment-backed entry inputs against the configured capability policy.
+/// Graph and module entrypoints call this before resolving inputs.
+pub fn authorize_environment_inputs(
+    declarations: &[crate::ast::InputDeclaration],
+    registry: &Registry,
+) -> Result<()> {
+    let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    let Some(policy) = configured.as_ref() else {
+        return Ok(());
+    };
+    policy.validate()?;
+    for declaration in declarations {
+        if let Some(crate::ast::InputSource::Environment(name)) = &declaration.source {
+            let allowed = policy.host_environment.contains(name);
+            record_policy_decision(
+                registry,
+                "<workflow>",
+                "environment.read",
+                None,
+                PolicyRisk::Elevated,
+                if allowed {
+                    PolicyDecisionOutcome::Approved
+                } else {
+                    PolicyDecisionOutcome::Denied
+                },
+                if allowed {
+                    PolicyDecisionReason::PolicyMatched
+                } else {
+                    PolicyDecisionReason::CapabilityNotGranted
+                },
+            );
+            if !allowed {
+                bail!("capability policy denies reading environment variable {name:?}");
+            }
+        }
     }
     Ok(())
 }

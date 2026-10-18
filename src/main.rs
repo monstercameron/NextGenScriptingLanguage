@@ -703,6 +703,35 @@ fn remote_resolve(arguments: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// A program's `# execute-policy:` header is enforced before any input is read or any
+/// effect runs: a static plan with effects outside the declared categories is refused.
+/// A build without the policy checker refuses a program that declares a header rather
+/// than run it unchecked.
+fn enforce_policy_header(
+    source: &str,
+    program: &flow::ast::Program,
+    registry: &flow::manifest::Registry,
+    path: &Path,
+) -> Result<()> {
+    #[cfg(feature = "agent-advisory")]
+    {
+        flow::agent::policy::enforce_header(source, program, registry, &path.to_string_lossy())
+    }
+    #[cfg(not(feature = "agent-advisory"))]
+    {
+        let _ = (program, registry, path);
+        let declares_header = source
+            .lines()
+            .map(str::trim)
+            .take_while(|line| line.is_empty() || line.starts_with('#'))
+            .any(|line| line.contains("execute-policy:"));
+        if declares_header {
+            bail!("this build cannot enforce the program's execute-policy header; rebuild with the agent-advisory feature");
+        }
+        Ok(())
+    }
+}
+
 fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapshot>) -> Result<()> {
     let capability_policy = args
         .capability_policy
@@ -777,6 +806,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 "--checkpoint cannot be used with a secret prompt input: a journal would keep the answer or data computed from it"
             );
         }
+        // A capability policy decides which environment variables a graph may read,
+        // before any input is resolved.
+        flow::capabilities::authorize_environment_inputs(graph.input_declarations(), &registry)?;
         let supplied_inputs = flow::inputs::parse_cli_arguments(
             graph.input_declarations(),
             &args.inputs,
@@ -1182,6 +1214,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         bail!(
             "--checkpoint cannot be used with a secret prompt input: a journal would keep the answer or data computed from it"
         );
+    }
+    // Only a real run or resume is refused; explain, check and --what-if report the plan.
+    if matches!(args.command.as_str(), "run" | "resume") && !args.what_if {
+        enforce_policy_header(&source, &program, &registry, &canonical_file)?;
     }
     // Supplied answers win over the answers file, which wins over a terminal prompt.
     let mut supplied = args.inputs.clone();

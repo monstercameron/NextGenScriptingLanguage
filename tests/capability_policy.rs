@@ -816,3 +816,31 @@ fn required_sandbox_rejects_in_process_backend_during_preflight() {
         .to_string()
         .contains("cannot isolate in-process applet"));
 }
+
+#[test]
+fn environment_entry_inputs_are_denied_by_the_shared_policy_preflight() {
+    let registry = Registry::default();
+    registry.set_host_state(Some(CapabilityPolicy {
+        version: 1,
+        applets: BTreeMap::new(),
+        host_environment: BTreeSet::new(),
+        deny_privileged: false,
+        allow_wrappers: BTreeSet::new(),
+    }));
+    let declaration = flow::ast::InputDeclaration {
+        name: "secret".into(),
+        kind: flow::ast::InputType::Text,
+        default: None,
+        source: Some(flow::ast::InputSource::Environment(
+            "LANE_X2_UNDECLARED".into(),
+        )),
+        line: 1,
+        description: None,
+        choices: None,
+    };
+    let error =
+        flow::capabilities::authorize_environment_inputs(&[declaration], &registry).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("denies reading environment variable"));
+}

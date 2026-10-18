@@ -25,9 +25,9 @@ use crate::security::{self, PersistenceKind, SecretRedactor, SensitivitySet};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value as Json};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -46,6 +46,9 @@ pub const MAX_PROGRAM_BYTES: usize = 1024 * 1024;
 pub const MAX_PLAN_BYTES: usize = 64 * 1024;
 /// Stderr kept inline with each step, from its end.
 pub const STDERR_TAIL_BYTES: usize = 2048;
+/// Maximum trace size. Further steps are counted but not written after this bound.
+pub const MAX_TRACE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RUN_BYTES: usize = 1024 * 1024;
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -92,7 +95,10 @@ struct RecorderState {
     steps: usize,
     blob_bytes: usize,
     truncated: bool,
-    trace: File,
+    trace: BufWriter<File>,
+    trace_bytes: usize,
+    trace_truncated: bool,
+    blobs_written: BTreeSet<String>,
     /// Raw streamed stdout, in order, bounded by `MAX_BLOB_BYTES`. It is redacted
     /// as a whole when the record is finished, so a secret split across two
     /// streamed writes is still found.
@@ -140,7 +146,8 @@ impl Recorder {
         }
         create_private_directory(start.directory)?;
         write_private(&start.directory.join(PROGRAM_FILE), start.program_source)?;
-        let trace = create_private(&start.directory.join(TRACE_FILE))?;
+        let trace = BufWriter::new(create_private(&start.directory.join(TRACE_FILE))?);
+        create_private_directory(&start.directory.join(BLOB_DIR))?;
         // Declared secret values are registered before any step runs, so they are
         // redacted from the first byte written.
         let environment = std::env::vars_os().collect::<Vec<_>>();
@@ -148,7 +155,7 @@ impl Recorder {
             .map_err(|error| anyhow!("registering declared secrets: {error}"))?;
         let redactor = security::secret_redactor(start.registry);
         let (plan_text, plan_sha256) = prepare_plan(&redactor, start.plan);
-        Ok(Self {
+        let recorder = Self {
             directory: start.directory.to_path_buf(),
             registry: start.registry.clone(),
             started: Instant::now(),
@@ -163,32 +170,63 @@ impl Recorder {
                 blob_bytes: 0,
                 truncated: false,
                 trace,
+                trace_bytes: 0,
+                trace_truncated: false,
+                blobs_written: BTreeSet::new(),
                 terminal: Vec::new(),
                 labels: SensitivitySet::empty(),
                 secret_environment: false,
             }),
-        })
+        };
+        recorder.write_run_document(false, None)?;
+        Ok(recorder)
     }
 
     /// Write `run.json` for a finished run. Call after the run, whatever its result.
     pub fn finish(&self, summary: &RunSummary) -> Result<()> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.trace.flush()?;
-        // The terminal stream is the streamed output followed by the final value,
-        // which the CLI prints after the run. Both are redacted as whole buffers.
-        let mut raw_terminal = state.terminal.clone();
-        raw_terminal.extend_from_slice(&summary.output);
-        let terminal = self.redactor.redact_bytes(&raw_terminal);
-        let output_bytes = self.redactor.redact_bytes(&summary.output);
-        let persist = persistence_allowed(&self.registry, &state.labels, state.secret_environment);
-        let output = self.blob(&mut state, &output_bytes, persist)?;
-        let terminal = self.blob(&mut state, &terminal, persist)?;
-        let error = summary
-            .error
-            .as_ref()
-            .map(|error| self.redactor.redact_text(error));
+        self.write_run_document_locked(&mut state, true, Some(summary))
+    }
+
+    fn write_run_document(&self, finished: bool, summary: Option<&RunSummary>) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.write_run_document_locked(&mut state, finished, summary)
+    }
+
+    fn write_run_document_locked(
+        &self,
+        state: &mut RecorderState,
+        finished: bool,
+        summary: Option<&RunSummary>,
+    ) -> Result<()> {
+        let output = if let Some(summary) = summary {
+            let output_bytes = self.redactor.redact_bytes(&summary.output);
+            let persist =
+                persistence_allowed(&self.registry, &state.labels, state.secret_environment);
+            self.blob(state, &output_bytes, persist)?
+        } else {
+            Json::Null
+        };
+        let terminal = if let Some(summary) = summary {
+            let mut raw_terminal = state.terminal.clone();
+            raw_terminal.extend_from_slice(&summary.output);
+            let bytes = self.redactor.redact_bytes(&raw_terminal);
+            let persist =
+                persistence_allowed(&self.registry, &state.labels, state.secret_environment);
+            self.blob(state, &bytes, persist)?
+        } else {
+            Json::Null
+        };
+        let error = summary.and_then(|summary| {
+            summary
+                .error
+                .as_ref()
+                .map(|error| self.redactor.redact_text(error))
+        });
         let document = json!({
             "protocol": PROTOCOL,
+            "finished": finished,
             "program": {
                 "file": PROGRAM_FILE,
                 "sha256": sha256_hex(&fs::read(self.directory.join(PROGRAM_FILE))?),
@@ -202,8 +240,8 @@ impl Recorder {
             "wall_ms": self.started.elapsed().as_millis() as u64,
             "steps": state.steps,
             "result": {
-                "ok": summary.ok,
-                "exit_status": summary.exit_status,
+                "ok": summary.map(|summary| summary.ok),
+                "exit_status": summary.and_then(|summary| summary.exit_status),
                 "error": error,
                 "output": output,
             },
@@ -219,7 +257,7 @@ impl Recorder {
             },
         });
         let text = serde_json::to_string_pretty(&document)?;
-        write_private(&self.directory.join(RUN_FILE), text.as_bytes())
+        atomic_write_private(&self.directory.join(RUN_FILE), text.as_bytes())
     }
 
     /// Store bytes as a content-addressed blob and describe them. `bytes` must
@@ -247,12 +285,8 @@ impl Recorder {
                 "truncated": true,
             }));
         }
-        let directory = self.directory.join(BLOB_DIR);
-        if !directory.is_dir() {
-            create_private_directory(&directory)?;
-        }
-        let path = directory.join(&hash);
-        if !path.exists() {
+        let path = self.directory.join(BLOB_DIR).join(&hash);
+        if state.blobs_written.insert(hash.clone()) {
             write_private(&path, bytes)?;
             state.blob_bytes += bytes.len();
         }
@@ -332,6 +366,11 @@ impl Observer for Recorder {
         state.steps += 1;
         state.labels.extend(&result.sensitivity);
         state.secret_environment |= result.secret_environment;
+        if state.trace_truncated || state.trace_bytes >= MAX_TRACE_BYTES {
+            state.trace_truncated = true;
+            state.truncated = true;
+            return Ok(());
+        }
         let persist = persistence_allowed(
             &self.registry,
             &result.sensitivity,
@@ -375,7 +414,18 @@ impl Observer for Recorder {
                 "tail": stderr_tail,
             },
         });
-        writeln!(state.trace, "{entry}")?;
+        let line = serde_json::to_vec(&entry)?;
+        let line_len = line.len().saturating_add(1);
+        if state.trace_bytes.saturating_add(line_len) <= MAX_TRACE_BYTES {
+            let mut line = line;
+            line.push(b'\n');
+            state.trace.write_all(&line)?;
+            state.trace_bytes += line_len;
+            state.trace.flush()?;
+        } else {
+            state.trace_truncated = true;
+            state.truncated = true;
+        }
         Ok(())
     }
 
@@ -420,7 +470,7 @@ pub struct StoredRecord {
 
 impl StoredRecord {
     pub fn open(directory: &Path) -> Result<Self> {
-        let run: Json = serde_json::from_slice(
+        let mut run: Json = serde_json::from_slice(
             &read_regular_no_follow(&directory.join(RUN_FILE))
                 .with_context(|| format!("{} is not a run record", directory.display()))?,
         )
@@ -432,10 +482,17 @@ impl StoredRecord {
             read_regular_no_follow(&directory.join(TRACE_FILE)).context("reading trace.jsonl")?,
         )
         .context("reading trace.jsonl")?;
+        let trace_line_count = trace.lines().count();
+        let has_torn_final_line = run["finished"] == false && !trace.ends_with('\n');
         let mut steps = Vec::new();
         for (number, line) in trace.lines().enumerate() {
-            let value: Json = serde_json::from_str(line)
-                .with_context(|| format!("trace.jsonl line {}", number + 1))?;
+            let value: Json = match serde_json::from_str(line) {
+                Ok(value) => value,
+                Err(_) if number + 1 == trace_line_count && has_torn_final_line => break,
+                Err(error) => {
+                    return Err(error).with_context(|| format!("trace.jsonl line {}", number + 1))
+                }
+            };
             if value["event"] != "step" {
                 continue;
             }
@@ -455,6 +512,9 @@ impl StoredRecord {
                 stderr: value["stderr"].clone(),
                 failed: value["failed"].as_bool().unwrap_or(false),
             });
+        }
+        if run["finished"] == false {
+            run["steps"] = json!(steps.len());
         }
         Ok(Self {
             directory: directory.to_path_buf(),
@@ -522,15 +582,30 @@ fn read_regular_no_follow(path: &Path) -> std::io::Result<Vec<u8>> {
             )));
         }
     }
-    let mut file = options.open(path)?;
+    let file = options.open(path)?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::other(format!(
             "{} is not a regular file",
             path.display()
         )));
     }
+    let limit = match path.file_name().and_then(|name| name.to_str()) {
+        Some(RUN_FILE) => MAX_RUN_BYTES,
+        Some(TRACE_FILE) => MAX_TRACE_BYTES,
+        Some(PROGRAM_FILE) => MAX_PROGRAM_BYTES,
+        _ => MAX_BLOB_BYTES,
+    };
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} exceeds the {limit}-byte record file limit",
+                path.display()
+            ),
+        ));
+    }
     Ok(bytes)
 }
 
@@ -577,6 +652,7 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
             "program_sha256": record.run["program"]["sha256"],
             "plan_sha256": record.run["plan"]["sha256"],
             "steps": record.steps.len(),
+            "finished": record.run["finished"],
             "truncated": record.run["truncated"],
             "failed_step": failed,
             "slowest_steps": slowest,
@@ -613,7 +689,14 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
         ));
     }
     if record.run["truncated"].as_bool().unwrap_or(false) {
-        text.push_str("note: the record reached its output limit; some outputs were not kept\n");
+        text.push_str(
+            "note: the record reached a size limit; some trace or output data was not kept\n",
+        );
+    }
+    if record.run["finished"] == false {
+        text.push_str(
+            "note: the recorded run did not finish; the trace may end at the last completed step\n",
+        );
     }
     Ok(text)
 }
@@ -771,6 +854,19 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn atomic_write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    if bytes.len() > MAX_RUN_BYTES {
+        bail!("run.json exceeds the {MAX_RUN_BYTES}-byte record file limit");
+    }
+    let temporary = path.with_extension("json.tmp");
+    write_private(&temporary, bytes)?;
+    fs::rename(&temporary, path)
+        .with_context(|| format!("replacing record file {}", path.display()))?;
+    #[cfg(unix)]
+    File::open(path.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,5 +998,58 @@ mod no_follow_tests {
             super::read_regular_no_follow(&directory.path().join("plain.json")).unwrap(),
             b"ok"
         );
+    }
+}
+
+#[cfg(test)]
+mod bounded_record_tests {
+    use super::{read_regular_no_follow, RecordStart, Recorder, StoredRecord, MAX_TRACE_BYTES};
+    use serde_json::json;
+
+    #[test]
+    fn record_reader_rejects_oversized_trace_with_a_size_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(super::TRACE_FILE);
+        std::fs::write(&path, vec![b'x'; MAX_TRACE_BYTES + 1]).unwrap();
+        let error = read_regular_no_follow(&path).unwrap_err();
+        assert!(error.to_string().contains("record file limit"));
+    }
+
+    #[test]
+    fn incomplete_record_opens_and_ignores_a_torn_final_trace_line() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join(super::RUN_FILE),
+            br#"{"protocol":"execute.record/1","finished":false,"steps":1}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join(super::TRACE_FILE),
+            b"{\"event\":\"step\",\"index\":0,\"line\":1,\"applets\":[],\"binaries\":[],\"argv\":[],\"status\":0,\"wall_us\":1,\"failed\":false}\n{\"event\":",
+        )
+        .unwrap();
+        let record = StoredRecord::open(directory.path()).unwrap();
+        assert_eq!(record.steps.len(), 1);
+        assert_eq!(record.run["finished"], false);
+        let summary = super::show_run(directory.path(), false).unwrap();
+        assert!(summary.contains("recorded run did not finish"));
+    }
+
+    #[test]
+    fn recorder_publishes_an_incomplete_run_document_at_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+        })
+        .unwrap();
+        drop(recorder);
+        let record = StoredRecord::open(directory.path()).unwrap();
+        assert_eq!(record.run["finished"], false);
+        assert_eq!(record.run["steps"], 0);
     }
 }

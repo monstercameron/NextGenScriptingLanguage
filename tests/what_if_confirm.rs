@@ -101,6 +101,55 @@ fn an_unchanged_reviewed_plan_runs() {
 }
 
 #[test]
+fn changing_path_resolution_changes_the_review_fingerprint() {
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("bin1");
+    let second = root.path().join("bin2");
+    fs::create_dir_all(&first).unwrap();
+    fs::create_dir_all(&second).unwrap();
+    let executable = if cfg!(windows) {
+        "mytool.exe"
+    } else {
+        "mytool"
+    };
+    fs::copy(env!("CARGO_BIN_EXE_execute-model"), first.join(executable)).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_execute-model"), second.join(executable)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for path in [first.join(executable), second.join(executable)] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+    write(
+        root.path(),
+        "job.program",
+        "run \"mytool\" with arguments []\n",
+    );
+
+    let fingerprint_for = |bin: &Path| {
+        let old_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![bin.to_path_buf()];
+        paths.extend(std::env::split_paths(&old_path));
+        let path = std::env::join_paths(paths).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .args(["run", "job.program", "--what-if"])
+            .current_dir(root.path())
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        report["fingerprint"].as_str().unwrap().to_owned()
+    };
+    assert_ne!(fingerprint_for(&first), fingerprint_for(&second));
+}
+
+#[test]
 fn a_different_input_value_is_refused_before_any_effect() {
     // The review allowed out.txt; the confirmation names a different target.
     let root = tempfile::tempdir().unwrap();

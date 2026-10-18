@@ -383,3 +383,47 @@ fn declared_secret_environment_values_never_appear_in_the_record() {
     assert_eq!(secret_step["stderr"]["tail"], "");
     assert_eq!(document["terminal"]["withheld"], "policy");
 }
+
+#[cfg(feature = "records")]
+#[test]
+fn long_recorded_runs_stop_growing_the_trace_at_its_limit() {
+    let work = tempfile::tempdir().unwrap();
+    let manifest_dir = work.path().join("manifests");
+    fs::create_dir(&manifest_dir).unwrap();
+    let mut concat: Value =
+        serde_json::from_slice(&fs::read(manifests().join("core.text_concat.json")).unwrap())
+            .unwrap();
+    concat.as_object_mut().unwrap().remove("description");
+    fs::write(
+        manifest_dir.join("text.concat.json"),
+        serde_json::to_vec(&concat).unwrap(),
+    )
+    .unwrap();
+    let program =
+        "repeat 100000 times\r\n  run text.concat with parts [\"a\", \"b\"] and separator \"-\"";
+    assert_eq!(program.len(), 78);
+    fs::write(work.path().join("long.program"), program).unwrap();
+    let record = work.path().join("record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "long.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            manifest_dir.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let trace_bytes = fs::metadata(record.join("trace.jsonl")).unwrap().len();
+    assert!(trace_bytes <= flow::record::MAX_TRACE_BYTES as u64);
+    let document: Value =
+        serde_json::from_slice(&fs::read(record.join("run.json")).unwrap()).unwrap();
+    assert_eq!(document["truncated"], true);
+    assert_eq!(document["steps"], 100000);
+}

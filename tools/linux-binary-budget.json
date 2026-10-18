@@ -1,4 +1,4 @@
 {
-  "max_bytes": 8000000,
-  "note": "8.0 MB ceiling: about 111% of the 7.22 MB Linux x86_64 default release binary measured in the bash-compare CI run 39099227965 (commit 55c8377)."
+  "max_bytes": 8200000,
+  "note": "8.2 MB ceiling: about 111% of the 7.42 MB x86_64 default release binary measured in the bash-compare CI run 39131244372."
 }

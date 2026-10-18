@@ -20,8 +20,10 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fuzz-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Scheduled and dispatched runs get their own group, so a push no longer cancels
+  # the nightly; only push and pull-request runs replace each other.
+  group: fuzz-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 jobs:
   replay:
     name: Replay seeds and saved crashes

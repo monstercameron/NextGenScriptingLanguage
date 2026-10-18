@@ -96,7 +96,7 @@ class FlakyToolRegressions(unittest.TestCase):
     def test_release_and_reproducible_builds_share_remap_configuration(self):
         workflow = (ROOT / ".github/workflows/packages.yml").read_text()
         self.assertEqual(workflow.count("--remap-path-prefix=$PWD=/build"), 2)
-        self.assertIn('export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"', workflow)
+        self.assertIn('SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"', workflow)
         self.assertIn('SOURCE_DATE_EPOCH="$(git -C build-a log -1 --format=%ct)"', workflow)
 
     def test_shell_completions_include_files_subcommands_flags_and_safe_bash_candidates(self):

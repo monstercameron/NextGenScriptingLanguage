@@ -48,7 +48,8 @@ jobs:
       - run: python3 tests/releases.py
       - name: Build release binaries with reproducible path settings
         run: |
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
           export RUSTFLAGS="--remap-path-prefix=$PWD=/build --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
           cargo build --locked --profile dist --features full --target '${{ matrix.target }}' --bins
       - name: Build archives and Linux packages

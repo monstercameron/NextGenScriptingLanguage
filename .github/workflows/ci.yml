@@ -71,6 +71,36 @@ jobs:
       - name: Install pinned workflow validator
         run: GOBIN="$RUNNER_TEMP/actionlint" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - run: '"$RUNNER_TEMP/actionlint/actionlint" -color'
+  linux-budgets:
+    # Size, latency, hot-path and port budgets for the default Linux build. A job of its
+    # own, so a failing test elsewhere no longer skips these checks.
+    name: Linux budgets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: jq --version
+      - name: Check Linux default release binary size
+        run: |
+          cargo build --locked --release --bin execute
+          python3 tools/check_binary_size.py target/release/execute tools/linux-binary-budget.json
+      - name: Compare Omarchy ports with their Bash originals
+        run: python3 tools/port_compare.py --binary target/release/execute
+      - name: Measure Linux latency budget
+        run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests
+      - name: Measure hot-path benchmarks
+        run: python3 tools/bench_budget.py target/release/execute tools/linux-bench-budget.json --manifest-dir manifests
+      - name: Check Linux minimal build size and tests
+        run: |
+          cargo build --locked --release --bin execute --no-default-features
+          python3 tools/check_binary_size.py target/release/execute tools/linux-minimal-binary-budget.json
+          cargo test --locked --no-default-features --lib
   unix:
     name: Unix (${{ matrix.os }})
     strategy:
@@ -95,26 +125,6 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: editors/vscode
       - run: make check
-      - name: Check Linux release binary size
-        if: runner.os == 'Linux'
-        run: |
-          cargo build --locked --release --bin execute --features full
-          python3 tools/check_binary_size.py target/release/execute tools/linux-binary-budget.json
-      - name: Check Linux minimal build size and tests
-        if: runner.os == 'Linux'
-        run: |
-          cargo build --locked --release --bin execute --no-default-features
-          python3 tools/check_binary_size.py target/release/execute tools/linux-minimal-binary-budget.json
-          cargo test --locked --no-default-features --lib
-      - name: Compare Omarchy ports with their Bash originals
-        if: runner.os == 'Linux'
-        run: python3 tools/port_compare.py --binary target/release/execute
-      - name: Measure Linux latency budget
-        if: runner.os == 'Linux'
-        run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests
-      - name: Measure hot-path benchmarks
-        if: runner.os == 'Linux'
-        run: python3 tools/bench_budget.py target/release/execute tools/linux-bench-budget.json --manifest-dir manifests
       - run: make unix-smoke
       - run: make proof-smoke
       - run: npm run package

@@ -1,4 +1,4 @@
 {
-  "max_bytes": 7000000,
-  "note": "7.0 MB ceiling for the --no-default-features build: it must stay below the 7.22 MB default release binary measured in CI run 39099227965; tighten once this step has printed its own size."
+  "max_bytes": 6200000,
+  "note": "6.2 MB ceiling: about 111% of the 5.56 MB x86_64 core (--no-default-features) release binary measured in the bash-compare CI run 39131244372."
 }

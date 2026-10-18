@@ -30,7 +30,9 @@ jobs:
         run: cargo +nightly miri setup
       - name: Run pure-module unit tests under Miri
         env:
-          MIRIFLAGS: -Zmiri-strict-provenance
+          # Isolation is off so the diagnostics tests that read the working directory
+          # run; these filters only select pure modules.
+          MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-disable-isolation
         run: |
           for filter in parser:: diagnostics:: contracts:: applets::env_file::; do
             cargo +nightly miri test --locked --lib "$filter"

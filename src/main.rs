@@ -815,7 +815,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         // Graph plans are not checked against an execute-policy header yet, so a graph
         // that declares one is refused rather than run unchecked.
-        if args.command == "run" && !args.what_if && declares_policy_header(&source) {
+        if matches!(args.command.as_str(), "run" | "resume")
+            && !args.what_if
+            && declares_policy_header(&source)
+        {
             bail!("execute-policy headers are not enforced for graphs yet; remove the header or express the work as a program");
         }
         // A capability policy decides which environment variables a graph may read,

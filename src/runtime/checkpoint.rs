@@ -226,6 +226,13 @@ pub(super) struct NodeBegin<'a> {
 #[serde(deny_unknown_fields)]
 struct InFlightNode {
     fingerprint: String,
+    /// Stable base identity for per-element records across edited loop bodies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    element_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    element_start: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    element_end: Option<usize>,
     start: usize,
     end: usize,
     line: usize,
@@ -804,8 +811,50 @@ impl Journal {
         }
         let previous_status = self.data.status;
         let previous_error = self.data.error.take();
+        // A node re-begun at the step where the in-flight node started is the same loop
+        // resumed, possibly with an edited body or appended entries. Its element log
+        // keeps the identity it was written under, so committed elements stay
+        // committed across any number of resumes; `verify_commits` still refuses a
+        // committed element whose list entry changed. The sequential loop takes its
+        // replay before this call and the parallel one after, so this does not
+        // depend on the replay.
+        let same_element_node = self
+            .data
+            .in_flight
+            .as_ref()
+            .is_some_and(|node| node.start == start);
+        let element_fingerprint = self
+            .data
+            .in_flight
+            .as_ref()
+            .filter(|_| same_element_node)
+            .map_or_else(
+                || fingerprint.to_owned(),
+                |node| {
+                    node.element_fingerprint
+                        .clone()
+                        .unwrap_or_else(|| node.fingerprint.clone())
+                },
+            );
+        let element_start = self
+            .data
+            .in_flight
+            .as_ref()
+            .filter(|_| same_element_node)
+            .and_then(|node| node.element_start)
+            .unwrap_or(start);
+        let element_end = self
+            .data
+            .in_flight
+            .as_ref()
+            .filter(|_| same_element_node)
+            .and_then(|node| node.element_end)
+            .unwrap_or(end);
         let previous_in_flight = self.data.in_flight.replace(InFlightNode {
             fingerprint: fingerprint.to_owned(),
+            element_fingerprint: Some(element_fingerprint),
+            element_start: Some(element_start),
+            element_end: Some(element_end),
             start,
             end,
             line,
@@ -819,7 +868,7 @@ impl Journal {
         let identity_changed = previous_in_flight.as_ref().is_none_or(|node| {
             node.fingerprint != fingerprint || node.start != start || node.end != end
         });
-        if identity_changed {
+        if identity_changed && !same_element_node {
             if let Err(error) = self.reset_elements(fingerprint, start, end) {
                 self.data.in_flight = previous_in_flight;
                 self.data.status = previous_status;
@@ -1168,7 +1217,8 @@ fn open_regular(path: &Path, label: &str, create: bool) -> Result<File> {
             .access_mode(
                 GENERIC_READ | WRITE_DAC | READ_CONTROL | if create { GENERIC_WRITE } else { 0 },
             )
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
     }
     let file = options
         .open(path)
@@ -1245,7 +1295,7 @@ pub(crate) fn fuzz_read_journal(path: &Path) -> Result<()> {
 }
 
 fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
-    let file = open_regular(path, "checkpoint journal", false)?;
+    let file = open_journal_for_read(path)?;
     restrict_file(&file)?;
     let mut bytes = Vec::new();
     file.take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
@@ -1336,6 +1386,26 @@ fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
         bail!("checkpoint journal contains an invalid in-flight node range");
     }
     Ok((data, log))
+}
+
+pub(super) fn open_journal_for_read(path: &Path) -> Result<File> {
+    for attempt in 0..6 {
+        match open_regular(path, "checkpoint journal", false) {
+            Ok(file) => return Ok(file),
+            Err(error) => {
+                let missing = error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                });
+                if !missing || attempt == 5 {
+                    return Err(error);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5 << attempt));
+            }
+        }
+    }
+    bail!("checkpoint journal could not be opened after retries")
 }
 
 const COMPLETED_CHAIN_START: &str = "execute-checkpoint-completed-log/v3";

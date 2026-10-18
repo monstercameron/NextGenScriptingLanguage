@@ -5,7 +5,7 @@ use super::{write_with_deadline, Signals, FORCE_STDERR_CAPTURE};
 use crate::manifest::Registry;
 use anyhow::{bail, Context, Result};
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Scopes forced stderr capture to one redirected native command.
 pub(super) struct ForceStderrCapture(bool);
@@ -23,6 +23,7 @@ impl Drop for ForceStderrCapture {
 /// A `Redirect` step waiting for the command that follows it.
 pub(super) struct PendingRedirect {
     pub(super) target: crate::ast::RedirectTarget,
+    pub(super) destination: Option<PathBuf>,
     /// Opened, authorized and re-checked when the redirect step runs, before the
     /// command starts. Writes go through this handle, not a later path lookup.
     pub(super) file: Option<File>,

@@ -3,6 +3,27 @@
 
 use super::*;
 
+/// Sync the directory entry after a checkpointed file write where the platform
+/// supports opening directories as ordinary files. Windows requires backup
+/// semantics flags to open a directory; the file itself is synced by its writer.
+fn sync_destination_parent(destination: &Path, cwd: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let resolved = if destination.is_absolute() {
+            destination.to_path_buf()
+        } else {
+            cwd.join(destination)
+        };
+        let parent = resolved.parent().unwrap_or(cwd);
+        File::open(parent)?.sync_all()?;
+    }
+    #[cfg(windows)]
+    {
+        let _ = (destination, cwd);
+    }
+    Ok(())
+}
+
 /// What a finite run reads from its caller: the program, its registry and options, and the
 /// signals that can cancel it. Nested runs receive a copy, so it is `Copy`.
 #[derive(Clone, Copy)]
@@ -1147,7 +1168,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let mut file = open_output_file(&destination, true, registry, &cwd)?;
                     append_to_open_file(&mut file, &destination, &bytes)?;
                     if journal.is_some() {
-                        File::open(destination.parent().unwrap_or(&cwd))?.sync_all()?;
+                        sync_destination_parent(&destination, &cwd)?;
                     }
                     lazy_event(
                         options.trace,
@@ -1190,23 +1211,28 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 StepKind::Redirect { target, path } => {
                     // The file is opened now, before the command can start, and the
                     // command's stderr is written through this same handle later.
-                    let file = match path {
+                    let (file, destination) = match path {
                         Some(path) => {
                             let destination = path_value(path, &bindings, &cwd)?;
+                            let sync_destination = journal.is_some().then(|| destination.clone());
                             let append = *target == crate::ast::RedirectTarget::StderrAppend;
-                            Some(open_redirect_target(
-                                &destination,
-                                append,
-                                registry,
-                                signals,
-                                &cwd,
-                            )?)
+                            (
+                                Some(open_redirect_target(
+                                    &destination,
+                                    append,
+                                    registry,
+                                    signals,
+                                    &cwd,
+                                )?),
+                                sync_destination,
+                            )
                         }
-                        None => None,
+                        None => (None, None),
                     };
                     pending_redirect = Some(PendingRedirect {
                         target: *target,
                         file,
+                        destination,
                     });
                 }
                 StepKind::Save { path, .. } => {
@@ -1230,7 +1256,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     )?;
                     atomic_write(&destination, &bytes)?;
                     if journal.is_some() {
-                        File::open(destination.parent().unwrap_or(&cwd))?.sync_all()?;
+                        sync_destination_parent(&destination, &cwd)?;
                     }
                     lazy_event(
                         options.trace,
@@ -1605,6 +1631,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                             failure.diagnostic.clone().into_bytes()
                                         });
                                         redirect.write_stderr(&stderr)?;
+                                        if journal.is_some() {
+                                            if let Some(destination) = redirect.destination.as_ref()
+                                            {
+                                                sync_destination_parent(destination, &cwd)?;
+                                            }
+                                        }
                                     }
                                     return Err(error);
                                 }
@@ -1733,7 +1765,15 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             }
                         }
                         let bytes = match &mut redirect {
-                            Some(redirect) => redirect.route(bytes, &redirected_stderr, signals)?,
+                            Some(redirect) => {
+                                let bytes = redirect.route(bytes, &redirected_stderr, signals)?;
+                                if journal.is_some() {
+                                    if let Some(destination) = redirect.destination.as_ref() {
+                                        sync_destination_parent(destination, &cwd)?;
+                                    }
+                                }
+                                bytes
+                            }
                             None => bytes,
                         };
                         if streamed {

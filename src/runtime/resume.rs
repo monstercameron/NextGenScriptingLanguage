@@ -513,6 +513,16 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
             step.line
         );
     }
+    if let Some(step) = program
+        .steps
+        .iter()
+        .find(|step| matches!(step.kind, StepKind::Try { .. } | StepKind::Finally))
+    {
+        bail!(
+            "line {}: try and on exit blocks are not supported with checkpointed runs yet",
+            step.line
+        );
+    }
     // Byte captures live outside the journal and would be lost on resume.
     if let Some(step) = program.steps.iter().find(|step| {
         matches!(

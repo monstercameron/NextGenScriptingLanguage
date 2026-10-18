@@ -583,7 +583,8 @@ Both blocks are unindented headers with indented bodies, appear at most once
 each, and are allowed only in one-shot programs: a triggered program
 (`every`, `on schedule`, `listen`) rejects them. A program with a handler needs
 at least one statement to wrap. `on interrupt` is rejected with `--checkpoint`
-and in live programs; `on exit` works with checkpoints. Explain shows the
+and in live programs; `try` and `on exit` are also rejected with checkpoints
+because resume cannot safely rebuild their handler frames yet. Explain shows the
 interrupt body as an `on_interrupt` row.
 
 ### Structured JSON

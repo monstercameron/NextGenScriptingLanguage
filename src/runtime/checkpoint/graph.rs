@@ -239,8 +239,7 @@ pub(crate) fn fuzz_read_disk(path: &Path) -> Result<()> {
 }
 
 fn read_disk(path: &Path) -> Result<GraphJournalDisk> {
-    let file = open_regular(path, "checkpoint journal", false)
-        .context("graph checkpoint journal is missing")?;
+    let file = super::open_journal_for_read(path).context("graph checkpoint journal is missing")?;
     restrict_file(&file)?;
     let mut bytes = Vec::new();
     file.take(MAX_JOURNAL_BYTES as u64 + 1)

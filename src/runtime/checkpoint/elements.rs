@@ -316,11 +316,11 @@ pub(in crate::runtime) fn for_each_resume(
     let Some(replay) = journal.take_element_replay() else {
         return Ok(None);
     };
+    let items = list_items(values, &start.bindings)?;
+    let node_fingerprint = journal.element_node_fingerprint()?;
     if replay.commits.is_empty() && replay.pending.is_empty() {
         return Ok(None);
     }
-    let items = list_items(values, &start.bindings)?;
-    let node_fingerprint = journal.in_flight_fingerprint()?;
     verify_commits(&node_fingerprint, &replay.commits, &items, true)?;
     check_pending(journal, &replay.pending)?;
     let _ = registry;
@@ -364,7 +364,7 @@ pub(in crate::runtime) fn for_each_element_begin(
     if !uncertain {
         return Ok(());
     }
-    let fingerprint = element_fingerprint(&journal.in_flight_fingerprint()?, element, item)?;
+    let fingerprint = element_fingerprint(&journal.element_node_fingerprint()?, element, item)?;
     journal.append_element(&ElementLine::Begin {
         index: element,
         fingerprint,
@@ -394,7 +394,7 @@ pub(in crate::runtime) fn for_each_element_commit(
     let Some((element, item)) = loops.current_element(header) else {
         return Ok(());
     };
-    let fingerprint = element_fingerprint(&journal.in_flight_fingerprint()?, element, item)?;
+    let fingerprint = element_fingerprint(&journal.element_node_fingerprint()?, element, item)?;
     journal.commit_state(element, fingerprint, cwd, output, bindings)
 }
 
@@ -419,7 +419,7 @@ pub(in crate::runtime) fn group_journal<'a>(
     // element commit would get, and it happens before any element writes a line.
     crate::runtime::authorize_checkpoint_persistence(registry, sensitivities)?;
     let items = list_items(&each.values, bindings)?;
-    let node_fingerprint = journal.in_flight_fingerprint()?;
+    let node_fingerprint = journal.element_node_fingerprint()?;
     let mut skip = BTreeMap::new();
     if let Some(replay) = journal.take_element_replay() {
         verify_commits(&node_fingerprint, &replay.commits, &items, false)?;
@@ -485,11 +485,15 @@ impl Journal {
         self.data.in_flight.as_ref().map(|node| node.start)
     }
 
-    fn in_flight_fingerprint(&self) -> Result<String> {
+    fn element_node_fingerprint(&self) -> Result<String> {
         self.data
             .in_flight
             .as_ref()
-            .map(|node| node.fingerprint.clone())
+            .map(|node| {
+                node.element_fingerprint
+                    .clone()
+                    .unwrap_or_else(|| node.fingerprint.clone())
+            })
             .context("no checkpoint node is in flight")
     }
 
@@ -531,8 +535,15 @@ impl Journal {
             self.element_replay = None;
             return Ok(());
         };
+        let node_fingerprint = node
+            .element_fingerprint
+            .clone()
+            .unwrap_or_else(|| node.fingerprint.clone());
+        let element_start = node.element_start.unwrap_or(node.start);
+        let element_end = node.element_end.unwrap_or(node.end);
         self.elements_file = None;
-        self.elements_chain = Self::element_chain_start(&node.fingerprint, node.start, node.end);
+        self.elements_chain =
+            Self::element_chain_start(&node_fingerprint, element_start, element_end);
         self.elements_bytes = 0;
         self.elements_lines = 0;
         self.elements_dirty = false;
@@ -953,6 +964,63 @@ mod tests {
         assert_eq!(replay.pending.len(), 1);
         assert_eq!(replay.pending[0].index, 1);
         assert!(replay.pending[0].uncertain);
+    }
+
+    #[test]
+    fn changed_node_keeps_stable_element_identity_for_future_resumes() {
+        let temp = tempdir().unwrap();
+        let options = options(temp.path());
+        let cwd = temp.path().join("work");
+        fs::create_dir(&cwd).unwrap();
+        let mut journal = open(&options, &cwd);
+        start_node(&mut journal, &cwd, "old-loop");
+        let first = element_fingerprint("old-loop", 0, &Value::String("a".into())).unwrap();
+        journal
+            .commit_state(0, first, &cwd, b"a", &BTreeMap::new())
+            .unwrap();
+        journal.sync_elements().unwrap();
+        journal.load_elements().unwrap();
+        journal
+            .begin_node("edited-loop", 0, 2, 1, &cwd, true)
+            .unwrap();
+        let items = vec![
+            Value::String("a".into()),
+            Value::String("b".into()),
+            Value::String("c".into()),
+        ];
+        let replay = journal.take_element_replay().unwrap();
+        let stable = journal.element_node_fingerprint().unwrap();
+        assert_eq!(stable, "old-loop");
+        verify_commits(&stable, &replay.commits, &items, true).unwrap();
+        journal.load_elements().unwrap();
+        journal
+            .begin_node("edited-loop-again", 0, 3, 1, &cwd, true)
+            .unwrap();
+        let replay = journal.take_element_replay().unwrap();
+        assert_eq!(journal.element_node_fingerprint().unwrap(), "old-loop");
+        verify_commits("old-loop", &replay.commits, &items, true).unwrap();
+    }
+
+    #[test]
+    fn changed_node_does_not_rebind_a_changed_committed_list_entry() {
+        let temp = tempdir().unwrap();
+        let options = options(temp.path());
+        let cwd = temp.path().join("work");
+        fs::create_dir(&cwd).unwrap();
+        let mut journal = open(&options, &cwd);
+        start_node(&mut journal, &cwd, "old-loop");
+        let fingerprint = element_fingerprint("old-loop", 0, &Value::String("a".into())).unwrap();
+        journal
+            .commit_state(0, fingerprint, &cwd, b"a", &BTreeMap::new())
+            .unwrap();
+        journal.sync_elements().unwrap();
+        journal.load_elements().unwrap();
+        journal
+            .begin_node("edited-loop", 0, 2, 1, &cwd, true)
+            .unwrap();
+        let replay = journal.take_element_replay().unwrap();
+        let changed_items = vec![Value::String("changed".into())];
+        assert!(verify_commits("old-loop", &replay.commits, &changed_items, true).is_err());
     }
 
     #[test]

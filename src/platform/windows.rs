@@ -67,24 +67,114 @@ pub(crate) fn signals(
     Ok(())
 }
 
-pub(crate) fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
-    let (source, target) = (wide(source.as_os_str()), wide(target.as_os_str()));
-    // SAFETY: MoveFileExW reads two NUL-terminated UTF-16 paths. `wide` appends the NUL,
-    // and `source` and `target` are locals in this frame that live until the call
-    // returns, so both pointers are valid for the whole call. The result is checked
-    // on the following lines.
-    // Both buffers remain alive and NUL-terminated for this call.
-    if unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            target.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error());
+/// `path` (absolute and normalized) in the verbatim `\\?\` form, without a NUL.
+/// Rename-by-handle rejects plain drive and UNC paths with ERROR_INVALID_NAME.
+fn verbatim_wide(path: &Path) -> Vec<u16> {
+    let text: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let units = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+    if text.starts_with(&units(r"\\?\")) || text.starts_with(&units(r"\\.\")) {
+        return text;
     }
-    Ok(())
+    if let Some(rest) = text.strip_prefix(units(r"\\").as_slice()) {
+        let mut name = units(r"\\?\UNC\");
+        name.extend_from_slice(rest);
+        return name;
+    }
+    let mut name = units(r"\\?\");
+    name.extend_from_slice(&text);
+    name
+}
+
+/// Rename `source` over `target` with `FILE_RENAME_FLAG_POSIX_SEMANTICS`. Returns
+/// `Ok(false)` when the file system or Windows version does not support it.
+fn posix_replace(source: &Path, target: &Path) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    // From winbase.h (Win32_System_WindowsProgramming, a windows-sys feature not enabled).
+    const FILE_RENAME_FLAG_REPLACE_IF_EXISTS: u32 = 1;
+    const FILE_RENAME_FLAG_POSIX_SEMANTICS: u32 = 2;
+    let name = verbatim_wide(&std::path::absolute(target)?);
+    let name_bytes = name.len() * std::mem::size_of::<u16>();
+    let file = std::fs::OpenOptions::new()
+        .access_mode(DELETE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(source)?;
+    let name_offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let size = (name_offset + name_bytes).max(std::mem::size_of::<FILE_RENAME_INFO>());
+    let (Ok(name_length), Ok(buffer_size)) = (u32::try_from(name_bytes), u32::try_from(size))
+    else {
+        return Ok(false);
+    };
+    // u64 storage keeps the buffer aligned for FILE_RENAME_INFO's HANDLE field.
+    let mut buffer = vec![0_u64; size.div_ceil(8)];
+    let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    // SAFETY: `buffer` holds at least `size` zeroed bytes, aligned to 8, which covers the
+    // FILE_RENAME_INFO header and `name_bytes` of file name starting at FileName. The
+    // writes stay inside that allocation, and the handle stays open for the call.
+    let renamed = unsafe {
+        (*info).Anonymous.Flags =
+            FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+        (*info).RootDirectory = std::ptr::null_mut();
+        (*info).FileNameLength = name_length;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
+            name.len(),
+        );
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileRenameInfoEx,
+            info.cast_const().cast(),
+            buffer_size,
+        )
+    };
+    if renamed != 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        // ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED, ERROR_INVALID_PARAMETER: the
+        // file system or this Windows version lacks POSIX rename semantics.
+        // ERROR_INVALID_NAME (123): a path form the rename-by-handle call rejects.
+        Some(1 | 50 | 87 | 123) => Ok(false),
+        _ => Err(error),
+    }
+}
+
+pub(crate) fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    // A POSIX-semantics rename replaces the target even while a reader holds it open
+    // with FILE_SHARE_DELETE (std's default share mode, and the checkpoint readers'),
+    // which MoveFileExW refuses with access denied. File systems without it (FAT,
+    // older Windows) fall back to MoveFileExW below.
+    if posix_replace(source, target)? {
+        return Ok(());
+    }
+    let (source, target) = (wide(source.as_os_str()), wide(target.as_os_str()));
+    // A reader that holds the target open (a status poller, an antivirus scan) makes
+    // the replace fail with access denied or a sharing violation for a moment, so
+    // those two errors are retried with a short backoff before the publish fails.
+    let mut attempt = 0;
+    loop {
+        // SAFETY: MoveFileExW reads two NUL-terminated UTF-16 paths. `wide` appends the
+        // NUL, and `source` and `target` are locals that outlive the call.
+        if unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                target.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        } != 0
+        {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        // ERROR_ACCESS_DENIED (5) and ERROR_SHARING_VIOLATION (32).
+        if !matches!(error.raw_os_error(), Some(5 | 32)) || attempt == 5 {
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5 << attempt));
+        attempt += 1;
+    }
 }
 
 pub(crate) struct Job(OwnedHandle);
@@ -530,7 +620,9 @@ pub(crate) fn restrict_directory(path: &Path) -> Result<()> {
     let file = OpenOptions::new()
         .access_mode(WRITE_DAC | READ_CONTROL | FILE_READ_ATTRIBUTES)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)?;
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)
+        .with_context(|| format!("opening checkpoint directory {}", path.display()))?;
     if is_reparse(&file.metadata()?) {
         bail!("checkpoint directory cannot be a reparse point");
     }

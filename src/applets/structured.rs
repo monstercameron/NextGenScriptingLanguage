@@ -4,6 +4,7 @@
 //! JSON Pointer uses RFC 6901 escaping and indexes arrays by decimal position.
 
 use super::{absence, checkpoint_work, invalid, required_string, AppletError, ExecutionContext};
+use crate::ast::Value as TypedValue;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 
@@ -59,6 +60,99 @@ pub(super) fn get(
     lookup(document.as_ref(), &pointer)?
         .cloned()
         .ok_or_else(|| absence("not_found", "JSON Pointer does not identify a value"))
+}
+
+/// `json.get` fast path for a parsed runtime binding. It still checks the complete
+/// document's size and depth, then converts only the selected value for applet output.
+pub(super) fn get_typed(
+    args: &Map<String, Value>,
+    document: &TypedValue,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    check_typed_size_and_depth(document, context)?;
+    let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
+    let selected = lookup_typed(document, &pointer)?
+        .ok_or_else(|| absence("not_found", "JSON Pointer does not identify a value"))?;
+    crate::structured::to_json(selected)
+        .map_err(|error| invalid(format!("JSON value cannot be converted: {error}")))
+}
+
+fn check_typed_size_and_depth(
+    value: &TypedValue,
+    context: &ExecutionContext<'_>,
+) -> Result<(), AppletError> {
+    let mut pending = vec![(value, 0usize)];
+    let mut work = 0usize;
+    let mut bytes = 0usize;
+    while let Some((value, depth)) = pending.pop() {
+        checkpoint_work(context, work)?;
+        work += 1;
+        if depth > MAX_DEPTH {
+            return Err(invalid(format!(
+                "JSON value exceeds the {MAX_DEPTH}-level depth limit"
+            )));
+        }
+        bytes = bytes.saturating_add(match value {
+            TypedValue::Null => 4,
+            TypedValue::Bool(true) => 4,
+            TypedValue::Bool(false) => 5,
+            TypedValue::Integer(number) => number.to_string().len(),
+            TypedValue::Number(number) => number_length(number),
+            TypedValue::String(text) => escaped_length(text),
+            TypedValue::List(items) => {
+                for item in items {
+                    checkpoint_work(context, work)?;
+                    work += 1;
+                    pending.push((item, depth + 1));
+                }
+                2 + items.len().saturating_sub(1)
+            }
+            TypedValue::Record(fields) => {
+                let mut length = 2 + fields.len().saturating_sub(1);
+                for (key, item) in fields {
+                    checkpoint_work(context, work)?;
+                    work += 1;
+                    length = length.saturating_add(escaped_length(key) + 1);
+                    pending.push((item, depth + 1));
+                }
+                length
+            }
+            TypedValue::Reference(_) => {
+                return Err(invalid("JSON document contains an unresolved reference"));
+            }
+        });
+    }
+    context.checkpoint()?;
+    if bytes > MAX_JSON_BYTES {
+        return Err(invalid(format!(
+            "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
+        )));
+    }
+    Ok(())
+}
+
+fn lookup_typed<'a>(
+    root: &'a TypedValue,
+    pointer: &[String],
+) -> Result<Option<&'a TypedValue>, AppletError> {
+    let mut current = root;
+    for segment in pointer {
+        current = match current {
+            TypedValue::Record(fields) => match fields.get(segment) {
+                Some(value) => value,
+                None => return Ok(None),
+            },
+            TypedValue::List(items) => match parse_array_index(segment)? {
+                Some(index) => match items.get(index) {
+                    Some(value) => value,
+                    None => return Ok(None),
+                },
+                None => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+    }
+    Ok(Some(current))
 }
 
 pub(super) fn set(
@@ -522,6 +616,62 @@ fn json_type(value: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_get_matches_the_json_value_path() {
+        let source = br#"{"a":[{"x":1},null],"meta":{"count":5000}}"#;
+        let typed = crate::structured::parse(source).expect("typed JSON parses");
+        let json: Value = serde_json::from_slice(source).expect("JSON parses");
+        let args = Map::from_iter([(
+            "pointer".to_owned(),
+            Value::String("/meta/count".to_owned()),
+        )]);
+        let context = ExecutionContext::new(&|| Ok(()));
+
+        assert_eq!(
+            get_typed(&args, &typed, &context).expect("typed lookup succeeds"),
+            get(
+                &Map::from_iter([
+                    ("document".to_owned(), json),
+                    (
+                        "pointer".to_owned(),
+                        Value::String("/meta/count".to_owned()),
+                    ),
+                ]),
+                &[],
+                &context
+            )
+            .expect("JSON value lookup succeeds")
+        );
+    }
+
+    #[test]
+    fn typed_get_preserves_size_and_depth_failures() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let args = Map::from_iter([("pointer".to_owned(), Value::String(String::new()))]);
+        let too_deep =
+            (0..=MAX_DEPTH).fold(TypedValue::Null, |value, _| TypedValue::List(vec![value]));
+        assert_eq!(
+            get_typed(&args, &too_deep, &context)
+                .expect_err("deep JSON is rejected")
+                .to_string(),
+            invalid(format!(
+                "JSON value exceeds the {MAX_DEPTH}-level depth limit"
+            ))
+            .to_string()
+        );
+
+        let oversized = TypedValue::String("x".repeat(MAX_JSON_BYTES));
+        assert_eq!(
+            get_typed(&args, &oversized, &context)
+                .expect_err("oversized JSON is rejected")
+                .to_string(),
+            invalid(format!(
+                "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
+            ))
+            .to_string()
+        );
+    }
 
     /// The walked length must equal serde_json's compact encoding for every value kind,
     /// including escapes, non-ASCII text and every number form.

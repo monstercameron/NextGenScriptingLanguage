@@ -1256,6 +1256,17 @@ impl Manifest {
         &self,
         values: &BTreeMap<String, V>,
     ) -> Result<serde_json::Map<String, serde_json::Value>> {
+        self.parameters_json_skipping(values, None)
+    }
+
+    /// Validate every supplied parameter while omitting one value from the converted
+    /// applet argument map. This is used when an in-process applet can consume a typed
+    /// binding directly, avoiding a full JSON tree copy for that parameter.
+    pub(crate) fn parameters_json_skipping<V: Borrow<Value>>(
+        &self,
+        values: &BTreeMap<String, V>,
+        skipped: Option<&str>,
+    ) -> Result<serde_json::Map<String, serde_json::Value>> {
         let needs_home = values.iter().any(|(name, value)| {
             self.is_path_parameter(name)
                 && matches!(value.borrow(), Value::String(text) if starts_with_home(text))
@@ -1266,18 +1277,20 @@ impl Manifest {
                 .map(|(name, value)| (name.clone(), value.borrow().clone()))
                 .collect::<BTreeMap<_, _>>();
             let expanded = self.home_expanded_values(&owned)?;
-            return self.converted_parameters(expanded.as_ref());
+            return self.converted_parameters_skipping(expanded.as_ref(), skipped);
         }
-        self.converted_parameters(values)
+        self.converted_parameters_skipping(values, skipped)
     }
 
-    fn converted_parameters<V: Borrow<Value>>(
+    fn converted_parameters_skipping<V: Borrow<Value>>(
         &self,
         values: &BTreeMap<String, V>,
+        skipped: Option<&str>,
     ) -> Result<serde_json::Map<String, serde_json::Value>> {
-        self.validate_argument_values(values)?;
+        self.validate_argument_values_skipping_json_port(values, skipped)?;
         values
             .iter()
+            .filter(|(name, _)| skipped != Some(name.as_str()))
             .map(|(name, value)| Ok((name.clone(), crate::structured::to_json(value.borrow())?)))
             .collect()
     }
@@ -1351,6 +1364,14 @@ impl Manifest {
         &self,
         values: &BTreeMap<String, V>,
     ) -> Result<()> {
+        self.validate_argument_values_skipping_json_port(values, None)
+    }
+
+    fn validate_argument_values_skipping_json_port<V: Borrow<Value>>(
+        &self,
+        values: &BTreeMap<String, V>,
+        skipped_json_port: Option<&str>,
+    ) -> Result<()> {
         // Both maps are ordered. Merge their keys to find the first unknown
         // supplied name in linear time while preserving the old error order.
         let supplied_names = values.keys();
@@ -1400,9 +1421,19 @@ impl Manifest {
                         check_option_items(name, spec, items, false)?;
                     }
                     if let Some(port) = self.ports().and_then(|ports| ports.inputs.get(name)) {
-                        port.schema
-                            .validate_value(value)
-                            .with_context(|| format!("validating input port {name:?}"))?;
+                        if skipped_json_port == Some(name.as_str())
+                            && port.schema.kind == crate::contracts::OutputType::Json
+                            && !contains_parameter_reference(value)
+                        {
+                            // A reference-free AST JSON value is already a valid JSON
+                            // representation. Keep schema validation, but avoid creating
+                            // a serde_json tree solely to validate a `json` port.
+                            port.schema.validate()?;
+                        } else {
+                            port.schema
+                                .validate_value(value)
+                                .with_context(|| format!("validating input port {name:?}"))?;
+                        }
                     }
                 }
             }

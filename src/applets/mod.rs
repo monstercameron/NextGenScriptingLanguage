@@ -273,6 +273,31 @@ pub fn execute_with_context(
     result
 }
 
+/// The parameter an in-process applet can read straight from an interpreter value,
+/// without converting it to a JSON tree first. The runtime leaves that parameter out of
+/// the converted argument map and passes the bound value to [`execute_with_typed_json`].
+pub(crate) fn typed_json_parameter(applet: &str) -> Option<&'static str> {
+    match applet {
+        "json.get" => Some("document"),
+        _ => None,
+    }
+}
+
+/// Run an applet whose [`typed_json_parameter`] is supplied as an interpreter value.
+pub(crate) fn execute_with_typed_json(
+    applet: &str,
+    args: &serde_json::Map<String, serde_json::Value>,
+    typed: &crate::ast::Value,
+    context: &ExecutionContext<'_>,
+) -> Result<serde_json::Value, AppletError> {
+    match applet {
+        "json.get" => structured::get_typed(args, typed, context),
+        _ => Err(invalid(format!(
+            "applet {applet:?} takes no typed JSON parameter"
+        ))),
+    }
+}
+
 pub(crate) fn required_string<'a>(
     args: &'a Map<String, Value>,
     name: &str,

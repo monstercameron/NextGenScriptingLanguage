@@ -1929,11 +1929,23 @@ fn resolved_json_arguments(
     manifest: &Manifest,
     bindings: &BTreeMap<String, Value>,
 ) -> Result<serde_json::Map<String, serde_json::Value>> {
+    resolved_json_arguments_skipping(call, manifest, bindings, None)
+}
+
+/// Resolve, validate and convert a call's arguments. A `skipped` parameter is validated
+/// like the others but left out of the converted map, for an applet that reads it as a
+/// typed value.
+fn resolved_json_arguments_skipping(
+    call: &Invocation,
+    manifest: &Manifest,
+    bindings: &BTreeMap<String, Value>,
+    skipped: Option<&str>,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
     // Literal-only arguments are already in the shape expected by the
     // manifest validator. Avoid cloning every key and nested Value into a
     // temporary map before the required JSON conversion.
     if !call.parameters.values().any(contains_reference) {
-        return manifest.parameters_json(&call.parameters);
+        return manifest.parameters_json_skipping(&call.parameters, skipped);
     }
 
     let values = call
@@ -1941,7 +1953,24 @@ fn resolved_json_arguments(
         .iter()
         .map(|(name, value)| Ok((name.clone(), resolve_borrowed(value, bindings)?)))
         .collect::<Result<BTreeMap<_, _>>>()?;
-    manifest.parameters_json(&values)
+    manifest.parameters_json_skipping(&values, skipped)
+}
+
+/// The applet's typed JSON parameter and its bound value, when the call passes that
+/// parameter as a direct reference to a reference-free binding.
+fn typed_json_argument<'a>(
+    call: &Invocation,
+    manifest: &Manifest,
+    bindings: &'a BTreeMap<String, Value>,
+) -> Option<(&'static str, &'a Value)> {
+    let parameter = crate::applets::typed_json_parameter(manifest.name_for(call))?;
+    let Some(Value::Reference(name)) = call.parameters.get(parameter) else {
+        return None;
+    };
+    let value = bindings
+        .get(name)
+        .filter(|value| !contains_reference(value))?;
+    Some((parameter, value))
 }
 
 /// A parameter value with its references resolved, borrowed where possible: a direct
@@ -2174,7 +2203,15 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
     check_deadline(deadline)?;
     let input_timeout = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
     let input = input.materialize(options.max_output_bytes, signals, input_timeout)?;
-    let arguments = resolved_json_arguments(call, manifest, bindings)?;
+    // A typed JSON parameter is validated with the others but not converted: the applet
+    // reads the bound value directly, so a large document is not copied into a second tree.
+    let typed_json = typed_json_argument(call, manifest, bindings);
+    let arguments = resolved_json_arguments_skipping(
+        call,
+        manifest,
+        bindings,
+        typed_json.map(|(parameter, _)| parameter),
+    )?;
     check_deadline(deadline)?;
     let checkpoint = || {
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -2186,13 +2223,21 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
         }
     };
     let context = crate::applets::ExecutionContext::new(&checkpoint);
-    let result = crate::applets::execute_with_context(
-        manifest.name_for(call),
-        &arguments,
-        &input,
-        cwd,
-        &context,
-    );
+    let result = match typed_json {
+        Some((_, typed)) => crate::applets::execute_with_typed_json(
+            manifest.name_for(call),
+            &arguments,
+            typed,
+            &context,
+        ),
+        None => crate::applets::execute_with_context(
+            manifest.name_for(call),
+            &arguments,
+            &input,
+            cwd,
+            &context,
+        ),
+    };
     match result {
         Ok(value) => {
             // Text and path results are raw UTF-8; records and lists stay JSON.

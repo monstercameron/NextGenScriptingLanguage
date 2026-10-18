@@ -1,90 +1,283 @@
 {
-  "date": "2026-10-13",
-  "release": "execute 0.4.5",
-  "reviewer_model": "gpt-6-luna",
-  "rubric": "language-quality-rubric.md",
-  "scope_choice": "Keep the Unix glue language small",
-  "status": "original 10/10 objective remains unachieved",
-  "rounds": 2,
-  "dimensions": [
+ "date": "2026-10-18",
+ "release": "4e27d85 (execute 0.9.0-rc.5)",
+ "reviewer_model": "claude-opus-5-5 (independent subagent)",
+ "rubric": "language-quality-rubric.md",
+ "scope_choice": "Keep the Unix glue language small; dimensions judged by the scoped 8/10 definitions in issues #243-#254",
+ "status": "rubric-8 campaign round 1: no dimension at 8",
+ "rounds": 1,
+ "binary_under_test": "target/release/execute.exe (Windows 11 ARM64, built 2026-10-17 22:47 local, before the last perf-only commits to HEAD); Linux numbers from CI run 39101832218 at 4e27d85",
+ "dimensions": [
+  {
+   "name": "Readability",
+   "weight_percent": 8,
+   "initial_score": 7,
+   "final_score": 6,
+   "evidence": [
+    "Simple pipelines read as prose (README quickstart, docs/language.md 'Reading a program' table)",
+    "jq inside 193/384 example programs; models/* each carry 3 near-identical jq calls a non-programmer cannot read",
+    "Playground demos spawn printf to set a variable 108 times in 29 of 30 demos (web/examples.json)",
+    "7 playground dashboards are one printf JSON template with %s/%d (web/examples.json incident-command:50, cert-expiry:65)",
+    "web-traffic demo: 'tally' helper = grep -F, count lines, parse json, take integer, encode, compare as text \"0\"; ranking by textual sort -r of uniq -c",
+    "examples/omarchy-rewrites/10-theme-set-vscode.program:87-100 builds a 3-field record in 13 lines although {\"path\": path} literals work",
+    "explain prints Rust Debug: 'if Reference(\"greeting\") contains String(\"x\")' (repro, #223)"
+   ]
+  },
+  {
+   "name": "AI generation efficiency",
+   "weight_percent": 15,
+   "initial_score": 3,
+   "final_score": 4,
+   "evidence": [
+    "Grammar page is EBNF and every program block is parsed by tests/lane_a_grammar_doc.rs",
+    "351/354 example programs and 30/30 playground demos pass check",
+    "check --json reports ok:true, exit 0 with five error diagnostics on a program run accepts (repro, #102, #101)",
+    "check rejects 'and stderr to FILE' that run accepts (repro, #123)",
+    "Undefined name: code check_failed, no span, no suggestion (repro, filed #258)",
+    "0/131 manifests carry a description; 'applets inspect \"uppercase text\"' -> unknown applet (filed #259)",
+    "then text.upper fails ('requires parameter text') while then text.lines works (filed #260)",
+    "No held-out benchmark; the public pilot is 3 tasks, 6 cases (benchmarks/ai_productivity/public_pilot_2026_10_15/summary.md, #242)"
+   ]
+  },
+  {
+   "name": "Declarative expressiveness",
+   "weight_percent": 12,
+   "initial_score": 5,
+   "final_score": 5,
+   "evidence": [
+    "Object literals take bound references: json.stringify with value {\"path\": path} works (repro); text.render templates exist",
+    "json.get/set/map/filter, number.*, csv/yaml/toml/ini parse and stringify are in-process",
+    "No aggregation: counting, summing, grouping and ranking go to awk (17 programs) or complex jq (222 calls) (#235)",
+    "170 jq -n --arg calls in 76 programs only build an object from variables",
+    "Naming a constant needs an applet call (filed #261)",
+    "Failure records carry kind/status/signal but no errno class (#238)"
+   ]
+  },
+  {
+   "name": "Reactive programming",
+   "weight_percent": 10,
+   "initial_score": 4,
+   "final_score": 5,
+   "evidence": [
+    "listen to / whenever, every, on schedule with missed-tick policies, stream from, dbus/hypr/tail.follow sources, service generate (docs/language.md Listener and schedule semantics)",
+    "Backpressure through the producer pipe; try/catch inside a handler isolates a bad record (repro)",
+    "Unhandled handler failure ends the service; one trigger per file",
+    "and stdout to stderr loses 'one' on timeout (repro, #211); stderr to FILE loses stderr on timeout (#140)",
+    "Early-exit consumer: Windows prints 'applet \"seq\" failed (exit code: 3328)' yet exits 0; Unix fails the group (#137, #174)",
+    "Trickling daemon client stalls the daemon (#191)"
+   ]
+  },
+  {
+   "name": "Composability",
+   "weight_percent": 10,
+   "initial_score": 4,
+   "final_score": 5,
+   "evidence": [
+    "Reusable programs, run program file, versioned program modules with locks, typed applet contracts and typed graph ports",
+    "Program-call results are bytes: playground tally returns encoded JSON compared as text (#237)",
+    "for each over a parsed JSON string array cannot pass item to argv ('reference item contains json') without take (repro)",
+    "Labels on run program dropped (#105); module bodies invisible to explain and the gate (#216); bare module manifest fails (#141)"
+   ]
+  },
+  {
+   "name": "Type safety",
+   "weight_percent": 10,
+   "initial_score": 4,
+   "final_score": 5,
+   "evidence": [
+    "check validates parameter names, manifest types, typed inputs, both branches and per-path result types before effects",
+    "number.add result passed to text.upper's text passes check, fails at run (repro, filed #257)",
+    "if <integer> is \"3\" passes check, fails at run (repro, filed #257)",
+    "json.filter equals 1 misses 1.0 and 1e0 (repro, #200); /a/x on an array is status 2 not absence (repro, #199)",
+    "0755 literal passes check and runs as 755 (repro, #189); temporary-scope leak (#213)"
+   ]
+  },
+  {
+   "name": "Error handling",
+   "weight_percent": 7,
+   "initial_score": 5,
+   "final_score": 5,
+   "evidence": [
+    "try/catch/finally, on exit, on interrupt drain, retry with backoff gated by effect certainty, exit/fail, typed failure records",
+    "Caught failure record has stdout_captured:false; the command's 'partial-out' is neither printed nor captured (repro, #233)",
+    "on exit looping 60 times: 'cleanup step budget of 128 exceeded', exit 1, main output dropped (repro, #205)",
+    "Resume of a checkpointed program with on exit: 'try end without active try' (repro, #160)",
+    "io_error carries errno only inside message text (repro, #238); stderr truncated at 8 KiB (#139)",
+    "Main CI: omarchy rewrite test expects status 9 from a failed notification, gets 0 (run 39101779516)"
+   ]
+  },
+  {
+   "name": "Scalability",
+   "weight_percent": 7,
+   "initial_score": 3,
+   "final_score": 4,
+   "evidence": [
+    "Native pipes stream: count.lines over 57 MB at 10.7 MB peak; 100 MB pipe at parity with bash (CI)",
+    "Flat 20,000-statement program checks in 0.20 s",
+    "Bracketed continuation parse: 5k items 0.32 s, 10k 1.11 s, 20k 4.02 s (repro, #107)",
+    "check --json on N bad lines: 5k 0.40 s, 10k 1.29 s, 20k 4.71 s (repro, #172)",
+    "8.1 MB JSON parse peaks at 128 MB; json.map refuses a 120,000-item array at 326 MB (repro, filed #262)",
+    "Open quadratic paths #202, #203, #204, #206, #167; unbounded --record #188"
+   ]
+  },
+  {
+   "name": "Determinism",
+   "weight_percent": 7,
+   "initial_score": 4,
+   "final_score": 4,
+   "evidence": [
+    "Journal v5, per-element checkpoints, keyed digests, content-derived step ids, documented interval/cron semantics",
+    "Resume of a first-statement for each over an input fails: 'undefined result \"items\"' even with --input (repro, filed #256)",
+    "on exit + resume broken (repro, #160)",
+    "Resume re-runs committed elements after edits (#142, #144); graph identity includes line numbers (#154); label edits refuse resume (#186)",
+    "Native checks red on every main push since 7bbbc07 (2026-10-17): 17 omarchy rewrite output/status mismatches vs bash (#80)"
+   ]
+  },
+  {
+   "name": "Security",
+   "weight_percent": 6,
+   "initial_score": 2,
+   "final_score": 3,
+   "evidence": [
+    "Threat model lists H1-H19 with severities; opt-in capability and data-flow policies; what-if/confirm fingerprints; LD_*/DYLD_* refused; secret prompts withheld; Security and Fuzz CI green at HEAD",
+    "No least privilege by default: Bash trust model (README Security model); # execute-policy: allow none still writes at run (repro, filed #263)",
+    "Environment input value written to --record trace.jsonl (repro, #110)",
+    "explain --json executables omit the listen producer 'sh' (repro, #169)",
+    "fail with message passes ESC]0; and ESC[31m raw (repro, #121) despite threat-model H17",
+    "check accepts U+202E/U+2066 in source (repro, #207); modules bypass gate and confirm (#215, #216)"
+   ]
+  },
+  {
+   "name": "Developer experience",
+   "weight_percent": 5,
+   "initial_score": 4,
+   "final_score": 5,
+   "evidence": [
+    "check, explain, inspect, help, what-if/confirm, record/show-run/replay, test, run-parts, LSP (completion, hover, rename, quick fixes), playground",
+    "Typo quick fix: 'did you mean \"run\"?' with a machine-applicable edit (repro)",
+    "check --json ok:true with errors (repro, #102); check rejects run-valid forms (#101, #123)",
+    "LSP exits on one malformed frame (repro, #175); test and repair reject --help (repro, #183)",
+    "Generated usage omits the -- that flags need (repro, #212)",
+    "Native checks failing on main for 40 consecutive pushes (#80)"
+   ]
+  },
+  {
+   "name": "Runtime efficiency",
+   "weight_percent": 3,
+   "initial_score": 5,
+   "final_score": 6,
+   "evidence": [
+    "x86_64 release vs bash: startup 0.98x, one command 1.04x, 5-stage 1.10x, builtin loop 0.56x, spawn loop 0.82x, upper 1.36x, JSON 0.73x, 100 MB pipe 1.02x (CI 39101832218)",
+    "core-musl-min x86_64: startup 0.72x, RSS 2.7 MB vs 3.5 MB; loses text upper 1.70x and JSON 1.11x",
+    "Release RSS 5.9 MB vs bash 3.5 MB; binary 7.2 MB vs 1.45 MB",
+    "Every budget in tools/linux-bench-budget.json and linux-latency-budget.json is null (#153)",
+    "README benchmark table is from 234c1fc and shows JSON 23.53 ms vs today's 6.12 ms"
+   ]
+  }
+ ],
+ "weighted_initial": 4.12,
+ "weighted_final": 4.7,
+ "issues_filed_this_round": [
+  256,
+  257,
+  258,
+  259,
+  260,
+  261,
+  262,
+  263
+ ],
+ "evidence_required_before_any_10": true,
+ "history": [
+  {
+   "date": "2026-10-13",
+   "release": "execute 0.4.5",
+   "reviewer_model": "gpt-6-luna",
+   "rubric": "language-quality-rubric.md",
+   "scope_choice": "Keep the Unix glue language small",
+   "status": "original 10/10 objective remains unachieved",
+   "rounds": 2,
+   "dimensions": [
     {
-      "name": "Readability",
-      "weight_percent": 8,
-      "initial_score": 7,
-      "final_score": 7
+     "name": "Readability",
+     "weight_percent": 8,
+     "initial_score": 7,
+     "final_score": 7
     },
     {
-      "name": "AI generation efficiency",
-      "weight_percent": 15,
-      "initial_score": 3,
-      "final_score": 3
+     "name": "AI generation efficiency",
+     "weight_percent": 15,
+     "initial_score": 3,
+     "final_score": 3
     },
     {
-      "name": "Declarative expressiveness",
-      "weight_percent": 12,
-      "initial_score": 5,
-      "final_score": 5
+     "name": "Declarative expressiveness",
+     "weight_percent": 12,
+     "initial_score": 5,
+     "final_score": 5
     },
     {
-      "name": "Reactive programming",
-      "weight_percent": 10,
-      "initial_score": 4,
-      "final_score": 4
+     "name": "Reactive programming",
+     "weight_percent": 10,
+     "initial_score": 4,
+     "final_score": 4
     },
     {
-      "name": "Composability",
-      "weight_percent": 10,
-      "initial_score": 4,
-      "final_score": 4
+     "name": "Composability",
+     "weight_percent": 10,
+     "initial_score": 4,
+     "final_score": 4
     },
     {
-      "name": "Type safety",
-      "weight_percent": 10,
-      "initial_score": 3,
-      "final_score": 4
+     "name": "Type safety",
+     "weight_percent": 10,
+     "initial_score": 3,
+     "final_score": 4
     },
     {
-      "name": "Error handling",
-      "weight_percent": 7,
-      "initial_score": 5,
-      "final_score": 5
+     "name": "Error handling",
+     "weight_percent": 7,
+     "initial_score": 5,
+     "final_score": 5
     },
     {
-      "name": "Scalability",
-      "weight_percent": 7,
-      "initial_score": 4,
-      "final_score": 3
+     "name": "Scalability",
+     "weight_percent": 7,
+     "initial_score": 4,
+     "final_score": 3
     },
     {
-      "name": "Determinism",
-      "weight_percent": 7,
-      "initial_score": 4,
-      "final_score": 4
+     "name": "Determinism",
+     "weight_percent": 7,
+     "initial_score": 4,
+     "final_score": 4
     },
     {
-      "name": "Security",
-      "weight_percent": 6,
-      "initial_score": 2,
-      "final_score": 2
+     "name": "Security",
+     "weight_percent": 6,
+     "initial_score": 2,
+     "final_score": 2
     },
     {
-      "name": "Developer experience",
-      "weight_percent": 5,
-      "initial_score": 4,
-      "final_score": 4
+     "name": "Developer experience",
+     "weight_percent": 5,
+     "initial_score": 4,
+     "final_score": 4
     },
     {
-      "name": "Runtime efficiency",
-      "weight_percent": 3,
-      "initial_score": 6,
-      "final_score": 5
+     "name": "Runtime efficiency",
+     "weight_percent": 3,
+     "initial_score": 6,
+     "final_score": 5
     }
-  ],
-  "weighted_initial": 4.12,
-  "weighted_final": 4.12,
-  "weighted_trusted_local_profile": 4.3,
-  "tests_passed": 142,
-  "known_regressions_resolved": 5,
-  "review_result": "No surviving P1/P2 defect found in re-reviewed paths; not a proof of defect absence",
-  "evidence_required_before_any_10": true
+   ],
+   "weighted_initial": 4.12,
+   "weighted_final": 4.12,
+   "weighted_trusted_local_profile": 4.3,
+   "tests_passed": 142,
+   "known_regressions_resolved": 5,
+   "review_result": "No surviving P1/P2 defect found in re-reviewed paths; not a proof of defect absence",
+   "evidence_required_before_any_10": true
+  }
+ ]
 }

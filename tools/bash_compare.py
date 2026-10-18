@@ -227,7 +227,9 @@ def losses(results, sizes):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("binary", type=Path, help="the execute binary")
-    parser.add_argument("--manifest-dir", type=Path, default=Path("manifests"))
+    # Without --manifest-dir, Execute resolves its default directory the way an
+    # installed binary does, which is the path that can use the bundled index.
+    parser.add_argument("--manifest-dir", type=Path)
     parser.add_argument("--bash", default=shutil.which("bash"))
     parser.add_argument("--dash", default=shutil.which("dash"))
     parser.add_argument("--time", default=gnu_time(), help="GNU time, for peak RSS")
@@ -270,7 +272,8 @@ def main(argv=None):
             if scenario.dash and args.dash:
                 row["dash"] = measure([args.dash, "-c", scenario.bash], stdin_path, runs, args.warmup, f"dash {scenario.key}", args.time)
             row["execute"] = measure(
-                [str(args.binary), "run", str(program), "--manifest-dir", str(args.manifest_dir)],
+                [str(args.binary), "run", str(program)]
+                + (["--manifest-dir", str(args.manifest_dir)] if args.manifest_dir else []),
                 stdin_path,
                 runs,
                 args.warmup,

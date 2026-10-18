@@ -29,13 +29,13 @@ jobs:
       - run: sudo apt-get install -y --no-install-recommends time strace
       - run: bash --version | head -1 && jq --version && ls -l /usr/bin/dash
       - name: Compare
-        run: python3 tools/bash_compare.py target/release/execute --manifest-dir manifests --json-out target/bash-compare.json
+        run: python3 tools/bash_compare.py target/release/execute --json-out target/bash-compare.json
       # Where the startup time goes, for the optimisation lanes: syscalls, the
       # dynamic loader's own cost, and the binary's sections.
       - name: Profile startup
         run: |
           echo 'use value ""' > "$RUNNER_TEMP/startup.program"
-          program=(target/release/execute run "$RUNNER_TEMP/startup.program" --manifest-dir manifests)
+          program=(target/release/execute run "$RUNNER_TEMP/startup.program")
           ldd target/release/execute
           size -A target/release/execute | sort -k2 -n | tail -n 12
           strace -f -c -o "$RUNNER_TEMP/strace-count.txt" "${program[@]}"

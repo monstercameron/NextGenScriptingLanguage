@@ -140,7 +140,29 @@ pub fn normalized_name(binary: &str) -> Option<String> {
     Some(stem.to_ascii_lowercase())
 }
 
+/// `name` without a trailing version (`python3.12` -> `python`, `lua5.4` -> `lua`,
+/// `node-18` -> `node`), so versioned installs are classified like the plain name.
+fn unversioned(name: &str) -> &str {
+    let stem = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let stem = stem.strip_suffix('-').unwrap_or(stem);
+    if stem.is_empty() {
+        name
+    } else {
+        stem
+    }
+}
+
 fn classify_one(name: &str) -> Privilege {
+    let base = classify_exact(name);
+    let unversioned = unversioned(name);
+    if unversioned == name {
+        base
+    } else {
+        base.max(classify_exact(unversioned))
+    }
+}
+
+fn classify_exact(name: &str) -> Privilege {
     if ELEVATORS.contains(&name) {
         Privilege::Elevator
     } else if WRAPPERS.contains(&name) || INTERPRETERS.contains(&name) || SHELLS.contains(&name) {
@@ -183,7 +205,9 @@ pub fn is_privileged_invocation(binary: &str) -> bool {
 /// Whether the name is on [`INTERPRETERS`]: a wrapper for `deny_privileged`, but not
 /// marked privileged by `explain`.
 pub fn is_interpreter(binary: &str) -> bool {
-    normalized_name(binary).is_some_and(|name| INTERPRETERS.contains(&name.as_str()))
+    normalized_name(binary).is_some_and(|name| {
+        INTERPRETERS.contains(&name.as_str()) || INTERPRETERS.contains(&unversioned(&name))
+    })
 }
 
 #[cfg(test)]
@@ -245,6 +269,24 @@ mod tests {
         ] {
             assert_eq!(classify(name), Privilege::Wrapper, "{name}");
         }
+    }
+
+    #[test]
+    fn versioned_names_are_classified_like_the_plain_name() {
+        for name in [
+            "python3.12",
+            "perl5.36",
+            "lua5.4",
+            "php8.2",
+            "node-18",
+            "pypy3.10",
+        ] {
+            assert_eq!(classify(name), Privilege::Wrapper, "{name}");
+        }
+        assert_eq!(classify("/usr/bin/python3.12"), Privilege::Wrapper);
+        assert_eq!(classify("bash5"), Privilege::Wrapper);
+        assert_eq!(classify("sha256sum"), Privilege::Standard);
+        assert_eq!(classify("7z"), Privilege::Standard);
     }
 
     #[test]

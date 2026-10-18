@@ -122,7 +122,7 @@ fn collect_module_paths(
                 // its source and dependencies; inserting it here first would stop that
                 // walk before it starts.
                 if key == "package_manifest" {
-                    collect_package_paths(&parent.join(path), paths)?;
+                    collect_package_paths(&parent.join(path), paths, &mut BTreeSet::new())?;
                 } else {
                     paths.insert(parent.join(path));
                 }
@@ -132,10 +132,18 @@ fn collect_module_paths(
     Ok(())
 }
 
-fn collect_package_paths(path: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<()> {
-    if !paths.insert(path.to_path_buf()) {
+/// Add a package manifest, its source and its dependencies, recursively. `visited`
+/// only breaks dependency cycles; a manifest already in `paths` for another reason is
+/// still walked.
+fn collect_package_paths(
+    path: &Path,
+    paths: &mut BTreeSet<PathBuf>,
+    visited: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    if !visited.insert(path.to_path_buf()) {
         return Ok(());
     }
+    paths.insert(path.to_path_buf());
     let bytes =
         fs::read(path).with_context(|| format!("reading package manifest {}", path.display()))?;
     let package: Value = serde_json::from_slice(&bytes)
@@ -147,7 +155,7 @@ fn collect_package_paths(path: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<(
     if let Some(dependencies) = package.get("dependencies").and_then(Value::as_object) {
         for dependency in dependencies.values() {
             if let Some(manifest) = dependency.get("manifest").and_then(Value::as_str) {
-                collect_package_paths(&parent.join(manifest), paths)?;
+                collect_package_paths(&parent.join(manifest), paths, visited)?;
             }
         }
     }

@@ -240,6 +240,142 @@ require explicit retry. See the [recovery contract](docs/language.md#recover-aft
 The browser uses bounded Rust applet ports and buffered pipelines. Installed
 executables, native pipes, services, model calls and TUI screens use native Execute.
 
+## Real OS scripts, a little beyond one-liners
+
+These are checked programs from the repository, the size of scripts a desktop or a
+server actually needs. Each shows something a plain shell script does not give you
+for free: a reviewable plan, typed data, safe file updates, resume after a failure,
+or a bounded model decision.
+
+### Switch a desktop theme, and resume if the reload fails
+
+[`examples/demo/theme-refresh.program`](examples/demo/theme-refresh.program) renders
+theme templates, swaps the current-theme link and reloads the compositor. The header
+declares the effects it may have; `explain --json` shows every step before it runs.
+
+```
+# execute-policy: allow writes process undeclared
+accept theme_name as text described as "Directory name for the theme, for example dark"
+accept themes_root as text described as "Directory that holds the theme directories"
+accept current_link as text described as "Path of the current-theme symbolic link"
+accept templates as text described as "Glob of templates to render"
+accept values_json as text described as "JSON object of template values"
+
+run path.join with parts [themes_root, theme_name] as theme_dir
+run fs.ensure_dir with path theme_dir as made_dir
+run json.parse with text values_json as values
+run fs.glob with pattern templates as template_files
+for each template in template_files
+  run path.basename with path template as file_name
+  run text.strip_suffix with text file_name and suffix ".tpl" as output_name
+  run path.join with parts [theme_dir, output_name] as output_path
+  run text.render with template_path template and values values as rendered
+  run fs.ensure_file with path output_path and content rendered as written
+run fs.ensure_symlink with path current_link and target theme_dir as swap
+run "hyprctl" with arguments ["reload"]
+run "printf" with arguments ["theme %s active\n", theme_name]
+```
+
+```sh
+execute check theme-refresh.program
+execute run theme-refresh.program --what-if                # plan plus a fingerprint
+execute run theme-refresh.program --confirm FINGERPRINT --checkpoint ck
+# the reload fails: repair that one step as a structured edit, then continue
+execute repair ck --op 'replace-command 23 run "hyprctl" with arguments ["reload", "--recover"]'
+execute resume theme-refresh.program --checkpoint ck --retry-uncertain
+```
+
+The rendered files and the link swap are not redone on resume; the failed reload is
+retried only because `--retry-uncertain` says so. The full walk-through is
+[`examples/demo/walkthrough.sh`](examples/demo/walkthrough.sh).
+
+### Toggle compositor state without racing another script
+
+[`examples/omarchy-rewrites/07-workspace-layout-toggle.program`](examples/omarchy-rewrites/07-workspace-layout-toggle.program)
+reads Hyprland's JSON, decides the next layout and records it. The state file is
+written with an expected hash, so a concurrent change is refused instead of
+overwritten, and a failure is reported with its status:
+
+```
+define a program named report_file_failure
+  accept path as text
+  accept operation as text
+  accept status as integer
+  run "printf" with arguments ["Warning: %s failed for %s (status %s)\n", operation, path, status]
+
+define a program named save_workspace_state
+  accept path as text
+  accept content as text
+  accept expected_hash as text
+  run fs.write_atomic with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and content content as write_result and keep status as write_status
+  if write_status is not 0
+    run program report_file_failure with path path and operation "workspace layout save" and status write_status
+
+run "hyprctl" with arguments ["activeworkspace", "-j"] and keep status as workspace_status
+then "jq" with arguments ["-sc", "{id: (map(.id | tostring) | join(\"\\n\")) }"]
+then parse json as workspace
+take text at "/id" from workspace as workspace_id
+```
+
+Nine more ports of real Omarchy commands, each compared against its Bash original,
+are in [`examples/omarchy-rewrites`](examples/omarchy-rewrites).
+
+### React to desktop events and run as a service
+
+[`examples/desktop/hyprland-events.program`](examples/desktop/hyprland-events.program)
+is a long-running listener on the compositor's event socket; every event is the
+handler's input:
+
+```
+accept socket_path as text
+
+listen to hypr.socket2 with socket_path socket_path
+whenever a line arrives as event
+  then "cat"
+```
+
+`execute service generate systemd PROGRAM --name NAME --working-dir DIR` prints a
+validated systemd user unit (or a launchd job) for a listener or schedule without
+installing anything, so the review happens before the system changes.
+
+### Let a model decide only what it is good at
+
+[`examples/ai-gauntlet/005-config-risk.program`](examples/ai-gauntlet/005-config-risk.program)
+asks a bounded judge whether a configuration change is low risk. The answer is a
+typed verdict with a confidence threshold; anything unsure, refused or failed falls
+back to "needs human review", and model text never becomes a command. It runs
+offline from fixtures unless `live` is set:
+
+```
+accept source_path as text with default "fixtures/005/source.txt"
+accept fixture as text with default "fixtures/005/confident.json"
+accept live as boolean with default false
+try
+  read source_path
+  if live is true
+    then jev.judge with question "Is this change limited to reversible editor formatting, with no permissions, network or deletion changes?" and minimum 80 as raw
+  otherwise
+    then jev.judge with question "Is this change limited to reversible editor formatting, with no permissions, network or deletion changes?" and minimum 80 and fixture fixture as raw
+  then parse json as verdict
+  take boolean at "/accepted" from verdict as accepted
+  take boolean at "/decision" from verdict as decision
+  if accepted is true
+    if decision is true
+      run json.set with document {"status":"candidate-for-review","result":null} and pointer "/result" and value "formatting-only change"
+    otherwise
+      run json.set with document {"status":"needs-human-review","result":null} and pointer "/result" and value null
+  otherwise
+    run json.set with document {"status":"needs-human-review","result":null} and pointer "/result" and value null
+catch failure
+  run json.set with document {"status":"needs-human-review","result":null} and pointer "/result" and value null
+then save to "out/005.json"
+```
+
+[`examples/ai-gauntlet`](examples/ai-gauntlet) has 24 of these everyday tasks (log
+triage, receipt extraction, Wi-Fi and audio device choice, command danger scoring,
+commit subjects, notification triage), each with its offline fixtures, its
+advantage over Bash recorded in `catalog.json`, and a test that runs them all.
+
 ## Performance, with receipts
 
 Execute is not yet faster than Bash at the basics, and optimisation is ongoing. At

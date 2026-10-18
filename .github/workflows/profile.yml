@@ -67,6 +67,9 @@ jobs:
             perf record -q -F 20000 -g -o "$d/$name.data" -- bash -c "for i in \$(seq 50); do '$bin' run '$d/$program' < '$input' > /dev/null; done"
             perf report -i "$d/$name.data" --stdio --no-children -g none --sort dso,symbol --percent-limit 0.5 2>/dev/null | grep -v "^#" | grep -v "^$" | head -n 45
             echo "::endgroup::"
+            echo "::group::$name perf (execute process only)"
+            perf report -i "$d/$name.data" --stdio --no-children -g none --comm execute --sort dso,symbol --percent-limit 0.3 2>/dev/null | grep -v "^#" | grep -v "^$" | head -n 60
+            echo "::endgroup::"
           }
           profile startup startup.program /dev/null
           profile one one.program /dev/null

@@ -356,4 +356,13 @@ mod tests {
             assert_eq!(actual, expected, "text={text:?}, needle={needle:?}");
         }
     }
+
+    #[test]
+    fn case_conversion_matches_unicode_case_mapping() {
+        for text in ["", "ascii TEXT 123", "Straße İΣ", "éclair ıß"] {
+            let args = Map::from_iter([("text".to_owned(), Value::String(text.to_owned()))]);
+            assert_eq!(upper(&args).unwrap(), Value::String(text.to_uppercase()));
+            assert_eq!(lower(&args).unwrap(), Value::String(text.to_lowercase()));
+        }
+    }
 }

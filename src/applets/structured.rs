@@ -5,6 +5,7 @@
 
 use super::{absence, checkpoint_work, invalid, required_string, AppletError, ExecutionContext};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 
 const MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_POINTER_BYTES: usize = 4096;
@@ -53,9 +54,9 @@ pub(super) fn get(
     input: &[u8],
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
-    let document = document(args, input, context)?;
+    let document = document_ref(args, input, context)?;
     let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
-    lookup(&document, &pointer)?
+    lookup(document.as_ref(), &pointer)?
         .cloned()
         .ok_or_else(|| absence("not_found", "JSON Pointer does not identify a value"))
 }
@@ -180,6 +181,27 @@ fn document(
     Ok(value)
 }
 
+fn document_ref<'a>(
+    args: &'a Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Cow<'a, Value>, AppletError> {
+    context.checkpoint()?;
+    if let Some(value) = args.get("document") {
+        check_size_and_depth(value, context)?;
+        return Ok(Cow::Borrowed(value));
+    }
+    if input.len() > MAX_JSON_BYTES {
+        return Err(invalid(format!(
+            "JSON input exceeds the {MAX_JSON_BYTES}-byte limit"
+        )));
+    }
+    let value = serde_json::from_slice(input)
+        .map_err(|error| invalid(format!("stdin is not valid JSON: {error}")))?;
+    check_size_and_depth(&value, context)?;
+    Ok(Cow::Owned(value))
+}
+
 fn check_size_and_depth(value: &Value, context: &ExecutionContext<'_>) -> Result<(), AppletError> {
     let mut pending = vec![(value, 0usize)];
     let mut work = 0usize;
@@ -210,15 +232,41 @@ fn check_size_and_depth(value: &Value, context: &ExecutionContext<'_>) -> Result
         }
     }
     context.checkpoint()?;
-    let encoded = serde_json::to_vec(value)
-        .map_err(|error| invalid(format!("JSON value cannot be serialized: {error}")))?;
+    let mut counter = JsonByteCounter {
+        bytes: 0,
+        limit: MAX_JSON_BYTES,
+        exceeded: false,
+    };
+    let encoded = serde_json::to_writer(&mut counter, value);
     context.checkpoint()?;
-    if encoded.len() > MAX_JSON_BYTES {
+    if counter.exceeded {
         return Err(invalid(format!(
             "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
         )));
     }
+    encoded.map_err(|error| invalid(format!("JSON value cannot be serialized: {error}")))?;
     Ok(())
+}
+
+struct JsonByteCounter {
+    bytes: usize,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl std::io::Write for JsonByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes) {
+            self.exceeded = true;
+            return Err(std::io::Error::other("JSON value exceeds byte limit"));
+        }
+        self.bytes += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn optional_pointer<'a>(args: &'a Map<String, Value>, name: &str) -> Result<&'a str, AppletError> {

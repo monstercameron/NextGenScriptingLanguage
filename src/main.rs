@@ -723,12 +723,10 @@ fn remote_resolve(arguments: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// A program's `# execute-policy:` header is enforced before any input is read or any
-/// effect runs: a static plan with effects outside the declared categories is refused.
-/// A build without the policy checker refuses a program that declares a header rather
-/// than run it unchecked.
 /// Whether a source's leading comments mention an `execute-policy` header (after an
-/// optional BOM), well-formed or not.
+/// optional BOM), well-formed or not. Used by the graph path and by builds without the
+/// policy checker.
+#[cfg(any(feature = "graph", not(feature = "agent-advisory")))]
 fn declares_policy_header(source: &str) -> bool {
     source
         .strip_prefix('\u{feff}')
@@ -739,6 +737,10 @@ fn declares_policy_header(source: &str) -> bool {
         .any(|line| line.contains("execute-policy"))
 }
 
+/// A program's `# execute-policy:` header is enforced before any input is read or any
+/// effect runs: a static plan with effects outside the declared categories is refused.
+/// A build without the policy checker refuses a program that declares a header rather
+/// than run it unchecked.
 fn enforce_policy_header(
     source: &str,
     program: &flow::ast::Program,
@@ -2398,7 +2400,9 @@ fn load_registry(
                 })
             })
         }
-        (None, None) => Registry::load_default(&default_manifest_dir(), check),
+        (None, None) => {
+            Registry::load_default_from_candidates(&default_manifest_candidates(), check)
+        }
         (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
     }
 }
@@ -2485,6 +2489,7 @@ fn install_workflow_policy_state(
     registry
 }
 
+#[cfg(feature = "live")]
 fn default_manifest_dir() -> PathBuf {
     // The working directory is never searched: any directory a script runs in
     // could otherwise shadow bundled applets. Use --manifest-dir or
@@ -2504,6 +2509,23 @@ fn default_manifest_dir() -> PathBuf {
     }
 
     Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
+}
+
+/// The default manifest directories in search order: next to the installed binary,
+/// the system share directory, then the source tree. The registry probes each once.
+fn default_manifest_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::with_capacity(3);
+    if let Ok(executable) = env::current_exe() {
+        // macOS may report the launch symlink rather than its bundle target.
+        #[cfg(target_os = "macos")]
+        let executable = fs::canonicalize(&executable).unwrap_or(executable);
+        if let Some((sibling, system)) = manifest_candidates(&executable) {
+            candidates.push(sibling);
+            candidates.push(system);
+        }
+    }
+    candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests"));
+    candidates
 }
 
 fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {

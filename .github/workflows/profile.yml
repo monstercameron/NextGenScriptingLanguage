@@ -63,7 +63,7 @@ jobs:
             echo "::group::$name perf"
             # Repeat the run so the sample count is meaningful.
             perf record -q -F 20000 -g -o "$d/$name.data" -- bash -c "for i in \$(seq 50); do '$bin' run '$d/$program' < '$input' > /dev/null; done"
-            perf report -i "$d/$name.data" --stdio --no-children --sort symbol --percent-limit 1 2>/dev/null | head -n 80
+            perf report -i "$d/$name.data" --stdio --no-children -g none --sort dso,symbol --percent-limit 0.5 2>/dev/null | grep -v "^#" | grep -v "^$" | head -n 45
             echo "::endgroup::"
           }
           profile startup startup.program /dev/null

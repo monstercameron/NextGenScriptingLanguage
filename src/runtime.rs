@@ -1936,12 +1936,26 @@ fn resolved_json_arguments(
     let values = call
         .parameters
         .iter()
-        .map(|(name, value)| {
-            let value = resolve(value, bindings)?;
-            Ok((name.clone(), value))
-        })
+        .map(|(name, value)| Ok((name.clone(), resolve_borrowed(value, bindings)?)))
         .collect::<Result<BTreeMap<_, _>>>()?;
     manifest.parameters_json(&values)
+}
+
+/// A parameter value with its references resolved, borrowed where possible: a direct
+/// reference borrows the binding, so a large document or text is not cloned before it
+/// is validated and converted; only composite values that contain references are built.
+fn resolve_borrowed<'a>(
+    value: &'a Value,
+    bindings: &'a BTreeMap<String, Value>,
+) -> Result<Cow<'a, Value>> {
+    match value {
+        Value::Reference(name) => bindings
+            .get(name)
+            .map(Cow::Borrowed)
+            .ok_or_else(|| anyhow!("undefined result {name:?}")),
+        value if !contains_reference(value) => Ok(Cow::Borrowed(value)),
+        value => resolve(value, bindings).map(Cow::Owned),
+    }
 }
 
 /// One applet call's captured output, as the decoder reads it.
@@ -2703,7 +2717,7 @@ fn execute_remote_applet(
     let resolved = call
         .parameters
         .iter()
-        .map(|(name, value)| Ok((name.clone(), resolve(value, bindings)?)))
+        .map(|(name, value)| Ok((name.clone(), resolve_borrowed(value, bindings)?)))
         .collect::<Result<BTreeMap<_, _>>>()?;
     let json_arguments = manifest.parameters_json(&resolved)?.into_iter().collect();
     let mut request = RemoteRequest::new(&manifest.name);

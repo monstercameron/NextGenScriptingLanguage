@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::any::{Any, TypeId};
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1234,7 +1234,7 @@ impl Manifest {
     /// Validate resolved values and produce the exact argv vector for the child.
     pub fn build_arguments(&self, values: &BTreeMap<String, Value>) -> Result<Vec<String>> {
         let values = self.home_expanded_values(values)?;
-        self.validate_argument_values(&values)?;
+        self.validate_argument_values(values.as_ref())?;
         let mut argv = Vec::with_capacity(self.arguments.len());
         for node in &self.arguments {
             append_arguments(node, &values, &mut argv)?;
@@ -1243,16 +1243,36 @@ impl Manifest {
     }
 
     /// Return the supplied, already-resolved parameters as a JSON object for
-    /// in-process applet dispatch. Optional parameters remain omitted.
-    pub fn parameters_json(
+    /// in-process applet dispatch. Optional parameters remain omitted. The values may
+    /// be borrowed (a binding passed by reference is validated and converted in place,
+    /// never cloned first); they are copied only when a path needs `~` expanded.
+    pub fn parameters_json<V: Borrow<Value>>(
         &self,
-        values: &BTreeMap<String, Value>,
+        values: &BTreeMap<String, V>,
     ) -> Result<serde_json::Map<String, serde_json::Value>> {
-        let values = self.home_expanded_values(values)?;
-        self.validate_argument_values(&values)?;
+        let needs_home = values.iter().any(|(name, value)| {
+            self.is_path_parameter(name)
+                && matches!(value.borrow(), Value::String(text) if starts_with_home(text))
+        });
+        if needs_home {
+            let owned = values
+                .iter()
+                .map(|(name, value)| (name.clone(), value.borrow().clone()))
+                .collect::<BTreeMap<_, _>>();
+            let expanded = self.home_expanded_values(&owned)?;
+            return self.converted_parameters(expanded.as_ref());
+        }
+        self.converted_parameters(values)
+    }
+
+    fn converted_parameters<V: Borrow<Value>>(
+        &self,
+        values: &BTreeMap<String, V>,
+    ) -> Result<serde_json::Map<String, serde_json::Value>> {
+        self.validate_argument_values(values)?;
         values
             .iter()
-            .map(|(name, value)| Ok((name.clone(), crate::structured::to_json(value)?)))
+            .map(|(name, value)| Ok((name.clone(), crate::structured::to_json(value.borrow())?)))
             .collect()
     }
 
@@ -1321,7 +1341,10 @@ impl Manifest {
         Ok(argv)
     }
 
-    fn validate_argument_values(&self, values: &BTreeMap<String, Value>) -> Result<()> {
+    fn validate_argument_values<V: Borrow<Value>>(
+        &self,
+        values: &BTreeMap<String, V>,
+    ) -> Result<()> {
         // Both maps are ordered. Merge their keys to find the first unknown
         // supplied name in linear time while preserving the old error order.
         let supplied_names = values.keys();
@@ -1351,7 +1374,7 @@ impl Manifest {
             }
             let value = match supplied.peek() {
                 Some((supplied_name, value)) if supplied_name.as_str() == name.as_str() => {
-                    let value = *value;
+                    let value: &Value = (*value).borrow();
                     supplied.next();
                     Some(value)
                 }

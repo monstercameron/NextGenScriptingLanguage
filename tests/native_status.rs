@@ -196,10 +196,17 @@ fn completed_status_binding_is_restored_and_command_is_not_repeated() {
         format!("{first}then \"printf\" with arguments [\"%s\", code]\n"),
     )
     .unwrap();
+    // The failed `run "false"` is not retry-safe, so going past it needs --retry-uncertain.
     for _ in 0..2 {
         let result = Command::new(env!("CARGO_BIN_EXE_execute"))
             .current_dir(dir.path())
-            .args(["resume", "main.program", "--checkpoint", "journal"])
+            .args([
+                "resume",
+                "main.program",
+                "--checkpoint",
+                "journal",
+                "--retry-uncertain",
+            ])
             .output()
             .unwrap();
         assert!(

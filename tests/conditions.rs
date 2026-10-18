@@ -189,12 +189,13 @@ fn malformed_blocks_and_excessive_nesting_are_rejected() {
         "if true is true\nrun pwd",
         "otherwise\n  run pwd",
         "if true is true\n  run pwd\notherwise\nrun pwd",
-        "if true is true\n  run pwd\notherwise\n    run pwd",
         "if true is true\n  accept name as text",
         "if true is true\n  every 1 second\n    run pwd",
     ] {
         assert!(parser::parse(source).is_err(), "{source}");
     }
+    // An `otherwise` body takes its own indentation, which need not match the `if` body.
+    assert!(parser::parse("if true is true\n  run pwd\notherwise\n    run pwd").is_ok());
     // A chain of `otherwise if` clauses that each have a body is complete at end of file.
     assert!(
         parser::parse("if true is true\n  run pwd\notherwise if true is true\n  run pwd").is_ok()
@@ -330,9 +331,16 @@ fn completed_conditionals_restore_a_common_binding_and_ignore_comment_line_shift
     );
     assert_eq!(fs::read(dir.path().join("calls")).unwrap(), b"x");
     fs::write(dir.path().join("main.program"),format!("# shifted source positions\n{block}then \"printf\" with arguments [\"<%s>\", result]\n")).unwrap();
+    // The failed `run "false"` is not retry-safe, so going past it is an explicit decision.
     let resumed = cli(
         dir.path(),
-        &["resume", "main.program", "--checkpoint", "journal"],
+        &[
+            "resume",
+            "main.program",
+            "--checkpoint",
+            "journal",
+            "--retry-uncertain",
+        ],
     );
     good(&resumed);
     assert_eq!(resumed.stdout, b"<selected>");

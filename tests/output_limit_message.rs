@@ -1,5 +1,5 @@
 //! A foreground command whose output exceeds `--max-output-bytes` is reported as a
-//! foreground command, with the way out: pipe the output, or raise the limit.
+//! foreground command, with the way out: a streaming final `pipe to`, or raise the limit.
 
 use std::fs;
 use std::process::Command;
@@ -35,5 +35,5 @@ fn a_foreground_command_over_the_limit_is_named_as_one() {
     );
     assert!(!stderr.contains("background job"), "{stderr}");
     assert!(stderr.contains("--max-output-bytes"), "{stderr}");
-    assert!(stderr.contains("pipe the output"), "{stderr}");
+    assert!(stderr.contains("streaming final `pipe to`"), "{stderr}");
 }

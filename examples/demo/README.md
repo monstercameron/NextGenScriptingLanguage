@@ -36,7 +36,9 @@ at the first step that does not behave as expected. It walks:
 5. **repair**: `execute repair DIR --op 'replace-command LINE ...'` retries the reload
    with `--recover`. The repair is a text edit to the program, validated, shown as a
    diff, and recorded in the checkpoint folder. Only the failed step may change.
-6. **resume**: `execute resume --checkpoint DIR` continues from the failed step.
+6. **resume**: `execute resume --checkpoint DIR --retry-uncertain` continues from the
+   failed step. The reload is a native command that is not retry-safe, so running it
+   again needs `--retry-uncertain`.
 7. **verify**: the link, the rendered template and the two reload calls are checked.
 
 The fake compositor accepts `reload --recover`, which is the repair the walkthrough
@@ -70,7 +72,7 @@ execute check examples/demo/theme-refresh.program $DEMO_INPUTS
 execute run examples/demo/theme-refresh.program $DEMO_INPUTS --what-if
 execute run examples/demo/theme-refresh.program $DEMO_INPUTS --confirm FINGERPRINT --checkpoint /tmp/demo/state
 execute repair /tmp/demo/state --op 'replace-command 23 run "hyprctl" with arguments ["reload", "--recover"]'
-execute resume examples/demo/theme-refresh.program $DEMO_INPUTS --checkpoint /tmp/demo/state
+execute resume examples/demo/theme-refresh.program $DEMO_INPUTS --checkpoint /tmp/demo/state --retry-uncertain
 ```
 
 The line number in the repair is the `run "hyprctl"` line of the program. The walkthrough

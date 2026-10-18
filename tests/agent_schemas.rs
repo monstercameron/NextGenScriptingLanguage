@@ -1,7 +1,7 @@
 //! Conformance: the published JSON Schemas in `docs/schemas/` accept the output
 //! the real `execute` binary prints, and reject damaged documents. The checker
 //! implements only the keywords these schemas use: type, const, enum, required,
-//! properties, additionalProperties (false), items, minimum, maximum.
+//! properties, additionalProperties (false), items, minimum, maximum, oneOf.
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -34,6 +34,21 @@ fn matches_type(instance: &Value, kind: &str) -> bool {
 
 /// Collect every violation, so a failure names all of them at once.
 fn violations(schema: &Value, instance: &Value, path: &str, errors: &mut Vec<String>) {
+    if let Some(branches) = schema.get("oneOf").and_then(Value::as_array) {
+        let matching = branches
+            .iter()
+            .filter(|branch| {
+                let mut branch_errors = Vec::new();
+                violations(branch, instance, path, &mut branch_errors);
+                branch_errors.is_empty()
+            })
+            .count();
+        if matching != 1 {
+            errors.push(format!(
+                "{path}: matches {matching} oneOf branches, expected exactly 1"
+            ));
+        }
+    }
     if let Some(constant) = schema.get("const") {
         if constant != instance {
             errors.push(format!("{path}: expected {constant}"));

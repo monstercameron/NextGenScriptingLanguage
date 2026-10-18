@@ -57,7 +57,8 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "id", "line", "kind", "scope", "direct", "applet", "binary", "argv", "effects",
+          "id", "line", "kind", "scope", "direct", "applet", "binary", "builtin", "process",
+          "resolved_path", "argv", "effects",
           "capabilities", "writes", "network", "reads", "cwd_change",
           "modifies_next_invocation", "environment_sensitive", "environment_tainted",
           "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared", "privileged", "retry"
@@ -70,6 +71,9 @@
           "direct": { "type": "boolean" },
           "applet": { "type": ["string", "null"] },
           "binary": { "type": ["string", "null"] },
+          "builtin": { "type": ["boolean", "null"] },
+          "process": { "type": ["boolean", "null"] },
+          "resolved_path": { "type": ["string", "null"] },
           "argv": {
             "type": ["array", "null"],
             "items": { "type": "string" }

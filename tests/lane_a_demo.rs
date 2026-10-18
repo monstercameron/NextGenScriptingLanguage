@@ -106,11 +106,12 @@ fn the_walk_through_fails_at_the_reload_and_resumes_after_the_fix() {
         root.path().join("themes/dark")
     );
 
+    // The failed reload is a native command, not retry-safe, so retrying it is explicit.
     let resumed = execute(
         root.path(),
         &bin,
         "resume",
-        &["--checkpoint", &state],
+        &["--checkpoint", &state, "--retry-uncertain"],
         &[("DEMO_RELOAD_OK", "1")],
     );
     assert!(

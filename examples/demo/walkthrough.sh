@@ -81,7 +81,9 @@ line=$(grep -n '^run "hyprctl"' "$program" | head -n 1 | cut -d: -f1)
 grep -q "repair 1 applied" "$work/repair.out" || fail "the repair was not recorded"
 
 echo "== 6. resume: continue from the failed step"
-out=$(run_execute resume --checkpoint "$checkpoint") || fail "the resumed run failed"
+# The failed reload is a native command, so its outcome is not retry-safe: running it
+# again is an explicit decision, made here with --retry-uncertain.
+out=$(run_execute resume --checkpoint "$checkpoint" --retry-uncertain) || fail "the resumed run failed"
 printf '%s\n' "$out" | grep -q "theme dark active" || fail "the resumed run did not finish"
 
 echo "== 7. verify: the link, the rendered files and the compositor calls"

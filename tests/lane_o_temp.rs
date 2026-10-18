@@ -158,10 +158,21 @@ fn the_first_scope_sweeps_directories_whose_owner_is_gone() {
     for dir in [&dead, &live, &unrelated] {
         fs::create_dir(dir).unwrap();
     }
-    // A pid this large is not a live process on any supported system.
-    fs::write(dead.join("owner"), "4000000000").unwrap();
-    // The test process is alive for the whole run.
-    fs::write(live.join("owner"), std::process::id().to_string()).unwrap();
+    let (dead_owner, live_owner) = owner_records();
+    fs::write(dead.join("owner"), dead_owner).unwrap();
+    fs::write(live.join("owner"), live_owner).unwrap();
+    // On Linux an owner PID that is not visible may live in another PID namespace that
+    // shares this temporary directory, so its scope is kept, as is an old pid-only record.
+    #[cfg(target_os = "linux")]
+    let unseen = {
+        let unseen = temp.path().join("execute-scope-unseen");
+        fs::create_dir(&unseen).unwrap();
+        fs::write(unseen.join("owner"), "4000000000:1").unwrap();
+        let legacy = temp.path().join("execute-scope-legacy");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("owner"), "4000000000").unwrap();
+        [unseen, legacy]
+    };
     let program = write_program(
         directory.path(),
         "with temporary file as scratch\n  run text.trim_final_lf with text \"x\"\n",
@@ -175,6 +186,36 @@ fn the_first_scope_sweeps_directories_whose_owner_is_gone() {
     assert!(!dead.exists(), "stale scope was not swept");
     assert!(live.exists(), "a live owner's scope was swept");
     assert!(unrelated.exists(), "an unrelated directory was swept");
+    #[cfg(target_os = "linux")]
+    for kept in unseen {
+        assert!(kept.exists(), "{} was swept", kept.display());
+    }
+}
+
+/// Owner records for a stale scope and a live one, in the form this platform writes.
+/// Linux records `PID:START` (the start time from /proc), so a visible PID whose start
+/// time differs is a reused PID and its scope is stale.
+#[cfg(target_os = "linux")]
+fn owner_records() -> (String, String) {
+    let pid = std::process::id();
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let start: u64 = stat
+        .rsplit_once(')')
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(19)
+        .unwrap()
+        .parse()
+        .unwrap();
+    (format!("{pid}:{}", start + 1), format!("{pid}:{start}"))
+}
+
+/// Elsewhere the record is the PID alone; a pid this large is not a live process on any
+/// supported system, and the test process is alive for the whole run.
+#[cfg(not(target_os = "linux"))]
+fn owner_records() -> (String, String) {
+    ("4000000000".to_owned(), std::process::id().to_string())
 }
 
 /// Process substitution's replacement: two saves into temporaries, then diff on the paths.

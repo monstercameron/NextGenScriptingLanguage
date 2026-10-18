@@ -184,13 +184,15 @@ fn yaml_rejects_unsupported_and_malformed_input_with_line_numbers() {
 
 #[test]
 fn yaml_stringify_quotes_only_when_needed_and_round_trips() {
+    // A scalar that starts like a number is quoted, so no YAML 1.1 or 1.2 resolver can
+    // read it as a number, date or sexagesimal value; plain words stay plain.
     assert_eq!(
         stringify(
             "yaml.stringify",
             json!({"name": "eth0", "addresses": ["10.0.0.5/24"]})
         )
         .unwrap(),
-        json!("addresses:\n  - 10.0.0.5/24\nname: eth0\n")
+        json!("addresses:\n  - \"10.0.0.5/24\"\nname: eth0\n")
     );
     let values = json!({
         "numeric_text": "1.0",

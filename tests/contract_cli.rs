@@ -449,7 +449,9 @@ fn help_lists_the_opt_in_policy_and_contract_inspection_details() {
     let output = cli(root.path(), &["--help"]);
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(help.contains("--capability-policy FILE"));
-    assert!(help.contains("remote egress and persistence need --data-flow-policy"));
+    // The data-flow policy is listed as its own option; the security-scope warning is
+    // printed when a capability policy is used without it.
+    assert!(help.contains("--data-flow-policy FILE"));
     assert!(help.contains("--total-timeout-ms N"));
 
     let applets = cli(root.path(), &["applets", "--help"]);

@@ -178,7 +178,9 @@ def run_case(binary, case):
         if mode in ('cache','recover'):
             for name,text in case.get('mutate',{}).items(): (cwd/name).write_text(text)
             if 'repair' in case: script.write_text(case['repair']+'\n')
-            after_args=['resume',str(script),*manifest,'--checkpoint','state','--cache-dir','cache','--trace',*case.get('after_args',[])] if mode=='recover' else args
+            # Each recover case resumes past a failed node that is not retry-safe, which
+            # needs the explicit --retry-uncertain decision.
+            after_args=['resume',str(script),*manifest,'--checkpoint','state','--cache-dir','cache','--trace','--retry-uncertain',*case.get('after_args',[])] if mode=='recover' else args
             after=invoke(binary,cwd,after_args)
             verify(after,cwd,case,'after'); phases['after']=summary(after)
             traces=events(after)

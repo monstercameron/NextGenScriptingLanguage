@@ -6,6 +6,16 @@ playground uses tracked HTML in `docs/playground/` and generated assets built fr
 then deploys the complete `docs/` artifact through GitHub Pages. `.nojekyll` keeps
 all files available without Jekyll processing.
 
+The landing page covers the positioning (an AI-first Unix scripting language that people
+can read and observe), the curated scripts, the thirty playground workflows (links use
+`playground/index.html#example=ID`), the terminal captures, the benchmark evidence, AI
+applets and the build steps. The comparison table in the numbers section is static HTML
+copied from the Linux x86_64 run of `tools/bash_compare.py` (commit `234c1fc`) and the
+README's performance section. When a newer run changes those numbers, edit the table, the
+"2 of 8" count and the surrounding sentences together, and keep the statement that
+optimisation is ongoing and that Execute loses startup, size and memory. The earlier
+paired macOS chart below it is drawn from the raw JSON reports in `assets/data`.
+
 The landing page itself is static and buildless. Build the playground before
 previewing the whole site:
 
@@ -43,7 +53,7 @@ script copies, actual `.program` validation, the hero's real two-line-count
 output, benchmark sample counts/copies and screenshot source provenance. It
 never executes the displayed AI or desktop applications.
 
-The benchmark selector uses two exact 80-sample paired reports. The page reports
+The earlier-measurement selector uses two exact 80-sample paired reports. The page reports
 helper-process avoidance, keeps Bash's faster result visible, and links the raw
 samples. Those measurements describe recorded 0.9.0-dev source hashes before
 the Windows port. The page identifies the 0.9.0-rc.4 release, keeps the retained

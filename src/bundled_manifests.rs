@@ -60,7 +60,7 @@ impl BundledEntry {
 pub struct BundledIndex {
     entries: Vec<BundledEntry>,
     names: BTreeMap<String, usize>,
-    bodies: String,
+    bodies: OnceLock<std::result::Result<String, String>>,
 }
 
 impl BundledIndex {
@@ -84,6 +84,18 @@ impl BundledIndex {
             .checked_add(entry.length)
             .ok_or_else(|| anyhow!("bundled manifest {} has an invalid range", entry.file))?;
         self.bodies
+            .get_or_init(|| -> std::result::Result<String, String> {
+                let mut bodies = Vec::new();
+                flate2::read::DeflateDecoder::new(BODIES)
+                    .read_to_end(&mut bodies)
+                    .context("inflating bundled manifest bodies")
+                    .map_err(|error| format!("{error:#}"))?;
+                String::from_utf8(bodies)
+                    .context("bundled manifest bodies are not UTF-8")
+                    .map_err(|error| format!("{error:#}"))
+            })
+            .as_ref()
+            .map_err(|message: &String| anyhow!("{message}"))?
             .get(entry.offset..end)
             .ok_or_else(|| anyhow!("bundled manifest {} is outside the bodies", entry.file))
     }
@@ -100,14 +112,7 @@ pub fn index() -> Result<&'static BundledIndex> {
 }
 
 fn load_embedded() -> Result<BundledIndex> {
-    let mut bodies = Vec::new();
-    flate2::read::DeflateDecoder::new(BODIES)
-        .read_to_end(&mut bodies)
-        .context("inflating bundled manifest bodies")?;
-    let bodies = String::from_utf8(bodies).context("bundled manifest bodies are not UTF-8")?;
-    let mut index = parse_index(INDEX_TEXT)?;
-    index.bodies = bodies;
-    Ok(index)
+    parse_index(INDEX_TEXT)
 }
 
 fn parse_index(text: &'static str) -> Result<BundledIndex> {
@@ -152,7 +157,7 @@ fn parse_index(text: &'static str) -> Result<BundledIndex> {
     Ok(BundledIndex {
         entries,
         names,
-        bodies: String::new(),
+        bodies: OnceLock::new(),
     })
 }
 

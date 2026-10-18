@@ -4,3 +4,8 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# Optional static Linux releases (install the Rust target and musl linker first):
+# cargo build --release --target x86_64-unknown-linux-musl
+# cargo build --release --target aarch64-unknown-linux-musl
+# For a size-first static build, add `--profile min` to either command.

@@ -118,9 +118,13 @@ fn collect_module_paths(
         let parent = manifest_path.parent().unwrap_or_else(|| Path::new("."));
         for key in ["source", "package_manifest", "package_lock"] {
             if let Some(path) = program.get(key).and_then(Value::as_str) {
-                paths.insert(parent.join(path));
+                // A package manifest is inserted by the walk itself, which also hashes
+                // its source and dependencies; inserting it here first would stop that
+                // walk before it starts.
                 if key == "package_manifest" {
                     collect_package_paths(&parent.join(path), paths)?;
+                } else {
+                    paths.insert(parent.join(path));
                 }
             }
         }
@@ -260,5 +264,48 @@ mod tests {
         fs::write(&source, "changed body").unwrap();
         let after = fingerprint(&plan, &context).unwrap().0;
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn package_source_and_dependency_changes_change_the_review_fingerprint() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifests = directory.path().join("manifests");
+        let dependency = directory.path().join("dep");
+        fs::create_dir(&manifests).unwrap();
+        fs::create_dir(&dependency).unwrap();
+        let module_manifest = json!({"contract":{"backend":"program_module","program":{"source":"body.program","package_manifest":"package.json"}}});
+        fs::write(manifests.join("module.json"), module_manifest.to_string()).unwrap();
+        fs::write(manifests.join("body.program"), "body").unwrap();
+        fs::write(
+            manifests.join("package.json"),
+            json!({"source":"package.program","dependencies":{"dep":{"manifest":"../dep/package.json"}}}).to_string(),
+        )
+        .unwrap();
+        fs::write(manifests.join("package.program"), "package source").unwrap();
+        fs::write(
+            dependency.join("package.json"),
+            json!({"source":"dep.program"}).to_string(),
+        )
+        .unwrap();
+        fs::write(dependency.join("dep.program"), "dependency source").unwrap();
+        let declarations = [];
+        let inputs = BTreeMap::new();
+        let context = RunSettings {
+            declarations: &declarations,
+            inputs: &inputs,
+            cwd: directory.path(),
+            capability_policy: None,
+            data_flow_policy: None,
+            manifest_dir: Some(&manifests),
+            manifest_catalog: None,
+        };
+        let plan = json!({"steps": []});
+        let first = fingerprint(&plan, &context).unwrap().0;
+        fs::write(manifests.join("package.program"), "changed package source").unwrap();
+        let second = fingerprint(&plan, &context).unwrap().0;
+        assert_ne!(first, second, "package source");
+        fs::write(dependency.join("dep.program"), "changed dependency source").unwrap();
+        let third = fingerprint(&plan, &context).unwrap().0;
+        assert_ne!(second, third, "dependency source");
     }
 }

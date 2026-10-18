@@ -172,8 +172,10 @@ pub struct Registry {
 
 #[derive(Default)]
 struct RegistryData {
-    manifests: Manifests,
-    names: BTreeMap<String, usize>,
+    // Shared between a registry and its detached copies: the parsed manifests and their names
+    // are immutable once a registry is built, so a copy shares them and copies only the rest.
+    manifests: Arc<Manifests>,
+    names: Arc<BTreeMap<String, usize>>,
     module_root: Option<PathBuf>,
     scope_identity: Option<String>,
     host_state: Arc<Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
@@ -453,8 +455,8 @@ impl Registry {
         let base_len = self.data.manifests.len();
         let mut manifests = self.data.manifests.to_parsed()?;
         let mut data = RegistryData {
-            manifests: Manifests::default(),
-            names: self.data.names.clone(),
+            manifests: Arc::new(Manifests::default()),
+            names: Arc::clone(&self.data.names),
             module_root: self.data.module_root.clone(),
             scope_identity: None,
             host_state: Arc::clone(&self.data.host_state),
@@ -484,7 +486,7 @@ impl Registry {
             }
             let index = manifests.len();
             for key in keys {
-                data.names.insert(key, index);
+                Arc::make_mut(&mut data.names).insert(key, index);
             }
             manifests.push(manifest);
         }
@@ -495,7 +497,7 @@ impl Registry {
             &origin,
             sources,
         )?);
-        data.manifests = Manifests::Parsed(manifests);
+        data.manifests = Arc::new(Manifests::Parsed(manifests));
         Ok(Self {
             data: Arc::new(data),
         })
@@ -513,12 +515,12 @@ impl Registry {
             .collect();
         Ok(Self {
             data: Arc::new(RegistryData {
-                manifests: Manifests::Bundled {
+                manifests: Arc::new(Manifests::Bundled {
                     index,
                     root: root.clone(),
                     cells,
-                },
-                names: index.names().clone(),
+                }),
+                names: Arc::new(index.names().clone()),
                 module_root: Some(root),
                 ..RegistryData::default()
             }),
@@ -553,12 +555,12 @@ impl Registry {
             bail!("program_module manifests require a file-loaded registry with a module root");
         }
         manifest.origin = origin;
-        let Manifests::Parsed(list) = &mut data.manifests else {
+        let Manifests::Parsed(list) = Arc::make_mut(&mut data.manifests) else {
             bail!("internal error: a bundled registry takes no new manifests");
         };
         let index = list.len();
         for key in std::iter::once(&manifest.name).chain(manifest.phrases.iter()) {
-            if let Some(previous) = data.names.insert(key.clone(), index) {
+            if let Some(previous) = Arc::make_mut(&mut data.names).insert(key.clone(), index) {
                 let previous_name = &list[previous].name;
                 bail!(
                     "duplicate manifest name or phrase {key:?} (used by {previous_name:?} and {:?})",
@@ -588,7 +590,7 @@ impl Registry {
     /// Canonical applet names in resolution order, without parsing any manifest. A
     /// bundled registry reads them from its index.
     pub fn applet_names(&self) -> Vec<&str> {
-        match &self.data.manifests {
+        match self.data.manifests.as_ref() {
             Manifests::Parsed(list) => list.iter().map(|manifest| manifest.name.as_str()).collect(),
             Manifests::Bundled { index, .. } => index
                 .entries()
@@ -616,8 +618,8 @@ impl Registry {
     pub fn detached(&self) -> Self {
         Self {
             data: Arc::new(RegistryData {
-                manifests: self.data.manifests.clone(),
-                names: self.data.names.clone(),
+                manifests: Arc::clone(&self.data.manifests),
+                names: Arc::clone(&self.data.names),
                 module_root: self.data.module_root.clone(),
                 scope_identity: self.data.scope_identity.clone(),
                 host_state: Arc::new(Mutex::new(HashMap::new())),
@@ -2891,7 +2893,7 @@ mod tests {
         let full = Registry::load(&dir).unwrap();
         let bundled = Registry::load_default(&dir).unwrap();
         assert!(
-            matches!(bundled.data.manifests, Manifests::Bundled { .. }),
+            matches!(*bundled.data.manifests, Manifests::Bundled { .. }),
             "the shipped directory should be served by the bundled index"
         );
         let full_list = full.manifests().unwrap();

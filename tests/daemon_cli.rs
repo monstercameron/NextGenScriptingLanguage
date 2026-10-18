@@ -574,6 +574,98 @@ fn forwarded_runs_do_not_share_capability_policies() {
     }
 }
 
+/// A setup-heavy forwarded run against the same run cold: a user manifest directory of about 530
+/// manifests, a capability policy and a data-flow policy. The daemon parses the directory once and
+/// serves it from its cache. The figures are printed for CI; the runs must succeed.
+#[test]
+fn setup_heavy_forwarded_run_latency_is_measured() {
+    let runtime = tempfile::tempdir().unwrap();
+    let _daemon = serve_in_background(runtime.path());
+    let root = tempfile::tempdir().unwrap();
+    let user = root.path().join("manifests");
+    copy_tree(&manifests(), &user);
+    let cat = fs::read(manifests().join("cat.json")).unwrap();
+    for index in 0..400 {
+        let name = format!("bulk{index:03}");
+        let mut value: Value = serde_json::from_slice(&cat).unwrap();
+        value["name"] = Value::String(name.clone());
+        value["phrases"] = serde_json::json!([format!("{name} copy")]);
+        fs::write(
+            user.join(format!("{name}.json")),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+    }
+    // A capability grant needs a version-1 contract on the applet, and printf runs a process.
+    let mut printf: Value =
+        serde_json::from_slice(&fs::read(user.join("printf.json")).unwrap()).unwrap();
+    printf["contract"] = serde_json::json!({"version": 1});
+    fs::write(
+        user.join("printf.json"),
+        serde_json::to_vec(&printf).unwrap(),
+    )
+    .unwrap();
+    let capability = root.path().join("capability.json");
+    fs::write(
+        &capability,
+        r#"{"version":1,"applets":{"printf":{"capabilities":["process.exec"]}}}"#,
+    )
+    .unwrap();
+    let data_flow = root.path().join("data-flow.json");
+    fs::write(&data_flow, r#"{"version":1}"#).unwrap();
+    // The data-flow policy loader accepts only an owner-private file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&data_flow, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let program = root.path().join("workflow.program");
+    fs::write(&program, PRINT_OUT).unwrap();
+    let run = |extra: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .env("XDG_RUNTIME_DIR", runtime.path())
+            .env_remove("EXECUTE_DAEMON")
+            .current_dir(root.path())
+            .stdin(Stdio::null())
+            .arg("run")
+            .arg(&program)
+            .arg("--manifest-dir")
+            .arg(&user)
+            .arg("--capability-policy")
+            .arg(&capability)
+            .arg("--data-flow-policy")
+            .arg(&data_flow)
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "out
+"
+        );
+    };
+    let mut forwarded = Vec::new();
+    let mut cold = Vec::new();
+    for _ in 0..10 {
+        let started = Instant::now();
+        run(&["--daemon"]);
+        forwarded.push(started.elapsed());
+        let started = Instant::now();
+        run(&[]);
+        cold.push(started.elapsed());
+    }
+    forwarded.sort();
+    cold.sort();
+    let forwarded_p50 = forwarded[forwarded.len() / 2];
+    let cold_p50 = cold[cold.len() / 2];
+    let line = format!(
+        "setup-heavy run (about 530 manifests, capability and data-flow policies): forwarded p50 {forwarded_p50:?}, cold p50 {cold_p50:?}"
+    );
+    eprintln!("{line}");
+    report_latency(&line);
+}
+
 /// Per-stage medians of a forwarded run, from the `EXECUTE_DAEMON_TRACE` stamps of the client,
 /// the daemon and its forked run. The stamps share the monotonic clock, so each stage is the
 /// time since the client began. Printed for CI; nothing is asserted beyond the runs succeeding.

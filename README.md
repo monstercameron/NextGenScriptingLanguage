@@ -54,7 +54,9 @@ Requires stable Rust to build (minimum 1.89.0). Programs require the command-lin
 tools they invoke. `cargo build --locked --release` builds the lean default: no
 terminal UI, model helper, live control, remote backend, Quickshell renderer, debug
 adapter or language server. Add `--features full` for those; release packages are
-built with `full`. A lean build says so when you use a gated feature.
+built with `full`. A lean build says so when you use a gated feature. The lean default
+still includes graphs, screens, records, tooling, module tools and agent advisory
+features; `--no-default-features` builds the smaller scripting core without them.
 The example above uses `cat`, `tr`, `sort` and `uniq` on macOS or Linux. Create
 `contacts.txt`, save the script as `clean-contacts.program`, then:
 
@@ -242,26 +244,28 @@ executables, native pipes, services, model calls and TUI screens use native Exec
 
 Execute is not yet faster than Bash at the basics, and optimisation is ongoing. At
 startup, per external command, per pipeline, per megabyte of text or JSON handled by
-its in-process applets, in memory and in binary size, Bash is ahead. Execute is ahead
-only on a loop of builtin calls and, marginally, on a loop of process spawns.
+its in-process applets (except JSON lookup), in memory and in binary size, Bash is
+ahead, by 2-20% in time. Execute is ahead on a loop of builtin calls, a loop of process
+spawns and a JSON pointer lookup.
 
 Median wall time in milliseconds on Linux x86_64 GitHub-hosted runners (Ubuntu 24.04,
-commit `234c1fc`), default lean build, default manifest path:
+CI run 39133435292 at commit `7320bb6`), default lean build, default manifest path:
 
 | Scenario | bash | dash | Execute |
 | --- | ---: | ---: | ---: |
-| Startup, no work | 1.20 | 0.64 | 1.76 |
-| One external command | 1.93 | 1.42 | 2.76 |
-| 5-stage pipeline | 2.99 | 2.21 | 4.30 |
-| 1000-iteration builtin loop | 4.37 | n/a | **2.80** |
-| 100-spawn loop | 67.07 | n/a | **63.86** |
-| Uppercase 1 MB (`tr` vs `text.upper`) | 2.84 | 2.25 | 5.47 |
-| JSON pointer lookup, about 240 KB (`jq` vs `json.get`) | 11.19 | 10.23 | 23.53 |
-| 100 MB through a pipe | 25.95 | 25.48 | 27.45 |
+| Startup, no work | 1.19 | 0.65 | 1.22 |
+| One external command | 1.92 | 1.48 | 2.16 |
+| 5-stage pipeline | 2.96 | 2.17 | 3.19 |
+| 1000-iteration builtin loop | 4.20 | n/a | **2.25** |
+| 100-spawn loop | 65.59 | n/a | **54.86** |
+| Uppercase 1 MB (`tr` vs `text.upper`) | 2.72 | 2.18 | 3.26 |
+| JSON pointer lookup, about 240 KB (`jq` vs `json.get`) | 10.36 | 9.90 | **7.24** |
+| 100 MB through a pipe | 25.84 | 25.61 | 26.06 |
 
-Peak resident memory at startup: bash 3.4 MB, Execute 6.2 MB. Binary size: Execute
-7.16 MB (x86_64) and 5.90 MB (arm64), bash 1.45 MB, dash 130 KB. An arm64 runner shows
-the same pattern.
+Peak resident memory at startup: bash 3.4 MB, Execute 6.1 MB (2.8 MB for the static
+core-musl-min build). Binary size: Execute 7.48 MB default and 3.50 MB core-musl-min
+(x86_64), bash 1.45 MB, dash 130 KB. An arm64 runner shows the same pattern. Work to
+close the remaining gaps is tracked in #305.
 
 **Method.** [`tools/bash_compare.py`](tools/bash_compare.py) pairs a bash command line
 with an Execute program that does the same job, gives both the same stdin, and takes the

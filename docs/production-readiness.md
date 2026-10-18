@@ -100,7 +100,7 @@ is certified for a live Omarchy desktop.
 | Sourced shell integration | Define how environment/cwd changes reach a caller and which Bash startup hooks stay Bash | External programs cannot mutate their parent shell; no sourced Bash emulation |
 | Safety and recovery | Inspectable effect boundaries, fault injection, checkpoint uncertainty and cleanup under interruption | Strict applet policy and opt-in macOS/Linux sandboxes exist in current source; no-policy commands remain trusted. Nightly crash-consistency, fuzz, sanitizer and soak workflows exist but are new; see the [CI notes](#ci-evidence-and-its-status). Broader adversarial/platform coverage remains open |
 | Distribution | Clean install/uninstall, paths with spaces, shebang portability, declared Bash-independent dependencies and immutable versioned packages | [Source `58b42f6` validation](../benchmarks/package-validation-38836416853/README.md) passed the fresh macOS ARM64 archive/root, catalog, spaced-path shebang and scratch rollback checks, all six native package targets, both Flatpak targets, and the exact twelve-asset hash set. Newer source revisions require their own validation; `0.9.0-rc.5` remains unpublished |
-| Performance | Identical behavior and workload on both runtimes, paired repeated release measurements, cold/warm startup, CPU, memory, streaming, idle and event latency on macOS and Linux | Six retained equal-command-plan fixtures put Bash medians below Execute and Execute below Nushell. A Linux comparison run on every `main` commit has Execute behind bash on startup, binary size and memory, and ahead only on a builtin loop and, marginally, a spawn loop ([below](#performance-against-bash-and-dash)). A bounded Linux 1,000-actor run passed; cold-start, sustained operation and process-tree resource evidence remain incomplete |
+| Performance | Identical behavior and workload on both runtimes, paired repeated release measurements, cold/warm startup, CPU, memory, streaming, idle and event latency on macOS and Linux | Six retained equal-command-plan fixtures put Bash medians below Execute and Execute below Nushell. A Linux comparison run on every `main` commit has Execute behind bash on startup, binary size and memory, and ahead on a builtin loop, a spawn loop and a JSON pointer lookup ([below](#performance-against-bash-and-dash)). A bounded Linux 1,000-actor run passed; cold-start, sustained operation and process-tree resource evidence remain incomplete |
 | Readability and generation | Held-out real scripts, fixed prompts, repair counts and blind human review | Example counts and passing tests do not establish this claim |
 
 Do not emulate missing control flow by generating Bash or application Rust.
@@ -134,29 +134,29 @@ correctness.
 
 ## Performance against Bash and dash
 
-Optimisation is ongoing. Today Execute is slower than Bash on startup, on a
-single external command, on pipelines, on text and JSON work done by its in-process
-applets, and on a 100 MB pipe; it uses more memory at startup and has a larger
-binary. It is ahead only on a loop of builtin calls and, marginally, on a loop of
-process spawns.
+Optimisation is ongoing. Today Execute is 2-20% slower than Bash on startup, on a
+single external command, on pipelines and on uppercase text, at parity on a 100 MB
+pipe, uses more memory at startup and has a larger binary. It is ahead on a loop of
+builtin calls, a loop of process spawns and a JSON pointer lookup.
 
-Measured on Linux x86_64 GitHub-hosted runners (Ubuntu 24.04, commit `234c1fc`),
+Measured on Linux x86_64 GitHub-hosted runners (Ubuntu 24.04, CI run 39133435292 at commit `7320bb6`),
 default lean build, default manifest path, medians in milliseconds:
 
 | Scenario | bash | dash | Execute | Execute / bash |
 | --- | ---: | ---: | ---: | ---: |
-| Startup, no work | 1.20 | 0.64 | 1.76 | 1.47 |
-| One external command | 1.93 | 1.42 | 2.76 | 1.43 |
-| 5-stage pipeline | 2.99 | 2.21 | 4.30 | 1.44 |
-| 1000-iteration builtin loop | 4.37 | n/a | 2.80 | 0.64 |
-| 100-spawn loop | 67.07 | n/a | 63.86 | 0.95 |
-| Uppercase 1 MB (`tr` vs `text.upper`) | 2.84 | 2.25 | 5.47 | 1.93 |
-| JSON pointer lookup, about 240 KB (`jq` vs `json.get`) | 11.19 | 10.23 | 23.53 | 2.10 |
-| 100 MB through a pipe | 25.95 | 25.48 | 27.45 | 1.06 |
+| Startup, no work | 1.19 | 0.65 | 1.22 | 1.02 |
+| One external command | 1.92 | 1.48 | 2.16 | 1.12 |
+| 5-stage pipeline | 2.96 | 2.17 | 3.19 | 1.08 |
+| 1000-iteration builtin loop | 4.20 | n/a | 2.25 | 0.54 |
+| 100-spawn loop | 65.59 | n/a | 54.86 | 0.84 |
+| Uppercase 1 MB (`tr` vs `text.upper`) | 2.72 | 2.18 | 3.26 | 1.20 |
+| JSON pointer lookup, about 240 KB (`jq` vs `json.get`) | 10.36 | 9.90 | 7.24 | 0.70 |
+| 100 MB through a pipe | 25.84 | 25.61 | 26.06 | 1.01 |
 
-Peak resident memory at startup is 3.4 MB for bash and 6.2 MB for Execute. Binary
-size is 7.16 MB (x86_64) and 5.90 MB (arm64) for Execute, 1.45 MB for bash and
-130 KB for dash. The arm64 runner shows the same pattern.
+Peak resident memory at startup is 3.4 MB for bash and 6.1 MB for Execute (2.8 MB
+for the static core-musl-min build). Binary size is 7.48 MB for the default x86_64
+build and 3.50 MB for core-musl-min, 1.45 MB for bash and 130 KB for dash. The arm64
+runner shows the same pattern. Remaining gaps are tracked in #305.
 
 How it is measured. [`tools/bash_compare.py`](../tools/bash_compare.py) pairs a bash
 command line with an Execute program that does the same job and gives both the same

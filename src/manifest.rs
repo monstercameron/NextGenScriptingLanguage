@@ -191,21 +191,20 @@ enum Manifests {
         index: &'static bundled_manifests::BundledIndex,
         root: PathBuf,
         cells: Vec<OnceLock<Manifest>>,
-        /// Whether each entry's file still has its indexed size, checked on first use.
+        /// Whether each entry's file still has its indexed content, checked on first use.
         verified: Vec<OnceLock<bool>>,
     },
 }
 
-/// How much of the default manifest directory is compared with the bundled index
-/// before a registry is built from it.
+/// Freshness rule used for the default manifest directory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManifestCheck {
-    /// File names at load time; each file's size when its manifest is first used. A
+    /// File names at load time; each file's content when its manifest is first used. A
     /// changed file then fails closed: the registry never switches to disk content
     /// after it has handed manifests out, so preflight and execution see the same set.
     Lazy,
-    /// Every file's size at load time. Any difference selects the full load from the
-    /// directory, with its errors. `execute check` and applet listing use this.
+    /// Every file's content at load time. A mismatch fails closed with the same
+    /// diagnostic used by `Lazy` on first use.
     Full,
 }
 
@@ -226,10 +225,25 @@ impl Default for Manifests {
     }
 }
 
-/// Whether the file for a bundled entry is still a plain file of the indexed size.
+/// Whether the file for a bundled entry is still a plain file with indexed content.
 fn entry_matches(root: &Path, entry: &bundled_manifests::BundledEntry) -> bool {
-    fs::metadata(root.join(entry.file()))
-        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == entry.bytes())
+    let Ok(metadata) = fs::metadata(root.join(entry.file())) else {
+        return false;
+    };
+    if !metadata.is_file() || metadata.len() != entry.bytes() {
+        return false;
+    }
+    fs::read(root.join(entry.file()))
+        .is_ok_and(|contents| format!("{:x}", Sha256::digest(contents)) == entry.sha256())
+}
+
+fn manifest_mismatch_message(root: &Path, entry: &bundled_manifests::BundledEntry) -> String {
+    format!(
+        "manifest {} in {} differs from the bundled copy; pass --manifest-dir {} to load edited manifests as files",
+        entry.file(),
+        root.display(),
+        root.display()
+    )
 }
 
 impl Manifests {
@@ -259,14 +273,7 @@ impl Manifests {
                 }
                 let entry = &index.entries()[position];
                 if !verified[position].get_or_init(|| entry_matches(root, entry)) {
-                    bail!(
-                        "manifest {} in {} differs from the bundled copy, so it was not loaded; \
-                         run `execute check` to validate the directory, or pass --manifest-dir {} \
-                         to load it as files",
-                        entry.file(),
-                        root.display(),
-                        root.display()
-                    );
+                    bail!(manifest_mismatch_message(root, entry));
                 }
                 let mut manifest = parse_manifest(index.body(position)?)
                     .with_context(|| format!("invalid bundled manifest {}", entry.file()))?;
@@ -585,7 +592,7 @@ impl Registry {
     }
 
     /// Load the default manifest directory. When it holds the bundled file names (and,
-    /// with [`ManifestCheck::Full`], their sizes), the bundled index serves it; any other
+    /// with [`ManifestCheck::Full`], their contents), the bundled index serves it; any other
     /// directory takes the full load. A missing directory is an empty registry.
     pub fn load_default(path: &Path, check: ManifestCheck) -> Result<Self> {
         match fs::metadata(path) {
@@ -594,13 +601,15 @@ impl Registry {
                 if !matches!(bundled_manifests::directory_matches(path, index), Ok(true)) {
                     return Self::load(path);
                 }
-                if check == ManifestCheck::Full
-                    && !index
-                        .entries()
-                        .iter()
-                        .all(|entry| entry_matches(path, entry))
-                {
-                    return Self::load(path);
+                if check == ManifestCheck::Full {
+                    let canonical_root = fs::canonicalize(path).with_context(|| {
+                        format!("canonicalizing manifest root {}", path.display())
+                    })?;
+                    for entry in index.entries() {
+                        if !entry_matches(path, entry) {
+                            bail!(manifest_mismatch_message(&canonical_root, entry));
+                        }
+                    }
                 }
                 Self::from_bundled(path)
             }
@@ -2052,6 +2061,92 @@ fn json_arguments_to_string(values: &BTreeMap<String, Value>) -> Result<String> 
     Ok(serde_json::to_string(&serde_json::Value::Object(object))?)
 }
 
+fn deserialize_unique_map<'de, D, K, V>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<K, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    K: Deserialize<'de> + Ord + std::fmt::Display,
+    V: Deserialize<'de>,
+{
+    struct UniqueMapVisitor<K, V>(std::marker::PhantomData<(K, V)>);
+
+    impl<'de, K, V> serde::de::Visitor<'de> for UniqueMapVisitor<K, V>
+    where
+        K: Deserialize<'de> + Ord + std::fmt::Display,
+        V: Deserialize<'de>,
+    {
+        type Value = BTreeMap<K, V>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a map with unique keys")
+        }
+
+        fn visit_map<A>(self, mut access: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let mut values = BTreeMap::new();
+            while let Some((key, value)) = access.next_entry()? {
+                let key: K = key;
+                if values.contains_key(&key) {
+                    return Err(serde::de::Error::custom(format!("duplicate key {key}")));
+                }
+                values.insert(key, value);
+            }
+            Ok(values)
+        }
+    }
+
+    deserializer.deserialize_map(UniqueMapVisitor(std::marker::PhantomData))
+}
+
+fn deserialize_unique_optional_map<'de, D, K, V>(
+    deserializer: D,
+) -> std::result::Result<Option<BTreeMap<K, V>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    K: Deserialize<'de> + Ord + std::fmt::Display,
+    V: Deserialize<'de>,
+{
+    struct OptionalMapVisitor<K, V>(std::marker::PhantomData<(K, V)>);
+
+    impl<'de, K, V> serde::de::Visitor<'de> for OptionalMapVisitor<K, V>
+    where
+        K: Deserialize<'de> + Ord + std::fmt::Display,
+        V: Deserialize<'de>,
+    {
+        type Value = Option<BTreeMap<K, V>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("null or a map with unique keys")
+        }
+
+        fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D2>(self, deserializer: D2) -> std::result::Result<Self::Value, D2::Error>
+        where
+            D2: serde::Deserializer<'de>,
+        {
+            deserialize_unique_map(deserializer).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(OptionalMapVisitor(std::marker::PhantomData))
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawManifest {
@@ -2075,7 +2170,7 @@ struct RawManifest {
     build_feature: Option<String>,
     #[serde(default, deserialize_with = "crate::contracts::deserialize_present")]
     stdio: Option<StdioContract>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_unique_map")]
     parameters: BTreeMap<String, ParameterSpec>,
     arguments: Vec<RawArgument>,
 }
@@ -2097,7 +2192,7 @@ struct RawParameter {
     deny_first_token: Vec<String>,
     #[serde(default)]
     forbid_option_items: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_unique_optional_map")]
     fields: Option<BTreeMap<String, ParameterFieldSpec>>,
 }
 
@@ -2108,7 +2203,7 @@ struct RawParameterField {
     kind: ParameterType,
     #[serde(default)]
     required: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_unique_optional_map")]
     fields: Option<BTreeMap<String, ParameterFieldSpec>>,
 }
 
@@ -3050,22 +3145,27 @@ mod tests {
     }
 
     #[test]
-    fn a_full_check_of_a_changed_default_directory_takes_the_full_load_and_its_errors() {
+    fn full_check_fails_closed_for_changed_default_content() {
         let dir = tempdir().unwrap();
         copy_shipped_manifests(dir.path());
         fs::write(dir.path().join("awk.json"), "{").unwrap();
-        let full_error = format!("{:#}", Registry::load(dir.path()).err().unwrap());
-        let check_error = format!(
+        let full_error = format!(
             "{:#}",
             Registry::load_default(dir.path(), ManifestCheck::Full)
                 .err()
                 .unwrap()
         );
-        assert_eq!(check_error, full_error);
+        let lazy = Registry::load_default(dir.path(), ManifestCheck::Lazy).unwrap();
+        let lazy_error = format!("{:#}", lazy.resolve("awk").err().unwrap());
+        assert!(
+            full_error.contains("differs from the bundled copy"),
+            "{full_error}"
+        );
+        assert_eq!(full_error, lazy_error);
     }
 
     #[test]
-    fn a_lazily_checked_changed_manifest_fails_closed_on_first_use() {
+    fn changed_manifest_fails_closed_on_first_use() {
         let dir = tempdir().unwrap();
         copy_shipped_manifests(dir.path());
         let path = dir.path().join("awk.json");
@@ -3085,10 +3185,116 @@ mod tests {
         // The registry never switches to disk content, so enumeration fails closed too.
         assert!(registry.manifests().is_err());
 
-        // A full check of the same directory loads the edited file instead.
-        let full = Registry::load_default(dir.path(), ManifestCheck::Full).unwrap();
-        assert!(matches!(*full.data.manifests, Manifests::Parsed(_)));
-        assert_eq!(full.resolve("awk").unwrap().name, "awk");
+        // Full and lazy checks use the same manifest definition and freshness rule.
+        let error = format!(
+            "{:#}",
+            Registry::load_default(dir.path(), ManifestCheck::Full)
+                .err()
+                .unwrap()
+        );
+        assert!(error.contains("differs from the bundled copy"), "{error}");
+    }
+
+    #[test]
+    fn same_size_manifest_edit_is_detected_by_content_hash() {
+        let dir = tempdir().unwrap();
+        copy_shipped_manifests(dir.path());
+        let path = dir.path().join("awk.json");
+        let original = fs::read_to_string(&path).unwrap();
+        let changed = original.replace("\"binary\": \"awk\"", "\"binary\": \"sed\"");
+        assert_eq!(original.len(), changed.len());
+        fs::write(path, changed).unwrap();
+
+        let registry = Registry::load_default(dir.path(), ManifestCheck::Lazy).unwrap();
+        let error = format!("{:#}", registry.resolve("awk").err().unwrap());
+        assert!(error.contains("differs from the bundled copy"), "{error}");
+    }
+
+    #[test]
+    fn duplicate_parameter_keys_are_rejected_with_the_key_name() {
+        let source = r#"{"name":"foo","binary":"echo","parameters":{"a":{"type":"list","items":"string","required":true},"a":{"type":"list","items":"string"}},"arguments":[{"when_present":"a","append":[{"spread":"a"}]}]}"#;
+        let error = format!("{:#}", parse_manifest(source).err().unwrap());
+        assert!(error.contains("duplicate key a"), "{error}");
+    }
+
+    #[test]
+    fn duplicate_nested_parameter_fields_are_rejected() {
+        let source = r#"{"name":"foo","binary":"echo","parameters":{"record":{"type":"record","fields":{"a":{"type":"string"},"a":{"type":"integer"}}}},"arguments":[]}"#;
+        let error = format!("{:#}", parse_manifest(source).err().unwrap());
+        assert!(error.contains("duplicate key a"), "{error}");
+    }
+
+    #[test]
+    fn option_like_manifest_operands_follow_a_double_dash() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+        // Keep exceptions visible for native tools that cannot parse the standard
+        // end-of-options marker.
+        const NO_DOUBLE_DASH: &[&str] = &[];
+
+        fn flatten<'a>(nodes: &'a [serde_json::Value], out: &mut Vec<&'a serde_json::Value>) {
+            for node in nodes {
+                if let Some(children) = node.get("append").and_then(serde_json::Value::as_array) {
+                    flatten(children, out);
+                } else {
+                    out.push(node);
+                }
+            }
+        }
+
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            let name = value["name"].as_str().unwrap();
+            let mut arguments = Vec::new();
+            flatten(value["arguments"].as_array().unwrap(), &mut arguments);
+            let mut saw_option = false;
+            let mut after_double_dash = false;
+            for (index, argument) in arguments.iter().enumerate() {
+                if argument["literal"] == "--" {
+                    after_double_dash = true;
+                    continue;
+                }
+                if let Some(literal) = argument.get("literal").and_then(serde_json::Value::as_str) {
+                    saw_option |= literal.starts_with('-');
+                    continue;
+                }
+                let dynamic_name = argument
+                    .get("parameter")
+                    .or_else(|| argument.get("spread"))
+                    .and_then(serde_json::Value::as_str);
+                let Some(dynamic_name) = dynamic_name else {
+                    continue;
+                };
+                if dynamic_name == "flags" {
+                    saw_option = true;
+                    continue;
+                }
+                if !saw_option || after_double_dash || NO_DOUBLE_DASH.contains(&name) {
+                    continue;
+                }
+                let is_option_value = index > 0
+                    && arguments[index - 1]
+                        .get("literal")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|literal| literal.starts_with('-') && literal != "--")
+                    || index > 1
+                        && arguments[index - 2]
+                            .get("literal")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|literal| {
+                                matches!(literal, "--arg" | "--argjson" | "--argstr")
+                            });
+                assert!(
+                    is_option_value,
+                    "{} passes user parameter {dynamic_name:?} after an option without --",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]
@@ -3435,7 +3641,7 @@ mod tests {
                     ("to".into(), Value::String("[:upper:]".into())),
                 ]))
                 .unwrap(),
-            ["[:lower:]", "[:upper:]"]
+            ["--", "[:lower:]", "[:upper:]"]
         );
     }
 

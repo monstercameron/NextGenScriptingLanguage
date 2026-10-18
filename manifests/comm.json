@@ -23,6 +23,9 @@
       ]
     },
     {
+      "literal": "--"
+    },
+    {
       "spread": "files"
     }
   ]

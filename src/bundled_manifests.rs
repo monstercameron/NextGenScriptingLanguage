@@ -7,12 +7,8 @@
 //!
 //! A registry uses the index only when the directory it was asked for holds exactly
 //! the indexed file names as plain files; any other directory takes the full load.
-//! Sizes are compared too: all of them at load time for `execute check` and applet
-//! listing (`ManifestCheck::Full`, where a difference selects the full load and its
-//! errors), or each one when its manifest is first used by a run
-//! (`ManifestCheck::Lazy`, where a difference fails closed instead of switching a
-//! registry already in use). The check is by name and size: equal-size edits are
-//! not seen.
+//! Each file is compared by size and SHA-256 when its manifest is first used. A
+//! mismatch fails closed consistently for checks, applet inspection, and runs.
 //!
 //! `generate` rebuilds all artifacts from a manifest directory after a full load has
 //! validated every file. A test fails when the checked-in artifacts no longer match
@@ -20,6 +16,7 @@
 
 use crate::manifest::Registry;
 use anyhow::{anyhow, bail, Context, Result};
+use sha2::Digest;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -38,6 +35,7 @@ const PHRASE_SEPARATOR: char = '\u{1f}';
 pub struct BundledEntry {
     file: &'static str,
     bytes: u64,
+    sha256: &'static str,
     name: &'static str,
     phrases: &'static [&'static str],
     offset: usize,
@@ -56,6 +54,10 @@ impl BundledEntry {
 
     pub fn bytes(&self) -> u64 {
         self.bytes
+    }
+
+    pub fn sha256(&self) -> &'static str {
+        self.sha256
     }
 
     pub fn phrases(&self) -> &[&'static str] {
@@ -130,7 +132,7 @@ pub fn index() -> Result<&'static BundledIndex> {
 }
 
 /// Whether `root` holds exactly the indexed files by name and plain-file type.
-/// File sizes are checked lazily when an indexed manifest is resolved. An
+/// File sizes and hashes are checked when an indexed manifest is resolved. An
 /// unreadable directory, a subdirectory or symlink among the JSON files, or any
 /// name difference is a mismatch, and the caller falls back to the full load.
 pub fn directory_matches(root: &Path, index: &BundledIndex) -> io::Result<bool> {
@@ -288,13 +290,14 @@ pub fn generate(dir: &Path) -> Result<Generated> {
             "{file}\t{}\t{name}\t{phrases}\t{offset}\t{length}\n",
             raw.len(),
         ));
-        entries.push((file.clone(), raw.len(), name, phrases, offset, length));
+        let hash = format!("{:x}", sha2::Sha256::digest(&raw));
+        entries.push((file.clone(), raw.len(), hash, name, phrases, offset, length));
     }
     names.sort_by(|left, right| left.0.cmp(&right.0));
     let mut index_rust = String::from("static ENTRIES: [BundledEntry; ");
     index_rust.push_str(&entries.len().to_string());
     index_rust.push_str("] = [\n");
-    for (file, bytes, name, phrases, offset, length) in &entries {
+    for (file, bytes, hash, name, phrases, offset, length) in &entries {
         let phrase_list = phrases
             .split(PHRASE_SEPARATOR)
             .filter(|phrase| !phrase.is_empty())
@@ -302,7 +305,7 @@ pub fn generate(dir: &Path) -> Result<Generated> {
             .collect::<Vec<_>>()
             .join(", ");
         index_rust.push_str(&format!(
-            "    BundledEntry {{ file: {file:?}, bytes: {bytes}, name: {name:?}, phrases: &[{phrase_list}], offset: {offset}, length: {length}, body: OnceLock::new() }},\n"
+            "    BundledEntry {{\n        file: {file:?},\n        bytes: {bytes},\n        sha256: {hash:?},\n        name: {name:?},\n        phrases: &[{phrase_list}],\n        offset: {offset},\n        length: {length},\n        body: OnceLock::new(),\n    }},\n"
         ));
     }
     index_rust.push_str("];\nstatic NAMES: [(&str, u16); ");

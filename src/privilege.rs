@@ -39,7 +39,6 @@ pub const WRAPPERS: &[&str] = &[
     "timeout",
     "stdbuf",
     "setsid",
-    "xargs",
     "busybox",
     "flock",
     "chroot",
@@ -53,6 +52,33 @@ pub const WRAPPERS: &[&str] = &[
     "script",
     "start-stop-daemon",
     "setpriv",
+    // Command runners and sandbox or session launchers that start another program.
+    "find",
+    "fd",
+    "xargs",
+    "ssh",
+    "parallel",
+    "strace",
+    "gdb",
+    "fakeroot",
+    "capsh",
+    "bwrap",
+    "firejail",
+    "tmux",
+    "screen",
+    "expect",
+];
+
+/// Interpreters, text processors and tools with command hooks (`awk 'BEGIN{system()}'`,
+/// `sed e`, `git -c core.pager=`, `tar --to-command`, `less !`). They are ordinary glue
+/// in most scripts, and their program text is usually visible in the step's arguments,
+/// so `explain` and the effects gate do not mark them privileged. A capability policy
+/// with `deny_privileged` treats them as wrappers: refused unless `allow_wrappers` names
+/// them.
+pub const INTERPRETERS: &[&str] = &[
+    "python", "python2", "python3", "pypy", "pypy3", "perl", "ruby", "node", "nodejs", "lua",
+    "php", "awk", "gawk", "mawk", "nawk", "sed", "git", "make", "gmake", "tar", "rsync", "vim",
+    "vi", "less", "man",
 ];
 
 /// Shells. A shell runs a command string, a script, or standard input, so its
@@ -117,7 +143,7 @@ pub fn normalized_name(binary: &str) -> Option<String> {
 fn classify_one(name: &str) -> Privilege {
     if ELEVATORS.contains(&name) {
         Privilege::Elevator
-    } else if WRAPPERS.contains(&name) || SHELLS.contains(&name) {
+    } else if WRAPPERS.contains(&name) || INTERPRETERS.contains(&name) || SHELLS.contains(&name) {
         Privilege::Wrapper
     } else {
         Privilege::Standard
@@ -147,7 +173,17 @@ pub fn is_elevator(binary: &str) -> bool {
 /// Whether a step is privileged or is a wrapper that can run another program. This is
 /// the single answer `explain` (text and JSON) uses. It looks at the name only.
 pub fn is_privileged_invocation(binary: &str) -> bool {
-    classify(binary) != Privilege::Standard
+    match classify(binary) {
+        Privilege::Standard => false,
+        Privilege::Wrapper => !is_interpreter(binary),
+        Privilege::Elevator => true,
+    }
+}
+
+/// Whether the name is on [`INTERPRETERS`]: a wrapper for `deny_privileged`, but not
+/// marked privileged by `explain`.
+pub fn is_interpreter(binary: &str) -> bool {
+    normalized_name(binary).is_some_and(|name| INTERPRETERS.contains(&name.as_str()))
 }
 
 #[cfg(test)]
@@ -198,6 +234,28 @@ mod tests {
             assert!(is_privileged_invocation(name));
         }
         assert_eq!(classify("env.exe"), Privilege::Wrapper);
+    }
+
+    #[test]
+    fn common_code_and_command_launchers_are_privileged_wrappers() {
+        for name in [
+            "python", "python3", "perl", "ruby", "node", "awk", "find", "fd", "git", "ssh", "make",
+            "sed", "tar", "rsync", "parallel", "strace", "gdb", "fakeroot", "capsh", "bwrap",
+            "firejail", "tmux", "screen", "expect", "vim", "less", "man",
+        ] {
+            assert_eq!(classify(name), Privilege::Wrapper, "{name}");
+        }
+    }
+
+    #[test]
+    fn interpreters_are_wrappers_for_policy_but_not_privileged_in_explain() {
+        for name in INTERPRETERS {
+            assert_eq!(classify(name), Privilege::Wrapper, "{name}");
+            assert!(!is_privileged_invocation(name), "{name}");
+        }
+        for name in ["xargs", "ssh", "find", "env", "bash", "sudo"] {
+            assert!(is_privileged_invocation(name), "{name}");
+        }
     }
 
     #[test]

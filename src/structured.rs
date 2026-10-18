@@ -1,7 +1,10 @@
 //! Small, explicit JSON boundary for the byte-oriented runtime.
 use crate::ast::{InputDeclaration, InputType, Value};
 use anyhow::{anyhow, bail, Context, Result};
-use serde::Serialize;
+use serde::{
+    de::{MapAccess, SeqAccess, Visitor},
+    Deserialize, Serialize,
+};
 use std::{collections::BTreeMap, io::Write};
 
 pub(crate) fn from_json(value: serde_json::Value) -> Value {
@@ -23,6 +26,13 @@ pub(crate) fn from_json(value: serde_json::Value) -> Value {
                 .collect(),
         ),
     }
+}
+
+#[cfg(test)]
+fn old_parse(bytes: &[u8]) -> Result<Value> {
+    serde_json::from_slice(bytes)
+        .map(from_json)
+        .context("parsing JSON")
 }
 
 /// Serialize directly from the typed tree; no second JSON tree or intermediate string.
@@ -74,9 +84,114 @@ pub(crate) fn literal(value: &Value) -> bool {
 }
 
 pub(crate) fn parse(bytes: &[u8]) -> Result<Value> {
-    serde_json::from_slice(bytes)
-        .map(from_json)
+    serde_json::from_slice::<JsonDocumentValue>(bytes)
+        .map(|value| value.0)
         .context("parsing JSON")
+}
+
+struct JsonDocumentValue(Value);
+
+impl<'de> Deserialize<'de> for JsonDocumentValue {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ValueVisitor;
+
+        impl<'de> Visitor<'de> for ValueVisitor {
+            type Value = JsonDocumentValue;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+
+            fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonDocumentValue(Value::Null))
+            }
+
+            fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonDocumentValue(Value::Null))
+            }
+
+            fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonDocumentValue(Value::Bool(value)))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonDocumentValue(Value::Integer(value)))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonDocumentValue(i64::try_from(value).map_or_else(
+                    |_| Value::Number(value.into()),
+                    Value::Integer,
+                )))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                serde_json::Number::from_f64(value)
+                    .map(Value::Number)
+                    .map(JsonDocumentValue)
+                    .ok_or_else(|| E::custom("invalid JSON number"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonDocumentValue(Value::String(value.to_owned())))
+            }
+
+            fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonDocumentValue(Value::String(value)))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+                while let Some(value) = sequence.next_element::<JsonDocumentValue>()? {
+                    values.push(value.0);
+                }
+                Ok(JsonDocumentValue(Value::List(values)))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut values = BTreeMap::new();
+                while let Some((key, value)) = map.next_entry::<String, JsonDocumentValue>()? {
+                    values.insert(key, value.0);
+                }
+                Ok(JsonDocumentValue(Value::Record(values)))
+            }
+        }
+
+        deserializer.deserialize_any(ValueVisitor)
+    }
 }
 
 pub(crate) fn validate_pointer(pointer: &str) -> Result<()> {
@@ -172,4 +287,41 @@ pub(crate) fn encode(value: &Value, limit: usize) -> Result<Vec<u8>> {
     };
     serde_json::to_writer(&mut output, &Plain(value)).context("encoding JSON")?;
     Ok(output.bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_parser_matches_serde_reference() {
+        let documents = [
+            r#"null"#,
+            r#"{"unicode":"雪 café","escaped":"line\nquote\"slash\\","nested":[{},[],{"x":true}]}"#,
+            r#"[-9223372036854775808,9223372036854775807,9223372036854775808,18446744073709551615,-1,0,1,1.0,-2.5,1e20]"#,
+            r#"{"same":1,"same":2,"empty_object":{},"empty_array":[]}"#,
+        ];
+        for document in documents {
+            let bytes = document.as_bytes();
+            assert_eq!(
+                parse(bytes).unwrap(),
+                old_parse(bytes).unwrap(),
+                "{document}"
+            );
+        }
+
+        for bytes in [&b""[..], b"null trailing", b"{"] {
+            assert_eq!(
+                format!("{:#}", parse(bytes).unwrap_err()),
+                format!("{:#}", old_parse(bytes).unwrap_err()),
+                "{}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
+
+        assert!(to_json(&Value::Reference("missing".into()))
+            .unwrap_err()
+            .to_string()
+            .contains("cannot encode an unresolved reference"));
+    }
 }

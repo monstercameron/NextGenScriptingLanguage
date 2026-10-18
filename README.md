@@ -227,6 +227,7 @@ require explicit retry. See the [recovery contract](docs/language.md#recover-aft
 | --- | --- |
 | [150 utilities](examples/ladder/README.md) | Useful file, log, data, CI and release workflows with inputs, outputs and exact fixture oracles. |
 | [100 model workflows](examples/models/README.md) | Explicit Jev/LLM calls, typed results and script-owned routing; offline fixtures by default. |
+| [AI gauntlet](examples/ai-gauntlet/README.md) | 24 everyday scripts where a bounded Jev/LLM step beats bash: triage, extraction to typed records, fuzzy device choice, risk and danger gates; typed verdicts, thresholds, deterministic fallbacks, offline fixtures and a test. |
 | [Omarchy ports](examples/omarchy-ports/README.md) | Thirty commands from the pinned Omarchy v4.0.4 `bin/`: ten interface ports and twenty compared against their Bash originals case by case (`tools/port_compare.py`, 75 cases, fake backends). Not a certified desktop replacement. |
 | [Native applet catalog](manifests) and [applet contracts](docs/applet-contracts.md) | Readable named parameters mapped directly to argv, with optional typed values, outcomes and execution backends. Direct quoted calls need no adapter. |
 | [Typed applet graphs](docs/graph.md) | Source-build graph files with preflighted typed ports, bounded event queues and `check`/`inspect`/`explain`/`run` commands. |

@@ -137,6 +137,21 @@ h1 em {
   gap: 10px;
   margin-bottom: 22px;
 }
+.example-group {
+  grid-column: 1 / -1;
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font: 700 10px var(--mono);
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.example-group:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
 .example {
   text-align: left;
   padding: 13px;

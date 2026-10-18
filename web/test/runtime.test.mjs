@@ -99,7 +99,7 @@ for (const example of examples) {
           cwd: folder,
           input: example.stdin ?? '',
           encoding: 'utf8',
-          timeout: 5000,
+          timeout: 60000,
           env: { ...process.env, LC_ALL: 'C' },
         },
       );

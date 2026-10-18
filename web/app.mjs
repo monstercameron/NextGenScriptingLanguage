@@ -341,7 +341,16 @@ function choose(example) {
       button.setAttribute('aria-pressed', String(button.dataset.id === example.id)),
     );
 }
+$('choose').textContent = `01 / PICK A WORKFLOW · ${examples.length} RUNNABLE EXAMPLES`;
+let currentGroup;
 for (const example of examples) {
+  if (example.group && example.group !== currentGroup) {
+    currentGroup = example.group;
+    const heading = document.createElement('h3');
+    heading.className = 'example-group';
+    heading.textContent = currentGroup;
+    $('examples').append(heading);
+  }
   const button = document.createElement('button');
   button.className = 'example';
   button.dataset.id = example.id;

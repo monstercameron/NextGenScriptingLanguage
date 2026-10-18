@@ -203,8 +203,11 @@ fn document_ref<'a>(
 }
 
 fn check_size_and_depth(value: &Value, context: &ExecutionContext<'_>) -> Result<(), AppletError> {
+    // One walk checks the depth and adds up the exact length of the compact JSON
+    // encoding, so the size limit needs no serialization pass over the document.
     let mut pending = vec![(value, 0usize)];
     let mut work = 0usize;
+    let mut bytes = 0usize;
     while let Some((value, depth)) = pending.pop() {
         checkpoint_work(context, work)?;
         work += 1;
@@ -213,60 +216,73 @@ fn check_size_and_depth(value: &Value, context: &ExecutionContext<'_>) -> Result
                 "JSON value exceeds the {MAX_DEPTH}-level depth limit"
             )));
         }
-        match value {
+        bytes = bytes.saturating_add(match value {
+            Value::Null => 4,
+            Value::Bool(true) => 4,
+            Value::Bool(false) => 5,
+            Value::Number(number) => number_length(number),
+            Value::String(text) => escaped_length(text),
             Value::Array(items) => {
                 for item in items {
                     checkpoint_work(context, work)?;
                     work += 1;
                     pending.push((item, depth + 1));
                 }
+                // Brackets and the commas between items.
+                2 + items.len().saturating_sub(1)
             }
             Value::Object(fields) => {
-                for item in fields.values() {
+                let mut length = 2 + fields.len().saturating_sub(1);
+                for (key, item) in fields {
                     checkpoint_work(context, work)?;
                     work += 1;
+                    // The quoted key and its colon.
+                    length = length.saturating_add(escaped_length(key) + 1);
                     pending.push((item, depth + 1));
                 }
+                length
             }
-            _ => {}
-        }
+        });
     }
     context.checkpoint()?;
-    let mut counter = JsonByteCounter {
-        bytes: 0,
-        limit: MAX_JSON_BYTES,
-        exceeded: false,
-    };
-    let encoded = serde_json::to_writer(&mut counter, value);
-    context.checkpoint()?;
-    if counter.exceeded {
+    if bytes > MAX_JSON_BYTES {
         return Err(invalid(format!(
             "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
         )));
     }
-    encoded.map_err(|error| invalid(format!("JSON value cannot be serialized: {error}")))?;
     Ok(())
 }
 
-struct JsonByteCounter {
-    bytes: usize,
-    limit: usize,
-    exceeded: bool,
+/// The length of `text` as a quoted JSON string in serde_json's compact encoding:
+/// `"` and `\` and the short control escapes take two bytes, other control bytes take
+/// six (`\u00XX`), and every other byte, including non-ASCII UTF-8, is copied.
+fn escaped_length(text: &str) -> usize {
+    let escapes: usize = text
+        .bytes()
+        .map(|byte| match byte {
+            b'"' | b'\\' | b'\x08' | b'\t' | b'\n' | b'\x0c' | b'\r' => 1,
+            0x00..=0x1f => 5,
+            _ => 0,
+        })
+        .sum();
+    text.len() + escapes + 2
 }
 
-impl std::io::Write for JsonByteCounter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if bytes.len() > self.limit.saturating_sub(self.bytes) {
-            self.exceeded = true;
-            return Err(std::io::Error::other("JSON value exceeds byte limit"));
+/// The length of a number as serde_json writes it (integers in decimal, floats in
+/// the shortest round-trip form), which is its `Display` form.
+fn number_length(number: &serde_json::Number) -> usize {
+    use std::fmt::Write;
+    struct Counter(usize);
+    impl Write for Counter {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0 += text.len();
+            Ok(())
         }
-        self.bytes += bytes.len();
-        Ok(bytes.len())
     }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
+    let mut counter = Counter(0);
+    // Writing to a counter cannot fail.
+    let _ = write!(counter, "{number}");
+    counter.0
 }
 
 fn optional_pointer<'a>(args: &'a Map<String, Value>, name: &str) -> Result<&'a str, AppletError> {
@@ -500,5 +516,52 @@ fn json_type(value: &Value) -> &'static str {
         Value::String(_) => "string",
         Value::Array(_) => "array",
         Value::Object(_) => "object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The walked length must equal serde_json's compact encoding for every value kind,
+    /// including escapes, non-ASCII text and every number form.
+    #[test]
+    fn walked_length_equals_the_compact_encoding() {
+        let values = [
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!([]),
+            serde_json::json!({}),
+            serde_json::json!({"a": [1, -2, 3.5, 1e300, 0.1, 18446744073709551615u64, false]}),
+            serde_json::json!({"quote\"key": "tab\t nl\n cr\r bell\u{7} del\u{7f} \\ \u{8}\u{c} é 日本"}),
+            serde_json::json!([[[{"x": {"y": [null, "", "\u{0}\u{1f}"]}}]]]),
+            serde_json::json!({"meta": {"count": 5000}, "items": [{"id": 1, "tags": ["a", "b"]}]}),
+        ];
+        for value in values {
+            let mut pending = vec![&value];
+            let mut walked = 0usize;
+            while let Some(value) = pending.pop() {
+                walked += match value {
+                    Value::Null => 4,
+                    Value::Bool(true) => 4,
+                    Value::Bool(false) => 5,
+                    Value::Number(number) => number_length(number),
+                    Value::String(text) => escaped_length(text),
+                    Value::Array(items) => {
+                        pending.extend(items);
+                        2 + items.len().saturating_sub(1)
+                    }
+                    Value::Object(fields) => {
+                        pending.extend(fields.values());
+                        2 + fields.len().saturating_sub(1)
+                            + fields
+                                .keys()
+                                .map(|key| escaped_length(key) + 1)
+                                .sum::<usize>()
+                    }
+                };
+            }
+            assert_eq!(walked, serde_json::to_vec(&value).unwrap().len(), "{value}");
+        }
     }
 }

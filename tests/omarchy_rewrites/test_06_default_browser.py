@@ -68,7 +68,7 @@ class DefaultBrowserTests(unittest.TestCase):
                 "unsafe_exists": (self.root / "unsafe").exists()}
 
     def compare(self, args=(), get=None, set_response=None, notification=None,
-                stdout_difference=False, failure_diagnostic=False):
+                failure_diagnostic=False):
         config = {"get": get or [{"stdout": "firefox.desktop\n"}],
                   "set": set_response or {}, "notification": notification or {}}
         (self.root / "config.json").write_text(json.dumps(config))
@@ -76,11 +76,7 @@ class DefaultBrowserTests(unittest.TestCase):
         rewrite = self.invoke([str(EXECUTE), str(PROGRAM), "--", *args])
         for field in ("status", "commands", "notifications", "browser_state", "home_files", "unsafe_exists"):
             self.assertEqual(original[field], rewrite[field], field)
-        if stdout_difference:
-            self.assertEqual(rewrite["stdout"], "")
-            self.assertNotEqual(original["stdout"], rewrite["stdout"])
-        else:
-            self.assertEqual(original["stdout"], rewrite["stdout"])
+        self.assertEqual(original["stdout"], rewrite["stdout"])
         if failure_diagnostic:
             self.assertTrue(rewrite["stderr"].startswith(original["stderr"]))
             self.assertIn("failed", rewrite["stderr"])
@@ -153,7 +149,7 @@ class DefaultBrowserTests(unittest.TestCase):
 
     def test_set_failure_stdout_known_finite_output_limit(self):
         self.compare(args=("zen",), set_response={"status": 19, "stdout": "partial set\n"},
-                     stdout_difference=True, failure_diagnostic=True)
+                     failure_diagnostic=True)
 
     def test_successful_set_and_notification_stdout_are_concatenated(self):
         original, _ = self.compare(args=("brave-origin",), set_response={"stdout": "set output\n"},
@@ -169,7 +165,7 @@ class DefaultBrowserTests(unittest.TestCase):
     def test_notification_failure_stdout_known_finite_output_limit(self):
         self.compare(args=("firefox",), set_response={"stdout": "set output\n"},
                      notification={"status": 23, "stdout": "partial notification\n"},
-                     stdout_difference=True, failure_diagnostic=True)
+                     failure_diagnostic=True)
 
     def test_typed_selection_override(self):
         (self.root / "config.json").write_text(json.dumps({"get": [{}], "set": {}, "notification": {}}))

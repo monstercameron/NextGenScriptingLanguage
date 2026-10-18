@@ -50,11 +50,10 @@ following differences explicitly asserted or bounded.
 
 Known limits:
 
-- Execute discards finite stdout on an unhandled native failure. Usage and
-  unknown-action messages therefore disappear on status 1, and a failed OSD's
-  partial stdout disappears. Those tests assert the gap and retain the Bash
-  output in evidence. Earlier successful setter stdout is concatenated exactly
-  when the OSD succeeds. Failure statuses add Execute's contextual diagnostics.
+- Native stdout streams as it does upstream and is kept on an unhandled native
+  failure. Usage and unknown-action messages, the pactl setter output and a
+  failed OSD's partial stdout all appear in upstream order. Failure statuses add
+  Execute's contextual diagnostics.
 - Quoted direct native commands can discard only their own stderr with
   `and discard stderr`; the two pactl queries use it to match upstream's
   `2>/dev/null`. Upstream custom error messages are emitted to stderr with

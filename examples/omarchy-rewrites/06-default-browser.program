@@ -12,10 +12,9 @@ define a program named set_browser
   accept desktop_id as text
   accept message as text
   accept glyph as text
-  run "env" with arguments ["-u", "BROWSER", "xdg-settings", "set", "default-web-browser", desktop_id] as set_output and keep status as set_status
+  run "env" with arguments ["-u", "BROWSER", "xdg-settings", "set", "default-web-browser", desktop_id] and keep status as set_status
   if set_status is 0
-    run "omarchy-notification-send" with arguments ["-g", glyph, message] as notification_output
-    run "printf" with arguments ["%s%s", set_output, notification_output]
+    run "omarchy-notification-send" with arguments ["-g", glyph, message]
   otherwise
     run "false"
 

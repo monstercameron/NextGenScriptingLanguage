@@ -53,7 +53,7 @@ if theme_exists is 0
       run "printf" with arguments ["1c2027"] as color
 otherwise
   run "printf" with arguments ["1c2027"] as color
-run "omarchy-theme-set-browser-policy" with arguments [color] as policy_output and keep status as policy_status
+run "omarchy-theme-set-browser-policy" with arguments [color] and keep status as policy_status
 run program refresh_browser with process "chromium" and command "chromium" as chromium_status
 run program refresh_browser with process "chrome" and command "google-chrome-stable" as chrome_status
 # The Bash helper succeeds for absent/stopped Chrome, so fallback occurs only after an actual failed refresh.
@@ -63,8 +63,8 @@ run program refresh_browser with process "msedge" and command "microsoft-edge-st
 run program refresh_browser with process "brave" and command "brave" as brave_status
 run program refresh_browser with process "/opt/brave-origin-bin/" and command "brave-origin" and match_flag "-f" as brave_origin_status
 if policy_status is 0
-  run "printf" with arguments ["%s", policy_output]
+  run "printf" with arguments [""]
 otherwise
   # Normalize every policy error to 1 after all refreshes, matching Bash's failed=1.
-  # Execute adds a native-failure diagnostic and discards policy stdout on this path.
+  # The policy utility's stdout streamed as it ran and is kept on failure, as in Bash.
   run "false"

@@ -64,8 +64,7 @@ if valid_id is true
     run "omarchy-notification-send" with arguments ["-g", "󱂬", notification]
   otherwise
     run "printf" with arguments ["%s, layout:%s", workspace_id, new_layout] as keyword_rule
-    run "hyprctl" with arguments ["keyword", "workspace", keyword_rule] as fallback_output and keep status as keyword_status
-    run "omarchy-notification-send" with arguments ["-g", "󱂬", notification] as notification_output
-    run "printf" with arguments ["%s%s", fallback_output, notification_output]
+    run "hyprctl" with arguments ["keyword", "workspace", keyword_rule] and keep status as keyword_status
+    run "omarchy-notification-send" with arguments ["-g", "󱂬", notification]
 otherwise
   run "false"

@@ -16,7 +16,7 @@ The retained local oracle uses Apple Bash 3.2.57. Its unquoted `$(<$CHROMIUM_THE
 Known language limits are tested, not represented as full Bash parity:
 
 - The fixed browser-refresh manifest discards both child streams at the process boundary, matching Bash's `&>/dev/null` without buffering refresh stdout. `pgrep` and the delegated policy command still use the runtime's native stream transport.
-- There is no builtin `exit failed`. A final native `false` preserves normalized policy-failure status 1 after refreshes, while Execute adds a native-failure diagnostic. On this path Execute also discards policy stdout; the original streams it. On success policy stdout bytes are preserved but buffered until refreshes complete.
+- There is no builtin `exit failed`. A final native `false` preserves normalized policy-failure status 1 after refreshes, while Execute adds a native-failure diagnostic. Policy stdout streams as the original does and is kept on failure; on success it streams before the refreshes.
 - Shell-source failures, NUL-containing theme files, read-permission races, signal/spawn failure transport, privileged policy file permissions, and live desktop behavior are not certified. Tests use UTF-8 text and silent mock normal paths.
 
 Run from the repository root:

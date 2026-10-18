@@ -48,16 +48,17 @@ output composition, and explicit typed input overrides.
 
 The tests assert these differences explicitly rather than claiming byte parity:
 
-- Invalid selection: upstream prints Usage to stdout and exits 1. Execute returns
-  1 and runs no XDG/notification command, but discards the earlier finite Usage
-  output on the final native failure and appends a native failure diagnostic.
-- Failed set: both return 1 and skip notification. Execute adds its failure
-  diagnostic; any stdout from the failed operation is discarded.
+- Invalid selection: upstream prints Usage to stdout and exits 1. Execute streams
+  the same Usage output, returns 1 and runs no XDG/notification command. Execute
+  adds its native failure diagnostic.
+- Failed set: both return 1 and skip notification. The set command's stdout
+  streams and is kept on failure, as in upstream; Execute adds its failure
+  diagnostic.
 - Failed notification: both preserve the notification status (tested as 23) and
-  retain the successful set side effect. Execute adds its native failure
-  diagnostic and discards finite stdout from that invocation and preceding set.
-- Successful set/notification stdout bytes are concatenated exactly, but Execute
-  buffers them until success; streaming timing is different.
+  retain the successful set side effect. Set and notification stdout stream in
+  upstream order and are kept; Execute adds its native failure diagnostic.
+- Successful set and notification stdout bytes are concatenated in upstream order
+  as they stream.
 
 Additional runtime boundaries: named captures and process inputs require UTF-8;
 NUL handling is not equivalent to Bash command substitution. The finite capture

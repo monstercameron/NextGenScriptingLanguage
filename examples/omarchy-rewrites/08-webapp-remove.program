@@ -22,7 +22,10 @@ if argument_count is "0\n"
   then encode paths as json
   then "jq" with arguments ["length"] as path_count
   if path_count is "0\n"
-    run "printf" with arguments ["No web apps to remove.\n"] as app_name
+    run "printf" with arguments ["No web apps to remove.\n"]
+    # Bind app_name on this path too so every path defines it; the message above has
+    # already streamed, as Bash prints it.
+    run "printf" with arguments [""] as app_name
     run "false"
   otherwise
     run "printf" with arguments [""] as menu_lines
@@ -66,9 +69,7 @@ run "printf" with arguments ["%s/%s.png", icon_dir, app_name] as named_icon
 run "printf" with arguments ["%s/%s.png", old_icon_dir, app_name] as old_icon
 run "rm" with arguments ["-f", normalized_icon, named_icon, old_icon]
 if notify is not "false"
-  run "omarchy-notification-send" with arguments ["-g", "", "Web app removed", app_name] as notification_output
-otherwise
-  run "printf" with arguments [""] as notification_output
-run "update-desktop-database" with arguments [desktop_dir] as database_output and discard stderr and keep status as database_status
-# Upstream suppresses database output while retaining notification stdout.
-run "printf" with arguments ["%s", notification_output]
+  run "omarchy-notification-send" with arguments ["-g", "", "Web app removed", app_name] and keep status as notification_status
+# Upstream ignores the notification status and streams its output; the database
+# refresh runs next and its status becomes the script status, with output discarded.
+run "update-desktop-database" with arguments [desktop_dir] as database_output and discard stderr

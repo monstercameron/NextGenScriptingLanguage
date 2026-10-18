@@ -14,7 +14,6 @@ define a program named percent
 
 define a program named osd
   accept sink as text
-  accept prior_output as text
   run program percent with sink sink as volume
   if volume is ""
     run "printf" with arguments ["0"] as display_volume
@@ -32,8 +31,7 @@ define a program named osd
       run "printf" with arguments ["volume-muted"] as icon
     otherwise
       run "printf" with arguments ["volume-high"] as icon
-  run "omarchy-osd" with arguments ["-i", icon, "-p", display_volume] as osd_output
-  run "printf" with arguments ["%s%s", prior_output, osd_output]
+  run "omarchy-osd" with arguments ["-i", icon, "-p", display_volume]
 
 define a program named report_file_failure
   accept path as text
@@ -117,10 +115,9 @@ define a program named apply_adjustment
     otherwise
       run "printf" with arguments ["%s", calculated] as next
   run "printf" with arguments ["%s%%", next] as volume_argument
-  run "pactl" with arguments ["set-sink-mute", sink, "0"] as unmute_output and keep status as unmute_status
-  run "pactl" with arguments ["set-sink-volume", sink, volume_argument] as volume_output and keep status as set_status
-  run "printf" with arguments ["%s%s", unmute_output, volume_output] as prior_output
-  run program osd with sink sink and prior_output prior_output
+  run "pactl" with arguments ["set-sink-mute", sink, "0"] and keep status as unmute_status
+  run "pactl" with arguments ["set-sink-volume", sink, volume_argument] and keep status as set_status
+  run program osd with sink sink
 
 if action is ""
   run "printf" with arguments ["Usage: omarchy-audio-output-volume <raise|lower|mute-toggle|+N|-N>\n"]
@@ -169,8 +166,8 @@ otherwise
             run program save_debounce_timestamp with path debounce_file and content timestamp_content and expected_hash "missing"
           otherwise
             run program report_file_failure with path debounce_file and operation "mute debounce snapshot" and status snapshot_status
-        run "pactl" with arguments ["set-sink-mute", sink, "toggle"] as mute_output and keep status as toggle_status
-        run program osd with sink sink and prior_output mute_output
+        run "pactl" with arguments ["set-sink-mute", sink, "toggle"] and keep status as toggle_status
+        run program osd with sink sink
     otherwise
       if action is "raise"
         run program adjust with sink sink and signed_step "+5"

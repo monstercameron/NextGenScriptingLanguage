@@ -45,9 +45,8 @@ Known runtime differences:
   failure is unhandled; this fixture's eval failure is deliberately handled.
 - Native failures preserve status and add Execute diagnostics. Invalid ids
   therefore return the same status 1 and make no changes, with extra stderr.
-- A failed notification's stdout, and earlier fallback stdout if notification
-  fails, can be discarded by Execute's failed finite-output contract. Successful
-  fallback and notification output is concatenated in exact upstream order.
+- Fallback and notification stdout stream in upstream order and are kept on
+  failure, so a failed notification keeps the earlier fallback stdout.
 - Native atomic save preserves existing permissions and follows a state-file
   symlink to its target. Its retained lock sidecar is an intentional atomicity
   artifact: when a save occurs, tests require the exact sibling lock file to

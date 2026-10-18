@@ -67,7 +67,7 @@ class AudioVolumeTests(unittest.TestCase):
                 "commands": commands, "files": files, "locks": locks}
 
     def compare(self, args=("raise",), *, current="50", after="55", muted="no", initial=None,
-                overrides=None, diagnostic=False, stdout_gap=False, stderr_gap=False, full_gap=False,
+                overrides=None, diagnostic=False, stderr_gap=False, full_gap=False,
                 debounce_directory=False):
         config = {"sink": {"stdout": "physical sink; $(touch unsafe)\n"},
                   "date": {"stdout": "1000000\n"},
@@ -83,11 +83,7 @@ class AudioVolumeTests(unittest.TestCase):
         if not full_gap:
             for key in ("status", "commands", "files"):
                 self.assertEqual(original[key], rewrite[key], (key, rewrite["stderr"]))
-            if stdout_gap:
-                self.assertNotEqual(original["stdout"], rewrite["stdout"])
-                self.assertEqual(rewrite["stdout"], "")
-            else:
-                self.assertEqual(original["stdout"], rewrite["stdout"], "stdout")
+            self.assertEqual(original["stdout"], rewrite["stdout"], "stdout")
             if diagnostic:
                 self.assertTrue(rewrite["stderr"].startswith(original["stderr"]))
                 self.assertIn("failed", rewrite["stderr"])
@@ -102,7 +98,7 @@ class AudioVolumeTests(unittest.TestCase):
             label = self._testMethodName + "-" + hashlib.sha256(json.dumps([args, config, initial], sort_keys=True).encode()).hexdigest()[:10]
             (destination / (label + ".json")).write_text(json.dumps(
                 {"case": self._testMethodName, "config": config, "arguments": args, "initial": initial,
-                 "gaps": {"diagnostic": diagnostic, "stdout": stdout_gap, "stderr": stderr_gap, "full": full_gap},
+                 "gaps": {"diagnostic": diagnostic, "stderr": stderr_gap, "full": full_gap},
                  "upstream": original, "execute": rewrite}, ensure_ascii=False, indent=2) + "\n")
         self.assertFalse((self.root / "unsafe").exists())
         return original, rewrite
@@ -230,8 +226,8 @@ class AudioVolumeTests(unittest.TestCase):
             {"stdout": "Volume: 50%\n"}, {"stdout": "unreadable\n"}]})
         self.assertEqual(original["commands"][-1]["argv"], ["-i", "volume-muted", "-p", "0"])
 
-    def test_osd_failure_preserves_status_with_output_gap(self):
-        original, _ = self.compare(overrides={"osd": {"status": 13, "stdout": "partial\n", "stderr": "osd error\n"}}, diagnostic=True, stdout_gap=True)
+    def test_osd_failure_preserves_status_and_stdout(self):
+        original, _ = self.compare(overrides={"osd": {"status": 13, "stdout": "partial\n", "stderr": "osd error\n"}}, diagnostic=True)
         self.assertEqual(original["status"], 13)
 
     def test_pactl_query_stderr_redirection_matches_bash(self):

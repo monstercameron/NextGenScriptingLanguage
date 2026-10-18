@@ -40,6 +40,8 @@ pub struct WorkflowServiceRequest<'a> {
     pub manifest_directory: Option<&'a Path>,
     pub capability_policy: Option<&'a Path>,
     pub data_flow_policy: Option<&'a Path>,
+    /// Private JSON answers file forwarded to `run` by path.
+    pub answers_file: Option<&'a Path>,
     pub label: Option<&'a str>,
     pub inputs: &'a BTreeMap<String, String>,
     pub program_arguments: &'a [String],
@@ -96,6 +98,10 @@ fn render_for_workflow_with_launchd_home_and_catalog(
         .data_flow_policy
         .map(|path| canonical_file(path, "data-flow policy"))
         .transpose()?;
+    let answers_file = request
+        .answers_file
+        .map(validate_private_answers_file)
+        .transpose()?;
     let label = request
         .label
         .map(str::to_owned)
@@ -122,13 +128,18 @@ fn render_for_workflow_with_launchd_home_and_catalog(
         );
     }
 
-    validate_explicit_environment_inputs(&program.inputs, request.inputs)?;
+    if answers_file.is_none() {
+        validate_explicit_environment_inputs(&program.inputs, request.inputs)?;
+    }
     let supplied = crate::inputs::parse_cli_arguments(
         &program.inputs,
         request.inputs,
         request.program_arguments,
     )?;
     for declaration in &program.inputs {
+        if answers_file.is_some() {
+            continue;
+        }
         if (crate::ast::is_sensitive(declaration)
             || matches!(declaration.source, Some(InputSource::Environment(_))))
             && request.inputs.contains_key(&declaration.name)
@@ -183,9 +194,13 @@ fn render_for_workflow_with_launchd_home_and_catalog(
             utf8_path(&path, "data-flow policy")?,
         ]);
     }
-    for (name, value) in request.inputs {
-        argv.push("--input".into());
-        argv.push(format!("{name}={value}"));
+    if let Some(path) = answers_file {
+        argv.extend(["--answers".into(), utf8_path(&path, "answers file")?]);
+    } else {
+        for (name, value) in request.inputs {
+            argv.push("--input".into());
+            argv.push(format!("{name}={value}"));
+        }
     }
     argv.push(utf8_path(&workflow, "workflow")?);
     if !request.program_arguments.is_empty() {
@@ -205,6 +220,224 @@ fn render_for_workflow_with_launchd_home_and_catalog(
         ),
         ServiceFormat::Launchd => render_launchd(&label, &working_directory, &argv, launchd_home),
     }
+}
+
+/// Resolve and verify that an unattended answers file is private to the caller.
+pub fn validate_private_answers_file(path: &Path) -> Result<PathBuf> {
+    let path = canonical_file(path, "answers file")?;
+    let metadata = fs::metadata(&path)
+        .with_context(|| format!("reading answers file metadata {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // SAFETY: geteuid reads the effective user id and has no pointer arguments or side effects.
+        if metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o777 != 0o600
+        {
+            bail!(
+                "answers file {} must be owned by the current user and have mode 0600",
+                path.display()
+            );
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        validate_private_windows_acl(&path)?;
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        bail!(
+            "cannot verify that answers file {} is private on this platform",
+            path.display()
+        );
+    }
+    #[cfg(unix)]
+    {
+        Ok(path)
+    }
+    #[cfg(windows)]
+    {
+        Ok(path)
+    }
+}
+
+#[cfg(windows)]
+fn validate_private_windows_acl(path: &Path) -> Result<()> {
+    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+    const INHERITED_ACE_FLAG: u8 = 0x10;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::{
+            AclSizeInformation,
+            Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT},
+            EqualSid, GetAce, GetAclInformation, GetSecurityDescriptorDacl, GetTokenInformation,
+            TokenUser, ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+
+    let mut name = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    name.push(0);
+    let mut owner = std::ptr::null_mut();
+    let mut dacl = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    // SAFETY: name is NUL-terminated, and all output pointers are live local slots.
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        if !descriptor.is_null() {
+            // SAFETY: GetNamedSecurityInfoW allocated this descriptor with LocalAlloc.
+            unsafe { LocalFree(descriptor) };
+        }
+        return Err(std::io::Error::from_raw_os_error(status as i32))
+            .context("reading answers file Windows ACL");
+    }
+    let result = (|| {
+        // SAFETY: GetCurrentProcess returns a valid pseudo-handle that requires no closing.
+        let process = unsafe { GetCurrentProcess() };
+        let mut token = std::ptr::null_mut();
+        // SAFETY: process is the valid pseudo-handle above and token is a writable out-slot.
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+            return Err(std::io::Error::last_os_error()).context("reading current user SID");
+        }
+        // SAFETY: OpenProcessToken succeeded and returned an owned token handle.
+        let token = unsafe { OwnedHandle::from_raw_handle(token) };
+        let mut needed = 0;
+        // SAFETY: A null buffer with length zero requests the required TokenUser buffer size.
+        unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            );
+        }
+        if needed == 0 {
+            return Err(std::io::Error::last_os_error()).context("sizing current user SID");
+        }
+        let mut token_data = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
+        // SAFETY: token_data is aligned and at least `needed` bytes long; the token remains live.
+        if unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                token_data.as_mut_ptr().cast(),
+                needed,
+                &mut needed,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error()).context("reading current user SID");
+        }
+        // SAFETY: GetTokenInformation wrote a TOKEN_USER at the start of the aligned buffer.
+        let user = unsafe { &*(token_data.as_ptr().cast::<TOKEN_USER>()) };
+        if owner.is_null() || user.User.Sid.is_null() {
+            bail!(
+                "answers file {} must be owned by the current user",
+                path.display()
+            );
+        }
+        // SAFETY: both SIDs are non-null and remain live in the descriptor and token buffer.
+        if unsafe { EqualSid(owner, user.User.Sid) } == 0 {
+            bail!(
+                "answers file {} must be owned by the current user",
+                path.display()
+            );
+        }
+
+        let mut present = 0;
+        let mut acl_defaulted = 0;
+        let mut descriptor_dacl = std::ptr::null_mut();
+        // SAFETY: descriptor is the live descriptor returned by GetNamedSecurityInfoW.
+        if unsafe {
+            GetSecurityDescriptorDacl(
+                descriptor,
+                &mut present,
+                &mut descriptor_dacl,
+                &mut acl_defaulted,
+            )
+        } == 0
+            || present == 0
+            || descriptor_dacl.is_null()
+            || dacl != descriptor_dacl
+        {
+            bail!(
+                "answers file {} must have an explicit private Windows DACL",
+                path.display()
+            );
+        }
+        let mut size = ACL_SIZE_INFORMATION {
+            AceCount: 0,
+            AclBytesInUse: 0,
+            AclBytesFree: 0,
+        };
+        // SAFETY: dacl is the valid ACL returned in the live security descriptor.
+        if unsafe {
+            GetAclInformation(
+                dacl,
+                (&mut size as *mut ACL_SIZE_INFORMATION).cast(),
+                std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            )
+        } == 0
+            || size.AceCount == 0
+        {
+            bail!(
+                "answers file {} must have a nonempty private Windows DACL",
+                path.display()
+            );
+        }
+        for index in 0..size.AceCount {
+            let mut raw_ace = std::ptr::null_mut();
+            // SAFETY: index is below the ACE count reported for this valid ACL.
+            if unsafe { GetAce(dacl, index, &mut raw_ace) } == 0 || raw_ace.is_null() {
+                return Err(std::io::Error::last_os_error())
+                    .context("reading answers file ACL entry");
+            }
+            // SAFETY: GetAce returned a pointer to an ACE stored inside the live ACL.
+            let header = unsafe { &*(raw_ace.cast::<windows_sys::Win32::Security::ACE_HEADER>()) };
+            if header.AceType != ACCESS_ALLOWED_ACE_TYPE
+                || header.AceFlags & INHERITED_ACE_FLAG != 0
+            {
+                bail!(
+                    "answers file {} has a nonprivate or inherited Windows ACL entry",
+                    path.display()
+                );
+            }
+            // SAFETY: ACCESS_ALLOWED_ACE_TYPE guarantees this ACE layout; SidStart begins its SID.
+            let ace = unsafe { &*(raw_ace.cast::<ACCESS_ALLOWED_ACE>()) };
+            let ace_sid = std::ptr::addr_of!(ace.SidStart).cast_mut().cast();
+            // SAFETY: the ACE SID lies inside the validated ACL and the token SID buffer is live.
+            if unsafe { EqualSid(ace_sid, user.User.Sid) } == 0 {
+                bail!(
+                    "answers file {} grants access to another Windows principal",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    })();
+    if !descriptor.is_null() {
+        // SAFETY: GetNamedSecurityInfoW allocated this descriptor with LocalAlloc.
+        unsafe { LocalFree(descriptor) };
+    }
+    result
 }
 
 fn validate_explicit_environment_inputs(
@@ -656,6 +889,22 @@ mod tests {
         assert_eq!(xml_text("a&<b>"), "a&amp;&lt;b&gt;");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_answers_file_requires_current_owner_and_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("answers.json");
+        fs::write(&path, "{}\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(validate_private_answers_file(&path).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            validate_private_answers_file(&path).unwrap(),
+            fs::canonicalize(path).unwrap()
+        );
+    }
+
     #[test]
     fn generated_service_is_validated_review_only_and_preserves_argv() {
         let directory = tempdir().unwrap();
@@ -678,6 +927,7 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            answers_file: None,
             label: Some("com.example.daily-task"),
             inputs: &inputs,
             program_arguments: &arguments,
@@ -712,6 +962,7 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            answers_file: None,
             label: Some("com.example.catalog-service"),
             inputs: &inputs,
             program_arguments: &arguments,
@@ -747,6 +998,7 @@ mod tests {
                 manifest_directory: None,
                 capability_policy: None,
                 data_flow_policy: None,
+                answers_file: None,
                 label: Some("com.example.scheduled"),
                 inputs: &inputs,
                 program_arguments: &arguments,
@@ -789,6 +1041,7 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            answers_file: None,
             label: None,
             inputs: &inputs,
             program_arguments: &arguments,
@@ -932,6 +1185,7 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            answers_file: None,
             label: Some("com.example.nightly"),
             inputs: &inputs,
             program_arguments: &arguments,
@@ -980,6 +1234,7 @@ mod tests {
             manifest_directory: None,
             capability_policy: None,
             data_flow_policy: None,
+            answers_file: None,
             label: Some("com.example.interval"),
             inputs: &inputs,
             program_arguments: &arguments,

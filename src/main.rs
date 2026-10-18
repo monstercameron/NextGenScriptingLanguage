@@ -575,6 +575,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             }
             return Ok(());
         }
+        let has_static_error = static_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Error);
         let mut diagnostics = static_diagnostics
             .iter()
             .map(serde_json::to_value)
@@ -587,9 +590,6 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             }));
         }
         if let Err(error) = &result {
-            let has_static_error = static_diagnostics.iter().any(|diagnostic| {
-                diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Error
-            });
             if !has_static_error {
                 diagnostics.push(serde_json::json!({
                     "severity": "error", "code": "check_failed",
@@ -603,11 +603,11 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         } else {
             write_json(&serde_json::json!({
                 "protocol": "execute.check/1", "validation": "static",
-                "ok": result.is_ok(), "path": path, "path_bytes": path_bytes,
+                "ok": result.is_ok() && !has_static_error, "path": path, "path_bytes": path_bytes,
                 "diagnostics": diagnostics
             }))?;
         }
-        if result.is_err() {
+        if result.is_err() || has_static_error {
             // Validation has no spawned workers/effects. The JSON response is
             // complete; preserve the ordinary failing-check exit status.
             std::process::exit(1);
@@ -2052,7 +2052,13 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
     }
     let manifest = manifest.context("modules command requires a package manifest")?;
     let root = root
-        .or_else(|| manifest.parent().map(Path::to_path_buf))
+        .or_else(|| {
+            manifest
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+                .or_else(|| Some(PathBuf::from(".")))
+        })
         .context("could not derive module root from manifest path")?;
     match command {
         "inspect" => {
@@ -2139,7 +2145,7 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
 
 #[cfg(feature = "tooling")]
 fn service_cli(arguments: &[String]) -> Result<()> {
-    const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--input NAME=VALUE ...] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
+    const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--input NAME=VALUE ... | --answers FILE] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. --answers requires a private JSON file and forwards only its path. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
     if arguments == ["--help"] || arguments == ["-h"] {
         writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
@@ -2154,6 +2160,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     let mut working_directory = None;
     let mut capability_policy = None;
     let mut data_flow_policy = None;
+    let mut answers_file = None;
     let mut persistent = false;
     let mut supplied_inputs = BTreeMap::new();
     let mut program_arguments = Vec::new();
@@ -2255,6 +2262,17 @@ fn service_cli(arguments: &[String]) -> Result<()> {
                     bail!("duplicate program input {name:?}");
                 }
             }
+            "--answers" => {
+                if answers_file.is_some() {
+                    bail!("--answers may be specified once");
+                }
+                answers_file = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--answers",
+                    "a JSON answers file",
+                )?));
+            }
             value if value.starts_with('-') => bail!("unsupported service option {value}"),
             _ => positional.push(workflow_path(argument)?),
         }
@@ -2262,6 +2280,14 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     }
     if positional.len() != 2 {
         bail!("service generate requires a format and one workflow file\n{HELP}");
+    }
+    if answers_file.is_some() && !supplied_inputs.is_empty() {
+        bail!("--answers cannot be combined with --input in service generation");
+    }
+    if let Some(path) = answers_file.as_deref() {
+        let path = flow::service_deployment::validate_private_answers_file(path)?;
+        supplied_inputs = flow::prompt::answers_from_file(&path)?;
+        answers_file = Some(path);
     }
     let capability_policy_path = capability_policy.clone();
     let data_flow_policy_path = data_flow_policy.clone();
@@ -2315,6 +2341,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
         manifest_directory: manifest_dir.as_deref(),
         capability_policy: capability_policy_path.as_deref(),
         data_flow_policy: data_flow_policy_path.as_deref(),
+        answers_file: answers_file.as_deref(),
         label: label.as_deref(),
         inputs: &supplied_inputs,
         program_arguments: &program_arguments,

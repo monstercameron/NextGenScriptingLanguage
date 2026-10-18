@@ -166,11 +166,58 @@ pub struct ProgramModuleLock {
 #[serde(deny_unknown_fields)]
 pub struct LockedProgramModule {
     /// Canonical package-manifest path relative to the module root.
+    #[serde(with = "portable_module_path")]
     pub manifest: PathBuf,
     pub version: String,
     pub interface_version: u32,
     pub manifest_sha256: String,
     pub source_sha256: String,
+}
+
+mod portable_module_path {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::path::{Component, Path, PathBuf};
+
+    pub fn serialize<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut parts = Vec::new();
+        for component in path.components() {
+            match component {
+                Component::Normal(value) => parts.push(
+                    value
+                        .to_str()
+                        .ok_or_else(|| serde::ser::Error::custom("module path is not UTF-8"))?,
+                ),
+                _ => {
+                    return Err(serde::ser::Error::custom(
+                        "module lock path is not relative",
+                    ))
+                }
+            }
+        }
+        serializer.serialize_str(&parts.join("/"))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let path = String::deserialize(deserializer)?;
+        let portable = path.replace('\\', "/");
+        let parsed = Path::new(&portable);
+        if parsed.as_os_str().is_empty()
+            || parsed
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(serde::de::Error::custom(
+                "module lock path must be relative",
+            ));
+        }
+        Ok(parsed.to_path_buf())
+    }
 }
 
 #[derive(Debug, Clone)]

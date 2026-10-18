@@ -58,8 +58,13 @@ pub fn repair(arguments: &[String]) -> Result<()> {
         None,
         None,
     )?;
-    let boundary = repair::boundary_line(&source, completed_steps)?;
-    let plan = repair::apply(&source, &operation, boundary, &registry)?;
+    let plan = plan_repair(
+        &source,
+        &program_path,
+        completed_steps,
+        &operation,
+        &registry,
+    )?;
 
     let mut out = io::stdout().lock();
     writeln!(out, "--- {}", program_path.display())?;
@@ -82,4 +87,66 @@ pub fn repair(arguments: &[String]) -> Result<()> {
         directory.display()
     )?;
     Ok(())
+}
+
+fn plan_repair(
+    source: &str,
+    program_path: &std::path::Path,
+    completed_steps: usize,
+    operation: &Operation,
+    registry: &flow::manifest::Registry,
+) -> Result<repair::Plan> {
+    let boundary = repair::boundary_line_at(source, Some(program_path), completed_steps)?;
+    repair::apply_at(source, Some(program_path), operation, boundary, registry)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repair_plan_uses_file_aware_parsing_and_physical_statement_lines() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = directory.path().join("lib.program");
+        fs::write(&library, "run \"printf\" with arguments [\"lib\"]\n").unwrap();
+        let path = directory.path().join("main.program");
+        let file_call = "run program file \"lib.program\"\nrun \"false\"\n";
+        fs::write(&path, file_call).unwrap();
+        let plan = plan_repair(
+            file_call,
+            &path,
+            1,
+            &Operation::parse("replace-command 2 run \"true\"").unwrap(),
+            &flow::manifest::Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.after,
+            "run program file \"lib.program\"\nrun \"true\"\n"
+        );
+
+        let multiline = "run \"printf\" with arguments [\n  \"a\",\n  \"b\"\n]\nrun \"false\"\n";
+        fs::write(&path, multiline).unwrap();
+        let plan = plan_repair(
+            multiline,
+            &path,
+            1,
+            &Operation::parse("replace-command 5 run \"true\"").unwrap(),
+            &flow::manifest::Registry::default(),
+        )
+        .unwrap();
+        assert!(plan.after.ends_with("run \"true\"\n"));
+
+        let raw_block = "use value \"\"\"\nline one \"quoted\" \\back\n# block text\n\"\"\"\npipe to \"wc\" with flags [\"-c\"]\nrun \"false\"\n";
+        fs::write(&path, raw_block).unwrap();
+        let plan = plan_repair(
+            raw_block,
+            &path,
+            1,
+            &Operation::parse("replace-command 6 run \"true\"").unwrap(),
+            &flow::manifest::Registry::default(),
+        )
+        .unwrap();
+        assert!(plan.after.contains("run \"true\"\n"));
+    }
 }

@@ -22,7 +22,7 @@ fn descriptions_resolve_intent_and_refuse_ambiguous_matches() {
         .to_string(),
     ])
     .unwrap();
-    let error = registry.resolve("render text template").unwrap_err();
+    let error = registry.discover("render text template").unwrap_err();
     assert!(error.to_string().contains("ambiguous applet description"));
     assert!(error.to_string().contains("fixture.render"));
     assert!(error.to_string().contains("fixture.render_other"));
@@ -37,7 +37,7 @@ fn descriptions_resolve_intent_and_refuse_ambiguous_matches() {
     .to_string()])
     .unwrap();
     assert_eq!(
-        unique.resolve("parse yaml").unwrap().name,
+        unique.discover("parse yaml").unwrap().name,
         "fixture.yaml_parse"
     );
 }
@@ -147,4 +147,22 @@ fn a_leading_bom_is_not_an_invisible_character_but_a_later_one_is() {
     assert!(inner
         .iter()
         .any(|diagnostic| diagnostic.code == "source.invisible_format"));
+}
+
+#[test]
+fn execution_resolution_never_matches_descriptions() {
+    let registry = Registry::from_sources(&[serde_json::json!({
+        "name": "fixture.render",
+        "description": "Render a text template by substituting named values.",
+        "binary": "fixture",
+        "parameters": {},
+        "arguments": []
+    })
+    .to_string()])
+    .unwrap();
+    assert!(registry.resolve("render text template").is_err());
+    assert_eq!(
+        registry.discover("render text template").unwrap().name,
+        "fixture.render"
+    );
 }

@@ -1798,7 +1798,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
     if let Some(name) = name {
         write_json(&serde_json::json!({
             "protocol": "execute.applet/1", "validation": "manifest_static",
-            "applet": registry.resolve(name)?.contract()
+            "applet": registry.discover(name)?.contract()
         }))
     } else {
         let mut manifests = registry.manifests()?;

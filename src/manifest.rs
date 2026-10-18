@@ -654,8 +654,18 @@ impl Registry {
             Manifests::Bundled { index, .. } => index.lookup(name_or_phrase),
             Manifests::Parsed(_) => self.data.names.get(name_or_phrase).copied(),
         };
-        if let Some(index) = index {
-            return self.data.manifests.get(index);
+        match index {
+            Some(index) => self.data.manifests.get(index),
+            None => bail!("unknown applet {name_or_phrase:?}"),
+        }
+    }
+
+    /// Like `resolve`, then by description words for discovery (`applets inspect`, the
+    /// language server). Execution and capability checks use `resolve` only: a free-text
+    /// description must never decide which applet a program runs.
+    pub fn discover(&self, name_or_phrase: &str) -> Result<&Manifest> {
+        if let Ok(manifest) = self.resolve(name_or_phrase) {
+            return Ok(manifest);
         }
         let words = normalized_description_words(name_or_phrase);
         if words.is_empty() {

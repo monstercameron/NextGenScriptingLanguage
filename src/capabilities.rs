@@ -1046,23 +1046,32 @@ where
         .map(|manifest| manifest.binary.clone());
     let names: Vec<&str> = manifest_binary.as_deref().into_iter().collect();
     check_privileged_launch(registry, &names, binary)?;
-    let environment = effective_environment(registry, applet_name)?;
-    let environment = apply_command_overlay(registry, applet_name, environment)?;
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
+    // With no capability policy, command overlay, manifest environment section or declared
+    // secret variable, the child environment is exactly the inherited one. The command then
+    // carries no environment changes, so std passes `environ` through instead of copying
+    // and rebuilding the whole environment for every child.
+    let inherits_environment = configured.as_ref().is_none()
+        && !command_overlay_active()
+        && registry
+            .resolve(applet_name)
+            .map_or(true, |manifest| manifest.environment().is_none())
+        && !crate::security::declares_secret_environment(registry, applet_name);
+    let environment = if inherits_environment {
+        None
+    } else {
+        let environment = effective_environment(registry, applet_name)?;
+        Some(apply_command_overlay(registry, applet_name, environment)?)
+    };
     let manifest = match registry.resolve(applet_name) {
         Ok(manifest) => manifest,
         Err(_) if configured.as_ref().is_none() => {
             // Direct quoted commands use a synthetic manifest that is not in
             // the registry. Keep their legacy launch path when no strict
             // capability policy is active.
-            crate::security::capture_declared_environment_secrets(
-                registry,
-                applet_name,
-                &environment,
-            )
-            .map_err(|_| anyhow!("could not register declared child environment secrets"))?;
             let mut command = Command::new(binary);
-            command.args(arguments).env_clear().envs(environment);
+            command.args(arguments);
+            apply_child_environment(registry, applet_name, &mut command, environment)?;
             cwd.apply(&mut command);
             return Ok(command);
         }
@@ -1080,10 +1089,9 @@ where
     }
     validate_environment_backend(manifest)?;
     let Some(policy) = configured.as_ref() else {
-        crate::security::capture_declared_environment_secrets(registry, applet_name, &environment)
-            .map_err(|_| anyhow!("could not register declared child environment secrets"))?;
         let mut command = Command::new(binary);
-        command.args(arguments).env_clear().envs(environment);
+        command.args(arguments);
+        apply_child_environment(registry, applet_name, &mut command, environment)?;
         cwd.apply(&mut command);
         return Ok(command);
     };
@@ -1118,8 +1126,6 @@ where
         crate::platform::sandbox::preflight(grant, binary, cwd)
             .with_context(|| format!("preflighting required sandbox for applet {applet_name:?}"))?;
     }
-    crate::security::capture_declared_environment_secrets(registry, applet_name, &environment)
-        .map_err(|_| anyhow!("could not register declared child environment secrets"))?;
     let mut command = if grant.sandbox_required {
         crate::platform::sandbox::command(binary, arguments, grant, cwd)?
     } else {
@@ -1127,9 +1133,32 @@ where
         command.args(arguments);
         command
     };
-    command.env_clear().envs(environment);
+    apply_child_environment(registry, applet_name, &mut command, environment)?;
     cwd.apply(&mut command);
     Ok(command)
+}
+
+/// Give a child its computed environment, registering declared secret values first. `None`
+/// means the child inherits the process environment unchanged.
+fn apply_child_environment(
+    registry: &Registry,
+    applet_name: &str,
+    command: &mut Command,
+    environment: Option<Vec<(OsString, OsString)>>,
+) -> Result<()> {
+    let Some(environment) = environment else {
+        return Ok(());
+    };
+    crate::security::capture_declared_environment_secrets(registry, applet_name, &environment)
+        .map_err(|_| anyhow!("could not register declared child environment secrets"))?;
+    command.env_clear().envs(environment);
+    Ok(())
+}
+
+/// Whether an `and environment` / `and without environment` overlay is active for the
+/// command being launched on this thread.
+fn command_overlay_active() -> bool {
+    COMMAND_ENV_OVERLAY.with(|cell| cell.borrow().is_some())
 }
 
 pub use crate::home::expand_home_path;

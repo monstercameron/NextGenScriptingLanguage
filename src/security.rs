@@ -434,6 +434,17 @@ pub fn secret_redactor(registry: &Registry) -> std::sync::Arc<SecretRedactor> {
     registry.host_state::<SecretRedactor>()
 }
 
+/// Whether the active data-flow policy declares secret environment variables for this
+/// applet, so its child environment must be built explicitly to register their values.
+pub fn declares_secret_environment(registry: &Registry, applet_name: &str) -> bool {
+    let policy = registry.host_state::<DataFlowPolicy>();
+    policy.active
+        && policy
+            .secret_environment
+            .get(applet_name)
+            .is_some_and(|names| !names.is_empty())
+}
+
 /// Capture explicit secret environment declarations from the already-filtered
 /// environment snapshot that will be passed to this applet. No ambient
 /// process environment is read here.

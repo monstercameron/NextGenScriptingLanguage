@@ -401,8 +401,11 @@ current pipeline value and restores its caller's bindings and working directory.
 
 A whole loop is one checkpoint/live node, including its body fingerprint.
 Completed loops are skipped on resume. A failure may have performed partial
-external effects: `--retry-uncertain` explicitly retries the **entire loop**;
-there is no per-iteration recovery. Live cursor changes cannot enter a loop's
+external effects: `--retry-uncertain` explicitly retries the **entire loop**.
+The exception is a top-level `for each` (and `parallel for each`) under
+`--checkpoint`, which records each element and resumes after the committed ones;
+see [per-element checkpoints](#per-element-checkpoints). `repeat`, `while` and
+nested loops have no per-iteration recovery. Live cursor changes cannot enter a loop's
 interior, and pause/source replacement take effect at its outer boundary.
 Finite scripts, schedule/listener handlers, reusable finite programs and native
 TUI command handlers accept loops. Persistent stream-stage grammar remains
@@ -449,8 +452,11 @@ Interpreter cancellation, the total timeout or exceeding `--max-output-bytes`
 stops new elements, cancels and reaps running ones and fails the group; running
 elements are marked `cancelled` and the rest `not_started`. Each element's
 captured output shares the byte limit evenly. Lists hold at most 10,000
-elements. The group is a single checkpoint node, so a failed group retries as a
-whole. Like `parallel` and `race`, it is unsupported in the browser host.
+elements. Without `--checkpoint` the group is one unit. Under `--checkpoint`, a
+top-level group records each element, so resume skips the committed elements; see
+[per-element checkpoints](#per-element-checkpoints). A nested group is one
+checkpoint node and retries as a whole. Like `parallel` and `race`, it is
+unsupported in the browser host.
 
 ### Transfers and cleanup
 
@@ -553,8 +559,9 @@ removed. Use a label when a tool must refer to a step across edits.
 
 Ids appear in `execute explain --json` (each step row's `id`), in `--trace` events
 (`id`), in the recorded step events of `--record` (`id` in `trace.jsonl`), and in
-execution records (`step_id`). Checkpoint identity is not yet keyed by step id; that
-follows the next journal version. Live control does not expose step ids yet.
+execution records (`step_id`). A program checkpoint records the id of each completed
+node's first step and matches it again on resume; see
+[Recover after a failure](#recover-after-a-failure). Live control does not expose step ids yet.
 
 ### Exit and interrupt handlers
 
@@ -903,6 +910,32 @@ automatically discovered catalog is allowed; a malformed catalog or an explicit
 missing `--manifest-dir` or `--manifest-catalog` remains an error. Existing
 manifests remain optional adapters, rather than a prerequisite for integrating
 a new executable.
+
+### Working directory and `use folder`
+
+`use folder "path"` sets the program's working directory, like `run cd with path
+"path"`; either may precede a trigger as initial setup. Both resolve the physical
+directory and go through one path:
+
+1. The folder is opened.
+2. The path it resolves to is authorized. With a capability policy that is a host
+   filesystem check against the policy's grants; without one nothing is denied.
+3. On Unix its device and inode are checked against the opened handle.
+4. The resolved path is recorded as the working directory, so later relative paths join
+   onto the directory that was authorized, not onto a path that could be re-resolved.
+
+On Unix the opened handle is the authority: launched children enter the opened directory
+(`fchdir`) before `exec`, call frames carry a duplicate of the handle, and background jobs
+and hand-overs use the run's handle, so a symbolic link swapped after `use folder`
+cannot move them. On other platforms the directory is a path. With a
+policy, an absolute path is checked in preflight, but a relative `read`, `save`,
+`append` or redirect after a directory change cannot be, because preflight does not
+know the directory yet. The runtime authorizes each one when its step runs, joined
+onto the authorized directory, with the same open-and-verify checks.
+
+Listeners and persistent workers still start in a path-based directory, and sandboxed
+children get the sandbox's own directory; see [threat model](threat-model.md) H12 and
+H18. Windows has no device and inode check (H13).
 
 `run` ignores previous stdout. `then` buffers finite output and feeds it only to
 commands that accept stdin. `pipe to` joins a concurrently running group with
@@ -1478,9 +1511,23 @@ versioned packed catalog. A packed catalog is never selected automatically and d
 merge with a directory. Catalog paths are relative to the caller's working
 directory; packed entries use the canonical catalog file as their origin, and
 relative program-module sources resolve from its parent directory. Service
-definitions store the canonical catalog path. Discovery checks
-`./manifests`, then `../manifests` beside the executable, then the development
-source location. The catalog includes `cd`, `pwd`, `ls`, `cat`, `printf`, `tr`,
+definitions store the canonical catalog path. Without either selector,
+discovery checks `manifests` beside the executable's `bin` directory, then
+`share/execute/manifests` there (the native package layout), then the development
+source location. The working directory is never searched, so a directory a script
+runs in cannot shadow bundled applets.
+
+**Bundled manifest index.** The shipped manifests are also embedded in the binary as
+one deflate stream per manifest with a generated index (names, phrases, sizes and
+offsets). When the default directory holds exactly the indexed files, with the same
+names and byte sizes, the registry is served from the index: a manifest body is
+inflated and parsed when it is first used, so startup does not read and validate every
+file. Any other
+default directory takes the full load with its usual errors, and a directory chosen
+with `--manifest-dir` or `--manifest-catalog` always takes the full validation. The
+match is by name and size, so an in-place edit that keeps a file's size is not seen
+by the default path; use `--manifest-dir` when you edit manifests. A test fails when
+the checked-in index no longer matches `manifests/`. The catalog includes `cd`, `pwd`, `ls`, `cat`, `printf`, `tr`,
 `wc`, `tail`, `grep`, `sort`, `uniq`, `cut`, `head`, `false`, and a `git.commit` mapping. Older aliases remain available.
 Git bindings are provided for inspection; the tests and demos do not commit/push.
 `tail` uses ordinary CLI defaults; following requires explicit `-F` flags. The
@@ -1557,6 +1604,8 @@ may be omitted. Trigger-only limits are rejected on programs that cannot use the
 
 `execute daemon serve` keeps a per-user process running behind a Unix socket, by default under `$XDG_RUNTIME_DIR`. `execute daemon status` reports whether it is running, and `execute daemon stop` stops it. Nothing runs in the background unless you start the daemon.
 
+The socket defaults to `$XDG_RUNTIME_DIR/execute-<uid>/daemon.sock` (the temporary directory when that variable is unset); `--socket PATH` selects another for `serve`, `status` and `stop`, while `run --daemon` always uses the default. The daemon is Unix only: on other platforms `daemon serve` reports that serving is not available and `run --daemon` runs in the client. Every client path checks the socket directory and the socket before it connects (a private directory owned by the user, a socket owned by the user), and checks the peer's user id after it connects. The daemon refuses a directory that is not private, another user's socket and a second daemon, and removes its socket when it exits. A client that connects and sends nothing holds the single-threaded accept loop for up to 2 seconds before its connection is dropped; only the same user can cause that delay (threat model H19). Before it serves, the daemon loads and parses the default manifest registry, and a plain forwarded run (no `--manifest-dir` or `--manifest-catalog`) starts from that parsed registry.
+
 `execute run program.program --daemon`, or `run` with `EXECUTE_DAEMON=1`, sends the run to the daemon when one answers. The daemon forks a child that takes the client's working directory, environment, umask, resource limits and standard streams, so the program sees what it would see run directly. When no daemon answers, the run happens in the client as usual. A program that may take the terminal (`interactively`, `hand over`, or a prompted input) is declined before it runs and runs in the client.
 
 A forwarded run with `--manifest-dir` or `--manifest-catalog` uses a parsed registry the daemon keeps for up to 8 manifest sources, least recently used first. An entry is reused while the source's top-level JSON files keep their names, sizes and modification times, and a changed file rebuilds it. The manifests are shared between a cached entry and each run, so a run copies only its own policies. Capability and data-flow policies are applied to each run's own registry, so one run's policy never applies to another run. `EXECUTE_DAEMON_TRACE=1` prints a timestamp at each stage of a forwarded run to stderr.
@@ -1598,7 +1647,13 @@ I/O.
 You can edit the failed node and subsequent nodes, including removing a failed
 terminal suffix. Completed nodes must retain the
 same syntax, manifests, executable identities, and pipe grouping. Comments and
-line-number changes are fine. Upstream file contents are frozen at a checkpointed
+line-number changes are fine: each completed node records the id of its first
+step (see [step labels and step ids](#step-labels-and-step-ids)) and the line it
+had, and resume matches nodes by that id at the position the completed prefix
+gives them. An edit below the last completed node, or a comment above a completed
+node, resumes without rerunning it. A statement inserted or removed above a
+completed node is refused, and the error names the node and both lines; use a
+fresh checkpoint. Upstream file contents are frozen at a checkpointed
 `read`; resume uses that snapshot even if the original file changes. Environment
 changes apply only to commands that still run. Use a new checkpoint directory to
 start over or change the completed prefix. A completed finite resume returns its
@@ -1635,6 +1690,47 @@ can also leave its applet running; stop or inspect it before retrying.
 
 Services discard unreferenced checkpoint blobs after each successful handler.
 The pure-result cache has its own lifecycle.
+
+### Per-element checkpoints
+
+A top-level `for each` or `parallel for each` under `--checkpoint` is one in-flight
+node whose elements are recorded one by one. Each element gets a `begin` line before
+it starts and a `commit` line once it has succeeded, in the append-only
+`elements.jsonl` beside the journal. A commit line holds the element's fingerprint
+(the node's fingerprint plus the item's canonical JSON), its output, and references
+to its bindings and working directory. Resume replays the log: committed elements
+are skipped and their results restored, so a sequential loop continues after its
+last committed element and a parallel group takes the recorded results of the
+committed ones. Entries appended to the list after the committed ones run normally.
+
+- A committed element whose list entry changed refuses the resume with `for each list
+  changed at element N; use a fresh checkpoint`.
+- Commit lines are appended through one handle and synced in groups, at most every
+  250 ms and always before any journal write. A commit lost in a crash reruns that
+  element.
+- The journal records the log's line count and chain digest at its last write. Resume
+  refuses a log shorter than that count or with a different chain at it.
+- An element that is not [retry-safe](#retry-safety) writes a durable `begin` record
+  first. If the run died inside such an element, only that element is uncertain, and
+  `--retry-uncertain` reruns it. The rest of the loop is not retried.
+- Nested loops, `repeat` and `while` keep whole-node behavior.
+
+### Journal versions
+
+The checkpoint journal is versioned, and `execute checkpoint status DIR [--json]`
+reads it without taking the lock or running anything. Version 1 is the legacy
+format; version 2 kept completed nodes inline in `journal.json`; version 3 moved them to the
+append-only `completed.jsonl` log, so a persist no longer rewrites every earlier
+node; version 4 added `elements.jsonl`; **version 5** is the current version and
+adds the `graph` mode for [finite graphs](graph.md#checkpoints), with its own
+`graph.jsonl`. A build reads and migrates older journals. A journal written by a
+newer build is refused by an older one. Program and graph journals refuse each other.
+
+Input digests recorded for resume are a keyed HMAC under a per-user key,
+so a low-entropy input cannot be guessed from a journal. A journal written before the
+keyed digest matches its unkeyed digest once and is then rewritten with the keyed
+one; a keyed journal never matches the unkeyed digest. See
+[threat model H11](threat-model.md).
 
 Checkpoint directories contain private outputs and named values (0700 directories,
 0600 files), checksummed state, and an exclusive writer lock. They are local trusted

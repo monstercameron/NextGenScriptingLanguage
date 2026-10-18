@@ -10,6 +10,18 @@ Execute is a small Rust interpreter for `.program` files that connect existing
 command-line tools. It handles pipelines, typed inputs, supervision, caching and
 terminal widgets. **Application control flow belongs in the `.program` file.**
 
+**Where it is going.** Execute aims to be an AI-first, complete Unix/POSIX scripting
+language whose programs a human can read and observe. *Complete* means the work Bash
+is used for: processes, pipes, files, redirection, environment, signals, jobs,
+scheduling and exit statuses, without being limited to what Bash can express. *AI-first*
+means a model can write, check, review and repair a program through machine-readable
+interfaces (`check --json`, `explain --json`, stable diagnostic codes, `--what-if`
+plans, run records), and *observable* means a person can read the same program and see
+what it will do before it runs. The grammar stays thin glue; computation goes to
+applets (the manifests in [`manifests/`](manifests) and the in-process applets in
+`src/applets/`) and to the native tools you already have. It is not yet a Bash
+replacement; [Scope and current limits](#scope-and-current-limits) says what is missing.
+
 ```text
 run "cat" with arguments ["contacts.txt"]
 pipe to "tr" with arguments ["[:upper:]", "[:lower:]"]
@@ -38,7 +50,11 @@ export PATH="$PWD/target/release:$PATH"
 execute --version
 ```
 
-Requires stable Rust to build. Programs require the command-line tools they invoke.
+Requires stable Rust to build (minimum 1.89.0). Programs require the command-line
+tools they invoke. `cargo build --locked --release` builds the lean default: no
+terminal UI, model helper, live control, remote backend, Quickshell renderer, debug
+adapter or language server. Add `--features full` for those; release packages are
+built with `full`. A lean build says so when you use a gated feature.
 The example above uses `cat`, `tr`, `sort` and `uniq` on macOS or Linux. Create
 `contacts.txt`, save the script as `clean-contacts.program`, then:
 
@@ -59,10 +75,12 @@ sam@example.com
 `check` validates without running commands. `explain` also prints the plan and argv.
 Relative paths resolve from the calling directory. Quoted executable calls work
 without manifests; named applets use the shipped catalog or an explicit
-`--manifest-dir PATH`/legacy JSON file. A packed catalog can be selected with
-`--manifest-catalog FILE`; this is opt-in and mutually exclusive with
+`--manifest-dir PATH`/legacy JSON file. The shipped catalog is also embedded in the
+binary as an index, so a default-path run parses a manifest only when a program uses
+it (see [CLI and manifests](docs/language.md#cli-and-manifests)). A packed catalog can
+be selected with `--manifest-catalog FILE`; this is opt-in and mutually exclusive with
 `--manifest-dir`. Keep runtime executables and the selected catalog together
-when extracting a release.
+when extracting a release. The working directory is never searched for manifests.
 
 ## The language in one minute
 
@@ -114,6 +132,41 @@ Intervals default to skipping missed ticks; cron uses the local calendar.
 Current source can print review-only systemd/launchd service definitions for
 triggered workflows. [Explore streams and services](docs/guide.md#one-file-several-lifetimes).
 
+## Check, review and replay, before and after a run
+
+A program can be inspected without running it, which is what lets a person or a model
+review it:
+
+```sh
+execute check report.program --json        # static validation, stable diagnostic codes
+execute explain report.program --json      # the static effect plan: writes, network, process, cwd
+execute run report.program --what-if       # plan plus a fingerprint; runs nothing
+execute run report.program --confirm FINGERPRINT   # runs only if the plan is unchanged
+execute help report.program --json         # inputs and flags from `accept ... described as`
+```
+
+Diagnostics carry stable codes and, where one exists, a machine-applicable fix.
+`--json-errors` makes runtime errors structured, `--record` keeps a run for replay
+without side effects, and `execute test` and `execute run-parts` run program tests and
+directories of programs. See [machine-readable checks](docs/language.md#machine-readable-checks),
+[review a plan](docs/language.md#review-a-plan-before-it-runs) and the
+[record and replay guide](docs/guide.md#record-a-run-show-what-failed-and-replay-it).
+
+`execute compile --to sh FILE` writes POSIX `sh` for the subset of programs that have a
+faithful `sh` form and refuses the rest by name and line; see
+[compile to POSIX sh](docs/language.md#compile-to-posix-sh).
+
+## A warm daemon for repeated runs
+
+`execute daemon serve` keeps one per-user process behind a checked Unix socket, and
+`execute run FILE --daemon` (or `EXECUTE_DAEMON=1`) forwards a run to it when one
+answers; otherwise the run happens in the client as usual. The forwarded child gets
+the client's directory, environment, umask, limits and standard streams. Nothing runs
+in the background unless you start it, it is Unix only, and it helps only where
+manifest and policy setup dominates: a one-line program is level with a cold run, and
+a 530-manifest directory with two policies ran 14 percent faster (7.30 against 8.50 ms,
+medians on the Linux CI runner). See the [daemon section](docs/language.md#warm-daemon---daemon).
+
 ## Terminal apps with control flow you can read
 
 Single-file screens define component layouts, ports, widgets and event handlers.
@@ -127,14 +180,16 @@ execute examples/github-stars.program
 The [CPU monitor](docs/top-cpu.md) uses `ps` and `jq`; the
 [GitHub star tracker](docs/github-stars.md) uses authenticated `gh` and includes
 a session history graph. The [widget catalog](docs/tui-catalog.md) distinguishes
-implemented elements from design ideas.
+implemented elements from design ideas. Screens need the terminal UI, so build with
+`--features full` (a lean build says so).
 
 ## Inspect and edit a running app
 
 The opt-in [live-control CLI](docs/live-control.md) exposes runtime and TUI widget
 state through local IPC, with JSON responses, revisions, atomic patches and
 lifecycle controls. Transport is a Unix socket or a native Windows named pipe.
-[Runnable examples](examples/live/README.md) include an operator console.
+[Runnable examples](examples/live/README.md) include an operator console. Live control
+needs the `live` feature (part of `full`; `tui` implies it).
 
 ## Cache work. Repair failures. Resume progress.
 
@@ -146,8 +201,19 @@ execute repair.program --checkpoint .execute-state/repair --trace
 execute resume repair.program --checkpoint .execute-state/repair --trace
 ```
 
+A top-level `for each` or `parallel for each` is recorded element by element, so a
+resume continues after the committed elements instead of rerunning the loop. Resume
+matches completed nodes by step id, so comments and edits below the last completed
+node do not force a rerun. Retry safety follows declared effects: an in-process applet
+that only reads, or declares nothing, can run again without the override, while a
+native command is uncertain after a crash. The journal is version 5 (finite graphs
+checkpoint too), input digests are keyed, and `execute checkpoint status DIR` reports
+what a resume would do.
+
 Checkpointing does not make external effects transactional. Uncertain effects
-require explicit retry. See the [recovery contract](docs/language.md#recover-after-a-failure).
+require explicit retry. See the [recovery contract](docs/language.md#recover-after-a-failure),
+[per-element checkpoints](docs/language.md#per-element-checkpoints) and
+[retry safety](docs/language.md#retry-safety).
 
 <a id="bring-another-cli"></a>
 <a id="150-useful-programs-with-inputs-and-outputs"></a>
@@ -159,6 +225,7 @@ require explicit retry. See the [recovery contract](docs/language.md#recover-aft
 | --- | --- |
 | [150 utilities](examples/ladder/README.md) | Useful file, log, data, CI and release workflows with inputs, outputs and exact fixture oracles. |
 | [100 model workflows](examples/models/README.md) | Explicit Jev/LLM calls, typed results and script-owned routing; offline fixtures by default. |
+| [Omarchy ports](examples/omarchy-ports/README.md) | Thirty commands from the pinned Omarchy v4.0.4 `bin/`: ten interface ports and twenty compared against their Bash originals case by case (`tools/port_compare.py`, 75 cases, fake backends). Not a certified desktop replacement. |
 | [Native applet catalog](manifests) and [applet contracts](docs/applet-contracts.md) | Readable named parameters mapped directly to argv, with optional typed values, outcomes and execution backends. Direct quoted calls need no adapter. |
 | [Typed applet graphs](docs/graph.md) | Source-build graph files with preflighted typed ports, bounded event queues and `check`/`inspect`/`explain`/`run` commands. |
 | [Security and data-flow policies](SECURITY.md) and [data-flow guide](docs/security-dataflow.md) | Optional applet capability/sandbox policy and separate sensitivity, remote-origin, persistence and cache-purity policy. |
@@ -173,66 +240,110 @@ executables, native pipes, services, model calls and TUI screens use native Exec
 
 ## Performance, with receipts
 
-Execute parses once and reuses programs for services. Native pipe payloads flow
-directly between tools. Process launch cost, buffering and each applet still
-matter; Bash remains faster in some recorded workloads.
+Execute is not yet faster than Bash at the basics, and optimisation is ongoing. At
+startup, per external command, per pipeline, per megabyte of text or JSON handled by
+its in-process applets, in memory and in binary size, Bash is ahead. Execute is ahead
+only on a loop of builtin calls and, marginally, on a loop of process spawns.
 
-[Benchmark methods and raw results](benchmarks/README.md) document workloads,
-boundaries, source hashes and known differences. Historical measurements describe
-their recorded versions. Browser virtual-applet timings do not measure native
-processes. The [paired Omarchy success harness](benchmarks/omarchy_success.py)
-is prepared separately from correctness coverage and has no result yet. No result
-establishes a universal speed advantage or full Bash parity.
-The [five-hour session summary](benchmarks/session-2026-10-14-summary.json)
-indexes the latest measured changes, security costs and remaining gaps.
+Median wall time in milliseconds on Linux x86_64 GitHub-hosted runners (Ubuntu 24.04,
+commit `234c1fc`), default lean build, default manifest path:
+
+| Scenario | bash | dash | Execute |
+| --- | ---: | ---: | ---: |
+| Startup, no work | 1.20 | 0.64 | 1.76 |
+| One external command | 1.93 | 1.42 | 2.76 |
+| 5-stage pipeline | 2.99 | 2.21 | 4.30 |
+| 1000-iteration builtin loop | 4.37 | n/a | **2.80** |
+| 100-spawn loop | 67.07 | n/a | **63.86** |
+| Uppercase 1 MB (`tr` vs `text.upper`) | 2.84 | 2.25 | 5.47 |
+| JSON pointer lookup, 400 KB (`jq` vs `json.get`) | 11.19 | 10.23 | 23.53 |
+| 100 MB through a pipe | 25.95 | 25.48 | 27.45 |
+
+Peak resident memory at startup: bash 3.4 MB, Execute 6.2 MB. Binary size: Execute
+7.16 MB (x86_64) and 5.90 MB (arm64), bash 1.45 MB, dash 130 KB. An arm64 runner shows
+the same pattern.
+
+**Method.** [`tools/bash_compare.py`](tools/bash_compare.py) pairs a bash command line
+with an Execute program that does the same job, gives both the same stdin, and takes the
+median of 20 timed runs after 2 warmups (10 runs for the spawn loop, 5 for the 100 MB
+pipe). Bash runs with `--norc --noprofile`; dash runs only the scenarios that are plain
+`sh`. Execute runs with no `--manifest-dir`, the way an installed binary does. Peak RSS
+comes from GNU `time`. The [`bash-compare.yml`](.github/workflows/bash-compare.yml)
+workflow repeats it on x86_64 and arm64 Linux for every push to `main` and keeps a JSON
+report. The table above is its default release build; since commit `e2c6861` it also
+builds and compares an `opt-level = "s"` variant, a static musl build and a musl build
+with the size-first `min` profile, which this table does not cover. The latest run, not
+this table, is the current state. These are shared runners,
+the medians have no confidence intervals, and the comparison covers neither Omarchy
+scripts, I/O-bound work nor Windows and macOS. The text and JSON rows compare an
+in-process applet with the usual external tool, not like with like.
+
+**What it means.** Execute pays a fixed start-up cost (about 0.6 ms over bash here)
+that dominates short programs. It wins where it replaces a process with an in-process
+call. For a program that starts many processes, the work is in those processes, and the
+two runtimes are close. [`--daemon`](#a-warm-daemon-for-repeated-runs) removes only
+manifest and policy setup, so it does not close the startup gap for a short program. Earlier measurements,
+with their own methods, are indexed in [benchmarks/README.md](benchmarks/README.md).
+Browser virtual-applet timings do not measure native processes. No result establishes a
+universal speed advantage or full Bash parity.
+
+**Research and write-ups.**
+
+- [Benchmark index and methods](benchmarks/README.md): source-pinned, paired workloads and retained losses.
+- [Optimization session report](docs/optimization-session-2026-10-14-report.md): the bounded October 14 campaign.
+- [Production gates](docs/production-readiness.md): acceptance gates, the performance policy and the full comparison notes.
+- [Replacement challenge](docs/replacement-challenge.md): fifteen proof gates, none closed.
+- [Thesis ledger](docs/thesis-progress.md): implemented capabilities against the original goals.
+- [Unix compatibility review](docs/unix-compatibility-review.md): the supplied review against the implementation.
+- [Threat model](docs/threat-model.md): attackers, controls and known holes.
 
 <a id="release-and-source-status"></a>
 
 ## Scope and current limits
 
-The project targets small, readable Unix glue programs on macOS and Linux, with
-a native Windows port on x64 and ARM64. `0.9.0-rc.4` is the published multi-platform
-release candidate. Current `main` also includes the browser playground and
-[repeat, for each and while loops](docs/language.md#loops-current-source).
+Execute targets Unix glue programs on macOS and Linux, with a native Windows port on
+x64 and ARM64. Current `main` is version `0.9.0-rc.5`. The latest published release is
+the multi-platform candidate [`0.9.0-rc.4`](https://github.com/monstercameron/NextGenScriptingLanguage/releases/tag/v0.9.0-rc.4)
+(tag `v0.9.0-rc.4`); `0.9.0-rc.5` has no tag and no release yet, so everything added
+since rc.4 requires a source build. The retained `bin/execute` is historical 0.8.0.
+[Version history](CHANGELOG.md) separates published releases from unreleased work,
+and [release validation](docs/releases.md) records what each package set passed.
 
-The current source candidate also adds [versioned applet contracts](docs/applet-contracts.md),
-generic bundled operations through `execute-applet`, and optional capability
-policy with a separate, opt-in OS sandbox for supported command and worker
-applets. A bounded journaled `fs.transaction`
-supports recovery for file-only batches, with partial visibility while updates
-apply. These features are source-only until a new release is published; the
-retained 0.8.0 binary and published 0.9.0-rc.4 packages remain unchanged.
+**Not a Bash replacement yet.** The project does not parse Bash and does not install
+itself as a login shell or `/bin/sh`. Missing or partial, as tracked in the
+[production gates](docs/production-readiness.md): job handles that outlive their
+script (`spawn` jobs end with it, and a `launch detached` child is not tracked),
+terminal ownership beyond handing the terminal to one `interactively` command,
+sourced shell configuration, a certified Omarchy desktop run, and general structured
+streaming. [`execute compile --to sh`](docs/language.md#compile-to-posix-sh) covers only
+a subset. Measured performance trails Bash on the basics (see above).
 
-Current source also includes [versioned external program modules](docs/program-modules.md),
-scheduled module graph nodes, scoped background jobs, finite task and graph APIs,
-and a narrow Quickshell adapter for graph text and button components. Each
-Quickshell renderer node starts one process. These source-candidate interfaces
-leave detached jobs, terminal ownership, richer redirection, shared rendering
-sessions, and real Omarchy desktop acceptance open.
+**Security model.** With no policy, Execute has Bash's trust model: native commands and
+applets run with the caller's permissions, explicit paths follow links and `..`, and
+nothing is sandboxed. An opt-in capability policy checks declared applet grants and
+filters environment variables, and `sandbox_required` can require an OS sandbox for
+supported command and worker applets on macOS and Linux. A separate
+[data-flow policy](docs/security-dataflow.md) governs remote egress and persistence of
+labeled values. Secret prompt answers are kept out of traces, records and checkpoints,
+and redaction is by exact value. `use folder` and `cd` authorize the opened directory,
+and the keyed checkpoint digest, daemon socket checks and fixes from a security audit
+are described in the [threat model](docs/threat-model.md), which lists nineteen known
+holes with severities (H1-H19). Neither policy proves arbitrary native code safe. See
+[SECURITY.md](SECURITY.md) for boundaries and disclosure. CI runs
+dependency, secret, fuzz, sanitizer, crash-consistency and soak checks; the nightly ones
+are new, and [their status is recorded](docs/production-readiness.md#ci-evidence-and-its-status).
 
-The [data-flow policy](docs/security-dataflow.md) is a separate opt-in boundary
-for remote egress, cache/checkpoint/save persistence and reviewed cache purity.
-It complements capability policy; neither interface infers sensitivity or
-proves arbitrary native code safe.
-
-The source also provides a stdio [Language Server Protocol server](docs/language-server.md)
-for diagnostics, completion, local reusable-program navigation and rename, plus
-manifest-based applet discovery and typed-port matching. These editor and
-discovery interfaces do not infer contracts from executable help output.
-
-Execute is still evolving toward the [Bash and Omarchy proof gates](docs/production-readiness.md).
-Native commands run with the caller's permissions;
-they are not automatically sandboxed. A configured capability policy checks
-declared applet grants, filters environment variables and can require an OS
-sandbox for supported command and worker backends. In-process operations do not
-run inside that sandbox. Flatpak has a separate application-wide sandbox contract; see
-[security boundaries](SECURITY.md) for details.
-
-The retained `bin/execute` is historical **0.8.0**. Published **0.9.0-rc.4**
-packages do not include the source-candidate features above; build the current
-source to try them. Published releases and historical evidence retain their
-original contents. See [version history](CHANGELOG.md),
-[platform contracts](docs/windows.md) and [release validation](docs/releases.md).
+**Features by build.** The lean default omits the terminal UI, model helper, live control
+and `attach`, remote applets, the Quickshell renderer, the debug adapter and the language
+server; `--features full` has them. Also in source, and in release packages only after
+the next release: typed applet [contracts](docs/applet-contracts.md), a bounded
+journaled `fs.transaction`, [external program modules](docs/program-modules.md),
+[typed applet graphs](docs/graph.md), the
+[language server](docs/language-server.md), and
+[loops](docs/language.md#loops-current-source), `parallel for each`, named background
+jobs and temporary scopes. The Quickshell adapter starts one process per renderer node,
+and real Omarchy desktop acceptance is open. Platform contracts are in
+[windows.md](docs/windows.md).
 
 ## Build and verify
 
@@ -245,8 +356,10 @@ make playground-browser-check  # Real Chromium acceptance checks
 ```
 
 See [Contributing](CONTRIBUTING.md) for prerequisites, browser installation,
-platform-specific tests and measured performance work. Tests use local fixtures;
-provider credentials are not needed.
+platform-specific tests, the feature sets and the
+[CI and nightly workflows](CONTRIBUTING.md#continuous-integration-and-nightly-checks).
+Tests use local fixtures; provider credentials are not needed. `make check` builds with
+`--features full`.
 
 ## Documentation
 

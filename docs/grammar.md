@@ -83,6 +83,22 @@ use value "hello"
 then tr with from "[:lower:]" and to "[:upper:]"
 ```
 
+## Working directory
+
+```text
+statement   = ... | "use" "folder" value
+```
+
+`use folder` sets the working directory for the statements that follow, like
+`run cd with path`. The folder is opened, its resolved path is authorized and later
+relative paths join onto it. It may also precede a trigger as initial setup. See
+"Working directory and `use folder`" in [the language reference](language.md).
+
+```program
+use folder "work"
+run pwd
+```
+
 ## Native commands and applets
 
 ```text
@@ -280,6 +296,10 @@ one in full.
 - `run FILE --single-instance LOCK` refuses to start while another run holds LOCK.
 - `run FILE --control` hosts the run on a live control endpoint, and `attach` reads or
   controls that endpoint.
+- `run FILE --daemon` (or `EXECUTE_DAEMON=1`) sends the run to a warm per-user daemon
+  when one answers, and runs it in the client otherwise. The program text is the same.
+- `run FILE --checkpoint DIR` and `resume FILE --checkpoint DIR` record and continue a
+  run; `execute checkpoint status DIR` reports a checkpoint.
 
 See "Review a plan before it runs" and "Attach to a live program" in
 [the language reference](language.md).

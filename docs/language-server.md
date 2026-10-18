@@ -17,9 +17,11 @@ parses. Navigation and rename are limited to local `define a program named`,
 `run program`, `then program`, and `pipe to program` symbols in the open file;
 the server does not rename applet names or arbitrary variables.
 
-The server loads manifests from `./manifests` when run from a project checkout,
-then checks the installed executable's sibling manifest locations. Set
-`EXECUTE_MANIFEST_DIR` to use another manifest directory. LSP positions follow
+`execute lsp` is part of the `full` build (the `lsp` feature); a lean build refuses it
+with a message that says to use the full build. The server never searches the working
+directory for manifests, because a workspace could then shadow bundled applets. It checks
+the installed executable's sibling `manifests` and `share/execute/manifests` locations.
+Set `EXECUTE_MANIFEST_DIR` to use another manifest directory. LSP positions follow
 the protocol's zero-based UTF-16 encoding. The JSON diagnostics API documents
 its separate byte-offset and one-based column coordinates below. The wire
 behavior follows the [official LSP 3.17 specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/).

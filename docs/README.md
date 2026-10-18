@@ -1,6 +1,14 @@
 # Execute documentation
 
+Execute is an AI-first, complete Unix/POSIX scripting language that humans can observe,
+with a thin grammar and computation in applets. It is not yet a Bash replacement; the
+[production gates](production-readiness.md) say what is missing.
+
 Use a [release download](releases.md) or build current `main` for the native runtime.
+The latest published release is 0.9.0-rc.4; current source is 0.9.0-rc.5, unpublished.
+The default source build is lean, and `--features full` adds the terminal UI, model
+helper, live control, remote backend, desktop renderer, debug adapter and language server
+(see [Build features](../CONTRIBUTING.md#build-features)).
 The [browser playground](https://monstercameron.github.io/NextGenScriptingLanguage/playground/)
 runs a bounded Rust/WASM host. The retained repository binary is historical 0.8.0.
 [Version history](../CHANGELOG.md) separates published releases from unreleased work.
@@ -11,7 +19,8 @@ runs a bounded Rust/WASM host. The retained repository binary is historical 0.8.
 | --- | --- |
 | [Quickstart](../README.md#quickstart) | Install, validate and run your first native pipeline. |
 | [Practical guide](guide.md) | Inputs, composition, scheduling and review-only service generation, terminal apps, AI routing and recovery. |
-| [Language reference](language.md) | Exact syntax, type rules, stdin, status, JSON, scopes, cache and checkpoints. |
+| [Language reference](language.md) | Exact syntax, type rules, stdin, status, JSON, scopes, cache, checkpoints (per-element logs, journal v5, retry safety), `use folder`, the bundled manifest index and the warm daemon. |
+| [Formal grammar](grammar.md) | The grammar and the modifier/context table. |
 | [Language server and applet discovery](language-server.md) | LSP diagnostics, completion/navigation, safe executable discovery and typed port matching. |
 | [Applet contracts](applet-contracts.md) | Manifest discovery, typed boundaries, explicit outcomes, execution lifetimes and security limits. |
 | [CSV applets](csv.md) | Finite UTF-8 CSV parsing and stringifying with typed table contracts. |
@@ -25,6 +34,7 @@ runs a bounded Rust/WASM host. The retained repository binary is historical 0.8.
 | [Browser playground](playground.md) | Browser applets, virtual files, memory limits and local builds. |
 | [Releases and installation](releases.md) | Platform packages, checksums, provenance and immutable releases. |
 | [Native Windows](windows.md) | Executable lookup, Job Objects, Unicode, named pipes and platform differences. |
+| [Threat model](threat-model.md) | Assets, trust boundaries, attacker models, controls with their tests, and known holes H1-H19 with severities. |
 | [VS Code extension](../editors/vscode/README.md) | Install highlighting, snippets and editor support. |
 
 ## Find a useful program
@@ -36,6 +46,7 @@ runs a bounded Rust/WASM host. The retained repository binary is historical 0.8.
 - [CPU monitor](top-cpu.md) and [GitHub star tracker](github-stars.md): complete single-file terminal apps.
 - [Widget catalog](tui-catalog.md): implemented elements and the wider design inventory.
 - [Applet manifests](../manifests): named parameters mapped directly to argv.
+- [Omarchy ports](../examples/omarchy-ports/README.md): thirty Omarchy commands as `.program` files, twenty of them compared with their Bash originals by `tools/port_compare.py`.
 
 ## Develop and evaluate
 
@@ -47,6 +58,8 @@ runs a bounded Rust/WASM host. The retained repository binary is historical 0.8.
 | [Browser host](../browser/README.md) / [web client](../web/README.md) | Shared language core, WASM ABI and frontend tooling. |
 | [Pages site](site.md) | Build, preview, deployment and source-backed showcase data. |
 | [Benchmark methods](../benchmarks/README.md) | Workloads, raw distributions, comparison boundaries and historical reports. |
+| [Execute against bash and dash](production-readiness.md#performance-against-bash-and-dash) | The Linux head-to-head table, its method (`tools/bash_compare.py`, `bash-compare.yml`) and its limits; Execute loses most rows today. |
+| [CI and nightly workflows](../CONTRIBUTING.md#continuous-integration-and-nightly-checks) | What each workflow does: native checks, security scans, fuzzing, sanitizers, crash consistency, soak, flaky detection and the bash comparison; [their status](production-readiness.md#ci-evidence-and-its-status). |
 | [Applet-boundary benchmark harness](../benchmarks/applet_boundaries.py) | Same-code command, in-process and worker measurements; no results are published until a final release build is authorized. |
 | [Omarchy success-path benchmark harness](../benchmarks/omarchy_success.py) | Paired saved-baseline/current-source applet scenarios with Bash-oracle and exact-effects checks before timing; separate from correctness improvements. |
 | [Production gates](production-readiness.md) | Remaining Bash/Omarchy acceptance work. |

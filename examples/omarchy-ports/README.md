@@ -42,11 +42,43 @@ its license are retained under `tests/fixtures/omarchy-v4.0.4`.
 
 These are interface ports, not certified replacements. Execute supervises a
 child instead of preserving Bash `exec` PID identity. It enriches failure
-diagnostics and discards failed finite-command stdout. This suite does not
+diagnostics. A command whose output is not captured streams it like Bash, and a failed
+one keeps what it streamed, while a captured (`as` or `then`) stage discards a failed
+stage's stdout. This suite does not
 verify foreground sessions, terminal ownership, signals, launch detachment,
 actual desktop effects, or package operations. The `setsid` example proves
 argument forwarding only; the fake backend never starts Nautilus. No system
 commands are replaced or installed by this directory.
+
+## Ports compared with their Bash originals
+
+Twenty more scripts live in subdirectories, `omarchy-ports/<script>/`, each with three
+files: `original.sh` (the upstream Bash script, with its MIT header and the license
+beside it), `port.program` (the Execute port) and `case.json` (the cases). Together they
+hold 75 cases covering both branches of each script, usage paths, empty arguments and
+failing backends. The scripts are the toggles (screensaver, theme sync, suspend,
+notification silencing, animations, touchpad, touchscreen, bar, Hyprland), theme lookups,
+launchers, notifications, package checks and restarts.
+
+```sh
+cargo build --locked --release
+python3 tools/port_compare.py --binary target/release/execute
+python3 tools/port_compare.py --only omarchy-toggle-bar
+```
+
+For every case, `tools/port_compare.py` runs the Bash original and the port in two fresh
+sandbox directories with the same argv, environment, initial files and stdin. The first
+`PATH` entry holds fake versions of the external commands the case names. Each fake appends
+its name and argv to a shared log and prints its configured output or runs a short body.
+The harness compares exit status, stdout, stderr, the fake-call log and the final file tree
+byte for byte, with the sandbox root normalised out. Real Omarchy, Hyprland and desktop
+commands are never invoked. The harness is Unix only (the fakes are POSIX shell scripts)
+and CI runs it on Linux in the native checks. `tools/omarchy_port_report.py` is the
+separate, parser-based report of which Execute features each pinned Omarchy command needs.
+
+These ports follow Bash's streaming rule: a command's output reaches stdout as it is
+produced, and a failed native command keeps its streamed output, as under Bash. They remain
+interface and behavior ports against fakes, and no live Omarchy session has certified them.
 
 The remaining production gates are in
 [production-readiness.md](../../docs/production-readiness.md).

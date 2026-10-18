@@ -220,7 +220,9 @@ or universal descendant management.
 
 A screen defines its layout first. Components declare their widgets, input/output
 ports, and event handlers in the same file. Rust renders the widgets; `.program`
-decides when commands run and where results go.
+decides when commands run and where results go. Screens need the terminal UI, which is
+in the `full` build (`cargo build --locked --release --features full`) and in release
+packages, but not in the lean default build.
 
 For example, this complete CPU display uses actual `ps` output and the shipped
 `jq.ps` adapter, which invokes `jq`:
@@ -271,7 +273,8 @@ design inventory from what is implemented today.
 ## Inspect and edit a running app
 
 Agents can inspect and change **actual runtime and widget state** through a local
-Unix socket. Start a managed instance from the project directory:
+Unix socket. This needs the `live` feature, part of the `full` build and of release
+packages. Start a managed instance from the project directory:
 
 ```sh
 execute live serve examples/live/widget-console.program --socket /tmp/execute-console.sock --paused
@@ -330,9 +333,38 @@ transformation. Copy it into a scratch folder to try this. Resume restores saved
 output, named values, and cwd, and skips the completed prefix. A native pipe group
 is one checkpoint node. Ordinary runs perform no checkpoint I/O.
 
+A top-level `for each` or `parallel for each` records each element, so resume
+continues after the committed elements rather than rerunning the loop. A comment added
+above a completed node, or an edit below the last completed node, does not force a
+rerun, because resume matches completed nodes by step id. Whether a step may run again
+without `--retry-uncertain` follows its declared effects: a pure or read-only in-process
+applet may, a native command may not. `execute checkpoint status DIR` shows what a
+resume would do without running anything.
+
 Checkpoints do not make external effects transactional. An interrupted command
 with an uncertain outcome requires explicit `--retry-uncertain`; completed nodes
-cannot be rewritten in place. See [recovery contracts](../docs/language.md#recover-after-a-failure).
+cannot be rewritten in place. See [recovery contracts](../docs/language.md#recover-after-a-failure),
+[per-element checkpoints](language.md#per-element-checkpoints) and
+[retry safety](language.md#retry-safety).
+
+## Faster repeated runs with the warm daemon
+
+If you run many short programs that load a large manifest directory or policies, start
+a per-user daemon once and forward runs to it:
+
+```sh
+execute daemon serve &          # leave it running; `execute daemon stop` ends it
+execute run report.program --daemon
+EXECUTE_DAEMON=1 execute run report.program    # the same, from the environment
+```
+
+When no daemon answers, the program simply runs in the client. The forwarded run sees
+your working directory, environment, umask, resource limits and standard streams. A
+program that may take the terminal (`interactively`, `hand over`, a prompted input) is
+declined and runs in the client. For a one-line program the daemon is level with a
+cold run; it saves manifest loading and policy setup, so measure your own program
+first. Unix only. The details, measured latencies and socket checks are in the
+[language reference](language.md#warm-daemon---daemon).
 
 ## Bring another CLI
 

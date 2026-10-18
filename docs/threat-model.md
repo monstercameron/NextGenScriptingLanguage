@@ -78,8 +78,12 @@ ancestor directories remain open (below).
 | Traversal and symbolic links (explicit paths) | None by design: explicit paths keep normal semantics. A policy adds path checks. | Policy tests in `tests/capability_policy.rs`. |
 | Check-then-open | Opened file descriptor is checked again on Unix cache reads. | `tests/cache_security.rs` |
 | Argument and environment injection | Literal argument vectors for ordinary commands; policy environment allowlist; explicit shells only on request. | `tests/direct_commands.rs`, `tests/capability_policy.rs` |
-| Terminal escapes | Diagnostics and streamed output escape control bytes (to be confirmed by `tests/security_terminal.rs`). | `tests/security_terminal.rs` (planned) |
-| Secrets in traces, journals, records, explain and what-if | Secret prompts are read with echo off and are not recorded; checkpoints refuse secret prompts. | `tests/security_redaction.rs`, `tests/security_secrets.rs` (planned) |
+| Terminal escapes | Error text and diagnostics escape control bytes (ESC, CSI, OSC, C1) before they reach a terminal (`terminal_text::escape_controls`). Streamed stdout stays raw so pipes keep their bytes (H17). | Unit tests in `src/terminal_text.rs`. |
+| Secrets in traces, journals, records, explain and what-if | Secret prompts are read with echo off. Their values are withheld from inspect, records (replay refuses them), live reads and snapshots, and checkpoint signatures (a keyed HMAC). A checkpoint refuses a run with a secret prompt input. Redaction is by exact value (H14). | `tests/security_redaction.rs`, `tests/prompt_inputs.rs`, `tests/what_if_confirm.rs` |
+| Checkpoint state tampering and guessing | Journals are checksummed and chained; input digests are an HMAC under a per-user key (H11); element and graph logs are anchored in the journal, and a shorter or re-chained log refuses the resume. | `src/runtime/checkpoint.rs` unit tests, `tests/checkpoint_*.rs`, `tests/crash_consistency.rs` |
+| Working directory | `use folder` and `cd` open the folder, authorize the resolved path, check identity and record the resolved path; children enter the opened directory (H12). | `tests/security_fixes.rs` (Unix) |
+| Daemon socket | A private per-user socket directory, owner checks on the socket and the directory, a peer user-id check after connect, and refusal of a second daemon. Forwarded runs inherit the client's directory, environment, umask and limits. | `tests/daemon_cli.rs` (Unix) |
+| Parsers and decoders fed hostile bytes | Eleven libFuzzer targets (program parser, manifests, env files, input values, DAP and live frames, checkpoint, graph, record, element and completed logs), a replay of seeds and saved crashes on every push, and property tests that journals mutate into typed errors. | [`fuzz.yml`](../.github/workflows/fuzz.yml), `tests/fuzz_regressions.rs`, `tests/crash_properties.rs` |
 | Live control | Peer identity check; two-second wire budgets; explicit grants; same-user plane. | `benchmarks/security-2026-10-15-live-transport.json` |
 | Model transport | HTTPS, with HTTP only for loopback; redirects and environment proxies disabled. | `tests/models.rs` |
 | Resource limits | Output limits, record size limits, command timeouts, parser nesting depth, live budgets. | `tests/cache_security.rs`, `tests/conditions.rs`, `tests/adversarial.rs` |
@@ -112,6 +116,7 @@ Severity scale: **High** breaks a documented guarantee for a supported configura
 | H16 | With no policy, a child inherits the caller's full environment, except that the dynamic loader's variables (`LD_*`, `DYLD_*`) cannot be set from a program or manifest. | Informational, Bash-model | *audit* |
 | H17 | Applet stdout is passed through raw so Unix pipes keep their bytes. Terminal control bytes in error text and diagnostics are escaped; streamed stdout is not. | Informational | *audit* |
 | H18 | Listeners and persistent workers launch with a path-based working directory, not a handle. A link swapped in after a `use folder` that set their directory can move them. Background jobs and handoffs already carry the run's handle. | Low, follow-up | *audit* |
+| H19 | The daemon reads each request on its single accepting thread (it must stay single-threaded because it forks), with a 2 second timeout. A same-user client that connects and sends nothing delays other clients for up to 2 seconds. Other users cannot connect. | Low, same-user delay | *Documented in `src/agent/daemon.rs`* |
 
 Fixed in the audit, with the test that shows each fix:
 
@@ -125,3 +130,22 @@ Fixed in the audit, with the test that shows each fix:
 - `ensure` rechecks the link type just before it renames a replacement link (narrow window remains).
 
 The checks in `tests/security_fixes.rs` marked Unix run on Linux and macOS in CI.
+
+## Continuous security checks
+
+Scheduled and per-push workflows exercise these controls; see
+[CONTRIBUTING](../CONTRIBUTING.md#continuous-integration-and-nightly-checks) for the full list.
+
+- [`security.yml`](../.github/workflows/security.yml): `cargo audit` and `cargo deny`
+  (licenses, sources, duplicate versions), a gitleaks scan of the history, a refusal of
+  tracked env files, CodeQL for Rust (advisory until a run confirms it) and dependency
+  review on pull requests.
+- [`fuzz.yml`](../.github/workflows/fuzz.yml): seed and crash replay on every push; the
+  eleven fuzz targets for 20 minutes each, nightly.
+- [`sanitizers.yml`](../.github/workflows/sanitizers.yml): nightly Miri on the pure
+  modules, AddressSanitizer and ThreadSanitizer on the library unit tests.
+- `tools/check_unsafe.py` in the native checks: every `unsafe` block and impl has a
+  `// SAFETY:` comment, and clippy denies undocumented unsafe blocks.
+- [`crash-consistency.yml`](../.github/workflows/crash-consistency.yml) and
+  [`soak.yml`](../.github/workflows/soak.yml): nightly kill and write-failure runs of
+  checkpoints, and one-hour resource soaks.

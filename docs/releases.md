@@ -10,7 +10,7 @@ Omarchy compatibility. See [Windows semantics](windows.md) and the
 | --- | --- | --- |
 | macOS Intel / Apple Silicon | `execute-VERSION-macos-x64.tar.gz` / `macos-arm64.tar.gz` | Both binaries, manifests, license and docs. macOS 15 or newer is the tested release baseline. Unsigned and not notarized. |
 | Linux x64 / ARM64 | `execute-VERSION-linux-x64.tar.gz` / `linux-arm64.tar.gz` | Static musl executables; native host tools are separate dependencies. |
-| Debian / Ubuntu | `execute_VERSION_amd64.deb` / `arm64.deb` | `/usr/bin` binaries and `/usr/share/execute/manifests`. |
+| Debian / Ubuntu | `execute_VERSION_amd64.deb` / `arm64.deb` | `/usr/bin` binaries and `/usr/share/execute/manifests`; from the next release, also bash, zsh and fish completions, a man page, the editor grammar and docs. |
 | Fedora / RHEL family | `execute-VERSION-1.x86_64.rpm` / `aarch64.rpm` | Same layout; payload validated on Ubuntu, with Fedora installation validation in CI. |
 | Windows x64 / ARM64 | `execute-VERSION-windows-x64.zip` / `windows-arm64.zip` | Real `.exe` binaries with a static CRT, without a separate VC++ redistributable. Extract the complete directory; add its `bin` directory to PATH. Not Authenticode signed. |
 | Flatpak x64 / ARM64 | `execute-VERSION-linux-x64.flatpak` / `linux-arm64.flatpak` | CLI sandbox, Freedesktop 25.08. Home files and network are permitted. Host tools and desktop services are not automatically accessible. |
@@ -18,8 +18,18 @@ Omarchy compatibility. See [Windows semantics](windows.md) and the
 Every archive contains `execute-VERSION/bin/execute` and `execute-model`
 (with `.exe` on Windows). Keep both binaries together and the `manifests`
 directory beside `bin`. Native packages put the manifests under
-`/usr/share/execute`. Do not copy the historical repository `bin/execute` into
-release assets; the pipeline builds source with `cargo build --locked --release`.
+`/usr/share/execute`; the binary looks for `manifests` beside its `bin` directory,
+then for `share/execute/manifests`, and never searches the working directory. Do not
+copy the historical repository `bin/execute` into release assets. The pipeline builds
+source with `cargo build --locked --profile dist --features full`, so packages include
+the terminal UI, model helper, live control, remote backend, desktop renderer, debug
+adapter and language server. A plain `cargo build --locked --release` produces the
+smaller lean build without them; see [build features](../CONTRIBUTING.md#build-features).
+
+Arch Linux packaging (`packaging/aur/execute-bin` for the release tarball and
+`packaging/aur/execute` for a source build) is in the repository, with
+`tools/aur.py` to render the version and checksums. It is not submitted to the AUR
+automatically, and the Arch build job in the packages workflow runs on tags.
 
 Download from [GitHub Releases](https://github.com/monstercameron/NextGenScriptingLanguage/releases).
 Verify the checksum before extracting or installing:

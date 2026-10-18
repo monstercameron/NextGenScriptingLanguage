@@ -63,3 +63,24 @@ file replacement, exit statuses, timeouts, descendant cleanup, cache/resume,
 intervals, streaming/listeners, named-pipe CRUD, headless widgets and persistent
 worker reuse, frame failures, pool limits, cancellation and cleanup. The Unix
 utility suites remain Unix-only.
+
+## Features that differ on Windows
+
+Windows release packages and the Windows CI jobs use the `full` feature set. Some
+newer features are Unix-only or weaker on Windows:
+
+- The warm daemon (`execute daemon`, `run --daemon`) is Unix only. `daemon serve`
+  reports that serving is not available, and `run --daemon` runs in the client.
+- `use folder` and `cd` authorize the resolved path, but the device and inode
+  identity check against the opened directory is Unix only, and a launched child
+  enters the directory by path, not by handle (threat model H12 and H13).
+- A secret prompt input refuses to run when the console echo cannot be turned off.
+- Journal version 5 checkpoints, per-element logs and keyed input digests are shared
+  with Unix. The Windows-specific ACL and reparse-point rules above still apply.
+- The Linux-only checks (the Omarchy port comparison, the soak runs, sanitizers, fuzzing
+  and the bash comparison) do not run on Windows. The flaky-test workflow does run on
+  Windows.
+- Shell-script fake tools for `execute test` are Unix-only (see the
+  [guide](guide.md#testing-programs)), and the Omarchy and Hyprland applets and ports
+  target Linux desktops. The [threat model](threat-model.md) lists the remaining
+  Windows gaps.

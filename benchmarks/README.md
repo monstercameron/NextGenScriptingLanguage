@@ -1,9 +1,10 @@
-# Benchmark results index — October 16, 2026
+# Benchmark results index — October 17, 2026
 
 These reports cover separate, source-pinned workloads and timing boundaries. Read each report for its platform, paired samples, and retained losses. The results are not combined into an overall speedup or readiness claim.
 
 | Measurement | Result | Scope and status |
 | --- | --- | --- |
+| [Execute against bash and dash](#execute-against-bash-and-dash) | Execute is slower than bash in six of eight scenarios, uses more memory and has a larger binary; it is faster on a 1,000-iteration builtin loop and, marginally, on a 100-spawn loop. | Linux x86_64 and arm64 GitHub runners, default lean build, measured by `tools/bash_compare.py` on every push to `main`. Optimisation is ongoing. |
 | [`recv_any`, hosted Linux](graph-recv-any-ci-38851233022/README.md) | 288/288 paired comparisons favored the candidate. | Preloaded bounded-queue `NodeIo::recv_any` on x86_64 Linux; this does not measure whole-graph or end-to-end execution. |
 | [`emit`, local macOS and hosted Linux](graph-emit-paired-macos-linux-20261016/README.md) | macOS: three case ratios favored the candidate; `fanout_8_integer` regressed about 2.0% (median paired ratio 1.02012; 21 wins/27 losses). Linux: all four case ratios were below 1.0. Overall, 52/192 macOS and 19/192 Linux comparisons lost. | Separate ARM64 macOS and x86_64 Linux `NodeIo::emit` runs. Platform results remain separate. |
 | [Named receive operations, local macOS](graph-named-recv-macos-arm64-20261016/README.md) | 566 improvements and 10 losses across 576 paired comparisons. | Preloaded bounded-queue `recv` and zero-duration `recv_timeout`; in-process operation only. |
@@ -19,6 +20,30 @@ These reports cover separate, source-pinned workloads and timing boundaries. Rea
 | [Program AST cache v1](program-ast-cache-v1-negative/README.md) | Negative result: 21 wins/27 losses; median paired ratio was 1.0221. | Candidate remains unmerged. This result does not support the proposed cache change. |
 
 Pair counts, ratios, and deltas use each report's stated denominator. Do not sum values across rows: platforms, source revisions, and workload boundaries differ.
+
+## Execute against bash and dash
+
+`tools/bash_compare.py` pairs a bash command line with an Execute program that does the
+same job, feeds both the same stdin, and reports the median wall time, the peak resident
+set size and the binary sizes. The `bash-compare.yml` workflow runs it for every push to
+`main` on `ubuntu-24.04` and `ubuntu-24.04-arm` and writes the table to the job summary
+and a JSON artifact. Each run builds four variants: the default release build (the one the
+published table uses), an `opt-level = "s"` build, a static musl build and a musl build
+with the size-first `min` profile. The headline table, with its method and limits, is in the
+[README](../README.md#performance-with-receipts) and under
+[Performance against Bash and dash](../docs/production-readiness.md#performance-against-bash-and-dash)
+in the production gates. Run it yourself with a release build of the default feature set:
+
+```sh
+cargo build --locked --release --bin execute
+python3 tools/bash_compare.py target/release/execute --json-out target/bash-compare.json
+```
+
+It needs `bash`, `jq` (the JSON scenario is skipped without it), GNU `time` at
+`/usr/bin/time` (for peak RSS) and, optionally, `dash`. `--runs`, `--warmup` and `--only`
+select repetitions and scenarios; `--require-win` exits 1 when Execute loses any
+scenario, and CI does not pass it. Do not run it while building or testing, and compare
+numbers within one run rather than across runs on shared runners.
 
 ## Earlier benchmark records (preserved)
 

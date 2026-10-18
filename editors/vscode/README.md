@@ -36,6 +36,11 @@ picker. The language ID is `execute-program`; TextMate scope is `source.execute`
   parallel/race task groups, typed graph declarations, and cache modifiers.
 - Finite stdin, JSON selection, same-file reusable programs, listeners, schedules,
   persistent streams, typed applet graphs and implemented TUI vocabulary.
+- Newer source syntax: the `execute N` version marker, step labels (`fetch:`), `on exit`
+  and `on interrupt` handlers, raw `"""` blocks, `use value` and `use bytes`,
+  `then capture bytes as`, `run program file`, `hand over to`, `launch detached`,
+  `and retry up to ... times`, `accept ... one of [...]`, and `from program directory`
+  or `from program path`.
 - Folding, `#` comments, list/object bracket pairing and two-space indentation defaults.
 - Complete-program and statement snippets using prefixes such as `program-input`,
   `program-pipeline`, `program-condition`, `program-try`, `program-parallel`,
@@ -52,8 +57,10 @@ whether a `break`, `continue` or `return` occurs in a valid semantic context.
 ## Scope
 
 This declarative extension provides lexical highlighting and snippets. It has no
-activation code, telemetry, command runner or language server. It does not execute
-programs or load applet manifests, and highlighting is not semantic validation.
+activation code, telemetry, command runner or language client. It does not execute
+programs or load applet manifests, and highlighting is not semantic validation. The
+runtime has its own stdio language server (`execute lsp`, in the `full` build); see the
+[language server guide](https://github.com/monstercameron/NextGenScriptingLanguage/blob/main/docs/language-server.md).
 Use `execute check FILE.program` or `execute check FILE.program --json` for the
 runtime's static checks. See the [language reference](https://github.com/monstercameron/NextGenScriptingLanguage/blob/main/docs/language.md).
 
@@ -62,7 +69,7 @@ runtime's static checks. See the [language reference](https://github.com/monster
 From the repository root, with stable Rust, Node.js 24 and npm:
 
 ```sh
-cargo build --locked --release
+cargo build --locked --release --features full
 npm --prefix editors/vscode ci --ignore-scripts --no-audit --no-fund
 npm --prefix editors/vscode test
 npm --prefix editors/vscode run package

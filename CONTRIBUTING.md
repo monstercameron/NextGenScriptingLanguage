@@ -37,6 +37,24 @@ cargo test --locked --target $target --release --lib
 
 See [Windows contracts](docs/windows.md) and the [release workflow](docs/releases.md).
 
+## Build features
+
+`cargo build --locked --release` produces the **lean** build: no terminal UI, no
+model helper, no live control plane, no remote backend, no Quickshell renderer, no
+DAP adapter and no language server. `--features full` adds all of them (`tui`,
+`model`, `desktop`, `dap`, `remote`, `live`, `lsp`); `tui` implies `live`. Release
+packages, `make check` and most CI jobs build with `full`, and a Linux job keeps the
+lean build compiling and testing (`--no-default-features`) against a size budget in
+`tools/linux-minimal-binary-budget.json`. A lean build refuses a gated feature with
+a message that says to use the full build, and manifests declare `build_feature` so
+the two applets that need `remote` and the Quickshell applet that needs `desktop`
+report `requires_full_build`. The release profile uses fat LTO and one codegen
+unit; the `dist` profile inherits it for packaged artifacts, and an opt-in `min` profile
+(`opt-level = "z"`, `panic = "abort"`, for example with a musl target) builds a much
+smaller binary but does not unwind panics, so releases do not use it. Two more features exist
+for tests only: `failpoints` (fault injection for the crash-consistency tests) and
+`fuzzing` (the fuzz entry points). Neither is part of `full`.
+
 Use `make rust-check` when working only on Rust, `make build` for a release build,
 and `make proof-smoke` for a small streaming/lifecycle check. The smoke report
 goes into ignored `target/`. `CARGO`, `PYTHON` and `NPM` can override executable
@@ -74,11 +92,45 @@ maintained entry points to `tools/check_docs.py`; the [documentation index](docs
 keeps guides separate from evidence. The [changelog](CHANGELOG.md) distinguishes
 unreleased features from immutable published versions.
 
+## Continuous integration and nightly checks
+
+Every workflow is in `.github/workflows/`, and every action is pinned by commit SHA.
+
+| Workflow | Runs | What it does |
+| --- | --- | --- |
+| `ci.yml` (Native checks) | Every push to `main` and every pull request | Release-contract and workflow lint, `check_unsafe.py`, `make check` on Ubuntu and macOS, native Windows x64 and ARM64, Linux binary-size budgets (full and lean), the Omarchy port comparison, the latency and hot-path budgets. Each `main` commit has its own concurrency group and runs to completion. |
+| `bash-compare.yml` | Every push to `main` | Builds the default lean binary (and, as variants, an `opt-level = "s"` build, a static musl build and a musl `min`-profile build) on x86_64 and arm64 Linux and compares each with bash and dash; see [benchmark methods](benchmarks/README.md#execute-against-bash-and-dash). Reports only; it does not fail on a loss. |
+| `security.yml` | Push, pull request, weekly | `cargo audit` and `cargo deny`, gitleaks over the history, a refusal of tracked env files, CodeQL (advisory), dependency review. |
+| `fuzz.yml` | Push and pull request (replay); nightly (fuzzing) | Replays seeds and saved crashes; nightly runs each of eleven libFuzzer targets for 20 minutes. |
+| `sanitizers.yml` | Nightly | Miri on the pure modules, AddressSanitizer and ThreadSanitizer on library unit tests. |
+| `crash-consistency.yml` | Nightly | Random kills and injected checkpoint write failures, then resume, plus journal and parser property tests. |
+| `soak.yml` | Nightly | One-hour service, live-controlled service and graph runs that assert flat memory, descriptors and threads (`tools/soak.py`). |
+| `flaky.yml` | Nightly | Runs the full suite 20 times per OS with `cargo nextest` and no retries, then lists each test that failed as `flaky` (some runs) or `failing` (every run). |
+| `platforms.yml` | Weekly | Minimum supported Rust (1.89.0), Linux arm64 library tests, and a static musl build on Alpine. |
+| `pages.yml` | Pushes and pull requests that touch the playground inputs | WASM build, playground checks and GitHub Pages deployment. |
+| `packages.yml`, `release.yml` | Manual dispatch, `v*` tags | Package validation and the SemVer release; see [releases](docs/releases.md). |
+
+The remaining workflows (`desktop-live-acceptance`, the `*-hosted-replication` and
+`graph-recv-any-hosted-paired` benchmarks, `mixed-runtime-probe` and
+`real-bash-100-runner-contract`) run by hand and produce retained evidence, not a
+pass or fail gate for changes.
+
+The nightly workflows have scheduled triggers plus `workflow_dispatch`, so any of
+them can be run on a branch before relying on it. Reproduce a CI failure locally with
+the command in the failing step; `make check` covers the `ci.yml` suite, and
+`python3 tools/port_compare.py --binary target/release/execute` the port
+comparison.
+
 ## Find the right code
 
 | Area | Files |
 | --- | --- |
-| CLI parsing and discovery | `src/main.rs`, `src/inputs.rs` |
+| CLI parsing and discovery | `src/main.rs`, `src/cli/`, `src/inputs.rs` |
+| Daemon, checkpoint status, gate, explain, dap | `src/agent/` |
+| Checkpoint journal, element log, resume | `src/runtime/checkpoint.rs`, `src/runtime/checkpoint/`, `src/runtime/resume.rs` |
+| Bundled manifest index | `src/bundled_manifests.rs`, `src/bundled_manifests/` (regenerate with `EXECUTE_UPDATE_BUNDLED_INDEX=1 cargo test`) |
+| Fuzz targets and saved crashes | `fuzz/fuzz_targets/`, `fuzz/regressions/`, `src/fuzz_entry.rs` |
+| Omarchy ports and their Bash comparison | `examples/omarchy-ports/`, `tools/port_compare.py` |
 | Syntax and same-file definitions | `src/parser.rs`, `src/parser/reusable.rs`, `src/ast.rs` |
 | Native execution and structured values | `src/runtime.rs`, `src/runtime/`, `src/structured.rs` |
 | Live state and control socket | `src/live/` |

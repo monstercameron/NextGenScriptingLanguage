@@ -6,6 +6,10 @@
   JSON null/decimal/object literals, dynamic JSON pointers and typed graph syntax.
 - Pair JSON object braces, indent new block headers and add complete validated
   snippets for the new source constructs.
+- Highlight the `execute N` marker, step labels, `on exit` and `on interrupt`,
+  raw `"""` blocks, `use value`/`use bytes`, `then capture bytes as`,
+  `run program file`, `hand over to`, `launch detached`, `and retry up to ... times`,
+  `one of` and `from program directory|path`.
 
 ## 0.2.2
 

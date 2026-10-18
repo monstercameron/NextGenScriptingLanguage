@@ -46,6 +46,13 @@ metadata. A `cacheable` declaration does not prove purity, and an
 once effects. Use this view to inspect the declared interface, then use the
 versioned fields below for typed values and backend behavior.
 
+Two other declarations have runtime consequences. For an in-process applet, the
+declared `effects` decide checkpoint [retry safety](language.md#retry-safety): reads or
+no effects are retry-safe, anything else is uncertain after a crash. A manifest may also
+declare `build_feature` (`remote` or `desktop`); in a lean build its inspected contract
+shows `requires_full_build` and the applet refuses to run with a message that says to use
+the full build.
+
 ## A manifest with typed output
 
 A manifest can keep the ordinary named-applet parameter and argv mapping while

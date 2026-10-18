@@ -4,7 +4,11 @@
 work targets equivalent behavior in readable `.program` files. It does not
 parse existing Bash syntax or install itself as `/bin/bash` or a login shell.
 Published 0.9.0-rc.4 packages and the retained 0.8.0 binary remain unchanged;
-the current source contains untagged candidate work.
+the current source (version `0.9.0-rc.5`, untagged and unpublished) contains
+candidate work. The project's aim is an AI-first, complete Unix/POSIX scripting
+language whose programs humans can read and observe; these gates measure how far
+the source is from replacing Bash for real workloads, not whether it can run a
+pipeline.
 
 ## Changes backed by tests
 
@@ -42,6 +46,24 @@ the current source contains untagged candidate work.
   or start the service; TTY handoff and universal detached-descendant cleanup
   are not provided. See [the practical guide](guide.md#generate-a-reviewable-service-definition).
 
+* A warm per-user daemon (`execute daemon`, `run --daemon`) forwards runs over a
+  checked Unix socket. It helps only where manifest and policy setup dominates;
+  for a one-line program it is level with a cold run. See
+  [the daemon section](language.md#warm-daemon---daemon).
+* Checkpoints record top-level `for each` loops element by element, match resume
+  nodes by step id, and use journal version 5 with a keyed input digest. Retry
+  safety follows declared effects, so a pure in-process loop writes no durable
+  begin record per element. See [recovery](language.md#recover-after-a-failure).
+* `use folder` and `cd` authorize the opened directory and later relative paths
+  join onto it. The [threat model](threat-model.md) lists nineteen known holes
+  (H1-H19) with severities, and CI runs dependency, secret, fuzz, sanitizer,
+  crash-consistency and soak checks; see
+  [CONTRIBUTING](../CONTRIBUTING.md#continuous-integration-and-nightly-checks).
+* The default build is lean (no terminal UI, model helper, live control, remote
+  backend, desktop renderer, DAP adapter or language server); packages ship the
+  `full` feature set. The shipped manifests are embedded in an index, so a
+  default-path run does not read and validate every manifest file.
+
 See [the input reference](language.md#process-input-sources) and
 [the isolated Omarchy ports](../examples/omarchy-ports/README.md).
 
@@ -55,10 +77,15 @@ feature locations. Every inventory entry remains `unverified`.
 
 The inventory is a source scanner, not a Bash parser. Its lexical hits can
 include strings and comments; they are leads for porting, not readiness scores.
-Installers, migrations, sourced shell configuration and QML are outside that
-command count and require separate inventories. The ten initial ports cover
-small command interfaces with fake backends. None is certified for a live
-Omarchy desktop.
+`tools/omarchy_port_report.py` is a parser-based report of the Execute features each
+command needs. Installers, migrations, sourced shell configuration and QML are
+outside that command count and require separate inventories. The ten initial
+ports cover small command interfaces with fake backends. Twenty further scripts
+are ported under `examples/omarchy-ports/<script>/` with the Bash original, the
+port and a `case.json`. `tools/port_compare.py` runs both in sandboxes with logging
+fake binaries first on `PATH` and compares exit status, stdout, stderr, the
+fake-call log and the final file tree over 75 cases, and CI runs it on Linux. None
+is certified for a live Omarchy desktop.
 
 ## Ordered acceptance gates
 
@@ -66,14 +93,14 @@ Omarchy desktop.
 | --- | --- | --- |
 | Command contracts | Exact argv, stdin, stdout/stderr, cwd, native status, missing tools and failure behavior on macOS and Linux | 110-case/46-tool Unix matrix; applet contracts add typed/status/stdio coverage, while output and pipeline failure policy differences remain explicit |
 | Shell control | Compact loops, local bindings, command results, early return/status, environment overrides and unset, append/separate/merged redirection | Typed inputs, scalar conditions and bounded repeat/for-each/while loops exist in current source; the remaining control surface needs proof |
-| Jobs and terminal ownership | Spawn, await, cancel, `exec` identity or a documented alternative, signal propagation, traps/finally and terminal handoff | Finite scopes own bounded named native jobs; detached jobs, persistent-lifetime handles and Bash terminal/session parity remain missing |
+| Jobs and terminal ownership | Spawn, await, cancel, `exec` identity or a documented alternative, signal propagation, traps/finally and terminal handoff | Finite scopes own bounded named native jobs, also under checkpoints. `on exit` and `on interrupt` handlers drain gracefully, `hand over` replaces the process with `execve` on Unix, `launch detached` starts an untracked child and `interactively` hands the terminal to one command. Persistent-lifetime job handles and Bash terminal/session parity remain missing |
 | Reuse and data | External program modules, typed records and structured streams without generated application helpers | Same-file finite reuse, versioned external modules, scheduled services and bounded native-command listener module nodes (one decoded event per sequential handler, with typed startup inputs), bounded task groups, finite JSON and typed applet records exist; other listener backends, joins and general structured streaming remain missing |
-| Real Omarchy ports | Port every in-scope command; add success, absent dependency, cancellation, failure and side-effect oracles per command | Pinned inventory plus ten isolated interface ports; no complete command or desktop certification |
+| Real Omarchy ports | Port every in-scope command; add success, absent dependency, cancellation, failure and side-effect oracles per command | Pinned inventory, ten isolated interface ports and twenty behavior-compared ports (75 cases) out of 444 commands; no complete command or desktop certification |
 | Desktop acceptance | Disposable Arch/Omarchy sessions testing Hyprland, Wayland, D-Bus, terminals, services and clean teardown | The disposable Arch VM reached an active seat0/VT1 Wayland session, then Quickshell exited 255 before IPC readiness. Direct renderer and local/remote graph acceptance remain pending; full Omarchy certification remains open |
 | Sourced shell integration | Define how environment/cwd changes reach a caller and which Bash startup hooks stay Bash | External programs cannot mutate their parent shell; no sourced Bash emulation |
-| Safety and recovery | Inspectable effect boundaries, fault injection, checkpoint uncertainty and cleanup under interruption | Strict applet policy and opt-in macOS/Linux sandboxes exist in current source; no-policy commands remain trusted, and broader adversarial/platform coverage remains open |
+| Safety and recovery | Inspectable effect boundaries, fault injection, checkpoint uncertainty and cleanup under interruption | Strict applet policy and opt-in macOS/Linux sandboxes exist in current source; no-policy commands remain trusted. Nightly crash-consistency, fuzz, sanitizer and soak workflows exist but are new; see the [CI notes](#ci-evidence-and-its-status). Broader adversarial/platform coverage remains open |
 | Distribution | Clean install/uninstall, paths with spaces, shebang portability, declared Bash-independent dependencies and immutable versioned packages | [Source `58b42f6` validation](../benchmarks/package-validation-38836416853/README.md) passed the fresh macOS ARM64 archive/root, catalog, spaced-path shebang and scratch rollback checks, all six native package targets, both Flatpak targets, and the exact twelve-asset hash set. Newer source revisions require their own validation; `0.9.0-rc.5` remains unpublished |
-| Performance | Identical behavior and workload on both runtimes, paired repeated release measurements, cold/warm startup, CPU, memory, streaming, idle and event latency on macOS and Linux | Six retained equal-command-plan fixtures put Bash medians below Execute and Execute below Nushell. A bounded Linux 1,000-actor run passed; cold-start, sustained operation and process-tree resource evidence remain incomplete |
+| Performance | Identical behavior and workload on both runtimes, paired repeated release measurements, cold/warm startup, CPU, memory, streaming, idle and event latency on macOS and Linux | Six retained equal-command-plan fixtures put Bash medians below Execute and Execute below Nushell. A Linux comparison run on every `main` commit has Execute behind bash on startup, binary size and memory, and ahead only on a builtin loop and, marginally, a spawn loop ([below](#performance-against-bash-and-dash)). A bounded Linux 1,000-actor run passed; cold-start, sustained operation and process-tree resource evidence remain incomplete |
 | Readability and generation | Held-out real scripts, fixed prompts, repair counts and blind human review | Example counts and passing tests do not establish this claim |
 
 Do not emulate missing control flow by generating Bash or application Rust.
@@ -104,3 +131,84 @@ a general runtime or Bash speed advantage. Exact Omarchy success-path timings
 are covered by a separate [paired harness](../benchmarks/omarchy_success.py);
 they must remain separate from newly covered failures and side-effect
 correctness.
+
+## Performance against Bash and dash
+
+Optimisation is ongoing. Today Execute is slower than Bash on startup, on a
+single external command, on pipelines, on text and JSON work done by its in-process
+applets, and on a 100 MB pipe; it uses more memory at startup and has a larger
+binary. It is ahead only on a loop of builtin calls and, marginally, on a loop of
+process spawns.
+
+Measured on Linux x86_64 GitHub-hosted runners (Ubuntu 24.04, commit `234c1fc`),
+default lean build, default manifest path, medians in milliseconds:
+
+| Scenario | bash | dash | Execute | Execute / bash |
+| --- | ---: | ---: | ---: | ---: |
+| Startup, no work | 1.20 | 0.64 | 1.76 | 1.47 |
+| One external command | 1.93 | 1.42 | 2.76 | 1.43 |
+| 5-stage pipeline | 2.99 | 2.21 | 4.30 | 1.44 |
+| 1000-iteration builtin loop | 4.37 | n/a | 2.80 | 0.64 |
+| 100-spawn loop | 67.07 | n/a | 63.86 | 0.95 |
+| Uppercase 1 MB (`tr` vs `text.upper`) | 2.84 | 2.25 | 5.47 | 1.93 |
+| JSON pointer lookup, 400 KB (`jq` vs `json.get`) | 11.19 | 10.23 | 23.53 | 2.10 |
+| 100 MB through a pipe | 25.95 | 25.48 | 27.45 | 1.06 |
+
+Peak resident memory at startup is 3.4 MB for bash and 6.2 MB for Execute. Binary
+size is 7.16 MB (x86_64) and 5.90 MB (arm64) for Execute, 1.45 MB for bash and
+130 KB for dash. The arm64 runner shows the same pattern.
+
+How it is measured. [`tools/bash_compare.py`](../tools/bash_compare.py) pairs a bash
+command line with an Execute program that does the same job and gives both the same
+stdin file. Wall time is taken around each process from Python, with stdout discarded.
+Each scenario runs 2 warmups and then 20 timed runs (10 for the spawn loop and 5 for
+the 100 MB pipe), and the report is the median. Bash runs as
+`bash --norc --noprofile -c`; dash runs `dash -c` only for scenarios that are plain
+`sh`, which excludes the two loops (they use bash arithmetic loops). Execute runs
+`execute run FILE` with no `--manifest-dir`, so it takes the default manifest
+path an installed binary uses, including the bundled index. A run that exits nonzero
+fails the comparison. Peak RSS comes from GNU `/usr/bin/time -f %M` (the maximum of
+three runs), because `wait4` from Python reports the parent's high-water mark. The
+[`bash-compare.yml`](../.github/workflows/bash-compare.yml) workflow runs it for every
+push to `main`, on `ubuntu-24.04` and `ubuntu-24.04-arm`, and keeps a JSON report. The
+table above is the default release build. Since commit `e2c6861` the workflow also builds
+and compares an `opt-level = "s"` variant, a static musl build and a musl build with the
+size-first `min` profile; those results are in the workflow runs, not in this table.
+
+What it does not show. The pairs use each runtime's natural tool (`tr` and `jq`
+against in-process applets), so they compare jobs, not one tool. The runners are shared
+machines, files are warm in the page cache, and the 20-run medians have no confidence
+intervals, so differences of a few percent are within noise. It does not measure
+Omarchy scripts, network or disk-bound work, or Windows and macOS. Numbers change as
+optimisation lands; read the latest workflow run, not this table, for the current
+state. The measurements that predate this comparison, with their own methods and
+boundaries, are indexed in [benchmarks/README.md](../benchmarks/README.md).
+
+## Research and evidence
+
+These pages hold the supporting write-ups. They apply to their recorded versions.
+
+- [Benchmark index and methods](../benchmarks/README.md): source-pinned workloads, paired
+  samples and retained losses.
+- [Optimization session report](optimization-session-2026-10-14-report.md) and its
+  [plan](optimization-session-2026-10-14.md): the bounded October 14 campaign across the
+  twelve rubric dimensions.
+- [Replacement challenge](replacement-challenge.md): the fifteen proof gates, with the
+  [supplied challenge](replacement-challenge-source.md).
+- [Thesis ledger](thesis-progress.md): implemented capabilities against the original goals.
+- [Unix compatibility review](unix-compatibility-review.md): the supplied review set against
+  the implementation, with benchmark gates.
+- [Threat model](threat-model.md) and [audit resolution ledger](audit-resolution.md):
+  attackers, controls and known holes; the 92 numbered audit findings.
+- [AI productivity protocol](../benchmarks/ai_productivity/README.md): the held-out
+  evaluation design, with results still pending, and a small public pilot.
+
+## CI evidence and its status
+
+The workflows listed in [CONTRIBUTING](../CONTRIBUTING.md#continuous-integration-and-nightly-checks)
+produce evidence, and most of the nightly ones are new. As of 2026-10-17 the fuzz replay,
+security scans and bash comparison pass on `main`; the crash-consistency and platform
+workflows have passed manual runs; the soak and flaky-test workflows have so far only
+failed on manual runs, and the findings are being fixed; and the sanitizer workflow has not
+yet run. Treat a nightly workflow as evidence only after it has passed on the commit in
+question. Check the [Actions page](https://github.com/monstercameron/NextGenScriptingLanguage/actions).

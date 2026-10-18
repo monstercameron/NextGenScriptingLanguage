@@ -397,13 +397,9 @@ fn package_service_with_v1_dependency_fixture(
 
 fn options(cwd: &Path) -> RunOptions {
     RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: cwd.to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
-        total_timeout: None,
+        ..RunOptions::new(cwd.to_path_buf())
     }
 }
 
@@ -808,13 +804,10 @@ fn graph_service_cancellation_reaps_only_its_retained_json_lines_worker() {
     let source = "accept snapshot as json\nevery 20 milliseconds\n  run test.worker\n  then encode snapshot as json\n";
     let (root, registry) = service_fixture_with_worker(source, &marker);
     let invocation_options = RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: root.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(Duration::from_secs(5)),
+        ..RunOptions::new(root.path().to_path_buf())
     };
 
     let global = flow::runtime::invoke_applet(
@@ -923,13 +916,10 @@ fn service_finally_keeps_module_worker_context_and_exact_process_accounting() {
     );
     let (root, registry) = service_fixture_with_worker(&source, &worker_marker);
     let invocation_options = RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: root.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(Duration::from_secs(5)),
+        ..RunOptions::new(root.path().to_path_buf())
     };
     let global = flow::runtime::invoke_applet(
         &registry,

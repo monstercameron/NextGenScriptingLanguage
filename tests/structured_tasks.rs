@@ -1,13 +1,10 @@
 use anyhow::{anyhow, Result};
 use flow::tasks::TaskScope;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::{
-    collections::BTreeMap,
-    sync::atomic::{AtomicBool, Ordering},
-};
 
 #[test]
 fn scope_enforces_bound_and_preserves_typed_join_results() -> Result<()> {
@@ -278,13 +275,9 @@ fn parallel_for_each_of_an_empty_list_returns_empty_records() -> Result<()> {
     let program = flow::parser::parse(source)?;
     let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
     let options = flow::runtime::RunOptions {
-        inputs: Default::default(),
-        working_directory: root.to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(8)),
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(root.to_path_buf())
     };
     let result = flow::runtime::run(&program, &registry, &options)?;
     let value: serde_json::Value = serde_json::from_slice(&result.output)?;
@@ -395,13 +388,10 @@ fn repeated_number_add_public_workload_has_exact_output() -> Result<()> {
     let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
     let cwd = tempfile::tempdir()?;
     let options = flow::runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: cwd.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(Duration::from_secs(10)),
+        ..flow::runtime::RunOptions::new(cwd.path().to_path_buf())
     };
 
     let result = flow::runtime::run(&program, &registry, &options)?;
@@ -678,13 +668,9 @@ fn task_group_starts_only_the_configured_number_of_workers_before_the_barrier() 
         let program = flow::parser::parse(&source)?;
         let registry = flow::manifest::Registry::load(&manifest_path)?;
         let options = flow::runtime::RunOptions {
-            inputs: Default::default(),
-            working_directory: root,
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: Some(Duration::from_secs(8)),
-            total_timeout: None,
+            ..flow::runtime::RunOptions::new(root)
         };
         flow::runtime::run(&program, &registry, &options)
     });
@@ -749,13 +735,9 @@ fn task_group_json_redacts_declared_secret_stderr_but_api_keeps_raw_bytes() -> R
         Ok(registry)
     };
     let options = flow::runtime::RunOptions {
-        inputs: Default::default(),
-        working_directory: temp.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 4096,
         command_timeout: Some(Duration::from_secs(5)),
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
     };
 
     // The backend/API keeps exact stderr bytes; only task-record presentation
@@ -875,13 +857,9 @@ fn run_program(
     let program = flow::parser::parse(source)?;
     let registry = flow::manifest::Registry::load(manifests)?;
     let options = flow::runtime::RunOptions {
-        inputs: Default::default(),
-        working_directory: working_directory.to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(8)),
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(working_directory.to_path_buf())
     };
     flow::runtime::run(&program, &registry, &options)
 }

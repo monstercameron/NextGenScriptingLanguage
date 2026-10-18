@@ -41,12 +41,9 @@ fn supplied_json_input_setup() {
         let fingerprint = format!("{:x}", Sha256::digest(serde_json::to_vec(&inputs).unwrap()));
         let options = runtime::RunOptions {
             inputs,
-            working_directory: directory.path().into(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 32,
             command_timeout: Some(Duration::from_secs(5)),
-            total_timeout: None,
+            ..runtime::RunOptions::new(directory.path().into())
         };
         let check = runtime::run(&program, &registry, &options).unwrap();
         assert_eq!(check.output, b"42");

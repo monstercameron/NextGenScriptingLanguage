@@ -15,13 +15,10 @@ use std::time::Duration;
 
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: cwd.to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(Duration::from_secs(10)),
+        ..runtime::RunOptions::new(cwd.to_path_buf())
     }
 }
 

@@ -32,13 +32,9 @@ fn failed_child_echoing_declared_environment_secret_redacts_errors_but_keeps_raw
     );
     let program = parser::parse("run secret.echo\n").unwrap();
     let options = runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: directory.path().to_owned(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024,
         command_timeout: Some(Duration::from_secs(5)),
-        total_timeout: None,
+        ..runtime::RunOptions::new(directory.path().to_owned())
     };
 
     let error = match runtime::run(&program, &registry, &options) {

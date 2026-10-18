@@ -197,7 +197,12 @@ pub(crate) fn enter_directory(
 ) -> Result<crate::working_dir::WorkingDirectory> {
     let opened = crate::working_dir::WorkingDirectory::open(requested)?;
     let resolved = opened.resolved_path()?;
-    crate::capabilities::authorize_host_path(registry, &resolved, false, cwd)?;
+    crate::capabilities::authorize_host_path(
+        registry,
+        &resolved,
+        crate::capabilities::HostAccess::Read,
+        cwd,
+    )?;
     if !opened.same_directory_as(&resolved)? {
         bail!(
             "folder changed while it was being opened: {}",

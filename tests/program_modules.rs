@@ -467,12 +467,8 @@ fn changed_transitive_module_source_rejects_resume_before_replaying_completed_ef
                 ("name".into(), flow::ast::Value::String("stable".into())),
             ])),
         )]),
-        working_directory: cwd.clone(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
-        command_timeout: None,
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(cwd.clone())
     };
     let checkpoint = flow::runtime::CheckpointOptions {
         directory: cwd.join("journal"),
@@ -577,13 +573,8 @@ fn module_private_bindings_and_folder_changes_do_not_escape_to_caller() {
     )
     .unwrap();
     let options = flow::runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: cwd.clone(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
-        command_timeout: None,
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(cwd.clone())
     };
     let result = flow::runtime::run(&caller, &registry, &options).unwrap();
     let expected = format!(
@@ -612,13 +603,8 @@ fn checkpoint_rejects_cwd_changing_module_child_calls_before_effects() {
     fs::write(&program_path, source).unwrap();
     let program = flow::parser::parse(source).unwrap();
     let options = flow::runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: fs::canonicalize(&cwd).unwrap(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
-        command_timeout: None,
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(fs::canonicalize(&cwd).unwrap())
     };
     let checkpoint = flow::runtime::CheckpointOptions {
         directory: cwd.join("journal"),
@@ -679,13 +665,9 @@ fn module_cache_key_tracks_resolved_typed_parameters() {
     .unwrap();
     let cwd = fs::canonicalize(&temp).unwrap();
     let options = flow::runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: cwd.clone(),
         cache_directory: Some(cwd.join("cache")),
-        trace: false,
         max_output_bytes: 1024 * 1024,
-        command_timeout: None,
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(cwd.clone())
     };
 
     let result = flow::runtime::run(&caller, &registry, &options).unwrap();
@@ -739,13 +721,9 @@ fn changed_body_applet_invalidates_module_cache_and_checkpoint_resume() {
     let cwd = fs::canonicalize(&temp).unwrap();
     let cached_caller = flow::parser::parse("run test.body as output and cache\n").unwrap();
     let options = flow::runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: cwd.clone(),
         cache_directory: Some(cwd.join("cache")),
-        trace: false,
         max_output_bytes: 1024 * 1024,
-        command_timeout: None,
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(cwd.clone())
     };
     let first = flow::runtime::run(&cached_caller, &registry, &options).unwrap();
     assert_eq!(first.output, br#""first""#);
@@ -827,13 +805,8 @@ fn module_interface_mismatch_fails_before_an_earlier_save() {
     )
     .unwrap();
     let options = flow::runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: temp.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
-        command_timeout: None,
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
     };
     let error = match flow::runtime::run(&caller, &registry, &options) {
         Ok(_) => panic!("module interface mismatch unexpectedly executed"),
@@ -984,12 +957,8 @@ fn package_alias_invokes_pinned_transitive_export_without_catalog_duplicate() {
                 ("name".into(), flow::ast::Value::String("pinned".into())),
             ])),
         )]),
-        working_directory: temp.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
-        command_timeout: None,
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(temp.path().to_path_buf())
     };
     let result = flow::runtime::run(&caller, &registry, &options).unwrap();
     assert_eq!(result.output, br#"{"count":5,"name":"pinned"}"#);

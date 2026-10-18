@@ -6,13 +6,9 @@ use std::{collections::BTreeMap, path::Path, time::Duration};
 
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: cwd.to_owned(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 16,
         command_timeout: Some(Duration::from_secs(10)),
-        total_timeout: None,
+        ..runtime::RunOptions::new(cwd.to_owned())
     }
 }
 

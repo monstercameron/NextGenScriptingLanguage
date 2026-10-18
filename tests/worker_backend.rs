@@ -672,13 +672,9 @@ fn runtime_error_display_redacts_secret_but_structured_bytes_stay_raw() {
         .expect("valid data flow policy"),
     );
     let options = runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: directory.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: MAX_FRAME,
         command_timeout: Some(Duration::from_secs(5)),
-        total_timeout: None,
+        ..runtime::RunOptions::new(directory.path().to_path_buf())
     };
     let error = runtime::run(
         &parser::parse("run worker.fixture\n").expect("valid fixture program"),

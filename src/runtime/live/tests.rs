@@ -4,13 +4,9 @@ use serde_json::json;
 
 fn options(directory: &Path) -> RunOptions {
     RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: directory.into(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 8 * 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
-        total_timeout: None,
+        ..RunOptions::new(directory.into())
     }
 }
 

@@ -148,12 +148,8 @@ pub fn replay(arguments: &[String]) -> Result<()> {
     let guard = runtime::observe::install(replayer.clone())?;
     let options = RunOptions {
         inputs,
-        working_directory: env::current_dir().context("could not determine current directory")?,
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 16 * 1024 * 1024,
-        command_timeout: None,
-        total_timeout: None,
+        ..RunOptions::new(env::current_dir().context("could not determine current directory")?)
     };
     let result = runtime::with_streamed_stdout(|| runtime::run(&program, &registry, &options));
     drop(guard);

@@ -745,13 +745,10 @@ fn native_pipes_validate_wire_encoding_before_launching_and_accept_json_text() {
     }
     fn options(cwd: &Path) -> flow::runtime::RunOptions {
         flow::runtime::RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: cwd.to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024,
             command_timeout: Some(Duration::from_secs(3)),
             total_timeout: Some(Duration::from_secs(5)),
+            ..flow::runtime::RunOptions::new(cwd.to_path_buf())
         }
     }
 
@@ -843,13 +840,10 @@ fn native_pipe_rejects_decode_only_path_normalization_but_keeps_raw_bytes() {
     }
     fn options(cwd: &Path) -> flow::runtime::RunOptions {
         flow::runtime::RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: cwd.to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024,
             command_timeout: Some(Duration::from_secs(3)),
             total_timeout: Some(Duration::from_secs(5)),
+            ..flow::runtime::RunOptions::new(cwd.to_path_buf())
         }
     }
 

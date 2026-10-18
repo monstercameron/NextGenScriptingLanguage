@@ -439,7 +439,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     crate::capabilities::authorize_host_path(
                         registry,
                         &std::env::temp_dir(),
-                        true,
+                        crate::capabilities::HostAccess::Write,
                         &cwd,
                     )
                     .with_context(|| format!("line {}", step.line))?;
@@ -741,7 +741,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::UseFolder { path } => {
                     let folder = path_value(path, &bindings, &cwd)?;
-                    crate::capabilities::authorize_host_path(registry, &folder, false, &cwd)?;
+                    crate::capabilities::authorize_host_path(
+                        registry,
+                        &folder,
+                        crate::capabilities::HostAccess::Read,
+                        &cwd,
+                    )?;
                     cwd = enter_directory(registry, &folder, &cwd)?;
                     if !cwd.is_dir() {
                         bail!("line {}: use folder requires a directory", step.line);
@@ -774,7 +779,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     data = match &step.kind {
                         StepKind::Read { path, .. } => {
                             let path = path_value(path, &bindings, &cwd)?;
-                            crate::capabilities::authorize_host_path(registry, &path, false, &cwd)?;
+                            crate::capabilities::authorize_host_path(
+                                registry,
+                                &path,
+                                crate::capabilities::HostAccess::Read,
+                                &cwd,
+                            )?;
                             let file = File::open(&path).with_context(|| {
                                 format!("line {}: reading {}", step.line, path.display())
                             })?;
@@ -783,7 +793,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             // in after the first check cannot redirect the read.
                             let resolved = fs::canonicalize(&path)?;
                             crate::capabilities::authorize_host_path(
-                                registry, &resolved, false, &cwd,
+                                registry,
+                                &resolved,
+                                crate::capabilities::HostAccess::Read,
+                                &cwd,
                             )?;
                             verify_opened_identity(&file, &resolved)?;
                             Input::File(file)
@@ -1119,7 +1132,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         options.command_timeout,
                     )?;
                     let destination = path_value(path, &bindings, &cwd)?;
-                    crate::capabilities::authorize_host_path(registry, &destination, true, &cwd)?;
+                    crate::capabilities::authorize_host_path(
+                        registry,
+                        &destination,
+                        crate::capabilities::HostAccess::Write,
+                        &cwd,
+                    )?;
                     crate::security::authorize_persistence_set(
                         registry,
                         "workflow.append",
@@ -1198,7 +1216,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         options.command_timeout,
                     )?;
                     let destination = path_value(path, &bindings, &cwd)?;
-                    crate::capabilities::authorize_host_path(registry, &destination, true, &cwd)?;
+                    crate::capabilities::authorize_host_path(
+                        registry,
+                        &destination,
+                        crate::capabilities::HostAccess::Write,
+                        &cwd,
+                    )?;
                     crate::security::authorize_persistence_set(
                         registry,
                         "workflow.save",
@@ -1401,7 +1424,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     registry,
                                     &manifest.name,
                                     &directory,
-                                    false,
+                                    crate::capabilities::HostAccess::Read,
                                     &cwd,
                                 )
                                 .is_ok()
@@ -1409,7 +1432,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         registry,
                                         &manifest.name,
                                         &directory,
-                                        true,
+                                        crate::capabilities::HostAccess::Write,
                                         &cwd,
                                     )
                                     .is_ok();

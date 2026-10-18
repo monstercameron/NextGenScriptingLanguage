@@ -133,7 +133,12 @@ pub(super) fn open_redirect_target(
     signals: &Signals,
     cwd: &Path,
 ) -> Result<File> {
-    crate::capabilities::authorize_host_path(registry, destination, true, cwd)?;
+    crate::capabilities::authorize_host_path(
+        registry,
+        destination,
+        crate::capabilities::HostAccess::Write,
+        cwd,
+    )?;
     crate::security::authorize_persistence_set(
         registry,
         "workflow.redirect",
@@ -190,7 +195,12 @@ pub(super) fn open_output_file(
     // move the write outside the grant.
     let canonical = std::fs::canonicalize(destination)
         .with_context(|| format!("resolving {}", destination.display()))?;
-    crate::capabilities::authorize_host_path(registry, &canonical, true, cwd)?;
+    crate::capabilities::authorize_host_path(
+        registry,
+        &canonical,
+        crate::capabilities::HostAccess::Write,
+        cwd,
+    )?;
     // The grant applies to the file that was opened, not to a path looked up
     // again later: its identity must match the authorized path.
     #[cfg(unix)]

@@ -53,13 +53,9 @@ fn run(
         &program,
         registry,
         &RunOptions {
-            inputs: Default::default(),
-            working_directory: directory.to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 4 * 1024 * 1024,
             command_timeout: Some(timeout),
-            total_timeout: None,
+            ..RunOptions::new(directory.to_path_buf())
         },
         BTreeMap::new(),
         input,
@@ -299,13 +295,9 @@ fn benchmark_run_with_context_cat_payloads() {
     let registry = registry(directory.path(), "/bin/cat");
     let program = parser::parse("then worker\n").unwrap();
     let options = RunOptions {
-        inputs: Default::default(),
-        working_directory: directory.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 4 * 1024 * 1024,
         command_timeout: Some(Duration::from_secs(10)),
-        total_timeout: None,
+        ..RunOptions::new(directory.path().to_path_buf())
     };
     runtime::validate_with_inputs(&program, &registry, BTreeSet::new(), true).unwrap();
 

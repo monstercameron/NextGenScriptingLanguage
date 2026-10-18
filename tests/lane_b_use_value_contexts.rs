@@ -1,6 +1,6 @@
 //! `use value` inside a service body and across a checkpointed run and resume.
 use flow::{manifest::Registry, parser, runtime};
-use std::{collections::BTreeMap, fs, path::Path, path::PathBuf, process::Command, time::Duration};
+use std::{fs, path::Path, path::PathBuf, process::Command, time::Duration};
 
 fn manifests() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
@@ -15,13 +15,10 @@ fn service_body_feeds_a_value_to_the_next_command() {
         parser::parse("every 10 milliseconds\n  use value \"hi\"\n  then wc with flags [\"-c\"]\n")
             .unwrap();
     let options = runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: directory.path().to_owned(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024,
         command_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(Duration::from_secs(5)),
+        ..runtime::RunOptions::new(directory.path().to_owned())
     };
     let mut output = Vec::new();
     let result = runtime::run_service(

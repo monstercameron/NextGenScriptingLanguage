@@ -65,13 +65,9 @@ fn run_projection(root: &Path, manifest: JsonValue, operation: &str) -> Result<V
     let executor = RuntimeGraphExecutor::new(
         registry,
         RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: root.to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: Some(Duration::from_secs(3)),
-            total_timeout: None,
+            ..RunOptions::new(root.to_path_buf())
         },
     );
     let session = GraphSession::start(plan, Arc::new(executor), GraphRunOptions::default())?;
@@ -149,13 +145,9 @@ fn failed_non_enveloped_results_emit_no_event_and_retain_effect_certainty() -> R
     let executor = RuntimeGraphExecutor::new(
         registry,
         RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: root.path().to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: Some(Duration::from_secs(3)),
-            total_timeout: None,
+            ..RunOptions::new(root.path().to_path_buf())
         },
     );
     let session = GraphSession::start(plan, Arc::new(executor), GraphRunOptions::default())?;

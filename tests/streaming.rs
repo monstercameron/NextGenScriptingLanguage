@@ -148,13 +148,10 @@ fn runtime_options(
     total_timeout: Option<Duration>,
 ) -> runtime::RunOptions {
     runtime::RunOptions {
-        inputs: Default::default(),
-        working_directory: dir.path().to_owned(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024,
         command_timeout,
         total_timeout,
+        ..runtime::RunOptions::new(dir.path().to_owned())
     }
 }
 

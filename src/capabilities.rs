@@ -800,8 +800,8 @@ fn preflight_cache_paths(
         // A cache entry is opened for reading and may be atomically replaced
         // after the applet runs. Keep that authority applet-scoped so another
         // applet's path grant cannot authorize this cache operation.
-        authorize_applet_host_path(registry, &manifest.name, &directory, false, cwd)?;
-        authorize_applet_host_path(registry, &manifest.name, &directory, true, cwd)?;
+        authorize_applet_host_path(registry, &manifest.name, &directory, HostAccess::Read, cwd)?;
+        authorize_applet_host_path(registry, &manifest.name, &directory, HostAccess::Write, cwd)?;
     }
     Ok(())
 }
@@ -870,7 +870,7 @@ fn preflight_invocations_with_policy<'a>(
             // A relative target after a working-directory change is authorized when the
             // step runs, joined onto the directory it actually names (`enter_directory`).
             if !dynamic_cwd || Path::new(path).is_absolute() {
-                authorize_host_path(registry, Path::new(path), false, cwd)?;
+                authorize_host_path(registry, Path::new(path), HostAccess::Read, cwd)?;
             }
             continue;
         }
@@ -951,7 +951,7 @@ fn preflight_invocations_with_policy<'a>(
                         if !path.is_absolute() {
                             bail!("strict policy requires remote bearer-file paths to be absolute");
                         }
-                        authorize_applet_host_path(registry, name, path, false, cwd)?;
+                        authorize_applet_host_path(registry, name, path, HostAccess::Read, cwd)?;
                     }
                 }
             }
@@ -1496,13 +1496,20 @@ pub fn authorize_network_endpoint(
     Ok(())
 }
 
+/// Whether a host path is being read or written, for filesystem policy checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostAccess {
+    Read,
+    Write,
+}
+
 /// Guard host-language file operations that otherwise bypass a child sandbox.
 /// Explicit path grants are shared as the policy's host file authority, so a
 /// host read/save can happen only inside at least one declared read/write root.
 pub fn authorize_host_path(
     registry: &Registry,
     path: &Path,
-    write: bool,
+    access: HostAccess,
     cwd: &Path,
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
@@ -1514,7 +1521,7 @@ pub fn authorize_host_path(
         .ok()
         .is_some_and(|target| {
             policy.applets.values().any(|grant| {
-                let paths = if write {
+                let paths = if access == HostAccess::Write {
                     &grant.filesystem.write
                 } else {
                     &grant.filesystem.read
@@ -1525,7 +1532,7 @@ pub fn authorize_host_path(
                 })
             })
         });
-    let (action, risk) = if write {
+    let (action, risk) = if access == HostAccess::Write {
         ("filesystem.write", PolicyRisk::High)
     } else {
         ("filesystem.read", PolicyRisk::Elevated)
@@ -1562,7 +1569,7 @@ pub fn authorize_applet_host_path(
     registry: &Registry,
     applet_name: &str,
     path: &Path,
-    write: bool,
+    access: HostAccess,
     cwd: &Path,
 ) -> Result<()> {
     let configured = registry.host_state::<Option<CapabilityPolicy>>();
@@ -1574,13 +1581,13 @@ pub fn authorize_applet_host_path(
         record_policy_decision(
             registry,
             applet_name,
-            if write {
+            if access == HostAccess::Write {
                 "filesystem.write"
             } else {
                 "filesystem.read"
             },
             None,
-            if write {
+            if access == HostAccess::Write {
                 PolicyRisk::High
             } else {
                 PolicyRisk::Elevated
@@ -1591,7 +1598,7 @@ pub fn authorize_applet_host_path(
         bail!("capability policy has no allowlist entry for applet {applet_name:?}");
     };
     let target = canonicalize_for_grant(path, cwd).ok();
-    let paths = if write {
+    let paths = if access == HostAccess::Write {
         &grant.filesystem.write
     } else {
         &grant.filesystem.read
@@ -1601,7 +1608,7 @@ pub fn authorize_applet_host_path(
             canonicalize_for_grant(path, cwd).is_ok_and(|root| grant_contains(&root, target))
         })
     });
-    let (action, risk) = if write {
+    let (action, risk) = if access == HostAccess::Write {
         ("filesystem.write", PolicyRisk::High)
     } else {
         ("filesystem.read", PolicyRisk::Elevated)
@@ -1704,19 +1711,21 @@ fn preflight_host_paths(
             // A temporary scope creates its path under the system temporary directory,
             // so the policy must allow writing there before any scope is created.
             if matches!(step.kind, StepKind::TempScope { .. }) {
-                authorize_host_path(registry, &std::env::temp_dir(), true, cwd)?;
+                authorize_host_path(registry, &std::env::temp_dir(), HostAccess::Write, cwd)?;
                 continue;
             }
-            let (path, write) = match &step.kind {
-                StepKind::UseFolder { path } | StepKind::Read { path, .. } => (path, false),
-                StepKind::Save { path, .. } => (path, true),
-                StepKind::Append { path } => (path, true),
+            let (path, access) = match &step.kind {
+                StepKind::UseFolder { path } | StepKind::Read { path, .. } => {
+                    (path, HostAccess::Read)
+                }
+                StepKind::Save { path, .. } => (path, HostAccess::Write),
+                StepKind::Append { path } => (path, HostAccess::Write),
                 StepKind::Redirect {
                     path: Some(path), ..
-                } => (path, true),
+                } => (path, HostAccess::Write),
                 StepKind::LaunchDetached {
                     output: Some(path), ..
-                } => (path, true),
+                } => (path, HostAccess::Write),
                 StepKind::Invoke { call, .. }
                     if !call.direct
                         && registry.resolve_call(call)?.builtin
@@ -1725,7 +1734,7 @@ fn preflight_host_paths(
                     let path = call.parameters.get("path").ok_or_else(|| {
                         anyhow!("capability policy requires a literal path for the cd builtin")
                     })?;
-                    (path, false)
+                    (path, HostAccess::Read)
                 }
                 _ => continue,
             };
@@ -1738,7 +1747,7 @@ fn preflight_host_paths(
             // A relative target after a working-directory change is authorized when the
             // step runs, joined onto the directory it actually names.
             if !dynamic_cwd || path.is_absolute() {
-                authorize_host_path(registry, &path, write, cwd)?;
+                authorize_host_path(registry, &path, access, cwd)?;
             }
         }
         // `policy` is passed explicitly to make it clear this scan is active

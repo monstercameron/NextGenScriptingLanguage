@@ -5,7 +5,6 @@ use flow::contracts::{OutputEncoding, OutputType};
 use flow::manifest::Registry;
 use flow::{parser, runtime};
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -406,13 +405,9 @@ fn registered_contracts_declare_recursive_table_shapes_and_compose() {
         &parser::parse(source).unwrap(),
         &registry,
         &runtime::RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: cwd.path().to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: Some(Duration::from_secs(5)),
-            total_timeout: None,
+            ..runtime::RunOptions::new(cwd.path().to_path_buf())
         },
     )
     .unwrap();

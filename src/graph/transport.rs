@@ -2405,7 +2405,7 @@ impl RuntimeGraphExecutor {
                 &self.registry,
                 &manifest.name,
                 &path,
-                false,
+                crate::capabilities::HostAccess::Read,
                 &cwd,
             )?;
         }
@@ -2414,7 +2414,7 @@ impl RuntimeGraphExecutor {
                 &self.registry,
                 &manifest.name,
                 &path,
-                false,
+                crate::capabilities::HostAccess::Read,
                 &cwd,
             )?;
         }

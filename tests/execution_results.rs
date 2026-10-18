@@ -43,13 +43,8 @@ fn native_fixture() -> String {
 
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: cwd.to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
-        command_timeout: None,
-        total_timeout: None,
+        ..runtime::RunOptions::new(cwd.to_path_buf())
     }
 }
 

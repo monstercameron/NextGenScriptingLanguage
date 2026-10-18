@@ -704,7 +704,12 @@ fn run_service_with_signals(
             StepKind::UseFolder { path } => {
                 let folder = path_value(&path, &options.inputs, &cwd)?;
                 stopped(&signals)?;
-                crate::capabilities::authorize_host_path(registry, &folder, false, &cwd)?;
+                crate::capabilities::authorize_host_path(
+                    registry,
+                    &folder,
+                    crate::capabilities::HostAccess::Read,
+                    &cwd,
+                )?;
                 stopped(&signals)?;
                 cwd = fs::canonicalize(folder)?;
                 stopped(&signals)?;
@@ -719,7 +724,12 @@ fn run_service_with_signals(
                     arguments_for_call(&call, registry.resolve_call(&call)?, &options.inputs)?;
                 let destination = cwd.join(&args[0]);
                 stopped(&signals)?;
-                crate::capabilities::authorize_host_path(registry, &destination, false, &cwd)?;
+                crate::capabilities::authorize_host_path(
+                    registry,
+                    &destination,
+                    crate::capabilities::HostAccess::Read,
+                    &cwd,
+                )?;
                 stopped(&signals)?;
                 cwd = fs::canonicalize(destination)
                     .with_context(|| format!("line {}: cd to {:?}", step.line, args[0]))?;
@@ -733,7 +743,6 @@ fn run_service_with_signals(
     }
     let options = RunOptions {
         inputs: options.inputs.clone(),
-        working_directory: cwd,
         cache_directory: options
             .cache_directory
             .as_ref()
@@ -742,6 +751,7 @@ fn run_service_with_signals(
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
+        ..RunOptions::new(cwd)
     };
     let mut journal = if let Some(checkpoint) = checkpoint {
         stopped(&signals)?;
@@ -756,7 +766,7 @@ fn run_service_with_signals(
         crate::capabilities::authorize_host_path(
             registry,
             &checkpoint.directory,
-            true,
+            crate::capabilities::HostAccess::Write,
             &configured_cwd,
         )?;
         stopped(&signals)?;
@@ -1089,13 +1099,9 @@ mod tests {
         let program =
             crate::parser::parse("every 60 seconds\n  then encode \"ready\" as json\n").unwrap();
         let options = RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: std::env::current_dir().unwrap(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024,
-            command_timeout: None,
             total_timeout: Some(Duration::from_millis(25)),
+            ..RunOptions::new(std::env::current_dir().unwrap())
         };
         let started = Instant::now();
         let result = run_service_with_schedule_options(

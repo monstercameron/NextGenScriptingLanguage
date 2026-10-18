@@ -42,13 +42,12 @@ fn start_producer(shared: &Arc<Shared>, options: &RunOptions, epoch: u64) -> Res
     state.producer_error = None;
     let bindings = state.doc.node_state().bindings;
     let options = RunOptions {
-        inputs: Default::default(),
-        working_directory: state.doc.cwd.clone(),
         cache_directory: options.cache_directory.clone(),
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
+        ..RunOptions::new(state.doc.cwd.clone())
     };
     drop(state);
     let control = shared.clone();
@@ -486,13 +485,12 @@ fn run_stream(
     cancel: Arc<AtomicBool>,
 ) -> Result<usize> {
     let options = RunOptions {
-        inputs: Default::default(),
-        working_directory: context.cwd,
         cache_directory: options.cache_directory.clone(),
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
+        ..RunOptions::new(context.cwd)
     };
     // Persistent streams retain their original native argv until cancellation/restart.
     runtime::live::stream(

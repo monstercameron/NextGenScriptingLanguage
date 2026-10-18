@@ -485,13 +485,12 @@ impl App {
             focused: 0,
             registry: Arc::new(registry.clone()),
             options: RunOptions {
-                inputs: Default::default(),
-                working_directory: options.working_directory.clone(),
                 cache_directory: options.cache_directory.clone(),
                 trace: options.trace,
                 max_output_bytes: options.max_output_bytes,
                 command_timeout: Some(options.command_timeout.unwrap_or(Duration::from_secs(30))),
                 total_timeout: options.total_timeout,
+                ..RunOptions::new(options.working_directory.clone())
             },
             sender,
             receiver,
@@ -651,13 +650,12 @@ impl App {
                 }
                 let registry = self.registry.clone();
                 let options = RunOptions {
-                    inputs: Default::default(),
-                    working_directory: self.options.working_directory.clone(),
                     cache_directory: self.options.cache_directory.clone(),
                     trace: self.options.trace,
                     max_output_bytes: self.options.max_output_bytes,
                     command_timeout: self.options.command_timeout,
                     total_timeout: self.options.total_timeout,
+                    ..RunOptions::new(self.options.working_directory.clone())
                 };
                 execution.parsed_data = None;
                 let bindings = std::mem::take(&mut execution.bindings);
@@ -2130,13 +2128,8 @@ mod tests {
         let screen =
             super::super::syntax::parse(include_str!("../../examples/top-cpu.program")).unwrap();
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: root.to_owned(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
-            command_timeout: None,
-            total_timeout: None,
+            ..RunOptions::new(root.to_owned())
         };
         let mut app = App::new(&screen, &registry, &options);
         let (instance_index, widget_index) = app
@@ -2265,13 +2258,8 @@ mod tests {
         let registry = Registry::load(&root.join("manifests")).unwrap();
         super::super::syntax::validate(&screen, &registry).unwrap();
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: root.to_owned(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 4096,
-            command_timeout: None,
-            total_timeout: None,
+            ..RunOptions::new(root.to_owned())
         };
         let mut app = App::new(&screen, &registry, &options);
         for value in 0..125 {
@@ -2306,13 +2294,8 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let registry = Registry::load(&root.join("manifests")).unwrap();
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: root.to_owned(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 4096,
-            command_timeout: None,
-            total_timeout: None,
+            ..RunOptions::new(root.to_owned())
         };
         let mut app = App::new(&screen, &registry, &options);
         app.advance(true);
@@ -2334,13 +2317,8 @@ mod tests {
             &screen,
             &registry,
             &RunOptions {
-                inputs: Default::default(),
-                working_directory: root.to_owned(),
-                cache_directory: None,
-                trace: false,
                 max_output_bytes: 4096,
-                command_timeout: None,
-                total_timeout: None,
+                ..RunOptions::new(root.to_owned())
             },
         )
     }
@@ -3081,13 +3059,8 @@ mod tests {
         let source = include_str!("../../examples/github-stars.program");
         let screen = super::super::syntax::parse(source).unwrap();
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: root.to_owned(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
-            command_timeout: None,
-            total_timeout: None,
+            ..RunOptions::new(root.to_owned())
         };
         let mut app = App::new(&screen, &registry, &options);
         for instance in &mut app.instances {
@@ -3170,13 +3143,8 @@ mod tests {
         let source = include_str!("../../examples/top-cpu.program");
         let screen = super::super::syntax::parse(source).unwrap();
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: root.to_owned(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
-            command_timeout: None,
-            total_timeout: None,
+            ..RunOptions::new(root.to_owned())
         };
         let mut app = App::new(&screen, &registry, &options);
         for instance in &mut app.instances {
@@ -3262,13 +3230,8 @@ mod tests {
         let source = include_str!("../../examples/top-cpu.program");
         let screen = super::super::syntax::parse(source).unwrap();
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: root.to_owned(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
-            command_timeout: None,
-            total_timeout: None,
+            ..RunOptions::new(root.to_owned())
         };
         let mut app = App::new(&screen, &registry, &options);
         for instance in &mut app.instances {

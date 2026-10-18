@@ -704,13 +704,10 @@ fn run_mixed_stress(total: usize, window_ms: u64, evidence: &mut Evidence) -> Re
             .context("preloading scheduled program module")?,
     );
     let run_options = RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: fixture.root.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(Duration::from_secs(15)),
+        ..RunOptions::new(fixture.root.path().to_path_buf())
     };
     let runtime = RuntimeGraphExecutor::with_module_session(
         fixture.registry.clone(),

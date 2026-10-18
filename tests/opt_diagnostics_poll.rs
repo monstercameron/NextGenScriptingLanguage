@@ -39,13 +39,9 @@ fn run(
         &program,
         registry,
         &flow::runtime::RunOptions {
-            inputs: Default::default(),
-            working_directory: directory.to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: Some(timeout),
-            total_timeout: None,
+            ..flow::runtime::RunOptions::new(directory.to_path_buf())
         },
         BTreeMap::new(),
         Vec::new(),

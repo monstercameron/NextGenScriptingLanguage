@@ -184,12 +184,9 @@ fn report_release_allocation_counts() {
                 ("padding".into(), Value::String("x".repeat(4 * 1024 * 1024))),
             ])),
         )]),
-        working_directory: directory.path().into(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 32,
         command_timeout: Some(std::time::Duration::from_secs(5)),
-        total_timeout: None,
+        ..runtime::RunOptions::new(directory.path().into())
     };
     let checked = runtime::run(&input_program, &registry, &input_options).unwrap();
     assert_eq!(checked.output, b"42");
@@ -381,13 +378,8 @@ fn report_release_allocation_counts() {
         let source_path = checkpoint_root.path().join(format!("{name}.program"));
         std::fs::write(&source_path, source).unwrap();
         let options = runtime::RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: checkpoint_root.path().into(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 32,
-            command_timeout: None,
-            total_timeout: None,
+            ..runtime::RunOptions::new(checkpoint_root.path().into())
         };
         let mut checkpoint = runtime::CheckpointOptions {
             directory: checkpoint_root.path().join(name),

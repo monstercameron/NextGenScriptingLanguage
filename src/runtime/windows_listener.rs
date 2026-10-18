@@ -222,13 +222,9 @@ mod native_listener_tests {
         };
         let signals = Signals::with_cancellation(Arc::new(AtomicBool::new(false)), false).unwrap();
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: directory.path().to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024,
             command_timeout: Some(Duration::from_secs(1)),
-            total_timeout: None,
+            ..RunOptions::new(directory.path().to_path_buf())
         };
         let mut output = Vec::new();
         let mut result = ServiceResult::default();
@@ -289,13 +285,9 @@ mod native_listener_tests {
         });
         let signals = Signals::with_cancellation(cancelled, false).unwrap();
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: directory.path().to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024,
             command_timeout: Some(Duration::from_secs(1)),
-            total_timeout: None,
+            ..RunOptions::new(directory.path().to_path_buf())
         };
         let started = Instant::now();
         let result = listen(

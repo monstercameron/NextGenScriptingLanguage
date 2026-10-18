@@ -560,16 +560,13 @@ fn dispatch(
             run_mode: mode == Mode::Run,
         });
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: shared.initial_cwd.clone(),
             cache_directory: opts
                 .flags
                 .get("--cache-dir")
                 .map(|p| shared.initial_cwd.join(p)),
-            trace: false,
             max_output_bytes: max_bytes,
             command_timeout: timeout,
-            total_timeout: None,
+            ..RunOptions::new(shared.initial_cwd.clone())
         };
         return serve(&socket, shared, options, mode);
     }

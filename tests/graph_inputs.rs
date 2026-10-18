@@ -23,12 +23,9 @@ fn echo_registry() -> Registry {
 fn options(cwd: &Path, inputs: BTreeMap<String, Value>) -> RunOptions {
     RunOptions {
         inputs,
-        working_directory: cwd.to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(5)),
-        total_timeout: None,
+        ..RunOptions::new(cwd.to_path_buf())
     }
 }
 

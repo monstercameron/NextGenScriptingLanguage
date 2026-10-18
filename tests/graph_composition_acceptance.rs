@@ -611,13 +611,9 @@ fn make_generation(
         plan.invocations(),
     )?);
     let run_options = RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: root.to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024 * 1024,
         command_timeout: Some(Duration::from_secs(8)),
-        total_timeout: None,
+        ..RunOptions::new(root.to_path_buf())
     };
     let runtime =
         RuntimeGraphExecutor::with_module_session(registry.clone(), run_options, module_session);
@@ -1027,13 +1023,9 @@ fn native_listener_projects_imported_finite_program_result_to_typed_event() -> R
     let executor = RuntimeGraphExecutor::with_module_session(
         registry,
         RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: root.path().to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: Some(Duration::from_secs(3)),
-            total_timeout: None,
+            ..RunOptions::new(root.path().to_path_buf())
         },
         module_session,
     );
@@ -1113,13 +1105,9 @@ fn remote_typed_events_flow_through_imported_module_result_projection_and_cancel
     let executor = RuntimeGraphExecutor::with_module_session(
         registry,
         RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: root.path().to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: Some(Duration::from_secs(3)),
-            total_timeout: None,
+            ..RunOptions::new(root.path().to_path_buf())
         },
         module_session,
     );

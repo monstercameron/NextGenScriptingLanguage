@@ -25,13 +25,10 @@ fn applet_listener_uses_its_child_scoped_environment_overlay() {
     )
     .unwrap();
     let options = runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: directory.path().to_owned(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024,
         command_timeout: Some(Duration::from_secs(2)),
         total_timeout: Some(Duration::from_secs(2)),
+        ..runtime::RunOptions::new(directory.path().to_owned())
     };
     let mut output = Vec::new();
     let result = runtime::run_service(

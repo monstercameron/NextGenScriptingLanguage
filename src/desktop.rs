@@ -859,10 +859,21 @@ impl PrivateRendererAssets {
         cwd: &Path,
     ) -> Result<()> {
         verify_private_runtime_directory(runtime_dir)?;
-        capabilities::authorize_host_path(registry, runtime_dir, true, cwd)
-            .context("authorizing host write for private Quickshell assets")?;
-        capabilities::authorize_applet_host_path(registry, POLICY_APPLET, runtime_dir, false, cwd)
-            .context("authorizing Quickshell child read for private assets")?;
+        capabilities::authorize_host_path(
+            registry,
+            runtime_dir,
+            capabilities::HostAccess::Write,
+            cwd,
+        )
+        .context("authorizing host write for private Quickshell assets")?;
+        capabilities::authorize_applet_host_path(
+            registry,
+            POLICY_APPLET,
+            runtime_dir,
+            capabilities::HostAccess::Read,
+            cwd,
+        )
+        .context("authorizing Quickshell child read for private assets")?;
         Ok(())
     }
 

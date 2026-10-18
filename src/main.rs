@@ -624,12 +624,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             "run" | "resume" => {
                 let options = RunOptions {
                     inputs,
-                    working_directory: env::current_dir()?,
                     cache_directory: args.cache_dir,
                     trace: args.trace,
                     max_output_bytes: args.max_output_bytes,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
+                    ..RunOptions::new(env::current_dir()?)
                 };
                 let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let _signal_registration =
@@ -720,13 +720,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             bail!("UI programs do not support resume, checkpoints, or listener record limits");
         }
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: env::current_dir()?,
             cache_directory: args.cache_dir,
             trace: args.trace,
             max_output_bytes: args.max_output_bytes,
             command_timeout: args.command_timeout,
             total_timeout: args.total_timeout,
+            ..RunOptions::new(env::current_dir()?)
         };
         return match args.command.as_str() {
             "check" => Ok(()),
@@ -867,12 +866,12 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             "run" => {
                 let options = RunOptions {
                     inputs,
-                    working_directory: env::current_dir()?,
                     cache_directory: args.cache_dir,
                     trace: args.trace,
                     max_output_bytes: args.max_output_bytes,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
+                    ..RunOptions::new(env::current_dir()?)
                 };
                 let mut emit =
                     |bytes: &[u8],
@@ -1147,13 +1146,14 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             // Each runtime entrypoint validates before starting effects.
             let options = RunOptions {
                 inputs,
-                working_directory: env::current_dir()
-                    .context("could not determine current directory")?,
                 cache_directory: args.cache_dir,
                 trace: args.trace,
                 max_output_bytes: args.max_output_bytes,
                 command_timeout: args.command_timeout,
                 total_timeout: args.total_timeout,
+                ..RunOptions::new(
+                    env::current_dir().context("could not determine current directory")?,
+                )
             };
             if args.once {
                 if args.checkpoint_dir.is_some() {

@@ -13,13 +13,9 @@ use std::{
 
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {
-        inputs: Default::default(),
-        working_directory: cwd.to_owned(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 4 * 1024 * 1024,
         command_timeout: Some(Duration::from_secs(10)),
-        total_timeout: None,
+        ..runtime::RunOptions::new(cwd.to_owned())
     }
 }
 

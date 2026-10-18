@@ -13,12 +13,10 @@ fn execute(source: &str, inputs: BTreeMap<String, Value>) -> Result<Vec<u8>> {
         &registry,
         &RunOptions {
             inputs,
-            working_directory: directory.path().to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024 * 1024,
             command_timeout: Some(std::time::Duration::from_secs(5)),
             total_timeout: Some(std::time::Duration::from_secs(10)),
+            ..RunOptions::new(directory.path().to_path_buf())
         },
     )?;
     Ok(result.output)

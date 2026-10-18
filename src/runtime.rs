@@ -108,6 +108,22 @@ pub struct RunOptions {
     /// Maximum lifetime of the full runtime operation, including scheduler waits.
     pub total_timeout: Option<Duration>,
 }
+
+impl RunOptions {
+    /// Options for a run in `working_directory` with no inputs, cache, trace or
+    /// timeouts, and a 1 MiB output limit.
+    pub fn new(working_directory: PathBuf) -> Self {
+        Self {
+            inputs: BTreeMap::new(),
+            working_directory,
+            cache_directory: None,
+            trace: false,
+            max_output_bytes: 1024 * 1024,
+            command_timeout: None,
+            total_timeout: None,
+        }
+    }
+}
 #[derive(Debug)]
 struct CommandTimedOut;
 impl std::fmt::Display for CommandTimedOut {
@@ -292,12 +308,12 @@ fn configured_inputs<'a>(
     // input tree only to discard that copy when replacing the inputs field.
     let configured = RunOptions {
         inputs: crate::inputs::resolve(&program.inputs, &options.inputs, false)?,
-        working_directory: options.working_directory.clone(),
         cache_directory: options.cache_directory.clone(),
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
+        ..RunOptions::new(options.working_directory.clone())
     };
     preflight_inputs(program, registry, &configured.inputs)?;
     Ok(Cow::Owned(configured))
@@ -2658,7 +2674,7 @@ fn execute_remote_applet(
             registry,
             &manifest.name,
             &path,
-            false,
+            crate::capabilities::HostAccess::Read,
             cwd,
         )?;
     }
@@ -2667,7 +2683,7 @@ fn execute_remote_applet(
             registry,
             &manifest.name,
             &path,
-            false,
+            crate::capabilities::HostAccess::Read,
             cwd,
         )?;
     }
@@ -4708,13 +4724,10 @@ mod drain_tests {
 
     fn options(directory: &Path) -> RunOptions {
         RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: directory.to_owned(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 4096,
             command_timeout: Some(Duration::from_secs(5)),
             total_timeout: Some(Duration::from_secs(10)),
+            ..RunOptions::new(directory.to_owned())
         }
     }
 

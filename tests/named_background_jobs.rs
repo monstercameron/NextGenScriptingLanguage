@@ -1,7 +1,6 @@
 use flow::ast::StepKind;
 use flow::{manifest::Registry, parser, runtime};
 use serde_json::{json, Value as Json};
-use std::collections::BTreeMap;
 use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
@@ -9,13 +8,10 @@ use std::time::Duration;
 
 fn options(cwd: &Path, max_output_bytes: usize) -> runtime::RunOptions {
     runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: cwd.to_owned(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes,
         command_timeout: Some(Duration::from_secs(10)),
         total_timeout: Some(Duration::from_secs(15)),
+        ..runtime::RunOptions::new(cwd.to_owned())
     }
 }
 

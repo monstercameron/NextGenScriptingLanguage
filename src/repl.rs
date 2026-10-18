@@ -190,13 +190,8 @@ impl<'a> Session<'a> {
         self.observer.begin(boundary, earlier);
         let guard = runtime::observe::install(self.observer.clone())?;
         let options = RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: self.working_directory.clone(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 16 * 1024 * 1024,
-            command_timeout: None,
-            total_timeout: None,
+            ..RunOptions::new(self.working_directory.clone())
         };
         let result =
             runtime::with_streamed_stdout(|| runtime::run(&program, self.registry, &options));

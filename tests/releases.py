@@ -646,6 +646,28 @@ class SoakAssertions(unittest.TestCase):
         self.assertEqual(soak.violations(samples, 2, self.LIMITS), [])
 
 
+class SoakPauseSamples(unittest.TestCase):
+    """A sample taken during a live pause is judged on its own, not against the steady state."""
+
+    def test_pause_phase_samples_hold_the_previous_steady_value(self):
+        import soak
+
+        samples = [(1000, 2, 4), (1000, 2, 10), (1000, 2, 4), (1000, 2, 4)]
+        paused = [False, True, False, False]
+        steady = soak.steady_samples(samples, paused)
+        self.assertEqual(len(steady), len(samples))
+        self.assertEqual(soak.violations(steady, 0, {"rss_growth_pct": 10.0, "fd_slack": 2, "thread_slack": 1}), [])
+
+    def test_steady_growth_still_fails_after_the_pause_phase(self):
+        import soak
+
+        samples = [(1000, 2, 4), (1000, 2, 10), (1000, 2, 9), (1000, 2, 9)]
+        paused = [False, True, False, False]
+        steady = soak.steady_samples(samples, paused)
+        failures = soak.violations(steady, 0, {"rss_growth_pct": 10.0, "fd_slack": 2, "thread_slack": 1})
+        self.assertTrue(any("descriptors rose" in failure for failure in failures), failures)
+
+
 class SoakRunAssertions(unittest.TestCase):
     """The graph soak compares per-run peaks: first third against last third."""
 

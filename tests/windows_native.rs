@@ -443,13 +443,9 @@ fn captured_stderr_flood_cannot_starve_native_deadlines() {
     let folder = tempfile::tempdir().unwrap();
     let program = flow::parser::parse(&native(&["stderr-flood"])).unwrap();
     let options = flow::runtime::RunOptions {
-        inputs: Default::default(),
-        working_directory: folder.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024,
         command_timeout: Some(Duration::from_millis(150)),
-        total_timeout: None,
+        ..flow::runtime::RunOptions::new(folder.path().to_path_buf())
     };
     let started = Instant::now();
     let result = flow::runtime::run_with_context(

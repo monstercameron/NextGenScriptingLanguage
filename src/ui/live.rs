@@ -610,13 +610,11 @@ pub(crate) fn run(shared: Arc<Shared>, options: &RunOptions) -> Result<()> {
         if rebuilding {
             source_epoch = state.ui_epoch;
             let options = RunOptions {
-                inputs: Default::default(),
-                working_directory: state.doc.cwd.clone(),
                 cache_directory: options.cache_directory.clone(),
-                trace: false,
                 max_output_bytes: options.max_output_bytes,
                 command_timeout: options.command_timeout,
                 total_timeout: options.total_timeout,
+                ..RunOptions::new(state.doc.cwd.clone())
             };
             app = Some(App::new(&screen, &shared.registry, &options));
             state.ui_dirty = true;
@@ -1010,13 +1008,9 @@ mod bench {
             screen,
             &Registry::default(),
             &RunOptions {
-                inputs: BTreeMap::new(),
-                working_directory: ".".into(),
-                cache_directory: None,
-                trace: false,
                 max_output_bytes: 1024 * 1024,
                 command_timeout: Some(Duration::from_secs(5)),
-                total_timeout: None,
+                ..RunOptions::new(".".into())
             },
         )
     }

@@ -2,7 +2,7 @@ use flow::{
     capabilities::{
         authorize_environment_variable, authorize_host_path, effective_environment,
         filter_environment, policy_fingerprint, preflight_with_cache_directory, AppletGrant,
-        CapabilityPolicy, ContractView, FilesystemGrant,
+        CapabilityPolicy, ContractView, FilesystemGrant, HostAccess,
     },
     manifest::Registry,
 };
@@ -419,8 +419,8 @@ fn decisions_record_approvals_and_denials_without_paths_or_environment_names() {
         applets: BTreeMap::from([("fixture.read".into(), configured)]),
     }));
 
-    authorize_host_path(&registry, &allowed_path, false, directory.path()).unwrap();
-    authorize_host_path(&registry, &denied_path, false, directory.path()).unwrap_err();
+    authorize_host_path(&registry, &allowed_path, HostAccess::Read, directory.path()).unwrap();
+    authorize_host_path(&registry, &denied_path, HostAccess::Read, directory.path()).unwrap_err();
     authorize_environment_variable(&registry, "fixture.read", "API_SECRET_CANARY").unwrap_err();
 
     let decisions = policy_decisions(&registry);
@@ -458,14 +458,26 @@ fn host_path_grants_are_canonical_and_directional() {
         applets: BTreeMap::from([("fixture.read".into(), configured)]),
     }));
     let cwd = directory.path();
-    authorize_host_path(&registry, &read_root.join("source.txt"), false, cwd).unwrap();
-    authorize_host_path(&registry, &write_root.join("result.txt"), true, cwd).unwrap();
-    assert!(authorize_host_path(&registry, &read_root, true, cwd).is_err());
-    assert!(authorize_host_path(&registry, &write_root, false, cwd).is_err());
+    authorize_host_path(
+        &registry,
+        &read_root.join("source.txt"),
+        HostAccess::Read,
+        cwd,
+    )
+    .unwrap();
+    authorize_host_path(
+        &registry,
+        &write_root.join("result.txt"),
+        HostAccess::Write,
+        cwd,
+    )
+    .unwrap();
+    assert!(authorize_host_path(&registry, &read_root, HostAccess::Write, cwd).is_err());
+    assert!(authorize_host_path(&registry, &write_root, HostAccess::Read, cwd).is_err());
     assert!(authorize_host_path(
         &registry,
         &directory.path().join("input/../../outside.txt"),
-        false,
+        HostAccess::Read,
         cwd
     )
     .is_err());
@@ -477,10 +489,13 @@ fn host_path_grants_are_canonical_and_directional() {
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("secret.txt"), b"hidden").unwrap();
         symlink(&outside, read_root.join("escape")).unwrap();
-        assert!(
-            authorize_host_path(&registry, &read_root.join("escape/secret.txt"), false, cwd)
-                .is_err()
-        );
+        assert!(authorize_host_path(
+            &registry,
+            &read_root.join("escape/secret.txt"),
+            HostAccess::Read,
+            cwd
+        )
+        .is_err());
     }
 }
 
@@ -525,7 +540,7 @@ fn applet_file_reads_cannot_borrow_another_applets_path_grant() {
         &registry,
         "allowed.reader",
         &read_root.join("token"),
-        false,
+        HostAccess::Read,
         directory.path(),
     )
     .unwrap();
@@ -533,7 +548,7 @@ fn applet_file_reads_cannot_borrow_another_applets_path_grant() {
         &registry,
         "remote.lookup",
         &read_root.join("token"),
-        false,
+        HostAccess::Read,
         directory.path(),
     )
     .is_err());
@@ -621,13 +636,9 @@ fn whole_program_preflight_denies_later_applet_before_prior_spawn() {
     }));
     let program = parser::parse("run allowed.first\nrun denied.later\n").unwrap();
     let options = runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: directory.path().into(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024,
         command_timeout: Some(Duration::from_secs(2)),
-        total_timeout: None,
+        ..runtime::RunOptions::new(directory.path().into())
     };
     let error = runtime::run(&program, &registry, &options)
         .err()
@@ -679,13 +690,9 @@ fn policy_preflight_rejects_later_unlisted_applet_before_prior_save() {
         parser::parse("run allowed.first\nthen save to file \"early.txt\"\nrun denied.later\n")
             .unwrap();
     let options = runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: directory.path().into(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024,
         command_timeout: Some(Duration::from_secs(2)),
-        total_timeout: None,
+        ..runtime::RunOptions::new(directory.path().into())
     };
     let error = runtime::run(&program, &registry, &options)
         .err()
@@ -748,13 +755,9 @@ fn strict_policy_rejects_effectful_in_process_alias_before_prior_spawn() {
     }));
     let program = parser::parse("run allowed.first\nrun fs.read with path \"secret\"\n").unwrap();
     let options = runtime::RunOptions {
-        inputs: BTreeMap::new(),
-        working_directory: directory.path().into(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: 1024,
         command_timeout: Some(Duration::from_secs(2)),
-        total_timeout: None,
+        ..runtime::RunOptions::new(directory.path().into())
     };
     let error = runtime::run(&program, &registry, &options)
         .err()

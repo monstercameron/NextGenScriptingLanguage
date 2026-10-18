@@ -38,13 +38,12 @@ pub(crate) fn execute_node(
         deadline_after(options.total_timeout, "total timeout")?,
     )?;
     let options = RunOptions {
-        inputs: Default::default(),
-        working_directory: state.cwd,
         cache_directory: options.cache_directory.clone(),
         trace: options.trace,
         max_output_bytes: options.max_output_bytes,
         command_timeout: options.command_timeout,
         total_timeout: options.total_timeout,
+        ..RunOptions::new(state.cwd)
     };
     crate::capabilities::preflight(node, registry, &options.working_directory)?;
     // run_finite_state replaces this slot on success; errors publish no state.

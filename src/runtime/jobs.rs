@@ -959,13 +959,9 @@ mod tests {
         };
         let registry = Registry::default();
         let options = RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: directory.path().to_owned(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024,
             command_timeout: Some(Duration::from_secs(2)),
-            total_timeout: None,
+            ..RunOptions::new(directory.path().to_owned())
         };
         let signals = Signals::with_cancellation_and_deadline(
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1025,13 +1021,10 @@ mod tests {
         let registry = Registry::default();
         let cwd = directory.path().to_owned();
         let options = RunOptions {
-            inputs: BTreeMap::new(),
-            working_directory: directory.path().to_owned(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 1024,
             command_timeout: Some(Duration::from_secs(3)),
             total_timeout: Some(Duration::from_secs(5)),
+            ..RunOptions::new(directory.path().to_owned())
         };
         let mut signals = Signals::with_cancellation_and_deadline(
             Arc::new(std::sync::atomic::AtomicBool::new(false)),

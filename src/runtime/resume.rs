@@ -731,7 +731,12 @@ pub fn run_checkpointed(
     authorize_checkpoint_persistence(registry, &sensitivity_floor)?;
     let mut checkpoint = checkpoint.clone();
     checkpoint.directory = cwd.join(&checkpoint.directory);
-    crate::capabilities::authorize_host_path(registry, &checkpoint.directory, true, &cwd)?;
+    crate::capabilities::authorize_host_path(
+        registry,
+        &checkpoint.directory,
+        crate::capabilities::HostAccess::Write,
+        &cwd,
+    )?;
     let mut journal = Journal::open_with_inputs(
         &checkpoint,
         &cwd,

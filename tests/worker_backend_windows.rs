@@ -353,13 +353,9 @@ fn typed_worker_output_flows_through_the_runtime_contract() {
     });
     let registry = manifest::Registry::from_sources(&[source.to_string()]).unwrap();
     let options = runtime::RunOptions {
-        inputs: Default::default(),
-        working_directory: directory.path().to_path_buf(),
-        cache_directory: None,
-        trace: false,
         max_output_bytes: MAX_FRAME,
         command_timeout: Some(Duration::from_secs(5)),
-        total_timeout: None,
+        ..runtime::RunOptions::new(directory.path().to_path_buf())
     };
     let program = parser::parse(
         "run worker.fixture as result\ntake integer at \"/n\" from result as number\nthen encode number as json\n",

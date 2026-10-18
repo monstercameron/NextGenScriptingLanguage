@@ -54,13 +54,9 @@ fn run_with_input_and_limit(
         &program,
         registry,
         &flow::runtime::RunOptions {
-            inputs: Default::default(),
-            working_directory: directory.to_path_buf(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes,
             command_timeout: Some(command_timeout),
-            total_timeout: None,
+            ..flow::runtime::RunOptions::new(directory.to_path_buf())
         },
         BTreeMap::new(),
         input,

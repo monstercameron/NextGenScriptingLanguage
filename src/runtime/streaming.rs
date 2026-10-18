@@ -479,13 +479,9 @@ mod tests {
             crate::stream::parse("stream from fail\ntake the first 1 lines\nshow each line\n")
                 .unwrap();
         let options = RunOptions {
-            inputs: Default::default(),
-            working_directory: directory.path().into(),
-            cache_directory: None,
-            trace: false,
             max_output_bytes: 8,
             command_timeout: Some(Duration::from_secs(3)),
-            total_timeout: None,
+            ..RunOptions::new(directory.path().into())
         };
         let mut emitted = Vec::new();
         let result = run_stream(&program, &registry, &options, 8, |bytes, _, _| {

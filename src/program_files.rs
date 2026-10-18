@@ -197,12 +197,15 @@ impl Loader<'_> {
 /// are, through the capability policy.
 #[cfg(not(target_arch = "wasm32"))]
 fn authorize_read(access: Access<'_>, canonical: &Path, shown: &str, line: usize) -> Result<()> {
-    crate::capabilities::authorize_host_path(access.registry, canonical, false, access.cwd)
-        .with_context(|| {
-            format!(
-                "line {line}: reading program file {shown} is not allowed by the capability policy"
-            )
-        })
+    crate::capabilities::authorize_host_path(
+        access.registry,
+        canonical,
+        crate::capabilities::HostAccess::Read,
+        access.cwd,
+    )
+    .with_context(|| {
+        format!("line {line}: reading program file {shown} is not allowed by the capability policy")
+    })
 }
 
 /// A build without a host filesystem cannot read a called file at all.

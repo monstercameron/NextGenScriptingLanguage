@@ -11,6 +11,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -70,7 +71,7 @@ pub fn cli(arguments: &[String]) -> Result<i32> {
 
     let (read_ok, read) = live(&exe, &["read", "/runtime", "--socket", &socket])?;
     if !read_ok {
-        println!("{read}");
+        writeln!(io::stdout(), "{read}")?;
         return Ok(1);
     }
     let revision = read["revision"]
@@ -84,7 +85,7 @@ pub fn cli(arguments: &[String]) -> Result<i32> {
             "revision": revision,
             "runtime": read.get("result").cloned().unwrap_or(Value::Null),
         });
-        println!("{object}");
+        writeln!(io::stdout(), "{object}")?;
         return Ok(0);
     };
 
@@ -108,7 +109,7 @@ pub fn cli(arguments: &[String]) -> Result<i32> {
         "applied": control_ok,
         "response": response,
     });
-    println!("{object}");
+    writeln!(io::stdout(), "{object}")?;
     Ok(if control_ok { 0 } else { 1 })
 }
 

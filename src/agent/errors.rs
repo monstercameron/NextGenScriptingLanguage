@@ -1,9 +1,10 @@
 //! `--json-errors`: a structured JSON object as the final stderr line of a
 //! failed run.
 //!
-//! The flag is global. It is removed from the argument list before parsing, and
-//! it changes only how the final error is written. Exit statuses are unchanged.
-//! A bare `--json-errors` argument therefore cannot be passed to a program.
+//! The flag is recognised only before the first `--`. It is removed from the
+//! option arguments before parsing, and changes only how the final error is
+//! written. Exit statuses are unchanged. After `--`, the same spelling is a
+//! literal program argument.
 //!
 //! Child stderr is forwarded unchanged, in both modes. A failing command's own
 //! stderr is written first, as usual. Only Execute's `execute: …` diagnostic

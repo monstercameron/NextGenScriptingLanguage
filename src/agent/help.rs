@@ -8,6 +8,7 @@ use crate::ast::{InputDeclaration, InputSource, InputType, Program, Value as Pro
 use crate::terminal_text::escape_controls;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
+use std::io::{self, Write};
 use std::path::Path;
 
 /// Protocol identifier of the `--json` object.
@@ -16,6 +17,22 @@ const USAGE: &str = "usage: execute help FILE [--json]";
 
 /// Run the `help` subcommand and return the process exit status.
 pub fn cli(arguments: &[String]) -> Result<i32> {
+    let registry = crate::manifest::Registry::default();
+    let cwd = std::env::current_dir()?;
+    cli_with_access(
+        arguments,
+        crate::program_files::Access {
+            registry: &registry,
+            cwd: &cwd,
+        },
+    )
+}
+
+/// Run help with the same host-read authority as the caller's program loader.
+pub fn cli_with_access(
+    arguments: &[String],
+    access: crate::program_files::Access<'_>,
+) -> Result<i32> {
     let mut as_json = false;
     let mut file = None;
     for argument in arguments {
@@ -30,12 +47,16 @@ pub fn cli(arguments: &[String]) -> Result<i32> {
         }
     }
     let file = file.ok_or_else(|| anyhow!("{USAGE}"))?;
-    let program = crate::program_files::parse_file(Path::new(file), None)?;
+    let program = crate::program_files::parse_file(Path::new(file), Some(access))?;
     let description = describe(&program, Path::new(file).to_string_lossy().as_ref());
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&description)?);
+        writeln!(
+            io::stdout(),
+            "{}",
+            serde_json::to_string_pretty(&description)?
+        )?;
     } else {
-        print!("{}", render_text(&description));
+        io::stdout().write_all(render_text(&description).as_bytes())?;
     }
     Ok(0)
 }
@@ -48,25 +69,12 @@ pub fn render_program_help(program: &Program, program_path: &str) -> String {
 /// The help object for one parsed program.
 pub fn describe(program: &Program, program_path: &str) -> Value {
     let inputs: Vec<Value> = program.inputs.iter().map(input_entry).collect();
-    let options = if program.inputs.iter().any(is_option) {
-        " [OPTIONS]"
-    } else {
-        ""
-    };
     json!({
         "protocol": PROTOCOL,
         "program": program_path,
-        "usage": format!("execute {program_path}{options} [--input NAME=VALUE ...]"),
+        "usage": format!("execute {program_path} [--input NAME=VALUE ...] [-- OPTIONS]"),
         "inputs": inputs,
     })
-}
-
-/// A flag or option: a named command-line switch, not a positional input.
-fn is_option(input: &InputDeclaration) -> bool {
-    matches!(
-        input.source,
-        Some(InputSource::Flag { .. } | InputSource::Option { .. })
-    )
 }
 
 fn input_entry(input: &InputDeclaration) -> Value {
@@ -208,8 +216,19 @@ fn push_description(text: &mut String, input: &Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::render_text;
+    use super::{describe, render_text};
     use serde_json::json;
+
+    #[test]
+    fn generated_usage_places_flags_after_the_argument_separator() {
+        let program =
+            crate::parser::parse("accept verbose as boolean from flag \"--verbose\"\n").unwrap();
+        let description = describe(&program, "tool.program");
+        assert_eq!(
+            description["usage"],
+            "execute tool.program [--input NAME=VALUE ...] [-- OPTIONS]"
+        );
+    }
 
     #[test]
     fn help_text_escapes_untrusted_descriptions_and_input_names() {

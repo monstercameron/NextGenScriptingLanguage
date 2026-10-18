@@ -31,8 +31,8 @@ pub(super) fn parse(
             "JSON text exceeds the {MAX_JSON_BYTES}-byte limit"
         )));
     }
-    let value = serde_json::from_slice(text)
-        .map_err(|error| invalid(format!("text is not valid JSON: {error}")))?;
+    let value = crate::structured::parse_json_value(text)
+        .map_err(|error| invalid(format!("text is not valid JSON: {error:#}")))?;
     check_size_and_depth(&value, context)?;
     Ok(value)
 }
@@ -142,12 +142,13 @@ fn lookup_typed<'a>(
                 Some(value) => value,
                 None => return Ok(None),
             },
-            TypedValue::List(items) => match parse_array_index(segment)? {
-                Some(index) => match items.get(index) {
+            TypedValue::List(items) => match parse_array_index(segment) {
+                Err(_) => return Ok(None),
+                Ok(Some(index)) => match items.get(index) {
                     Some(value) => value,
                     None => return Ok(None),
                 },
-                None => return Ok(None),
+                Ok(None) => return Ok(None),
             },
             _ => return Ok(None),
         };
@@ -268,8 +269,8 @@ fn document(
                 "JSON input exceeds the {MAX_JSON_BYTES}-byte limit"
             )));
         }
-        serde_json::from_slice(input)
-            .map_err(|error| invalid(format!("stdin is not valid JSON: {error}")))?
+        crate::structured::parse_json_value(input)
+            .map_err(|error| invalid(format!("stdin is not valid JSON: {error:#}")))?
     };
     check_size_and_depth(&value, context)?;
     Ok(value)
@@ -290,8 +291,8 @@ fn document_ref<'a>(
             "JSON input exceeds the {MAX_JSON_BYTES}-byte limit"
         )));
     }
-    let value = serde_json::from_slice(input)
-        .map_err(|error| invalid(format!("stdin is not valid JSON: {error}")))?;
+    let value = crate::structured::parse_json_value(input)
+        .map_err(|error| invalid(format!("stdin is not valid JSON: {error:#}")))?;
     check_size_and_depth(&value, context)?;
     Ok(Cow::Owned(value))
 }
@@ -432,12 +433,13 @@ fn lookup<'a>(root: &'a Value, pointer: &[String]) -> Result<Option<&'a Value>, 
                 Some(value) => value,
                 None => return Ok(None),
             },
-            Value::Array(items) => match parse_array_index(segment)? {
-                Some(index) => match items.get(index) {
+            Value::Array(items) => match parse_array_index(segment) {
+                Err(_) => return Ok(None),
+                Ok(Some(index)) => match items.get(index) {
                     Some(value) => value,
                     None => return Ok(None),
                 },
-                None => return Ok(None),
+                Ok(None) => return Ok(None),
             },
             _ => return Ok(None),
         };
@@ -532,15 +534,68 @@ impl Predicate {
     fn matches(&self, item: &Value) -> Result<bool, AppletError> {
         Ok(match self {
             Self::Exists(pointer, expected) => lookup(item, pointer)?.is_some() == *expected,
-            Self::Equals(pointer, expected) => lookup(item, pointer)? == Some(expected),
+            Self::Equals(pointer, expected) => {
+                lookup(item, pointer)?.is_some_and(|actual| json_values_equal(actual, expected))
+            }
             // A missing value is not equal to any JSON value. This also means
             // an absent nested field naturally passes a `not_equals` filter.
-            Self::NotEquals(pointer, expected) => lookup(item, pointer)? != Some(expected),
+            Self::NotEquals(pointer, expected) => {
+                lookup(item, pointer)?.is_none_or(|actual| !json_values_equal(actual, expected))
+            }
             Self::Type(pointer, expected) => {
                 lookup(item, pointer)?.is_some_and(|value| json_type(value) == expected)
             }
         })
     }
+}
+
+fn json_values_equal(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => {
+            match (integer_value(left), integer_value(right)) {
+                (Some(left), Some(right)) => left == right,
+                (Some(integer), None) => float_matches_integer(right.as_f64(), integer),
+                (None, Some(integer)) => float_matches_integer(left.as_f64(), integer),
+                (None, None) => left.as_f64() == right.as_f64(),
+            }
+        }
+        (Value::Array(left), Value::Array(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| json_values_equal(left, right))
+        }
+        (Value::Object(left), Value::Object(right)) => {
+            left.len() == right.len()
+                && left.iter().all(|(key, value)| {
+                    right
+                        .get(key)
+                        .is_some_and(|other| json_values_equal(value, other))
+                })
+        }
+        _ => left == right,
+    }
+}
+
+fn integer_value(number: &serde_json::Number) -> Option<i128> {
+    number
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| number.as_u64().map(i128::from))
+}
+
+fn float_matches_integer(number: Option<f64>, integer: i128) -> bool {
+    let Some(number) = number else {
+        return false;
+    };
+    // JSON integer values fit in i64/u64. Reject rounded f64s at either bound
+    // before casting, then compare the integral f64 value without lossy integer
+    // to-float conversion.
+    number.fract() == 0.0
+        && number >= i64::MIN as f64
+        && number < 18_446_744_073_709_551_616.0
+        && number as i128 == integer
 }
 
 fn parse_predicate(value: &Value, index: usize) -> Result<Predicate, AppletError> {

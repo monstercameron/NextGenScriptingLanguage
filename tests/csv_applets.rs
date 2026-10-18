@@ -93,14 +93,14 @@ fn empty_input_empty_cells_blank_records_and_final_newlines_are_distinct() {
 }
 
 #[test]
-fn bom_is_preserved_as_text_and_never_stripped() {
+fn bom_is_stripped_before_csv_parsing() {
     let parsed = run(
         "csv.parse",
         json!({}),
         "\u{feff}name,value\r\nAda,雪\r\n".as_bytes(),
     )
     .unwrap();
-    assert_eq!(parsed["headers"][0], "\u{feff}name");
+    assert_eq!(parsed["headers"][0], "name");
     assert_eq!(parsed["rows"][0][1], "雪");
 }
 
@@ -228,7 +228,7 @@ fn parser_and_stringifier_enforce_exact_cell_limit() {
     ]));
     let args = Map::from_iter([("table".to_owned(), table)]);
     let output = applets::execute("csv.stringify", &args, b"").unwrap();
-    assert_eq!(output.as_str().unwrap().len(), EXACT_ROWS * (WIDTH - 1 + 2));
+    assert_eq!(output.as_str().unwrap().len(), EXACT_ROWS * (3 * WIDTH + 1));
     drop(output);
 
     let mut oversized_args = args;
@@ -334,7 +334,7 @@ fn stringify_is_deterministic_and_roundtrips_the_declared_table_shape() {
     let encoded = run("csv.stringify", json!({"table": table}), b"").unwrap();
     assert_eq!(
         encoded,
-        json!("name,note,amount,empty\r\n雪,\"say \"\"hi\"\"\r\nthere\",001,\r\n")
+        json!("name,note,amount,empty\r\n雪,\"say \"\"hi\"\"\r\nthere\",001,\"\"\r\n")
     );
     let parsed = run("csv.parse", json!({}), encoded.as_str().unwrap().as_bytes()).unwrap();
     assert_eq!(

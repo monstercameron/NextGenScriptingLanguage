@@ -25,6 +25,8 @@ pub(super) fn parse(
 ) -> Result<Value, AppletError> {
     let text = text_input(args, input)?;
     check_text_size(text.len())?;
+    let text = std::str::from_utf8(crate::structured::strip_utf8_bom(text.as_bytes()))
+        .map_err(|error| invalid(format!("INI input is not UTF-8: {error}")))?;
     let mut root: Map<String, Value> = Map::new();
     let mut sections: Map<String, Value> = Map::new();
     let mut current: Option<String> = None;

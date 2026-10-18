@@ -30,6 +30,8 @@ pub(super) fn parse(
 ) -> Result<Value, AppletError> {
     let text = text_input(args, input)?;
     check_text_size(text.len())?;
+    let text = std::str::from_utf8(crate::structured::strip_utf8_bom(text.as_bytes()))
+        .map_err(|error| invalid(format!("YAML input is not UTF-8: {error}")))?;
     let lines = split_lines(text)?;
     let mut parser = Parser {
         lines,
@@ -71,6 +73,9 @@ fn split_lines(text: &str) -> Result<Vec<Line>, AppletError> {
             text: body.to_owned(),
             raw: raw.to_owned(),
         });
+    }
+    if text.ends_with('\n') {
+        lines.pop();
     }
     Ok(lines)
 }
@@ -360,6 +365,13 @@ impl Parser<'_, '_> {
                 break;
             }
             let content = *content_indent.get_or_insert(indent);
+            if !literal && indent > content {
+                return Err(syntax(
+                    FORMAT,
+                    line.number,
+                    "more-indented folded scalar lines are not supported",
+                ));
+            }
             for _ in 0..pending_blank {
                 lines_out.push(String::new());
             }
@@ -738,10 +750,30 @@ impl Flow<'_, '_, '_> {
                     None => return Err(self.fail("flow sequence is not closed on this line")),
                     _ => {}
                 }
+                if matches!(self.chars.get(self.pos), Some(',')) {
+                    return Err(self.fail("flow sequence entries cannot be empty"));
+                }
+                let quoted = matches!(self.chars.get(self.pos), Some('\'' | '"'));
                 items.push(self.value(depth + 1)?);
+                if !quoted
+                    && items
+                        .last()
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value.contains(": "))
+                {
+                    return Err(
+                        self.fail("single-pair mappings in flow sequences are not supported")
+                    );
+                }
                 self.skip_spaces();
                 match self.chars.get(self.pos) {
-                    Some(',') => self.pos += 1,
+                    Some(',') => {
+                        self.pos += 1;
+                        self.skip_spaces();
+                        if matches!(self.chars.get(self.pos), Some(',')) {
+                            return Err(self.fail("flow sequence entries cannot be empty"));
+                        }
+                    }
                     Some(']') => {
                         self.pos += 1;
                         break;
@@ -833,6 +865,7 @@ pub(super) fn stringify(args: &Map<String, Value>) -> Result<Value, AppletError>
     let value = args
         .get("value")
         .ok_or_else(|| invalid("yaml.stringify requires args.value"))?;
+    validate_stringify_depth(value, 0)?;
     let mut out = String::new();
     match value {
         Value::Object(map) if !map.is_empty() => write_mapping(&mut out, map, 0)?,
@@ -844,6 +877,24 @@ pub(super) fn stringify(args: &Map<String, Value>) -> Result<Value, AppletError>
     }
     check_text_size(out.len())?;
     Ok(Value::String(out))
+}
+
+fn validate_stringify_depth(value: &Value, depth: usize) -> Result<(), AppletError> {
+    check_depth(depth, FORMAT, 1)?;
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                validate_stringify_depth(item, depth + 1)?;
+            }
+        }
+        Value::Object(fields) => {
+            for item in fields.values() {
+                validate_stringify_depth(item, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn write_mapping(
@@ -946,5 +997,35 @@ fn plain_is_safe(text: &str) -> bool {
     {
         return false;
     }
+    if text == "=" || text == "<<" || matches_yaml_implicit_resolver(text) {
+        return false;
+    }
     matches!(resolve_plain(text, 0), Ok(Value::String(_)))
+}
+
+fn matches_yaml_implicit_resolver(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "y" | "n" | "yes" | "no" | "on" | "off" | "null" | "~"
+    ) {
+        return true;
+    }
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    if digits.starts_with("0x")
+        || digits.starts_with("0X")
+        || digits.starts_with("0o")
+        || digits.starts_with("0O")
+        || digits.starts_with("0b")
+        || digits.starts_with("0B")
+    {
+        return true;
+    }
+    if text.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+        || (matches!(text.chars().next(), Some('+' | '-'))
+            && text.chars().nth(1).is_some_and(|ch| ch.is_ascii_digit()))
+    {
+        return true;
+    }
+    false
 }

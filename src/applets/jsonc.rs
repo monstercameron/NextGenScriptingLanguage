@@ -24,7 +24,8 @@ pub(super) fn set(
     let replacement = serde_json::to_string(value)
         .map_err(|error| failed("serialization_error", error.to_string()))?;
     write_jsonc_update(args, cwd, move |source| {
-        Ok(Some(set_source(source, &key, &replacement, context)?))
+        let updated = set_source(source, &key, &replacement, context)?;
+        Ok((updated != source).then_some(updated))
     })
 }
 
@@ -51,6 +52,7 @@ pub(super) fn edit_content(
         None => std::str::from_utf8(input)
             .map_err(|error| invalid(format!("stdin must be UTF-8 JSONC: {error}")))?,
     };
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     if content.len() > MAX_CONTENT_BYTES {
         return Err(invalid(format!(
             "JSONC content exceeds the {MAX_CONTENT_BYTES}-byte limit"
@@ -88,6 +90,7 @@ fn set_source(
     replacement: &str,
     context: &ExecutionContext<'_>,
 ) -> Result<String, AppletError> {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     context.checkpoint()?;
     let document = Parser::new(source, context).parse()?;
     let members = root_members(&document)?;
@@ -108,27 +111,29 @@ fn remove_source(
     key: &str,
     context: &ExecutionContext<'_>,
 ) -> Result<Option<String>, AppletError> {
-    let mut updated = source.to_owned();
-    let mut changed = false;
-    loop {
-        context.checkpoint()?;
-        let document = Parser::new(&updated, context).parse()?;
-        let members = root_members(&document)?;
-        let mut found = None;
-        for (index, member) in members.iter().enumerate() {
-            checkpoint_work(context, index)?;
-            if member.key == key {
-                found = Some(index);
-                break;
-            }
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
+    context.checkpoint()?;
+    let document = Parser::new(source, context).parse()?;
+    let members = root_members(&document)?;
+    let mut ranges = Vec::new();
+    for (index, member) in members.iter().enumerate() {
+        checkpoint_work(context, index)?;
+        if member.key == key {
+            ranges.push(removal_range(members, index));
         }
-        let Some(index) = found else {
-            break;
-        };
-        let range = removal_range(members, index);
-        updated.replace_range(range, "");
-        changed = true;
     }
+    let changed = !ranges.is_empty();
+    let removed_bytes = ranges
+        .iter()
+        .map(|range| range.end - range.start)
+        .sum::<usize>();
+    let mut updated = String::with_capacity(source.len().saturating_sub(removed_bytes));
+    let mut copied = 0usize;
+    for range in ranges {
+        updated.push_str(&source[copied..range.start]);
+        copied = range.end;
+    }
+    updated.push_str(&source[copied..]);
     context.checkpoint()?;
     Ok(changed.then_some(updated))
 }

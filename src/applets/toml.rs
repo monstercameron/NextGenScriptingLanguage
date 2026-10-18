@@ -20,7 +20,7 @@ use super::text::{check_text_size, text_input};
 use super::{checkpoint_work, invalid, AppletError, ExecutionContext};
 use serde_json::{Map, Value};
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 
 const FORMAT: &str = "toml";
@@ -32,7 +32,8 @@ pub(super) fn parse(
 ) -> Result<Value, AppletError> {
     let text = text_input(args, input)?;
     check_text_size(text.len())?;
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let text = std::str::from_utf8(crate::structured::strip_utf8_bom(text.as_bytes()))
+        .map_err(|error| invalid(format!("TOML input is not UTF-8: {error}")))?;
     let mut parser = Parser {
         text,
         bytes: text.as_bytes(),
@@ -47,6 +48,8 @@ pub(super) fn parse(
         explicit: HashSet::new(),
         implicit: HashSet::new(),
         arrays: HashSet::new(),
+        inline_tables: HashSet::new(),
+        array_scope_members: HashMap::new(),
     };
     parser.document()?;
     Ok(Value::Object(parser.root))
@@ -70,6 +73,11 @@ struct Parser<'a, 'c, 'x> {
     implicit: HashSet<Vec<String>>,
     /// Arrays of tables defined by `[[header]]`.
     arrays: HashSet<Vec<String>>,
+    /// Paths whose value was created by an inline table and is immutable.
+    inline_tables: HashSet<Vec<String>>,
+    /// Descendant table paths for each array-of-tables path, so a new element
+    /// clears only paths owned by the previous element.
+    array_scope_members: HashMap<Vec<String>, HashSet<Vec<String>>>,
 }
 
 impl Parser<'_, '_, '_> {
@@ -108,24 +116,31 @@ impl Parser<'_, '_, '_> {
         }
     }
 
-    fn skip_comment(&mut self) {
+    fn skip_comment(&mut self) -> Result<(), AppletError> {
         if self.peek() == Some(b'#') {
             while !matches!(self.peek(), None | Some(b'\n')) {
+                if let Some(byte) = self.peek() {
+                    let valid_carriage_return = byte == b'\r' && self.peek_at(1) == Some(b'\n');
+                    if (byte < 0x20 && byte != b'\t' && !valid_carriage_return) || byte == 0x7f {
+                        return Err(self.error("control character in comment"));
+                    }
+                }
                 self.pos += 1;
             }
         }
+        Ok(())
     }
 
     /// Skip whitespace, line breaks and comments between statements and inside
     /// arrays.
-    fn skip_blank(&mut self) {
+    fn skip_blank(&mut self) -> Result<(), AppletError> {
         loop {
             self.skip_spaces();
-            self.skip_comment();
+            self.skip_comment()?;
             match self.peek() {
                 Some(b'\n') => self.pos += 1,
                 Some(b'\r') if self.peek_at(1) == Some(b'\n') => self.pos += 2,
-                _ => break,
+                _ => return Ok(()),
             }
         }
     }
@@ -134,7 +149,7 @@ impl Parser<'_, '_, '_> {
     /// follow.
     fn expect_line_end(&mut self) -> Result<(), AppletError> {
         self.skip_spaces();
-        self.skip_comment();
+        self.skip_comment()?;
         match self.peek() {
             None => Ok(()),
             Some(b'\n') => {
@@ -151,7 +166,7 @@ impl Parser<'_, '_, '_> {
 
     fn document(&mut self) -> Result<(), AppletError> {
         loop {
-            self.skip_blank();
+            self.skip_blank()?;
             let Some(byte) = self.peek() else {
                 return Ok(());
             };
@@ -269,6 +284,7 @@ impl Parser<'_, '_, '_> {
             }
         }
         self.explicit.insert(keys.clone());
+        self.register_scoped_path(&keys);
         self.current = keys;
         Ok(())
     }
@@ -295,13 +311,16 @@ impl Parser<'_, '_, '_> {
                 ))
             }
         }
+        self.register_scoped_path(&keys);
         // Tables under the previous element belong to that element only.
-        self.explicit
-            .retain(|path| !is_strict_descendant(path, &keys));
-        self.implicit
-            .retain(|path| !is_strict_descendant(path, &keys));
-        self.arrays
-            .retain(|path| !is_strict_descendant(path, &keys));
+        if let Some(descendants) = self.array_scope_members.remove(&keys) {
+            for path in descendants {
+                self.explicit.remove(&path);
+                self.implicit.remove(&path);
+                self.arrays.remove(&path);
+                self.array_scope_members.remove(&path);
+            }
+        }
         self.current = keys;
         Ok(())
     }
@@ -318,6 +337,7 @@ impl Parser<'_, '_, '_> {
             if !parent.contains_key(last) {
                 parent.insert(last.clone(), Value::Object(Map::new()));
                 self.implicit.insert(path.to_vec());
+                self.register_scoped_path(path);
                 continue;
             }
             let extendable = match parent.get(last) {
@@ -338,12 +358,48 @@ impl Parser<'_, '_, '_> {
         Ok(())
     }
 
+    fn register_scoped_path(&mut self, path: &[String]) {
+        for depth in 1..path.len() {
+            let scope = &path[..depth];
+            if self.arrays.contains(scope) {
+                self.array_scope_members
+                    .entry(scope.to_vec())
+                    .or_default()
+                    .insert(path.to_vec());
+            }
+        }
+    }
+
     fn insert_current(&mut self, keys: Vec<String>, value: Value) -> Result<(), AppletError> {
         let current = self.current.clone();
         let line = self.line();
+        let mut path = current.clone();
+        for key in keys.iter().take(keys.len().saturating_sub(1)) {
+            if self.inline_tables.contains(&path) {
+                return Err(syntax(
+                    FORMAT,
+                    line,
+                    "inline tables are fully self-contained",
+                ));
+            }
+            path.push(key.clone());
+        }
+        if self.inline_tables.contains(&path) {
+            return Err(syntax(
+                FORMAT,
+                line,
+                "inline tables are fully self-contained",
+            ));
+        }
         let table = navigate_mut(&mut self.root, &current)
             .map_err(|_| syntax(FORMAT, line, "current table is not a table"))?;
-        insert_path(table, &keys, value, FORMAT, line, current.len())
+        let is_table = value.is_object();
+        insert_path(table, &keys, value, FORMAT, line, current.len())?;
+        if is_table {
+            path.extend(keys);
+            self.inline_tables.insert(path);
+        }
+        Ok(())
     }
 
     /// Cooperative cancellation point, checked every 256 steps so a long flat
@@ -389,13 +445,13 @@ impl Parser<'_, '_, '_> {
         let mut items = Vec::new();
         loop {
             self.tick()?;
-            self.skip_blank();
+            self.skip_blank()?;
             if self.peek() == Some(b']') {
                 self.pos += 1;
                 break;
             }
             items.push(self.value(depth + 1)?);
-            self.skip_blank();
+            self.skip_blank()?;
             match self.peek() {
                 Some(b',') => self.pos += 1,
                 Some(b']') => {
@@ -628,10 +684,6 @@ fn is_disallowed_control(character: char) -> bool {
     (character < ' ' && character != '\t') || character == '\u{7f}'
 }
 
-fn is_strict_descendant(path: &[String], ancestor: &[String]) -> bool {
-    path.len() > ancestor.len() && path.starts_with(ancestor)
-}
-
 /// Walk into a table, stepping into the last element of an array of tables.
 fn navigate_mut<'m>(
     root: &'m mut Map<String, Value>,
@@ -798,10 +850,32 @@ pub(super) fn stringify(args: &Map<String, Value>) -> Result<Value, AppletError>
             "toml.stringify requires args.value to be a JSON object",
         ));
     };
+    check_depth(0, FORMAT, 1)?;
+    for value in map.values() {
+        validate_stringify_depth(value, 1)?;
+    }
     let mut out = String::new();
     write_table(&mut out, &mut Vec::new(), map)?;
     check_text_size(out.len())?;
     Ok(Value::String(out))
+}
+
+fn validate_stringify_depth(value: &Value, depth: usize) -> Result<(), AppletError> {
+    check_depth(depth, FORMAT, 1)?;
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                validate_stringify_depth(item, depth + 1)?;
+            }
+        }
+        Value::Object(fields) => {
+            for item in fields.values() {
+                validate_stringify_depth(item, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn is_table_array(value: &Value) -> bool {
@@ -910,7 +984,9 @@ fn write_inline(out: &mut String, value: &Value) -> Result<(), AppletError> {
 /// JSON string escapes are a subset of TOML basic-string escapes, so the JSON
 /// encoding is a valid TOML basic string.
 fn string_text(text: &str) -> String {
-    serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_owned())
+    serde_json::to_string(text)
+        .unwrap_or_else(|_| "\"\"".to_owned())
+        .replace('\u{7f}', "\\u007f")
 }
 
 fn key_text(key: &str) -> String {

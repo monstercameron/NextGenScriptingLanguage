@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 
 /// Parse the bytes of an environment file into a JSON object of text values.
 pub(super) fn load(input: &[u8]) -> Result<Value, AppletError> {
+    let input = crate::structured::strip_utf8_bom(input);
     let text =
         std::str::from_utf8(input).map_err(|_| invalid("environment file is not UTF-8 text"))?;
     parse(text).map(Value::Object).map_err(invalid)

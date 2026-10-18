@@ -25,6 +25,7 @@ pub(super) fn parse(
         Some(_) => return Err(invalid("args.text must be a string")),
         None => input,
     };
+    let text = crate::structured::strip_utf8_bom(text);
     if text.len() > MAX_CSV_BYTES {
         return Err(invalid(format!(
             "CSV input exceeds the {MAX_CSV_BYTES}-byte limit"
@@ -40,6 +41,9 @@ pub(super) fn parse(
     };
 
     let mut records = read_records(text, has_headers, context)?;
+    if text.ends_with(b"\n\n") && records.last().is_some_and(|row| row == &[String::new()]) {
+        records.pop();
+    }
     let headers = if has_headers && !records.is_empty() {
         records.remove(0)
     } else {
@@ -381,7 +385,7 @@ fn checked_source_bytes(total: usize, added: usize) -> Result<usize, AppletError
 }
 
 fn validate_data_byte(byte: u8, index: usize) -> Result<(), AppletError> {
-    if byte < 0x20 || byte == 0x7f {
+    if (byte < 0x20 && byte != b'\t') || byte == 0x7f {
         return Err(invalid(format!(
             "unsupported control byte in CSV field at byte {index}"
         )));
@@ -484,7 +488,9 @@ fn write_field(
             ));
         }
     }
-    if !quoted {
+    if field.is_empty() {
+        push_output(output, "\"\"", work, context)?;
+    } else if !quoted {
         for character in field.chars() {
             checkpoint_work(context, *work)?;
             *work = work.saturating_add(1);
@@ -530,7 +536,7 @@ fn check_output_size(output: &str) -> Result<(), AppletError> {
 }
 
 fn is_disallowed_control(character: char) -> bool {
-    (character <= '\u{001f}' || character == '\u{007f}') && !matches!(character, '\r' | '\n')
+    (character <= '\u{001f}' || character == '\u{007f}') && !matches!(character, '\t' | '\r' | '\n')
 }
 
 fn check_json_size(

@@ -84,9 +84,134 @@ pub(crate) fn literal(value: &Value) -> bool {
 }
 
 pub(crate) fn parse(bytes: &[u8]) -> Result<Value> {
-    serde_json::from_slice::<JsonDocumentValue>(bytes)
+    serde_json::from_slice::<JsonDocumentValue>(strip_utf8_bom(bytes))
         .map(|value| value.0)
         .context("parsing JSON")
+}
+
+/// Remove one UTF-8 byte-order mark from the beginning of a text document.
+pub(crate) fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)
+}
+
+/// Parse applet JSON directly into `serde_json::Value`, rejecting duplicate
+/// object keys without an intermediate interpreter value.
+pub(crate) fn parse_json_value(bytes: &[u8]) -> Result<serde_json::Value> {
+    serde_json::from_slice::<JsonValueDocument>(strip_utf8_bom(bytes))
+        .map(|document| document.0)
+        .context("parsing JSON")
+}
+
+struct JsonValueDocument(serde_json::Value);
+
+impl<'de> Deserialize<'de> for JsonValueDocument {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ValueVisitor;
+
+        impl<'de> Visitor<'de> for ValueVisitor {
+            type Value = JsonValueDocument;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+
+            fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonValueDocument(serde_json::Value::Null))
+            }
+
+            fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_unit()
+            }
+
+            fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonValueDocument(value.into()))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonValueDocument(value.into()))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonValueDocument(value.into()))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                serde_json::Number::from_f64(value)
+                    .map(serde_json::Value::Number)
+                    .map(JsonValueDocument)
+                    .ok_or_else(|| E::custom("invalid JSON number"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonValueDocument(value.into()))
+            }
+
+            fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(JsonValueDocument(value.into()))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+                while let Some(value) = sequence.next_element::<JsonValueDocument>()? {
+                    values.push(value.0);
+                }
+                Ok(JsonValueDocument(values.into()))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut values = serde_json::Map::new();
+                while let Some((key, value)) = map.next_entry::<String, JsonValueDocument>()? {
+                    match values.entry(key) {
+                        serde_json::map::Entry::Vacant(entry) => {
+                            entry.insert(value.0);
+                        }
+                        serde_json::map::Entry::Occupied(entry) => {
+                            return Err(serde::de::Error::custom(format!(
+                                "duplicate key {:?}",
+                                entry.key()
+                            )));
+                        }
+                    }
+                }
+                Ok(JsonValueDocument(values.into()))
+            }
+        }
+
+        deserializer.deserialize_any(ValueVisitor)
+    }
 }
 
 struct JsonDocumentValue(Value);
@@ -184,7 +309,17 @@ impl<'de> Deserialize<'de> for JsonDocumentValue {
             {
                 let mut values = BTreeMap::new();
                 while let Some((key, value)) = map.next_entry::<String, JsonDocumentValue>()? {
-                    values.insert(key, value.0);
+                    match values.entry(key) {
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(value.0);
+                        }
+                        std::collections::btree_map::Entry::Occupied(entry) => {
+                            return Err(serde::de::Error::custom(format!(
+                                "duplicate key {:?}",
+                                entry.key()
+                            )));
+                        }
+                    }
                 }
                 Ok(JsonDocumentValue(Value::Record(values)))
             }
@@ -299,7 +434,7 @@ mod tests {
             r#"null"#,
             r#"{"unicode":"雪 café","escaped":"line\nquote\"slash\\","nested":[{},[],{"x":true}]}"#,
             r#"[-9223372036854775808,9223372036854775807,9223372036854775808,18446744073709551615,-1,0,1,1.0,-2.5,1e20]"#,
-            r#"{"same":1,"same":2,"empty_object":{},"empty_array":[]}"#,
+            r#"{"same":1,"empty_object":{},"empty_array":[]}"#,
         ];
         for document in documents {
             let bytes = document.as_bytes();
@@ -323,5 +458,13 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("cannot encode an unresolved reference"));
+    }
+
+    #[test]
+    fn duplicate_json_object_keys_are_rejected_with_source_position() {
+        let error = parse(br#"{"a":1,"a":2}"#).expect_err("duplicate key must fail");
+        let message = format!("{error:#}");
+        assert!(message.contains("duplicate key \"a\""), "{message}");
+        assert!(message.contains("line 1 column"), "{message}");
     }
 }

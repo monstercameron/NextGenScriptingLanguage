@@ -1,10 +1,14 @@
 {
   "name": "count.lines",
-  "phrases": ["count lines"],
+  "phrases": [
+    "count lines"
+  ],
   "binary": "wc",
   "accepts_stdin": true,
   "cacheable": true,
   "arguments": [
-    { "literal": "-l" }
+    {
+      "literal": "-l"
+    }
   ]
 }

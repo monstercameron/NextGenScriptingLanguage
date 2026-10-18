@@ -1,12 +1,21 @@
 {
   "name": "printf",
-  "phrases": ["print"],
+  "phrases": [
+    "print"
+  ],
   "binary": "printf",
   "parameters": {
-    "message": { "type": "string", "required": true }
+    "message": {
+      "type": "string",
+      "required": true
+    }
   },
   "arguments": [
-    { "literal": "%s\\n" },
-    { "parameter": "message" }
+    {
+      "literal": "%s\\n"
+    },
+    {
+      "parameter": "message"
+    }
   ]
 }

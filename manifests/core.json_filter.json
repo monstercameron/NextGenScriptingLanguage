@@ -82,5 +82,9 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "json filter",
+    "filter json records"
+  ]
 }

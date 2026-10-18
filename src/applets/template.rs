@@ -23,6 +23,30 @@ pub(super) fn render(
     cwd: &Path,
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
+    render_inner(args, cwd, context, None)
+}
+
+pub(super) fn format(
+    args: &Map<String, Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let mode = args.get("escape").and_then(Value::as_str).ok_or_else(|| {
+        invalid("text.format requires args.escape (plain, json, shell, url, csv, html, or regex)")
+    })?;
+    if !["plain", "json", "shell", "url", "csv", "html", "regex"].contains(&mode) {
+        return Err(invalid(format!(
+            "unsupported text.format escape mode {mode:?}"
+        )));
+    }
+    render_inner(args, Path::new("."), context, Some(mode))
+}
+
+fn render_inner(
+    args: &Map<String, Value>,
+    cwd: &Path,
+    context: &ExecutionContext<'_>,
+    escape: Option<&str>,
+) -> Result<Value, AppletError> {
     let template: Cow<'_, str> = match (args.get("template"), args.get("template_path")) {
         (Some(Value::String(text)), None) => Cow::Borrowed(text.as_str()),
         (None, Some(Value::String(path))) => Cow::Owned(read_template(path, cwd)?),
@@ -62,7 +86,7 @@ pub(super) fn render(
             let value = values.get(name).ok_or_else(|| {
                 invalid(format!("text.render has no value for placeholder {name:?}"))
             })?;
-            push_value(&mut output, name, value)?;
+            push_value(&mut output, name, value, escape)?;
             rest = &body[close + 2..];
         }
         check_size(output.len() + rest.len())?;
@@ -102,18 +126,67 @@ fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
-fn push_value(output: &mut String, name: &str, value: &Value) -> Result<(), AppletError> {
-    match value {
-        Value::String(text) => output.push_str(text),
-        Value::Bool(flag) => output.push_str(if *flag { "true" } else { "false" }),
-        Value::Number(number) => output.push_str(&number.to_string()),
+fn push_value(
+    output: &mut String,
+    name: &str,
+    value: &Value,
+    escape: Option<&str>,
+) -> Result<(), AppletError> {
+    let raw = match value {
+        Value::String(text) => text.clone(),
+        Value::Bool(flag) => if *flag { "true" } else { "false" }.to_owned(),
+        Value::Number(number) => number.to_string(),
         _ => {
             return Err(invalid(format!(
                 "text.render placeholder {name:?} must be text, a number or a boolean"
             )))
         }
-    }
+    };
+    output.push_str(&match escape {
+        None | Some("plain") => raw,
+        Some("json") => {
+            let encoded = serde_json::to_string(&raw)
+                .map_err(|error| invalid(format!("JSON escaping failed: {error}")))?;
+            encoded
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .ok_or_else(|| invalid("JSON escaping returned an invalid string"))?
+                .to_owned()
+        }
+        Some("shell") => {
+            if raw.contains('\0') {
+                return Err(invalid(format!("text.format placeholder {name:?} contains NUL, which shell arguments cannot represent")));
+            }
+            format!("'{}'", raw.replace('\'', "'\\''"))
+        }
+        Some("url") => percent_encode(&raw),
+        Some("csv") => format!("\"{}\"", raw.replace('"', "\"\"")),
+        Some("html") => raw.chars().map(|character| match character {
+            '&' => "&amp;".to_owned(), '<' => "&lt;".to_owned(), '>' => "&gt;".to_owned(),
+            '"' => "&quot;".to_owned(), '\'' => "&#39;".to_owned(),
+            _ => character.to_string(),
+        }).collect(),
+        Some("regex") => raw.chars().map(|character| {
+            if "\\.^$|?*+()[]{}".contains(character) { format!("\\{character}") } else { character.to_string() }
+        }).collect(),
+        Some(_) => return Err(invalid("unsupported text.format escape mode")),
+    });
     check_size(output.len())
+}
+
+fn percent_encode(text: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut output = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            output.push(char::from(byte));
+        } else {
+            output.push('%');
+            output.push(char::from(HEX[usize::from(byte >> 4)]));
+            output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    output
 }
 
 fn check_size(length: usize) -> Result<(), AppletError> {

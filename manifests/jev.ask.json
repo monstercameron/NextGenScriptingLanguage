@@ -5,23 +5,96 @@
   "cacheable": false,
   "uncertain_on_failure": true,
   "parameters": {
-    "questions": { "type": "json", "required": true },
-    "model": { "type": "string" },
-    "max_bytes": { "type": "integer" },
-    "timeout_ms": { "type": "integer" },
-    "env_file": { "type": "string" },
-    "fixture": { "type": "string" }
+    "questions": {
+      "type": "json",
+      "required": true
+    },
+    "model": {
+      "type": "string"
+    },
+    "max_bytes": {
+      "type": "integer"
+    },
+    "timeout_ms": {
+      "type": "integer"
+    },
+    "env_file": {
+      "type": "string"
+    },
+    "fixture": {
+      "type": "string"
+    }
   },
   "arguments": [
-    { "literal": "ask" },
-    { "literal": "--provider" },
-    { "literal": "jev" },
-    { "when_present": "model", "append": [{ "literal": "--model" }, { "parameter": "model" }] },
-    { "literal": "--questions" },
-    { "json_parameter": "questions" },
-    { "when_present": "max_bytes", "append": [{ "literal": "--max-bytes" }, { "parameter": "max_bytes" }] },
-    { "when_present": "timeout_ms", "append": [{ "literal": "--timeout-ms" }, { "parameter": "timeout_ms" }] },
-    { "when_present": "env_file", "append": [{ "literal": "--env-file" }, { "parameter": "env_file" }] },
-    { "when_present": "fixture", "append": [{ "literal": "--fixture" }, { "parameter": "fixture" }] }
+    {
+      "literal": "ask"
+    },
+    {
+      "literal": "--provider"
+    },
+    {
+      "literal": "jev"
+    },
+    {
+      "when_present": "model",
+      "append": [
+        {
+          "literal": "--model"
+        },
+        {
+          "parameter": "model"
+        }
+      ]
+    },
+    {
+      "literal": "--questions"
+    },
+    {
+      "json_parameter": "questions"
+    },
+    {
+      "when_present": "max_bytes",
+      "append": [
+        {
+          "literal": "--max-bytes"
+        },
+        {
+          "parameter": "max_bytes"
+        }
+      ]
+    },
+    {
+      "when_present": "timeout_ms",
+      "append": [
+        {
+          "literal": "--timeout-ms"
+        },
+        {
+          "parameter": "timeout_ms"
+        }
+      ]
+    },
+    {
+      "when_present": "env_file",
+      "append": [
+        {
+          "literal": "--env-file"
+        },
+        {
+          "parameter": "env_file"
+        }
+      ]
+    },
+    {
+      "when_present": "fixture",
+      "append": [
+        {
+          "literal": "--fixture"
+        },
+        {
+          "parameter": "fixture"
+        }
+      ]
+    }
   ]
 }

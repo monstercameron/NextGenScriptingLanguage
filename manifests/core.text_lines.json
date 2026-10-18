@@ -8,29 +8,45 @@
     }
   },
   "arguments": [
-    { "literal": "text.lines" },
-    { "literal": "--args" },
-    { "json_arguments": true }
+    {
+      "literal": "text.lines"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
   ],
   "contract": {
     "version": 1,
     "backend": "in_process",
-    "lifecycle": { "kind": "oneshot" },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
     "output": {
       "type": "list",
       "encoding": "json",
-      "items": { "type": "text" }
+      "items": {
+        "type": "text"
+      }
     },
-    "capabilities": ["text.transform"],
+    "capabilities": [
+      "text.transform"
+    ],
     "effects": [],
     "ports": {
       "inputs": {
         "text": {
-          "schema": { "type": "text" },
+          "schema": {
+            "type": "text"
+          },
           "delivery": "single"
         },
         "stdin": {
-          "schema": { "type": "text" },
+          "schema": {
+            "type": "text"
+          },
           "delivery": "single",
           "encoding": "raw"
         }
@@ -39,11 +55,16 @@
         "value": {
           "schema": {
             "type": "list",
-            "items": { "type": "text" }
+            "items": {
+              "type": "text"
+            }
           },
           "delivery": "single"
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "text lines"
+  ]
 }

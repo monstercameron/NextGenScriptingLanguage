@@ -1,0 +1,110 @@
+{
+  "name": "list.max",
+  "phrases": [
+    "maximum value",
+    "largest number"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "items": {
+      "type": "json"
+    },
+    "key": {
+      "type": "string"
+    },
+    "n": {
+      "type": "integer"
+    },
+    "collect": {
+      "type": "boolean"
+    },
+    "delimiter": {
+      "type": "string"
+    },
+    "field": {
+      "type": "integer"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "list.max"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "json",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "data.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "items": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "key": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "n": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "collect": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
+        "delimiter": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "field": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

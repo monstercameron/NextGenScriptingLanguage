@@ -58,5 +58,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "text trim_final_lf"
+  ]
 }

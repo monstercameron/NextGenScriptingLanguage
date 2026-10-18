@@ -99,5 +99,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "text matches"
+  ]
 }

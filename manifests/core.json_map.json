@@ -82,5 +82,10 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "json map",
+    "select fields",
+    "map json values"
+  ]
 }

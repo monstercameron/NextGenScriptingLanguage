@@ -3,9 +3,14 @@
   "binary": "cd",
   "builtin": "cd",
   "parameters": {
-    "path": { "type": "string", "required": true }
+    "path": {
+      "type": "string",
+      "required": true
+    }
   },
   "arguments": [
-    { "parameter": "path" }
+    {
+      "parameter": "path"
+    }
   ]
 }

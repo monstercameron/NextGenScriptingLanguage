@@ -5,63 +5,235 @@
   "cacheable": false,
   "uncertain_on_failure": true,
   "parameters": {
-    "model": { "type": "string", "required": true },
-    "instruction": { "type": "string", "required": true },
-    "endpoint": { "type": "string" },
-    "api_key_env": { "type": "string" },
-    "api": { "type": "string" },
-    "effort": { "type": "string" },
-    "temperature": { "type": "json" },
-    "max_tokens": { "type": "integer" },
-    "max_bytes": { "type": "integer" },
-    "timeout_ms": { "type": "integer" },
-    "env_file": { "type": "string" },
-    "fixture": { "type": "string" }
+    "model": {
+      "type": "string",
+      "required": true
+    },
+    "instruction": {
+      "type": "string",
+      "required": true
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "api_key_env": {
+      "type": "string"
+    },
+    "api": {
+      "type": "string"
+    },
+    "effort": {
+      "type": "string"
+    },
+    "temperature": {
+      "type": "json"
+    },
+    "max_tokens": {
+      "type": "integer"
+    },
+    "max_bytes": {
+      "type": "integer"
+    },
+    "timeout_ms": {
+      "type": "integer"
+    },
+    "env_file": {
+      "type": "string"
+    },
+    "fixture": {
+      "type": "string"
+    }
   },
   "arguments": [
-    { "literal": "generate" },
-    { "literal": "--provider" },
-    { "literal": "openai" },
-    { "literal": "--model" },
-    { "parameter": "model" },
-    { "literal": "--instruction" },
-    { "parameter": "instruction" },
-    { "when_present": "endpoint", "append": [{ "literal": "--endpoint" }, { "parameter": "endpoint" }] },
-    { "when_present": "api_key_env", "append": [{ "literal": "--api-key-env" }, { "parameter": "api_key_env" }] },
-    { "when_present": "api", "append": [{ "literal": "--api" }, { "parameter": "api" }] },
-    { "when_present": "effort", "append": [{ "literal": "--effort" }, { "parameter": "effort" }] },
-    { "when_present": "temperature", "append": [{ "literal": "--temperature" }, { "json_parameter": "temperature" }] },
-    { "when_present": "max_tokens", "append": [{ "literal": "--max-tokens" }, { "parameter": "max_tokens" }] },
-    { "when_present": "max_bytes", "append": [{ "literal": "--max-bytes" }, { "parameter": "max_bytes" }] },
-    { "when_present": "timeout_ms", "append": [{ "literal": "--timeout-ms" }, { "parameter": "timeout_ms" }] },
-    { "when_present": "env_file", "append": [{ "literal": "--env-file" }, { "parameter": "env_file" }] },
-    { "when_present": "fixture", "append": [{ "literal": "--fixture" }, { "parameter": "fixture" }] }
+    {
+      "literal": "generate"
+    },
+    {
+      "literal": "--provider"
+    },
+    {
+      "literal": "openai"
+    },
+    {
+      "literal": "--model"
+    },
+    {
+      "parameter": "model"
+    },
+    {
+      "literal": "--instruction"
+    },
+    {
+      "parameter": "instruction"
+    },
+    {
+      "when_present": "endpoint",
+      "append": [
+        {
+          "literal": "--endpoint"
+        },
+        {
+          "parameter": "endpoint"
+        }
+      ]
+    },
+    {
+      "when_present": "api_key_env",
+      "append": [
+        {
+          "literal": "--api-key-env"
+        },
+        {
+          "parameter": "api_key_env"
+        }
+      ]
+    },
+    {
+      "when_present": "api",
+      "append": [
+        {
+          "literal": "--api"
+        },
+        {
+          "parameter": "api"
+        }
+      ]
+    },
+    {
+      "when_present": "effort",
+      "append": [
+        {
+          "literal": "--effort"
+        },
+        {
+          "parameter": "effort"
+        }
+      ]
+    },
+    {
+      "when_present": "temperature",
+      "append": [
+        {
+          "literal": "--temperature"
+        },
+        {
+          "json_parameter": "temperature"
+        }
+      ]
+    },
+    {
+      "when_present": "max_tokens",
+      "append": [
+        {
+          "literal": "--max-tokens"
+        },
+        {
+          "parameter": "max_tokens"
+        }
+      ]
+    },
+    {
+      "when_present": "max_bytes",
+      "append": [
+        {
+          "literal": "--max-bytes"
+        },
+        {
+          "parameter": "max_bytes"
+        }
+      ]
+    },
+    {
+      "when_present": "timeout_ms",
+      "append": [
+        {
+          "literal": "--timeout-ms"
+        },
+        {
+          "parameter": "timeout_ms"
+        }
+      ]
+    },
+    {
+      "when_present": "env_file",
+      "append": [
+        {
+          "literal": "--env-file"
+        },
+        {
+          "parameter": "env_file"
+        }
+      ]
+    },
+    {
+      "when_present": "fixture",
+      "append": [
+        {
+          "literal": "--fixture"
+        },
+        {
+          "parameter": "fixture"
+        }
+      ]
+    }
   ],
   "contract": {
     "version": 1,
     "backend": "command",
-    "lifecycle": { "kind": "oneshot" },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
     "output": {
       "type": "record",
       "encoding": "json",
       "fields": {
-        "protocol": { "type": "text" },
-        "provider": { "type": "text" },
-        "model": { "type": "text" },
-        "kind": { "type": "text" },
-        "transport": { "type": "text" },
+        "protocol": {
+          "type": "text"
+        },
+        "provider": {
+          "type": "text"
+        },
+        "model": {
+          "type": "text"
+        },
+        "kind": {
+          "type": "text"
+        },
+        "transport": {
+          "type": "text"
+        },
         "usage": {
           "type": "record",
           "fields": {
-            "input_tokens": { "type": "integer" },
-            "output_tokens": { "type": "integer" },
-            "total_tokens": { "type": "integer" }
+            "input_tokens": {
+              "type": "integer"
+            },
+            "output_tokens": {
+              "type": "integer"
+            },
+            "total_tokens": {
+              "type": "integer"
+            }
           },
-          "required": ["input_tokens", "output_tokens", "total_tokens"]
+          "required": [
+            "input_tokens",
+            "output_tokens",
+            "total_tokens"
+          ]
         },
-        "text": { "type": "text" }
+        "text": {
+          "type": "text"
+        }
       },
-      "required": ["protocol", "provider", "model", "kind", "transport", "usage", "text"]
+      "required": [
+        "protocol",
+        "provider",
+        "model",
+        "kind",
+        "transport",
+        "usage",
+        "text"
+      ]
     }
   }
 }

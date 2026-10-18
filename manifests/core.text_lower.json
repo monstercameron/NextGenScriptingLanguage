@@ -1,11 +1,10 @@
 {
   "name": "text.lower",
   "binary": "@execute-applet",
-  "accepts_stdin": false,
+  "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string",
-      "required": true
+      "type": "string"
     }
   },
   "arguments": [
@@ -40,6 +39,13 @@
             "type": "text"
           },
           "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
         }
       },
       "outputs": {
@@ -51,5 +57,9 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "text lower",
+    "lowercase text"
+  ]
 }

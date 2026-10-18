@@ -4,25 +4,58 @@
   "accepts_stdin": false,
   "cacheable": false,
   "parameters": {
-    "command": {"type": "string", "required": true},
-    "extension": {"type": "string", "required": true}
+    "command": {
+      "type": "string",
+      "required": true
+    },
+    "extension": {
+      "type": "string",
+      "required": true
+    }
   },
   "arguments": [
-    {"parameter": "command"},
-    {"literal": "--install-extension"},
-    {"parameter": "extension"}
+    {
+      "parameter": "command"
+    },
+    {
+      "literal": "--install-extension"
+    },
+    {
+      "parameter": "extension"
+    }
   ],
-  "stdio": {"stdout": "discard", "stderr": "discard"},
+  "stdio": {
+    "stdout": "discard",
+    "stderr": "discard"
+  },
   "contract": {
     "version": 1,
     "backend": "command",
-    "lifecycle": {"kind": "oneshot"},
+    "lifecycle": {
+      "kind": "oneshot"
+    },
     "outcomes": [
-      {"status": 0, "name": "success", "kind": "success"},
-      {"status": 1, "name": "failure", "kind": "failure"},
-      {"status": 127, "name": "not_found", "kind": "absence"}
+      {
+        "status": 0,
+        "name": "success",
+        "kind": "success"
+      },
+      {
+        "status": 1,
+        "name": "failure",
+        "kind": "failure"
+      },
+      {
+        "status": 127,
+        "name": "not_found",
+        "kind": "absence"
+      }
     ],
-    "capabilities": ["process.spawn"],
-    "effects": ["process.spawn"]
+    "capabilities": [
+      "process.spawn"
+    ],
+    "effects": [
+      "process.spawn"
+    ]
   }
 }

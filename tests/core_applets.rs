@@ -171,6 +171,49 @@ fn path_text_arithmetic_and_color_operations_are_explicit() {
 }
 
 #[test]
+fn single_input_text_transforms_consume_pipeline_bytes_when_text_is_omitted() {
+    assert_eq!(
+        run("text.upper", json!({}), "straße".as_bytes()).unwrap(),
+        json!("STRASSE")
+    );
+    assert_eq!(
+        run("text.lower", json!({}), b"HELLO").unwrap(),
+        json!("hello")
+    );
+    assert_eq!(
+        run("text.replace", json!({"old":"a","new":"x"}), b"aba").unwrap(),
+        json!("xbx")
+    );
+    assert_eq!(
+        run("text.strip_prefix", json!({"prefix":"pre"}), b"prefix").unwrap(),
+        json!("fix")
+    );
+    assert_eq!(
+        run("text.strip_suffix", json!({"suffix":"fix"}), b"prefix").unwrap(),
+        json!("pre")
+    );
+    assert_eq!(
+        run("text.default_if_empty", json!({"default":"fallback"}), b"").unwrap(),
+        json!("fallback")
+    );
+}
+
+#[test]
+fn json_map_uses_a_byte_budget_instead_of_a_fixed_item_count() {
+    let input = format!(
+        "[{}]",
+        std::iter::repeat_n("0", 100_001)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+    .into_bytes();
+    let mapped = run("json.map", json!({"select":""}), &input).unwrap();
+    assert_eq!(mapped.as_array().unwrap().len(), 100_001);
+    let filtered = run("json.filter", json!({"where":[{"equals":0}]}), &input).unwrap();
+    assert_eq!(filtered.as_array().unwrap().len(), 100_001);
+}
+
+#[test]
 fn arithmetic_contracts_refine_json_parameters_to_number() {
     let sources = [
         include_str!("../manifests/core.number_add.json"),

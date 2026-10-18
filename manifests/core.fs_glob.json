@@ -12,29 +12,45 @@
     }
   },
   "arguments": [
-    { "literal": "fs.glob" },
-    { "literal": "--args" },
-    { "json_arguments": true }
+    {
+      "literal": "fs.glob"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
   ],
   "contract": {
     "version": 1,
     "backend": "in_process",
-    "lifecycle": { "kind": "oneshot" },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
     "output": {
       "type": "list",
       "encoding": "json",
-      "items": { "type": "text" }
+      "items": {
+        "type": "text"
+      }
     },
-    "capabilities": ["filesystem.read"],
+    "capabilities": [
+      "filesystem.read"
+    ],
     "effects": [],
     "ports": {
       "inputs": {
         "pattern": {
-          "schema": { "type": "text" },
+          "schema": {
+            "type": "text"
+          },
           "delivery": "single"
         },
         "include_hidden": {
-          "schema": { "type": "boolean" },
+          "schema": {
+            "type": "boolean"
+          },
           "delivery": "single"
         }
       },
@@ -42,11 +58,16 @@
         "value": {
           "schema": {
             "type": "list",
-            "items": { "type": "text" }
+            "items": {
+              "type": "text"
+            }
           },
           "delivery": "single"
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "fs glob"
+  ]
 }

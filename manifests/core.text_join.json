@@ -64,5 +64,10 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "text join",
+    "join text",
+    "concatenate text"
+  ]
 }

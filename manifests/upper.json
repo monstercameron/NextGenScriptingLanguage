@@ -1,11 +1,17 @@
 {
   "name": "upper",
-  "phrases": ["uppercase"],
+  "phrases": [
+    "uppercase"
+  ],
   "binary": "tr",
   "accepts_stdin": true,
   "cacheable": true,
   "arguments": [
-    { "literal": "[:lower:]" },
-    { "literal": "[:upper:]" }
+    {
+      "literal": "[:lower:]"
+    },
+    {
+      "literal": "[:upper:]"
+    }
   ]
 }

@@ -5,57 +5,189 @@
   "cacheable": false,
   "uncertain_on_failure": true,
   "parameters": {
-    "question": { "type": "string", "required": true },
-    "levels": { "type": "list", "items": "string", "required": true, "min_items": 2 },
-    "model": { "type": "string" },
-    "minimum": { "type": "integer" },
-    "max_bytes": { "type": "integer" },
-    "timeout_ms": { "type": "integer" },
-    "env_file": { "type": "string" },
-    "fixture": { "type": "string" }
+    "question": {
+      "type": "string",
+      "required": true
+    },
+    "levels": {
+      "type": "list",
+      "items": "string",
+      "required": true,
+      "min_items": 2
+    },
+    "model": {
+      "type": "string"
+    },
+    "minimum": {
+      "type": "integer"
+    },
+    "max_bytes": {
+      "type": "integer"
+    },
+    "timeout_ms": {
+      "type": "integer"
+    },
+    "env_file": {
+      "type": "string"
+    },
+    "fixture": {
+      "type": "string"
+    }
   },
   "arguments": [
-    { "literal": "score" },
-    { "literal": "--provider" },
-    { "literal": "jev" },
-    { "when_present": "model", "append": [{ "literal": "--model" }, { "parameter": "model" }] },
-    { "literal": "--question" },
-    { "parameter": "question" },
-    { "literal": "--levels" },
-    { "spread": "levels" },
-    { "when_present": "minimum", "append": [{ "literal": "--minimum" }, { "parameter": "minimum" }] },
-    { "when_present": "max_bytes", "append": [{ "literal": "--max-bytes" }, { "parameter": "max_bytes" }] },
-    { "when_present": "timeout_ms", "append": [{ "literal": "--timeout-ms" }, { "parameter": "timeout_ms" }] },
-    { "when_present": "env_file", "append": [{ "literal": "--env-file" }, { "parameter": "env_file" }] },
-    { "when_present": "fixture", "append": [{ "literal": "--fixture" }, { "parameter": "fixture" }] }
+    {
+      "literal": "score"
+    },
+    {
+      "literal": "--provider"
+    },
+    {
+      "literal": "jev"
+    },
+    {
+      "when_present": "model",
+      "append": [
+        {
+          "literal": "--model"
+        },
+        {
+          "parameter": "model"
+        }
+      ]
+    },
+    {
+      "literal": "--question"
+    },
+    {
+      "parameter": "question"
+    },
+    {
+      "literal": "--levels"
+    },
+    {
+      "spread": "levels"
+    },
+    {
+      "when_present": "minimum",
+      "append": [
+        {
+          "literal": "--minimum"
+        },
+        {
+          "parameter": "minimum"
+        }
+      ]
+    },
+    {
+      "when_present": "max_bytes",
+      "append": [
+        {
+          "literal": "--max-bytes"
+        },
+        {
+          "parameter": "max_bytes"
+        }
+      ]
+    },
+    {
+      "when_present": "timeout_ms",
+      "append": [
+        {
+          "literal": "--timeout-ms"
+        },
+        {
+          "parameter": "timeout_ms"
+        }
+      ]
+    },
+    {
+      "when_present": "env_file",
+      "append": [
+        {
+          "literal": "--env-file"
+        },
+        {
+          "parameter": "env_file"
+        }
+      ]
+    },
+    {
+      "when_present": "fixture",
+      "append": [
+        {
+          "literal": "--fixture"
+        },
+        {
+          "parameter": "fixture"
+        }
+      ]
+    }
   ],
   "contract": {
     "version": 1,
     "backend": "command",
-    "lifecycle": { "kind": "oneshot" },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
     "output": {
       "type": "record",
       "encoding": "json",
       "fields": {
-        "protocol": { "type": "text" },
-        "provider": { "type": "text" },
-        "model": { "type": "text" },
-        "kind": { "type": "text" },
-        "transport": { "type": "text" },
+        "protocol": {
+          "type": "text"
+        },
+        "provider": {
+          "type": "text"
+        },
+        "model": {
+          "type": "text"
+        },
+        "kind": {
+          "type": "text"
+        },
+        "transport": {
+          "type": "text"
+        },
         "usage": {
           "type": "record",
           "fields": {
-            "input_tokens": { "type": "integer" },
-            "output_tokens": { "type": "integer" },
-            "total_tokens": { "type": "integer" }
+            "input_tokens": {
+              "type": "integer"
+            },
+            "output_tokens": {
+              "type": "integer"
+            },
+            "total_tokens": {
+              "type": "integer"
+            }
           },
-          "required": ["input_tokens", "output_tokens", "total_tokens"]
+          "required": [
+            "input_tokens",
+            "output_tokens",
+            "total_tokens"
+          ]
         },
-        "score": { "type": "number" },
-        "confidence_percent": { "type": "integer" },
-        "accepted": { "type": "boolean" }
+        "score": {
+          "type": "number"
+        },
+        "confidence_percent": {
+          "type": "integer"
+        },
+        "accepted": {
+          "type": "boolean"
+        }
       },
-      "required": ["protocol", "provider", "model", "kind", "transport", "usage", "score", "confidence_percent", "accepted"]
+      "required": [
+        "protocol",
+        "provider",
+        "model",
+        "kind",
+        "transport",
+        "usage",
+        "score",
+        "confidence_percent",
+        "accepted"
+      ]
     }
   }
 }

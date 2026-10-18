@@ -3,8 +3,17 @@
   "build_feature": "remote",
   "binary": "@remote-applet",
   "accepts_stdin": false,
-  "parameters": {"pulse": {"type": "integer", "required": true}},
-  "arguments": [{"json_arguments": true}],
+  "parameters": {
+    "pulse": {
+      "type": "integer",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "json_arguments": true
+    }
+  ],
   "contract": {
     "version": 1,
     "backend": "remote",
@@ -14,12 +23,33 @@
       "descriptor_cache": "descriptors/desktop.clock_remote.descriptor.json",
       "descriptor_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     },
-    "output": {"type": "integer", "encoding": "json"},
-    "capabilities": ["network.loopback"],
-    "effects": ["network.loopback"],
+    "output": {
+      "type": "integer",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "network.loopback"
+    ],
+    "effects": [
+      "network.loopback"
+    ],
     "ports": {
-      "inputs": {"pulse": {"schema": {"type": "integer"}, "delivery": "events"}},
-      "outputs": {"value": {"schema": {"type": "integer"}, "delivery": "records"}}
+      "inputs": {
+        "pulse": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "events"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "records"
+        }
+      }
     }
   }
 }

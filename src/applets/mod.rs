@@ -4,6 +4,7 @@
 //! `.program` workflow owns sequencing, retries, and decisions about which
 //! operation to call.
 
+mod aggregation;
 mod arithmetic;
 mod config;
 mod csv;
@@ -207,20 +208,30 @@ pub fn execute_with_context(
 ) -> Result<Value, AppletError> {
     context.checkpoint()?;
     let result = match operation {
+        "list.count"
+        | "list.sum"
+        | "list.min"
+        | "list.max"
+        | "list.unique"
+        | "list.sort"
+        | "list.top"
+        | "list.group"
+        | "text.count_lines_by" => aggregation::run(operation, args, input),
         "path.dirname" => path::dirname(args),
         "path.basename" => path::basename(args),
         "path.remove_suffix" => path::remove_suffix(args),
         "text.trim_final_lf" | "text.normalize" => text::trim_final_lf(args, input),
         "text.concat" => text::concat(args, context),
         "text.matches" => text::matches(args, input, context),
-        "text.default_if_empty" => text::default_if_empty(args),
-        "text.replace" => text::replace(args, context),
-        "text.strip_prefix" => text::strip_prefix(args),
-        "text.strip_suffix" => text::strip_suffix(args),
-        "text.lower" => text::lower(args),
-        "text.upper" => text::upper(args),
+        "text.default_if_empty" => text::default_if_empty(args, input),
+        "text.replace" => text::replace(args, input, context),
+        "text.strip_prefix" => text::strip_prefix(args, input),
+        "text.strip_suffix" => text::strip_suffix(args, input),
+        "text.lower" => text::lower(args, input),
+        "text.upper" => text::upper(args, input),
         "text.join" => text::concat(args, context),
         "text.render" => template::render(args, cwd, context),
+        "text.format" => template::format(args, context),
         "fs.ensure_file" => ensure::ensure_file(args, cwd),
         "fs.ensure_line" => ensure::ensure_line(args, cwd),
         "fs.ensure_symlink" => ensure::ensure_symlink(args, cwd),

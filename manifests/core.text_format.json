@@ -1,0 +1,80 @@
+{
+  "name": "text.format",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "template": {
+      "type": "string",
+      "required": true
+    },
+    "values": {
+      "type": "json",
+      "required": true
+    },
+    "escape": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "literal": "text.format"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "template": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "values": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "escape": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  },
+  "phrases": [
+    "format template",
+    "escape text",
+    "build safe text"
+  ]
+}

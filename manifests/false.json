@@ -1,6 +1,8 @@
 {
   "name": "false",
-  "phrases": ["fail"],
+  "phrases": [
+    "fail"
+  ],
   "binary": "false",
   "arguments": []
 }

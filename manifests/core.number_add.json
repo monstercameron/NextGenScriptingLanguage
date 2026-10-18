@@ -61,5 +61,10 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "number add",
+    "add numbers",
+    "sum numbers"
+  ]
 }

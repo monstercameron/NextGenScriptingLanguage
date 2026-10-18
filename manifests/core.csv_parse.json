@@ -3,41 +3,77 @@
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
-    "text": { "type": "string" },
-    "has_headers": { "type": "boolean" }
+    "text": {
+      "type": "string"
+    },
+    "has_headers": {
+      "type": "boolean"
+    }
   },
   "arguments": [
-    { "literal": "csv.parse" },
-    { "literal": "--args" },
-    { "json_arguments": true }
+    {
+      "literal": "csv.parse"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
   ],
   "contract": {
     "version": 1,
     "backend": "in_process",
-    "lifecycle": { "kind": "oneshot" },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
     "output": {
       "type": "record",
       "encoding": "json",
       "fields": {
-        "headers": { "type": "list", "items": { "type": "text" } },
+        "headers": {
+          "type": "list",
+          "items": {
+            "type": "text"
+          }
+        },
         "rows": {
           "type": "list",
           "items": {
             "type": "list",
-            "items": { "type": "text" }
+            "items": {
+              "type": "text"
+            }
           }
         }
       },
-      "required": ["headers", "rows"]
+      "required": [
+        "headers",
+        "rows"
+      ]
     },
-    "capabilities": ["csv.convert"],
+    "capabilities": [
+      "csv.convert"
+    ],
     "effects": [],
     "ports": {
       "inputs": {
-        "text": { "schema": { "type": "text" }, "delivery": "single" },
-        "has_headers": { "schema": { "type": "boolean" }, "delivery": "single" },
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "has_headers": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
         "stdin": {
-          "schema": { "type": "text" },
+          "schema": {
+            "type": "text"
+          },
           "delivery": "single",
           "encoding": "raw"
         }
@@ -47,20 +83,33 @@
           "schema": {
             "type": "record",
             "fields": {
-              "headers": { "type": "list", "items": { "type": "text" } },
+              "headers": {
+                "type": "list",
+                "items": {
+                  "type": "text"
+                }
+              },
               "rows": {
                 "type": "list",
                 "items": {
                   "type": "list",
-                  "items": { "type": "text" }
+                  "items": {
+                    "type": "text"
+                  }
                 }
               }
             },
-            "required": ["headers", "rows"]
+            "required": [
+              "headers",
+              "rows"
+            ]
           },
           "delivery": "single"
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "csv parse"
+  ]
 }

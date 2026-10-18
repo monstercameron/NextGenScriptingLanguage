@@ -106,5 +106,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "color parse_rgb result"
+  ]
 }

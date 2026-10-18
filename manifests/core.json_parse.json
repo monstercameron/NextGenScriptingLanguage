@@ -57,5 +57,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "json parse"
+  ]
 }

@@ -4,21 +4,32 @@
   "accepts_stdin": true,
   "cacheable": false,
   "parameters": {
-    "flags": { "type": "list", "items": "string" },
-    "path": { "type": "string" }
+    "flags": {
+      "type": "list",
+      "items": "string"
+    },
+    "path": {
+      "type": "string"
+    }
   },
   "arguments": [
     {
       "when_present": "flags",
       "append": [
-        { "spread": "flags" }
+        {
+          "spread": "flags"
+        }
       ]
     },
     {
       "when_present": "path",
       "append": [
-        { "literal": "--" },
-        { "parameter": "path" }
+        {
+          "literal": "--"
+        },
+        {
+          "parameter": "path"
+        }
       ]
     }
   ]

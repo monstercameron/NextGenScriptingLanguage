@@ -61,5 +61,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "path remove_suffix"
+  ]
 }

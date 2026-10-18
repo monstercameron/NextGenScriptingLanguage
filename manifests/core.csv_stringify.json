@@ -3,19 +3,35 @@
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
-    "table": { "type": "json", "required": true }
+    "table": {
+      "type": "json",
+      "required": true
+    }
   },
   "arguments": [
-    { "literal": "csv.stringify" },
-    { "literal": "--args" },
-    { "json_arguments": true }
+    {
+      "literal": "csv.stringify"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
   ],
   "contract": {
     "version": 1,
     "backend": "in_process",
-    "lifecycle": { "kind": "oneshot" },
-    "output": { "type": "text", "encoding": "json" },
-    "capabilities": ["csv.convert"],
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "text",
+      "encoding": "json"
+    },
+    "capabilities": [
+      "csv.convert"
+    ],
     "effects": [],
     "ports": {
       "inputs": {
@@ -23,26 +39,41 @@
           "schema": {
             "type": "record",
             "fields": {
-              "headers": { "type": "list", "items": { "type": "text" } },
+              "headers": {
+                "type": "list",
+                "items": {
+                  "type": "text"
+                }
+              },
               "rows": {
                 "type": "list",
                 "items": {
                   "type": "list",
-                  "items": { "type": "text" }
+                  "items": {
+                    "type": "text"
+                  }
                 }
               }
             },
-            "required": ["headers", "rows"]
+            "required": [
+              "headers",
+              "rows"
+            ]
           },
           "delivery": "single"
         }
       },
       "outputs": {
         "value": {
-          "schema": { "type": "text" },
+          "schema": {
+            "type": "text"
+          },
           "delivery": "single"
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "csv stringify"
+  ]
 }

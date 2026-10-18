@@ -257,8 +257,11 @@ fn text_output(value: String) -> Result<Value, AppletError> {
 
 /// Return `text`, or `default` when `text` is empty. Empty means zero bytes:
 /// a value of only spaces is not empty.
-pub(super) fn default_if_empty(args: &Map<String, Value>) -> Result<Value, AppletError> {
-    let text = required_text(args, "text")?;
+pub(super) fn default_if_empty(
+    args: &Map<String, Value>,
+    input: &[u8],
+) -> Result<Value, AppletError> {
+    let text = text_input(args, input)?;
     let default = required_text(args, "default")?;
     check_text_size(default.len())?;
     text_output(if text.is_empty() { default } else { text }.to_owned())
@@ -268,9 +271,10 @@ pub(super) fn default_if_empty(args: &Map<String, Value>) -> Result<Value, Apple
 /// `from` cannot be empty, which would otherwise match between every character.
 pub(super) fn replace(
     args: &Map<String, Value>,
+    input: &[u8],
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
-    let text = required_text(args, "text")?;
+    let text = text_input(args, input)?;
     let from = required_text(args, "old")?;
     let to = required_text(args, "new")?;
     if from.is_empty() {
@@ -292,28 +296,28 @@ pub(super) fn replace(
 }
 
 /// Remove `prefix` when the text starts with it; otherwise return the text.
-pub(super) fn strip_prefix(args: &Map<String, Value>) -> Result<Value, AppletError> {
-    let text = required_text(args, "text")?;
+pub(super) fn strip_prefix(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
+    let text = text_input(args, input)?;
     let prefix = required_text(args, "prefix")?;
     text_output(text.strip_prefix(prefix).unwrap_or(text).to_owned())
 }
 
 /// Remove `suffix` when the text ends with it; otherwise return the text.
-pub(super) fn strip_suffix(args: &Map<String, Value>) -> Result<Value, AppletError> {
-    let text = required_text(args, "text")?;
+pub(super) fn strip_suffix(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
+    let text = text_input(args, input)?;
     let suffix = required_text(args, "suffix")?;
     text_output(text.strip_suffix(suffix).unwrap_or(text).to_owned())
 }
 
 /// Unicode default lowercase mapping. It is locale-independent, so Turkish
 /// dotted and dotless i are not special-cased.
-pub(super) fn lower(args: &Map<String, Value>) -> Result<Value, AppletError> {
-    text_output(required_text(args, "text")?.to_lowercase())
+pub(super) fn lower(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
+    text_output(text_input(args, input)?.to_lowercase())
 }
 
 /// Unicode default uppercase mapping. It is locale-independent.
-pub(super) fn upper(args: &Map<String, Value>) -> Result<Value, AppletError> {
-    text_output(required_text(args, "text")?.to_uppercase())
+pub(super) fn upper(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
+    text_output(text_input(args, input)?.to_uppercase())
 }
 
 fn tick(context: &ExecutionContext<'_>, work: &mut usize) -> Result<(), AppletError> {
@@ -366,8 +370,14 @@ mod tests {
     fn case_conversion_matches_unicode_case_mapping() {
         for text in ["", "ascii TEXT 123", "Straße İΣ", "éclair ıß"] {
             let args = Map::from_iter([("text".to_owned(), Value::String(text.to_owned()))]);
-            assert_eq!(upper(&args).unwrap(), Value::String(text.to_uppercase()));
-            assert_eq!(lower(&args).unwrap(), Value::String(text.to_lowercase()));
+            assert_eq!(
+                upper(&args, &[]).unwrap(),
+                Value::String(text.to_uppercase())
+            );
+            assert_eq!(
+                lower(&args, &[]).unwrap(),
+                Value::String(text.to_lowercase())
+            );
         }
     }
 }

@@ -12,7 +12,6 @@ const MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_POINTER_BYTES: usize = 4096;
 const MAX_POINTER_SEGMENTS: usize = 256;
 const MAX_FILTER_CLAUSES: usize = 32;
-const MAX_COLLECTION_ITEMS: usize = 100_000;
 const MAX_DEPTH: usize = 128;
 
 pub(super) fn parse(
@@ -182,12 +181,8 @@ pub(super) fn map(
     let array = lookup(&document, &array_pointer)?
         .and_then(Value::as_array)
         .ok_or_else(|| invalid("the selected JSON value must be an array"))?;
-    if array.len() > MAX_COLLECTION_ITEMS {
-        return Err(invalid(format!(
-            "selected array exceeds the {MAX_COLLECTION_ITEMS}-item limit"
-        )));
-    }
-    let mut mapped = Vec::with_capacity(array.len());
+    let mut mapped = Vec::new();
+    let mut output_bytes = 2usize;
     for (index, item) in array.iter().enumerate() {
         checkpoint_work(context, index)?;
         let value = lookup(item, &selection_pointer)?.ok_or_else(|| {
@@ -196,6 +191,7 @@ pub(super) fn map(
                 format!("select pointer is absent from array item {index}"),
             )
         })?;
+        output_bytes = add_output_item_size(output_bytes, value)?;
         mapped.push(value.clone());
     }
     let result = Value::Array(mapped);
@@ -213,11 +209,6 @@ pub(super) fn filter(
     let array = lookup(&document, &array_pointer)?
         .and_then(Value::as_array)
         .ok_or_else(|| invalid("the selected JSON value must be an array"))?;
-    if array.len() > MAX_COLLECTION_ITEMS {
-        return Err(invalid(format!(
-            "selected array exceeds the {MAX_COLLECTION_ITEMS}-item limit"
-        )));
-    }
     let clauses = args
         .get("where")
         .and_then(Value::as_array)
@@ -233,6 +224,7 @@ pub(super) fn filter(
         predicates.push(parse_predicate(clause, index)?);
     }
     let mut selected = Vec::new();
+    let mut output_bytes = 2usize;
     let mut work = 0usize;
     for item in array {
         checkpoint_work(context, work)?;
@@ -247,12 +239,37 @@ pub(super) fn filter(
             }
         }
         if matches {
+            output_bytes = add_output_item_size(output_bytes, item)?;
             selected.push(item.clone());
         }
     }
     let result = Value::Array(selected);
     check_size_and_depth(&result, context)?;
     Ok(result)
+}
+
+fn add_output_item_size(current: usize, value: &Value) -> Result<usize, AppletError> {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, value)
+        .map_err(|error| invalid(format!("JSON item cannot be serialized: {error}")))?;
+    let separator = usize::from(current > 2);
+    let total = current.saturating_add(separator).saturating_add(counter.0);
+    if total > MAX_JSON_BYTES {
+        return Err(invalid(format!(
+            "JSON selection exceeds the {MAX_JSON_BYTES}-byte output limit"
+        )));
+    }
+    Ok(total)
 }
 
 fn document(

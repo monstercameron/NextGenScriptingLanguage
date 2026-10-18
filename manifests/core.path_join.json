@@ -55,5 +55,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "path join"
+  ]
 }

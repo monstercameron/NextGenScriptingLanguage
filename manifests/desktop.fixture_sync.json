@@ -3,8 +3,18 @@
   "build_feature": "remote",
   "binary": "@remote-applet",
   "accepts_stdin": false,
-  "parameters": {"click": {"type": "record", "fields": {}, "required": true}},
-  "arguments": [{"json_arguments": true}],
+  "parameters": {
+    "click": {
+      "type": "record",
+      "fields": {},
+      "required": true
+    }
+  },
+  "arguments": [
+    {
+      "json_arguments": true
+    }
+  ],
   "contract": {
     "version": 1,
     "backend": "remote",
@@ -17,21 +27,52 @@
     "output": {
       "type": "record",
       "encoding": "json",
-      "fields": {"synced": {"type": "boolean"}, "message": {"type": "text"}},
-      "required": ["synced", "message"]
+      "fields": {
+        "synced": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "text"
+        }
+      },
+      "required": [
+        "synced",
+        "message"
+      ]
     },
-    "capabilities": ["network.loopback"],
-    "effects": ["network.loopback"],
+    "capabilities": [
+      "network.loopback"
+    ],
+    "effects": [
+      "network.loopback"
+    ],
     "ports": {
       "inputs": {
-        "click": {"schema": {"type": "record", "fields": {}, "required": []}, "delivery": "events"}
+        "click": {
+          "schema": {
+            "type": "record",
+            "fields": {},
+            "required": []
+          },
+          "delivery": "events"
+        }
       },
       "outputs": {
         "value": {
           "schema": {
             "type": "record",
-            "fields": {"synced": {"type": "boolean"}, "message": {"type": "text"}},
-            "required": ["synced", "message"]
+            "fields": {
+              "synced": {
+                "type": "boolean"
+              },
+              "message": {
+                "type": "text"
+              }
+            },
+            "required": [
+              "synced",
+              "message"
+            ]
           },
           "delivery": "records"
         }

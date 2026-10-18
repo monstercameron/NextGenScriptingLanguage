@@ -75,5 +75,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "number parse_integer"
+  ]
 }

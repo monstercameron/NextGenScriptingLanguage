@@ -13,24 +13,36 @@
     }
   },
   "arguments": [
-    { "literal": "fs.test" },
-    { "literal": "--args" },
-    { "json_arguments": true }
+    {
+      "literal": "fs.test"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
   ],
   "contract": {
     "version": 1,
     "backend": "in_process",
-    "lifecycle": { "kind": "oneshot" },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
     "output": {
       "type": "boolean",
       "encoding": "json"
     },
-    "capabilities": ["filesystem.read"],
+    "capabilities": [
+      "filesystem.read"
+    ],
     "effects": [],
     "ports": {
       "inputs": {
         "path": {
-          "schema": { "type": "path" },
+          "schema": {
+            "type": "path"
+          },
           "delivery": "single"
         },
         "kind": {
@@ -52,10 +64,15 @@
       },
       "outputs": {
         "value": {
-          "schema": { "type": "boolean" },
+          "schema": {
+            "type": "boolean"
+          },
           "delivery": "single"
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "fs test"
+  ]
 }

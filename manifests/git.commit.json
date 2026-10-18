@@ -1,21 +1,42 @@
 {
   "name": "git.commit",
-  "phrases": ["commit changes"],
+  "phrases": [
+    "commit changes"
+  ],
   "binary": "git",
   "parameters": {
-    "message": { "type": "string", "required": true },
-    "files": { "type": "list", "items": "string", "min_items": 1 }
+    "message": {
+      "type": "string",
+      "required": true
+    },
+    "files": {
+      "type": "list",
+      "items": "string",
+      "min_items": 1
+    }
   },
   "arguments": [
-    { "literal": "commit" },
-    { "literal": "-m" },
-    { "parameter": "message" },
+    {
+      "literal": "commit"
+    },
+    {
+      "literal": "-m"
+    },
+    {
+      "parameter": "message"
+    },
     {
       "when_present": "files",
       "append": [
-        { "literal": "--only" },
-        { "literal": "--" },
-        { "spread": "files" }
+        {
+          "literal": "--only"
+        },
+        {
+          "literal": "--"
+        },
+        {
+          "spread": "files"
+        }
       ]
     }
   ]

@@ -80,5 +80,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "color rgb_to_hex"
+  ]
 }

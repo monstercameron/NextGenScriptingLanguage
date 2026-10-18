@@ -1,131 +1,141 @@
 execute.bundled-manifests	2
 awk.json	480	awk		0	193
 cat.json	566	cat	copy	193	222
-cd.json	180	cd		415	110
-comm.json	456	comm		525	187
-core.color_parse_rgb.json	1706	color.parse_rgb		712	442
-core.color_parse_rgb_result.json	2016	color.parse_rgb.result		1154	526
-core.color_rgb_to_hex.json	1479	color.rgb_to_hex		1680	381
-core.csv_parse.json	1656	csv.parse		2061	459
-core.csv_stringify.json	1150	csv.stringify		2520	396
-core.dbus_monitor_system.json	965	dbus.monitor_system		2916	368
-core.dbus_monitor_user.json	961	dbus.monitor_user		3284	366
-core.env_load.json	1019	env.load		3650	339
-core.fs_ensure_dir.json	1807	fs.ensure_dir		3989	466
-core.fs_ensure_file.json	2055	fs.ensure_file		4455	487
-core.fs_ensure_line.json	1934	fs.ensure_line		4942	487
-core.fs_ensure_symlink.json	1991	fs.ensure_symlink		5429	472
-core.fs_glob.json	1067	fs.glob		5901	374
-core.fs_read.json	1031	fs.read		6275	370
-core.fs_snapshot.json	1039	fs.snapshot		6645	371
-core.fs_test.json	1226	fs.test		7016	411
-core.fs_transaction.json	1341	fs.transaction		7427	424
-core.fs_transaction_recover.json	1357	fs.transaction.recover		7851	433
-core.fs_unlink_checked.json	1437	fs.unlink_checked		8284	453
-core.fs_write_atomic.json	1646	fs.write_atomic		8737	467
-core.hypr_activewindow.json	695	hypr.activewindow		9204	303
-core.hypr_clients.json	734	hypr.clients		9507	311
-core.hypr_dispatch.json	1823	hypr.dispatch		9818	621
-core.hypr_dispatch_exec.json	1310	hypr.dispatch_exec		10439	478
-core.hypr_monitors.json	736	hypr.monitors		10917	313
-core.hypr_socket2.json	845	hypr.socket2		11230	358
-core.hypr_workspaces.json	740	hypr.workspaces		11588	314
-core.ini_parse.json	1021	ini.parse		11902	337
-core.ini_stringify.json	902	ini.stringify		12239	325
-core.json_filter.json	1510	json.filter		12564	393
-core.json_get.json	1196	json.get		12957	342
-core.json_map.json	1508	json.map		13299	393
-core.json_parse.json	1021	json.parse		13692	335
-core.json_set.json	1388	json.set		14027	361
-core.json_stringify.json	902	json.stringify		14388	321
-core.jsonc_edit_content.json	1594	jsonc.edit_content		14709	389
-core.jsonc_remove.json	1658	jsonc.remove		15098	482
-core.jsonc_set.json	1719	jsonc.set		15580	484
-core.menu_fuzzel.json	1712	menu.fuzzel		16064	493
-core.menu_gum_choose.json	1917	menu.gum_choose		16557	515
-core.menu_gum_confirm.json	1582	menu.gum_confirm		17072	494
-core.menu_gum_input.json	2272	menu.gum_input		17566	536
-core.menu_walker.json	1366	menu.walker		18102	463
-core.notify_dismiss.json	1399	notify.dismiss		18565	430
-core.notify_restore.json	606	notify.restore		18995	268
-core.notify_send.json	4752	notify.send		19263	752
-core.number_add.json	1092	number.add		20015	335
-core.number_compare.json	1102	number.compare		20350	344
-core.number_divide.json	1098	number.divide		20694	337
-core.number_multiply.json	1102	number.multiply		21031	339
-core.number_parse_integer.json	1423	number.parse_integer		21370	388
-core.number_parse_integer_result.json	1733	number.parse_integer.result		21758	473
-core.number_subtract.json	1102	number.subtract		22231	336
-core.number_to_text.json	927	number.to_text		22567	331
-core.osd_brightness.json	978	osd.brightness		22898	377
-core.osd_caps.json	605	osd.caps		23275	273
-core.osd_volume.json	1006	osd.volume		23548	390
-core.package_check_updates.json	768	package.check_updates		23938	316
-core.package_install.json	1132	package.install		24254	396
-core.package_install_aur.json	1089	package.install_aur		24650	392
-core.package_query.json	1119	package.query		25042	400
-core.path_basename.json	1068	path.basename		25442	348
-core.path_dirname.json	896	path.dirname		25790	325
-core.path_join.json	984	path.join		26115	343
-core.path_remove_suffix.json	1104	path.remove_suffix		26458	344
-core.systemd_user_disable.json	1000	systemd.user.disable		26802	374
-core.systemd_user_enable.json	998	systemd.user.enable		27176	373
-core.systemd_user_is_active.json	1252	systemd.user.is_active		27549	434
-core.systemd_user_restart.json	1000	systemd.user.restart		27983	374
-core.systemd_user_start.json	996	systemd.user.start		28357	372
-core.systemd_user_stop.json	994	systemd.user.stop		28729	372
-core.text_concat.json	1166	text.concat		29101	364
-core.text_default_if_empty.json	1114	text.default_if_empty		29465	346
-core.text_join.json	1162	text.join		29811	365
-core.text_lines.json	1003	text.lines		30176	350
-core.text_lower.json	896	text.lower		30526	324
-core.text_matches.json	1909	text.matches		30850	468
-core.text_render.json	1135	text.render		31318	380
-core.text_replace.json	1276	text.replace		31698	349
-core.text_split.json	1303	text.split		32047	385
-core.text_strip_prefix.json	1104	text.strip_prefix		32432	341
-core.text_strip_suffix.json	1104	text.strip_suffix		32773	342
-core.text_trim_final_lf.json	1060	text.trim_final_lf		33115	343
-core.text_upper.json	896	text.upper		33458	323
-core.toml_parse.json	1023	toml.parse		33781	339
-core.toml_stringify.json	904	toml.stringify		34120	327
-core.yaml_parse.json	1023	yaml.parse		34447	339
-core.yaml_stringify.json	904	yaml.stringify		34786	327
-count.lines.json	168	count.lines	count lines	35113	117
-cut.json	426	cut		35230	165
-desktop.clock_format.json	1005	desktop.clock_format		35395	417
-desktop.clock_local.json	815	desktop.clock_local		35812	371
-desktop.clock_remote.json	897	desktop.clock_remote		36183	376
-desktop.fixture_sync.json	1291	desktop.fixture_sync		36559	456
-desktop.quickshell.json	513	desktop.quickshell		37015	245
-false.json	85	false	fail	37260	70
-gh.repo.json	471	gh.repo		37330	211
-git.commit.json	493	git.commit	commit changes	37541	224
-grep.json	443	grep		37765	190
-head.json	275	head		37955	146
-jev.ask.json	1107	jev.ask		38101	342
-jev.classify.json	2538	jev.classify		38443	659
-jev.judge.json	2228	jev.judge		39102	594
-jev.score.json	2367	jev.score		39696	634
-join.json	456	join		40330	187
-jq.json	459	jq		40517	203
-jq.ps.json	920	jq.ps		40720	438
-llm.ask.json	2812	llm.ask		41158	651
-llm.extract.json	2933	llm.extract		41809	667
-ls.json	396	ls		42476	173
-mkdir.json	480	mkdir		42649	198
-omarchy.browser-refresh.json	961	omarchy.browser-refresh		42847	374
-omarchy.editor-install.json	803	omarchy.editor-install		43221	348
-omarchy.editor-list.json	770	omarchy.editor-list		43569	360
-paste.json	458	paste		43929	187
-printf.json	227	printf	print	44116	136
-ps.json	288	ps		44252	148
-pwd.json	58	pwd		44400	57
-sed.json	441	sed		44457	194
-sort.json	295	sort		44651	151
-tail.follow.json	323	tail.follow	follow file	44802	167
-tail.json	447	tail		44969	198
-tr.json	557	tr		45167	208
-uniq.json	295	uniq		45375	152
-upper.json	199	upper	uppercase	45527	125
-wc.json	279	wc		45652	160
+cd.json	206	cd		415	113
+comm.json	456	comm		528	187
+core.color_parse_rgb.json	1748	color.parse_rgb	color parse_rgb	715	453
+core.color_parse_rgb_result.json	2065	color.parse_rgb.result	color parse_rgb result	1168	542
+core.color_rgb_to_hex.json	1522	color.rgb_to_hex	color rgb_to_hex	1710	393
+core.csv_parse.json	2146	csv.parse	csv parse	2103	495
+core.csv_stringify.json	1456	csv.stringify	csv stringify	2598	416
+core.dbus_monitor_system.json	965	dbus.monitor_system		3014	368
+core.dbus_monitor_user.json	961	dbus.monitor_user		3382	366
+core.env_load.json	1054	env.load	env load	3748	351
+core.fs_ensure_dir.json	1847	fs.ensure_dir	fs ensure_dir	4099	476
+core.fs_ensure_file.json	2096	fs.ensure_file	fs ensure_file	4575	501
+core.fs_ensure_line.json	1975	fs.ensure_line	fs ensure_line	5076	500
+core.fs_ensure_symlink.json	2035	fs.ensure_symlink	fs ensure_symlink	5576	485
+core.fs_glob.json	1237	fs.glob	fs glob	6061	396
+core.fs_read.json	1031	fs.read		6457	370
+core.fs_snapshot.json	1039	fs.snapshot		6827	371
+core.fs_test.json	1356	fs.test	fs test	7198	417
+core.fs_transaction.json	1341	fs.transaction		7615	424
+core.fs_transaction_recover.json	1357	fs.transaction.recover		8039	433
+core.fs_unlink_checked.json	1437	fs.unlink_checked		8472	453
+core.fs_write_atomic.json	1646	fs.write_atomic		8925	467
+core.hypr_activewindow.json	695	hypr.activewindow		9392	303
+core.hypr_clients.json	734	hypr.clients		9695	311
+core.hypr_dispatch.json	1823	hypr.dispatch		10006	621
+core.hypr_dispatch_exec.json	1310	hypr.dispatch_exec		10627	478
+core.hypr_monitors.json	736	hypr.monitors		11105	313
+core.hypr_socket2.json	845	hypr.socket2		11418	358
+core.hypr_workspaces.json	740	hypr.workspaces		11776	314
+core.ini_parse.json	1057	ini.parse	ini parse	12090	349
+core.ini_stringify.json	942	ini.stringify	ini stringify	12439	337
+core.json_filter.json	1575	json.filter	json filterfilter json records	12776	417
+core.json_get.json	1231	json.get	json get	13193	354
+core.json_map.json	1587	json.map	json mapselect fieldsmap json values	13547	422
+core.json_parse.json	1058	json.parse	json parse	13969	347
+core.json_set.json	1423	json.set	json set	14316	373
+core.json_stringify.json	943	json.stringify	json stringify	14689	333
+core.jsonc_edit_content.json	1639	jsonc.edit_content	jsonc edit_content	15022	400
+core.jsonc_remove.json	1658	jsonc.remove		15422	482
+core.jsonc_set.json	1719	jsonc.set		15904	484
+core.list_count.json	1957	list.count	count itemscount valuescount list	16388	438
+core.list_group.json	1752	list.group	group recordscount by key	16826	452
+core.list_max.json	1933	list.max	maximum valuelargest number	17278	443
+core.list_min.json	1934	list.min	minimum valuesmallest number	17721	444
+core.list_sort.json	1748	list.sort	sort listorder records	18165	447
+core.list_sum.json	1936	list.sum	sum valuesadd list numbers	18612	447
+core.list_top.json	1747	list.top	top valueslargest records	19059	442
+core.list_unique.json	2057	list.unique	deduplicate listunique values	19501	466
+core.menu_fuzzel.json	1712	menu.fuzzel		19967	493
+core.menu_gum_choose.json	1917	menu.gum_choose		20460	515
+core.menu_gum_confirm.json	1582	menu.gum_confirm		20975	494
+core.menu_gum_input.json	2272	menu.gum_input		21469	536
+core.menu_walker.json	1366	menu.walker		22005	463
+core.notify_dismiss.json	1399	notify.dismiss		22468	430
+core.notify_restore.json	606	notify.restore		22898	268
+core.notify_send.json	4752	notify.send		23166	752
+core.number_add.json	1167	number.add	number addadd numberssum numbers	23918	360
+core.number_compare.json	1143	number.compare	number compare	24278	357
+core.number_divide.json	1138	number.divide	number divide	24635	349
+core.number_multiply.json	1144	number.multiply	number multiply	24984	351
+core.number_parse_integer.json	1470	number.parse_integer	number parse_integer	25335	401
+core.number_parse_integer_result.json	1787	number.parse_integer.result	number parse_integer result	25736	489
+core.number_subtract.json	1144	number.subtract	number subtract	26225	348
+core.number_to_text.json	968	number.to_text	number to_text	26573	343
+core.osd_brightness.json	978	osd.brightness		26916	377
+core.osd_caps.json	605	osd.caps		27293	273
+core.osd_volume.json	1006	osd.volume		27566	390
+core.package_check_updates.json	768	package.check_updates		27956	316
+core.package_install.json	1132	package.install		28272	396
+core.package_install_aur.json	1089	package.install_aur		28668	392
+core.package_query.json	1119	package.query		29060	400
+core.path_basename.json	1108	path.basename	path basename	29460	360
+core.path_dirname.json	935	path.dirname	path dirname	29820	337
+core.path_join.json	1020	path.join	path join	30157	354
+core.path_remove_suffix.json	1149	path.remove_suffix	path remove_suffix	30511	355
+core.systemd_user_disable.json	1000	systemd.user.disable		30866	374
+core.systemd_user_enable.json	998	systemd.user.enable		31240	373
+core.systemd_user_is_active.json	1252	systemd.user.is_active		31613	434
+core.systemd_user_restart.json	1000	systemd.user.restart		32047	374
+core.systemd_user_start.json	996	systemd.user.start		32421	372
+core.systemd_user_stop.json	994	systemd.user.stop		32793	372
+core.text_concat.json	1204	text.concat	text concat	33165	376
+core.text_count_lines_by.json	1436	text.count_lines_by	count lines by fieldgroup lines by key	33541	432
+core.text_default_if_empty.json	1315	text.default_if_empty	text default_if_emptydefault empty text	33973	380
+core.text_format.json	1376	text.format	format templateescape textbuild safe text	34353	387
+core.text_join.json	1239	text.join	text joinjoin textconcatenate text	34740	394
+core.text_lines.json	1176	text.lines	text lines	35134	369
+core.text_lower.json	1082	text.lower	text lowerlowercase text	35503	353
+core.text_matches.json	1948	text.matches	text matches	35856	481
+core.text_render.json	1363	text.render	text renderrender templatefill template	36337	409
+core.text_replace.json	1462	text.replace	text replacereplace text	36746	383
+core.text_split.json	1520	text.split	text split	37129	403
+core.text_strip_prefix.json	1301	text.strip_prefix	text strip_prefixremove text prefix	37532	378
+core.text_strip_suffix.json	1301	text.strip_suffix	text strip_suffixremove text suffix	37910	378
+core.text_trim_final_lf.json	1105	text.trim_final_lf	text trim_final_lf	38288	355
+core.text_upper.json	1082	text.upper	text upperuppercase text	38643	351
+core.toml_parse.json	1060	toml.parse	toml parse	38994	351
+core.toml_stringify.json	945	toml.stringify	toml stringify	39345	338
+core.yaml_parse.json	1095	yaml.parse	yaml parseparse yamlread yaml	39683	364
+core.yaml_stringify.json	945	yaml.stringify	yaml stringify	40047	338
+count.lines.json	186	count.lines	count lines	40385	123
+cut.json	426	cut		40508	165
+desktop.clock_format.json	1361	desktop.clock_format		40673	446
+desktop.clock_local.json	1083	desktop.clock_local		41119	393
+desktop.clock_remote.json	1125	desktop.clock_remote		41512	396
+desktop.fixture_sync.json	1681	desktop.fixture_sync		41908	489
+desktop.quickshell.json	513	desktop.quickshell		42397	245
+false.json	93	false	fail	42642	74
+gh.repo.json	471	gh.repo		42716	211
+git.commit.json	623	git.commit	commit changes	42927	228
+grep.json	443	grep		43155	190
+head.json	275	head		43345	146
+jev.ask.json	1603	jev.ask		43491	360
+jev.classify.json	3664	jev.classify		43851	690
+jev.judge.json	3170	jev.judge		44541	620
+jev.score.json	3357	jev.score		45161	663
+join.json	456	join		45824	187
+jq.json	459	jq		46011	203
+jq.ps.json	920	jq.ps		46214	438
+llm.ask.json	4082	llm.ask		46652	684
+llm.extract.json	4239	llm.extract		47336	705
+ls.json	476	ls		48041	173
+mkdir.json	480	mkdir		48214	198
+omarchy.browser-refresh.json	961	omarchy.browser-refresh		48412	374
+omarchy.editor-install.json	1019	omarchy.editor-install		48786	368
+omarchy.editor-list.json	970	omarchy.editor-list		49154	379
+paste.json	458	paste		49533	187
+printf.json	271	printf	print	49720	144
+ps.json	288	ps		49864	148
+pwd.json	58	pwd		50012	57
+sed.json	441	sed		50069	194
+sort.json	295	sort		50263	151
+tail.follow.json	397	tail.follow	follow file	50414	175
+tail.json	527	tail		50589	200
+tr.json	557	tr		50789	208
+uniq.json	295	uniq		50997	152
+upper.json	227	upper	uppercase	51149	130
+wc.json	313	wc		51279	161

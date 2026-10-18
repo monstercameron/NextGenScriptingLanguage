@@ -52,5 +52,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "number to_text"
+  ]
 }

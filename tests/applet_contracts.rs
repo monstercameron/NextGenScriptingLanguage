@@ -48,6 +48,27 @@ fn write_manifest(path: &Path, manifest: &Value) {
 }
 
 #[test]
+fn every_shipped_in_process_applet_has_an_intent_phrase() {
+    let manifests = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    for entry in fs::read_dir(manifests).unwrap() {
+        let entry = entry.unwrap();
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let value: Value = serde_json::from_slice(&fs::read(entry.path()).unwrap()).unwrap();
+        let name = value["name"].as_str().unwrap();
+        if value["contract"]["backend"] == "in_process" {
+            assert!(
+                value["phrases"]
+                    .as_array()
+                    .is_some_and(|phrases| !phrases.is_empty()),
+                "{name} lacks intent phrases"
+            );
+        }
+    }
+}
+
+#[test]
 fn discovery_is_deterministic_resolves_aliases_and_exposes_validated_types_and_argv() {
     let directory = tempfile::tempdir().unwrap();
     let catalog = directory.path().join("catalog");

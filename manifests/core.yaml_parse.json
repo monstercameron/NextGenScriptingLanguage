@@ -57,5 +57,10 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "yaml parse",
+    "parse yaml",
+    "read yaml"
+  ]
 }

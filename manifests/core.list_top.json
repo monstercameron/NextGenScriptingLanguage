@@ -1,0 +1,100 @@
+{
+  "name": "list.top",
+  "phrases": [
+    "top values",
+    "largest records"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "items": {
+      "type": "json"
+    },
+    "key": {
+      "type": "string",
+      "required": true
+    },
+    "n": {
+      "type": "integer",
+      "required": true
+    },
+    "collect": {
+      "type": "boolean"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "list.top"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "type": "list",
+      "encoding": "json",
+      "items": {
+        "type": "json"
+      }
+    },
+    "capabilities": [
+      "data.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "items": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "key": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "n": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "collect": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
+        }
+      },
+      "outputs": {
+        "value": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          },
+          "delivery": "single"
+        }
+      }
+    }
+  }
+}

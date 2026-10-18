@@ -60,5 +60,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "path basename"
+  ]
 }

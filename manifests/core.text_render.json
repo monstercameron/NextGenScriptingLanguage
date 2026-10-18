@@ -15,41 +15,65 @@
     }
   },
   "arguments": [
-    { "literal": "text.render" },
-    { "literal": "--args" },
-    { "json_arguments": true }
+    {
+      "literal": "text.render"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
   ],
   "contract": {
     "version": 1,
     "backend": "in_process",
-    "lifecycle": { "kind": "oneshot" },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
     "output": {
       "type": "text",
       "encoding": "json"
     },
-    "capabilities": ["text.transform", "filesystem.read"],
+    "capabilities": [
+      "text.transform",
+      "filesystem.read"
+    ],
     "effects": [],
     "ports": {
       "inputs": {
         "template": {
-          "schema": { "type": "text" },
+          "schema": {
+            "type": "text"
+          },
           "delivery": "single"
         },
         "template_path": {
-          "schema": { "type": "path" },
+          "schema": {
+            "type": "path"
+          },
           "delivery": "single"
         },
         "values": {
-          "schema": { "type": "json" },
+          "schema": {
+            "type": "json"
+          },
           "delivery": "single"
         }
       },
       "outputs": {
         "value": {
-          "schema": { "type": "text" },
+          "schema": {
+            "type": "text"
+          },
           "delivery": "single"
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "text render",
+    "render template",
+    "fill template"
+  ]
 }

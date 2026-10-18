@@ -51,5 +51,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "path dirname"
+  ]
 }

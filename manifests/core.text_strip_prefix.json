@@ -1,11 +1,10 @@
 {
   "name": "text.strip_prefix",
   "binary": "@execute-applet",
-  "accepts_stdin": false,
+  "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string",
-      "required": true
+      "type": "string"
     },
     "prefix": {
       "type": "string",
@@ -50,6 +49,13 @@
             "type": "text"
           },
           "delivery": "single"
+        },
+        "stdin": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single",
+          "encoding": "raw"
         }
       },
       "outputs": {
@@ -61,5 +67,9 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "text strip_prefix",
+    "remove text prefix"
+  ]
 }

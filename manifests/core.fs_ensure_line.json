@@ -103,5 +103,8 @@
         }
       }
     }
-  }
+  },
+  "phrases": [
+    "fs ensure_line"
+  ]
 }

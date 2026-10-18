@@ -14,7 +14,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from release import ROOT, version
+from release import ROOT, TARGETS, version
+
+RELEASE_TARGETS = tuple(TARGETS)
 
 SPEC_VERSION = "1.5"
 TOOL = {"vendor": "Execute maintainers", "name": "tools/sbom.py", "version": "1"}
@@ -22,6 +24,16 @@ TOOL = {"vendor": "Execute maintainers", "name": "tools/sbom.py", "version": "1"
 
 def purl(name, value):
     return "pkg:cargo/" + name + "@" + value
+
+
+def node_edges(node):
+    """Return Cargo resolve edges across current and older metadata schemas."""
+    if "deps" in node:
+        return node["deps"]
+    return [
+        {"pkg": package_id, "dep_kinds": [{"kind": None}]}
+        for package_id in node.get("dependencies", [])
+    ]
 
 
 def lock_checksums(lock_text):
@@ -41,13 +53,29 @@ def build_sbom(metadata, lock_text, value, epoch, license_expression="MIT"):
     checksums = lock_checksums(lock_text)
     by_id = {package["id"]: package for package in metadata["packages"]}
     root_id = metadata["resolve"]["root"]
+    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     refs = {}
-    for node in metadata["resolve"]["nodes"]:
+    for node in nodes.values():
         package = by_id[node["id"]]
         refs[node["id"]] = purl(package["name"], package["version"])
 
+    # Include only the root binary's normal/build dependency closure, never dev edges.
+    included = set()
+    pending = [root_id]
+    while pending:
+        current = pending.pop()
+        if current in included:
+            continue
+        included.add(current)
+        for dependency in node_edges(nodes[current]):
+            kinds = dependency.get("dep_kinds") or [{"kind": None}]
+            if any(kind.get("kind") in (None, "normal", "build") for kind in kinds):
+                pending.append(dependency["pkg"])
+
     components = []
-    for node in metadata["resolve"]["nodes"]:
+    for node in nodes.values():
+        if node["id"] not in included:
+            continue
         if node["id"] == root_id:
             continue
         package = by_id[node["id"]]
@@ -59,7 +87,7 @@ def build_sbom(metadata, lock_text, value, epoch, license_expression="MIT"):
             "purl": refs[node["id"]],
         }
         if package.get("license"):
-            component["licenses"] = [{"expression": package["license"]}]
+            component["licenses"] = [{"expression": normalize_license(package["license"])}]
         digest = checksums.get((package["name"], package["version"]))
         if digest:
             component["hashes"] = [{"alg": "SHA-256", "content": digest}]
@@ -67,8 +95,19 @@ def build_sbom(metadata, lock_text, value, epoch, license_expression="MIT"):
     components.sort(key=lambda component: component["bom-ref"])
 
     dependencies = []
-    for node in metadata["resolve"]["nodes"]:
-        depends_on = sorted({refs[dep] for dep in node["dependencies"] if dep in refs})
+    for node in nodes.values():
+        if node["id"] not in included:
+            continue
+        dependencies_for_node = {
+            dependency["pkg"]
+            for dependency in node_edges(node)
+            if dependency["pkg"] in included
+            and any(
+                kind.get("kind") in (None, "normal", "build")
+                for kind in (dependency.get("dep_kinds") or [{"kind": None}])
+            )
+        }
+        depends_on = sorted({refs[dep] for dep in dependencies_for_node if dep in refs})
         dependencies.append({"ref": refs[node["id"]], "dependsOn": depends_on})
     dependencies.sort(key=lambda entry: entry["ref"])
 
@@ -79,7 +118,7 @@ def build_sbom(metadata, lock_text, value, epoch, license_expression="MIT"):
         "name": "execute",
         "version": value,
         "purl": root_ref,
-        "licenses": [{"expression": license_expression}],
+        "licenses": [{"expression": normalize_license(license_expression)}],
     }
     body = {"components": components, "dependencies": dependencies, "root": root}
     digest = hashlib.sha256(
@@ -97,6 +136,11 @@ def build_sbom(metadata, lock_text, value, epoch, license_expression="MIT"):
     }
 
 
+def normalize_license(value):
+    """Translate Cargo's legacy slash-separated dual license notation to SPDX OR."""
+    return re.sub(r"\s*/\s*", " OR ", value.strip())
+
+
 def source_date_epoch(root=ROOT):
     value = os.environ.get("SOURCE_DATE_EPOCH")
     if value:
@@ -106,17 +150,42 @@ def source_date_epoch(root=ROOT):
     )
 
 
+def release_metadata():
+    """Union the full-feature resolve graph across every shipped target."""
+    packages = {}
+    nodes = {}
+    root_id = None
+    for target in RELEASE_TARGETS:
+        document = json.loads(
+            subprocess.check_output(
+                [
+                    "cargo", "metadata", "--locked", "--features", "full",
+                    "--filter-platform", target, "--format-version", "1",
+                ],
+                cwd=ROOT,
+                text=True,
+            )
+        )
+        root_id = root_id or document["resolve"]["root"]
+        packages.update({package["id"]: package for package in document["packages"]})
+        for node in document["resolve"]["nodes"]:
+            if node["id"] not in nodes:
+                nodes[node["id"]] = node
+            else:
+                existing = nodes[node["id"]]
+                dependencies = {
+                    json.dumps(dependency, sort_keys=True): dependency
+                    for dependency in node_edges(existing) + node_edges(node)
+                }
+                existing["deps"] = [dependencies[key] for key in sorted(dependencies)]
+    return {"packages": list(packages.values()), "resolve": {"root": root_id, "nodes": list(nodes.values())}}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
-    metadata = json.loads(
-        subprocess.check_output(
-            ["cargo", "metadata", "--locked", "--format-version", "1"],
-            cwd=ROOT,
-            text=True,
-        )
-    )
+    metadata = release_metadata()
     value = version()
     sbom = build_sbom(
         metadata,

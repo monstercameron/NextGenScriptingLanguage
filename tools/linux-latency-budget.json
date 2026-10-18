@@ -1,11 +1,11 @@
 {
-  "version_median_ms": null,
-  "one_line_median_ms": null,
-  "ten_step_median_ms": null,
-  "hot_loop_median_ms": null,
-  "version_max_rss_kb": null,
-  "one_line_max_rss_kb": null,
-  "ten_step_max_rss_kb": null,
-  "hot_loop_max_rss_kb": null,
-  "note": "Set each median budget to about 150% of the median the first Linux CI run prints for it, and each RSS budget to about 110% of the peak it prints. Until then the step reports the timings and memory without enforcing them. The one-line and ten-step programs run native printf, so they measure process creation as well as startup."
+  "version_median_ms": 3.0,
+  "one_line_median_ms": 5.0,
+  "ten_step_median_ms": 8.0,
+  "hot_loop_median_ms": 500.0,
+  "version_max_rss_kb": 16000,
+  "one_line_max_rss_kb": 20000,
+  "ten_step_max_rss_kb": 24000,
+  "hot_loop_max_rss_kb": 32000,
+  "note": "Median ceilings: version 3 ms is 1.7x the documented 1.76 ms startup at commit 234c1fc; one-line 5 ms is 1.8x the 2.76 ms one-command result; ten-step 8 ms is 1.9x the 4.30 ms five-stage pipeline; 500 ms is 1.8x a linear extrapolation of the 2.80 ms 1,000-call builtin loop to the 100,000-call hot loop. RSS ceilings 16,000/20,000/24,000/32,000 KB are respectively 2.5x/3.1x/3.8x/5.0x the documented 6.2 MB startup peak, allowing more for larger workloads."
 }

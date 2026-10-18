@@ -1,4 +1,4 @@
 {
-  "max_bytes": null,
-  "note": "Set max_bytes to about 110% of today's Linux target/release/execute size, measured from the first Linux CI run of the Check Linux release binary size step. Until then the step reports the size without enforcing it."
+  "max_bytes": 8000000,
+  "note": "8.0 MB ceiling: about 111% of the 7.22 MB Linux x86_64 default release binary measured in the bash-compare CI run 39099227965 (commit 55c8377)."
 }

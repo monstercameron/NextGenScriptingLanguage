@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import xml.etree.ElementTree as ET  # Reads only reports nextest wrote in the same workflow run.
 from collections import defaultdict
@@ -53,11 +54,17 @@ def captured_output(case: ET.Element) -> str:
     return "\n".join(parts)
 
 
-def collect(root: Path) -> tuple[dict, list[str], list[str]]:
+def os_label(run: str) -> str:
+    return re.sub(r"-\d+$", "", run)
+
+
+def collect(
+    root: Path, expected_os: list[str] | None = None, expected_runs: int | None = None
+) -> tuple[dict, list[str], list[str], list[str]]:
     reports = sorted(root.rglob("*.xml"))
     runs = sorted({run_label(path, root) for path in reports})
     tests: dict[str, dict] = defaultdict(
-        lambda: {"passed": 0, "failed": 0, "failed_runs": [], "message": "", "output": ""}
+        lambda: {"passed": 0, "failed": 0, "failed_runs": [], "message": "", "output": "", "by_os": {}}
     )
     errors: list[str] = []
     for path in reports:
@@ -71,24 +78,50 @@ def collect(root: Path) -> tuple[dict, list[str], list[str]]:
             name = f"{case.get('classname', '')} {case.get('name', '')}".strip()
             status, detail = testcase_outcome(case)
             entry = tests[name]
+            platform = entry["by_os"].setdefault(
+                os_label(run), {"passed": 0, "failed": 0}
+            )
             if status == "passed":
                 entry["passed"] += 1
+                platform["passed"] += 1
             elif status == "failed":
                 entry["failed"] += 1
+                platform["failed"] += 1
                 entry["failed_runs"].append(run)
                 if not entry["message"]:
                     entry["message"] = detail[:OUTPUT_LIMIT]
                     entry["output"] = captured_output(case)[:OUTPUT_LIMIT]
-    return tests, runs, errors
+    missing = []
+    if expected_os is not None and expected_runs is not None:
+        seen = set(runs)
+        missing = [
+            f"junit-{platform}-{number}"
+            for platform in expected_os
+            for number in range(1, expected_runs + 1)
+            if f"junit-{platform}-{number}" not in seen
+        ]
+    return tests, runs, errors, missing
 
 
 def classify(entry: dict) -> str:
     if entry["failed"] == 0:
         return "passed"
+    platforms = entry.get("by_os", {})
+    if any(counts["failed"] and not counts["passed"] for counts in platforms.values()):
+        return "failing"
     return "flaky" if entry["passed"] > 0 else "failing"
 
 
-def summary_markdown(tests: dict, runs: list[str], errors: list[str]) -> str:
+def classify_platform(counts: dict) -> str:
+    if counts["failed"] == 0:
+        return "passed"
+    return "flaky" if counts["passed"] else "failing"
+
+
+def summary_markdown(
+    tests: dict, runs: list[str], errors: list[str], missing: list[str] | None = None
+) -> str:
+    missing = missing or []
     failed = {name: entry for name, entry in tests.items() if entry["failed"]}
     lines = [
         "# Flaky test detection",
@@ -99,14 +132,22 @@ def summary_markdown(tests: dict, runs: list[str], errors: list[str]) -> str:
     ]
     if errors:
         lines += ["## Unreadable reports", ""] + [f"- {error}" for error in errors] + [""]
+    if missing:
+        lines += ["## Missing reports", ""] + [f"- {run}" for run in missing] + [""]
     if not failed:
-        lines.append("No test failed in any run.")
+        lines.append("No test failed in any run with a report.")
         return "\n".join(lines) + "\n"
     for name, entry in sorted(failed.items(), key=lambda item: (classify(item[1]), item[0])):
+        failing_platforms = [
+            platform
+            for platform, counts in sorted(entry.get("by_os", {}).items())
+            if classify_platform(counts) == "failing"
+        ]
+        platform_note = f" on {', '.join(failing_platforms)}" if failing_platforms else ""
         lines += [
             f"## {name}",
             "",
-            f"- Status: **{classify(entry)}** ({entry['failed']} failed, "
+            f"- Status: **{classify(entry)}**{platform_note} ({entry['failed']} failed, "
             f"{entry['passed']} passed)",
             f"- Failed in: {', '.join(sorted(set(entry['failed_runs'])))}",
             "",
@@ -126,12 +167,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("report_dir", type=Path)
     parser.add_argument("--json", type=Path, help="write the full report as JSON")
     parser.add_argument("--summary", type=Path, help="write the Markdown summary (e.g. $GITHUB_STEP_SUMMARY)")
+    parser.add_argument("--expect-runs", type=int, help="expected number of reports per OS")
+    parser.add_argument("--expect-os", action="append", help="expected OS label; repeat per platform")
     args = parser.parse_args(argv)
     if not args.report_dir.is_dir():
         print(f"no report directory at {args.report_dir}", file=sys.stderr)
         return 2
-    tests, runs, errors = collect(args.report_dir)
-    markdown = summary_markdown(tests, runs, errors)
+    if (args.expect_runs is None) != (args.expect_os is None):
+        parser.error("--expect-runs and --expect-os must be supplied together")
+    tests, runs, errors, missing = collect(args.report_dir, args.expect_os, args.expect_runs)
+    markdown = summary_markdown(tests, runs, errors, missing)
     sys.stdout.write(markdown)
     if args.summary:
         with args.summary.open("a", encoding="utf-8") as handle:
@@ -139,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         document = {
             "runs": runs,
+            "missing_reports": missing,
             "errors": errors,
             "tests": {
                 name: {**entry, "status": classify(entry)}
@@ -148,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         args.json.write_text(json.dumps(document, indent=2), encoding="utf-8")
     failed = any(entry["failed"] for entry in tests.values())
-    return 1 if failed or errors else 0
+    return 1 if failed or errors or missing else 0
 
 
 if __name__ == "__main__":

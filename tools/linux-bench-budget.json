@@ -1,15 +1,15 @@
 {
-  "ten_step_pipeline_median_ms": null,
-  "ten_step_pipeline_max_rss_kb": null,
-  "for_each_10000_median_ms": null,
-  "for_each_10000_max_rss_kb": null,
-  "for_each_10000_checkpoint_median_ms": null,
-  "for_each_10000_checkpoint_max_rss_kb": null,
-  "applet_100_median_ms": null,
-  "applet_100_max_rss_kb": null,
-  "pipe_1mb_median_ms": null,
-  "pipe_1mb_max_rss_kb": null,
-  "parallel_limit_8_median_ms": null,
-  "parallel_limit_8_max_rss_kb": null,
-  "note": "Set each median budget to about 150% and each RSS budget to about 110% of the value the first Linux CI run prints. Until then the step reports the numbers without enforcing them."
+  "ten_step_pipeline_median_ms": 50.0,
+  "ten_step_pipeline_max_rss_kb": 32768,
+  "for_each_10000_median_ms": 1000.0,
+  "for_each_10000_max_rss_kb": 32768,
+  "for_each_10000_checkpoint_median_ms": 2000.0,
+  "for_each_10000_checkpoint_max_rss_kb": 32768,
+  "applet_100_median_ms": 50.0,
+  "applet_100_max_rss_kb": 32768,
+  "pipe_1mb_median_ms": 250.0,
+  "pipe_1mb_max_rss_kb": 32768,
+  "parallel_limit_8_median_ms": 1000.0,
+  "parallel_limit_8_max_rss_kb": 65536,
+  "note": "Initial enforceable ceilings with broad headroom pending retained per-scenario CI samples: measured README.md baseline at commit 234c1fc gives 4.30 ms for a five-stage pipeline, 2.80 ms for 1,000 builtin applet calls, and 6.2 MB startup peak. Pipeline 50 ms is 10x its current baseline; 100-call applet budget 50 ms is 18x the 1,000-call baseline; 1 MiB pipe 250 ms allows about 4 MiB/s; 10,000-element loops allow 1 s without checkpoints and 2 s with durable checkpoints; parallel-8 allows 1 s. RSS caps (32 MiB, 64 MiB for parallel work) provide broad process and workload headroom."
 }

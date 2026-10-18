@@ -9,7 +9,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::ToSocketAddrs;
 #[cfg(unix)]
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 
 mod cli;
@@ -289,7 +289,16 @@ fn program_takes_terminal(arguments: &[String]) -> bool {
 }
 
 fn execute() -> Result<()> {
-    let arguments = flow::agent::errors::strip_flag(env::args_os().skip(1))
+    let raw_arguments = env::args_os().skip(1).collect::<Vec<_>>();
+    let literal_boundary = raw_arguments.iter().position(|argument| argument == "--");
+    let arguments = match literal_boundary {
+        Some(boundary) => {
+            let mut parsed = flow::agent::errors::strip_flag(raw_arguments[..boundary].iter().cloned());
+            parsed.extend(raw_arguments[boundary..].iter().cloned());
+            parsed
+        }
+        None => flow::agent::errors::strip_flag(raw_arguments),
+    }
         .into_iter()
         .enumerate()
         .map(|(index, argument)| {
@@ -305,6 +314,26 @@ fn execute() -> Result<()> {
 }
 
 fn execute_arguments(arguments: Vec<String>) -> Result<()> {
+    if arguments.len() == 2
+        && matches!(arguments[1].as_str(), "--help" | "-h")
+        && is_help_subcommand(&arguments[0])
+    {
+        let name = &arguments[0];
+        let synopsis = match name.as_str() {
+            "test" => "Usage: execute test [OPTIONS] FILE...",
+            "run-parts" => "Usage: execute run-parts [OPTIONS] DIRECTORY",
+            "show-run" => "Usage: execute show-run [OPTIONS] RECORD",
+            "replay" => "Usage: execute replay [OPTIONS] RECORD",
+            "repl" => "Usage: execute repl [OPTIONS] RECORD",
+            "repair" => "Usage: execute repair CHECKPOINT --op OPERATION",
+            "lsp" => "Usage: execute lsp [--stdio]",
+            "help" => "Usage: execute help [--json] FILE",
+            "attach" => "Usage: execute attach [OPTIONS] SESSION",
+            _ => "Usage: execute SUBCOMMAND [OPTIONS]",
+        };
+        writeln!(io::stdout(), "{synopsis}")?;
+        return Ok(());
+    }
     if let Some(worker_arguments) = init_worker_arguments(&arguments)? {
         #[cfg(unix)]
         {
@@ -406,16 +435,22 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         bail!("`service` requires the tooling feature; rebuild with --features tooling");
     }
     if arguments.first().is_some_and(|a| a == "model") {
-        #[cfg(unix)]
+        #[cfg(not(feature = "model"))]
+        bail!("`model` requires the model feature; rebuild with --features model (or --features full)");
+        #[cfg(feature = "model")]
         {
-            let helper = runtime::bundled_model_applet()?;
-            let mut command = std::process::Command::new(helper);
-            command.args(&arguments[1..]);
-            return Err(command.exec()).context("starting the bundled model applet");
-        }
-        #[cfg(windows)]
-        {
-            std::process::exit(runtime::model_cli(&arguments[1..])?);
+            #[cfg(unix)]
+            {
+                let helper = runtime::bundled_model_applet()?;
+                let mut command = std::process::Command::new(helper);
+                command.args(&arguments[1..]);
+                return Err(std::os::unix::process::CommandExt::exec(&mut command))
+                    .context("starting the bundled model applet");
+            }
+            #[cfg(windows)]
+            {
+                std::process::exit(runtime::model_cli(&arguments[1..])?);
+            }
         }
     }
     if arguments.first().is_some_and(|a| a == "checkpoint") {
@@ -434,6 +469,10 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     #[cfg(feature = "dap")]
     if arguments.first().is_some_and(|a| a == "dap") {
         std::process::exit(flow::agent::dap::cli(&arguments[1..])?);
+    }
+    #[cfg(not(feature = "dap"))]
+    if arguments.first().is_some_and(|a| a == "dap") {
+        bail!("`dap` requires the dap feature; rebuild with --features dap (or --features full)");
     }
     if arguments.first().is_some_and(|a| a == "daemon") {
         std::process::exit(flow::agent::daemon::cli(
@@ -578,6 +617,21 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     execute_workflow(args, None)
 }
 
+fn is_help_subcommand(name: &str) -> bool {
+    matches!(
+        name,
+        "test"
+            | "run-parts"
+            | "show-run"
+            | "replay"
+            | "repl"
+            | "repair"
+            | "lsp"
+            | "help"
+            | "attach"
+    )
+}
+
 /// `--init` before `--` runs the workflow under the PID 1 supervisor. Returns
 /// the worker's arguments, with the flag removed, or `None` when it is absent.
 fn init_worker_arguments(arguments: &[String]) -> Result<Option<Vec<String>>> {
@@ -675,9 +729,13 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     };
     // Held until this function returns, so a second instance is refused for the
     // whole run. Graph, screen, and stream runs are covered too.
-    let _single_instance = match args.single_instance.as_deref() {
-        Some(path) => Some(flow::agent::instance::acquire(path)?),
-        None => None,
+    let _single_instance = if args.what_if {
+        None
+    } else {
+        match args.single_instance.as_deref() {
+            Some(path) => Some(flow::agent::instance::acquire(path)?),
+            None => None,
+        }
     };
     #[cfg(not(feature = "graph"))]
     if is_graph_source(&source) {
@@ -1710,7 +1768,7 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
         writeln!(io::stdout(), "{HELP}")?;
         return Ok(());
     }
-    let mut target = None;
+    let mut target = false;
     let mut output = None;
     let mut file = None;
     let mut manifest_dir = None;
@@ -1719,16 +1777,27 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--to" => {
-                let value = arguments.get(index + 1).context(HELP)?;
+                if target {
+                    bail!("--to may be specified only once");
+                }
+                let value = take_option_value(arguments, &mut index, "--to", "a target")?;
                 if value != "sh" {
                     bail!("compile supports only --to sh\n{HELP}");
                 }
-                target = Some(value.as_str());
-                index += 2;
+                target = true;
+                index += 1;
             }
             "--out" => {
-                output = Some(PathBuf::from(arguments.get(index + 1).context(HELP)?));
-                index += 2;
+                if output.is_some() {
+                    bail!("--out may be specified only once");
+                }
+                output = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--out",
+                    "an output path",
+                )?));
+                index += 1;
             }
             "--manifest-dir" => {
                 if manifest_dir.is_some() {
@@ -1737,8 +1806,13 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
                 if manifest_catalog.is_some() {
                     bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
                 }
-                manifest_dir = Some(PathBuf::from(arguments.get(index + 1).context(HELP)?));
-                index += 2;
+                manifest_dir = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--manifest-dir",
+                    "a manifest directory",
+                )?));
+                index += 1;
             }
             "--manifest-catalog" => {
                 if manifest_catalog.is_some() {
@@ -1747,8 +1821,13 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
                 if manifest_dir.is_some() {
                     bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
                 }
-                manifest_catalog = Some(PathBuf::from(arguments.get(index + 1).context(HELP)?));
-                index += 2;
+                manifest_catalog = Some(PathBuf::from(take_option_value(
+                    arguments,
+                    &mut index,
+                    "--manifest-catalog",
+                    "a manifest catalog",
+                )?));
+                index += 1;
             }
             flag if flag.starts_with('-') => bail!("unknown compile option {flag:?}\n{HELP}"),
             path => {
@@ -1759,7 +1838,7 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
             }
         }
     }
-    if target.is_none() {
+    if !target {
         bail!("compile needs --to sh\n{HELP}");
     }
     let file = file.context(HELP)?;
@@ -1780,11 +1859,83 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
     let script =
         flow::compile_sh::compile(&program, &registry, &file.display().to_string(), &bytes)?;
     match output {
-        Some(path) => fs::write(&path, script)
-            .with_context(|| format!("writing compiled script {}", path.display()))?,
+        Some(path) => {
+            let source_path = fs::canonicalize(&file)
+                .with_context(|| format!("resolving source program {}", file.display()))?;
+            let destination = if path.exists() {
+                fs::canonicalize(&path)
+                    .with_context(|| format!("resolving output path {}", path.display()))?
+            } else {
+                let parent = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."));
+                let filename = path.file_name().context("output path must name a file")?;
+                fs::canonicalize(parent)
+                    .with_context(|| format!("resolving output directory {}", parent.display()))?
+                    .join(filename)
+            };
+            if source_path == destination {
+                bail!("--out must not name the source program");
+            }
+            write_compiled_script_atomically(&path, script.as_bytes())?;
+        }
         None => io::stdout().write_all(script.as_bytes())?,
     }
     Ok(())
+}
+
+#[cfg(feature = "tooling")]
+fn write_compiled_script_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::ErrorKind;
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    path.file_name().context("output path must name a file")?;
+    let mut temporary_path = None;
+    let mut temporary_file = None;
+    for attempt in 0..100u32 {
+        let candidate = parent.join(format!(
+            ".execute-compile-{}.{}.tmp",
+            std::process::id(),
+            attempt
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                temporary_path = Some(candidate);
+                temporary_file = Some(file);
+                break;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("creating temporary output beside {}", path.display())
+                })
+            }
+        }
+    }
+    let temporary_path =
+        temporary_path.context("could not allocate a unique temporary output file")?;
+    let write_result = (|| -> Result<()> {
+        let mut file = temporary_file.context("temporary output file was not created")?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary_path, path)
+            .with_context(|| format!("atomically replacing compiled script {}", path.display()))?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    write_result
 }
 
 #[cfg(feature = "module-tools")]
@@ -2265,7 +2416,7 @@ fn default_manifest_dir() -> PathBuf {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute model --help\n       execute --help\n\nOptions:\n  --json                  Structured static validation result (check only)\n  --input NAME=VALUE     Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR       Directory or one legacy JSON file containing applet manifests\n  --manifest-catalog FILE Explicit packed catalog; mutually exclusive with --manifest-dir\n  --capability-policy FILE Enforce a strict, versioned applet policy (check/explain/inspect/run/resume/live serve)\n  --data-flow-policy FILE Enforce origin and persistence data-flow grants\n  --cache-dir DIR          Cache directory (run/resume)\n  --checkpoint DIR         Durable checkpoint directory (run/resume)\n  --retry-uncertain        Retry an invocation with an uncertain prior outcome (resume only)\n  --headless               Run a UI once and print its JSON state\n  --once                  Run one activation of a calendar-triggered handler and exit (run only)\n  --init                  Run as PID 1: supervise the worker, reap orphans, forward SIGINT/SIGTERM/SIGHUP (run only, Unix)\n  --trace                  Print execution details to stderr (run/resume/stream)\n  --max-output-bytes N     Maximum captured output size (run/resume)\n  --max-runs N             Maximum trigger runs or interactive UI jobs (not --headless)\n  --missed-ticks POLICY   Trigger backlog policy: skip, coalesce, or catch-up (run/resume)\n  --max-catch-up N         Bound catch-up runs to 1..64 (requires catch-up)\n  --calendar-dedup MODE   Calendar fold policy: instant or local (run/resume)\n  --command-timeout-ms N  Maximum lifetime of each native pipeline (run/resume/stream)\n  --drain-timeout-ms N    Budget for an interrupt drain before it cancels (run only; default 10000)\n  --max-record-bytes N     Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --json                  Structured result for check or explain\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {
@@ -2291,11 +2442,7 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
 }
 
 pub(crate) fn print_help() -> Result<()> {
-    writeln!(
-        io::stdout(),
-        "{}\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\nData-flow policies can declare applet-scoped secrets.environment names for output taint and redaction.\nSecurity scope: --capability-policy grants applet capabilities; remote egress and persistence need --data-flow-policy.",
-        usage()
-    )?;
+    writeln!(io::stdout(), "{}", usage())?;
     Ok(())
 }
 

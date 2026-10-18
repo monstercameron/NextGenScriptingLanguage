@@ -52,6 +52,13 @@ def version(root=ROOT):
             raise ValueError(
                 "browser/Cargo.lock Execute version disagrees with Cargo.toml"
             )
+    fuzz_lock = root / "fuzz/Cargo.lock"
+    if fuzz_lock.exists():
+        fuzz = re.search(
+            r'(?m)^name = "execute"\nversion = "([^"]+)"$', fuzz_lock.read_text()
+        )
+        if not fuzz or fuzz[1] != cargo[1]:
+            raise ValueError("fuzz/Cargo.lock Execute version disagrees with Cargo.toml")
     return validate(cargo[1])
 
 
@@ -67,6 +74,8 @@ def set_version(value, root=ROOT):
         edits.append(
             ("browser/Cargo.lock", r'(?m)(^name = "execute"\nversion = ")[^"]+("$)')
         )
+    if (root / "fuzz/Cargo.lock").exists():
+        edits.append(("fuzz/Cargo.lock", r'(?m)(^name = "execute"\nversion = ")[^"]+("$)'))
     replacements = []
     for filename, pattern in edits:
         p = root / filename
@@ -82,6 +91,21 @@ def set_version(value, root=ROOT):
 
 def package_version(value):
     return validate(value).replace("-", "~", 1)
+
+
+def bumped_version(value, part):
+    """Return the next release version; a prerelease patch candidate releases as-is."""
+    validate(value)
+    if part not in ("major", "minor", "patch"):
+        raise ValueError("part must be major, minor, or patch")
+    core, separator, _prerelease = value.partition("-")
+    if separator and part == "patch":
+        return core
+    parts = [int(piece) for piece in core.split(".")]
+    index = ("major", "minor", "patch").index(part)
+    parts[index] += 1
+    parts[index + 1 :] = [0] * (2 - index)
+    return ".".join(map(str, parts))
 
 
 def expected_assets(value):
@@ -156,11 +180,7 @@ def main():
         set_version(args.version)
         print(args.version)
     elif args.command == "bump":
-        parts = [int(p) for p in value.split("-")[0].split(".")]
-        index = ["major", "minor", "patch"].index(args.part)
-        parts[index] += 1
-        parts[index + 1 :] = [0] * (2 - index)
-        new = ".".join(map(str, parts))
+        new = bumped_version(value, args.part)
         set_version(new)
         print(new)
     elif args.command == "verify-assets":

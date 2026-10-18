@@ -43,23 +43,24 @@ jobs:
           cargo build --locked --release --features full --bin execute
           target/release/execute --version
   alpine-static:
-    name: Static musl build on Alpine
+    name: Static musl build
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build a static binary inside Alpine and run it
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-unknown-linux-musl
+      - name: Build a static musl binary and run it
         run: |
-          docker run --rm -v "$PWD:/src" -w /src alpine:3.21 sh -eu -c '
-            apk add --no-cache build-base curl ca-certificates file
-            curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.99.1
-            . "$HOME/.cargo/env"
-            RUSTFLAGS="-C target-feature=+crt-static" \
-              cargo build --locked --profile dist --features full --bin execute --target x86_64-unknown-linux-musl
-            file target/x86_64-unknown-linux-musl/dist/execute | grep -q "static" || { echo "not a static binary"; exit 1; }
-            target/x86_64-unknown-linux-musl/dist/execute --version
-            cd /tmp && printf "%s\n" "run printf with message \"alpine\"" > smoke.program
-            /src/target/x86_64-unknown-linux-musl/dist/execute run smoke.program --manifest-dir /src/manifests
-          '
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential musl-tools file
+          RUSTFLAGS="-C target-feature=+crt-static" \
+            cargo build --locked --profile dist --features full --bin execute --target x86_64-unknown-linux-musl
+          file target/x86_64-unknown-linux-musl/dist/execute | grep -q "static" || { echo "not a static binary"; exit 1; }
+          target/x86_64-unknown-linux-musl/dist/execute --version
+          cd /tmp && printf "%s\n" "run printf with message \"musl\"" > smoke.program
+          "$GITHUB_WORKSPACE/target/x86_64-unknown-linux-musl/dist/execute" run smoke.program --manifest-dir "$GITHUB_WORKSPACE/manifests"

@@ -15,7 +15,8 @@ on:
       seconds:
         description: 'Seconds each target runs (a short value confirms the workflow cheaply)'
         required: false
-        default: '1200'
+        default: 1200
+        type: number
 permissions:
   contents: read
 concurrency:
@@ -66,8 +67,12 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install cargo-fuzz
         run: cargo install --locked --version 0.13.2 cargo-fuzz
-      - name: Fuzz ${{ matrix.target }} for 20 minutes
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=${{ github.event.inputs.seconds || 1200 }} -timeout=10 -rss_limit_mb=2048
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          FUZZ_SECONDS: ${{ github.event.inputs.seconds || 1200 }}
+        run: |
+          [[ "$FUZZ_SECONDS" =~ ^[0-9]+$ ]] || { echo 'seconds must be an integer' >&2; exit 1; }
+          cargo +nightly fuzz run "${{ matrix.target }}" -- "-max_total_time=$FUZZ_SECONDS" -timeout=10 -rss_limit_mb=2048
       - name: Keep any crash or timeout input
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

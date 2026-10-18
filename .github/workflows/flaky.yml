@@ -111,7 +111,10 @@ jobs:
           pattern: junit-*
           path: junit
       - name: Summarise every failing test with its output
-        run: python3 tools/collect_flaky.py junit --json flaky-report.json --summary "$GITHUB_STEP_SUMMARY"
+        run: >
+          python3 tools/collect_flaky.py junit --expect-runs 20
+          --expect-os ubuntu-24.04 --expect-os macos-15 --expect-os windows-2022
+          --json flaky-report.json --summary "$GITHUB_STEP_SUMMARY"
       - name: Keep the report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

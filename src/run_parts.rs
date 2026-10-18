@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -106,13 +107,19 @@ pub fn cli(arguments: &[String]) -> Result<()> {
         .iter()
         .any(|entry| matches!(entry.status, Status::Failed(_)));
     if options.json {
-        println!(
+        writeln!(
+            io::stdout(),
             "{}",
             serde_json::to_string_pretty(&json_report(&directory, &entries))?
-        );
+        )?;
     } else {
         for entry in &entries {
-            println!("run-parts: {} {}", entry.name, describe(&entry.status));
+            writeln!(
+                io::stdout(),
+                "run-parts: {} {}",
+                entry.name,
+                describe(&entry.status)
+            )?;
         }
     }
     if failed {
@@ -198,7 +205,7 @@ fn run_program(executable: &Path, path: &Path, options: &Options, name: &str) ->
     if options.json {
         eprint!("{}", String::from_utf8_lossy(&output.stdout));
     } else {
-        print!("{}", String::from_utf8_lossy(&output.stdout));
+        io::stdout().write_all(&output.stdout)?;
     }
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
     let _ = name;

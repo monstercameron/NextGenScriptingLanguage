@@ -1,20 +1,38 @@
 #compdef execute
 # zsh completion for execute
+_execute_first() {
+  _alternative \
+    'subcommands:subcommand:(check explain inspect run resume test run-parts show-run replay repl repair compile checkpoint help attach dap daemon applets modules service live model lsp)' \
+    'programs:program:_files -g "*.program"'
+}
 _arguments -s \
-  '1:command:(check explain inspect run resume applets modules service live model lsp)' \
+  '1:command or program:_execute_first' \
   '--input[supply a declared program input]:NAME=VALUE' \
   '--json[structured result for check and explain]' \
-  '--manifest-dir[directory containing applet manifests]:directory:_directories' \
+  '--manifest-dir[applet manifest directory]:directory:_directories' \
   '--manifest-catalog[packed manifest catalog]:file:_files' \
   '--capability-policy[versioned applet policy]:file:_files' \
   '--data-flow-policy[origin and persistence grants]:file:_files' \
   '--cache-dir[cache directory]:directory:_directories' \
   '--checkpoint[durable checkpoint directory]:directory:_directories' \
-  '--retry-uncertain[retry an uncertain invocation on resume]' \
-  '--trace[print execution details to stderr]' \
-  '--max-output-bytes[largest captured output]:bytes:' \
-  '--command-timeout-ms[lifetime limit for each native pipeline]:milliseconds:' \
-  '--total-timeout-ms[lifetime limit for the whole workflow]:milliseconds:' \
-  '--drain-timeout-ms[interrupt drain budget]:milliseconds:' \
-  '--help[show help]' \
-  '*:file:_files'
+  '--retry-uncertain[retry uncertain invocation]' \
+  '--answers[test answer file]:file:_files' \
+  '--record[record run]:directory:_directories' \
+  '--what-if[print plan without running]' \
+  '--confirm[confirm plan fingerprint]:fingerprint:' \
+  '--allow[grant capability]:capability:' \
+  '--policy-header[include capability policy header in explain output]' \
+  '--format[output format]:format:(github json)' \
+  '--single-instance[prevent concurrent run]:file:_files' \
+  '--control[enable live control socket]' \
+  '--break-at[pause at source line]:line:' \
+  '--daemon[forward through daemon]' \
+  '--json-errors[structured error on stderr]' \
+  '--version[show version]' '-V[show version]' \
+  '--headless[run UI once]' '--once[run one activation]' '--init[supervise as PID 1]' \
+  '--trace[print execution details]' '--max-output-bytes[maximum captured output]:bytes:' \
+  '--max-runs[maximum trigger runs]:count:' '--missed-ticks[trigger backlog policy]:policy:(skip coalesce catch-up)' \
+  '--max-catch-up[catch-up run bound]:count:' '--calendar-dedup[calendar fold policy]:mode:(instant local)' \
+  '--command-timeout-ms[native pipeline lifetime]:milliseconds:' '--total-timeout-ms[workflow lifetime]:milliseconds:' \
+  '--drain-timeout-ms[interrupt drain budget]:milliseconds:' '--max-record-bytes[listener record limit]:bytes:' \
+  '--help[show help]' '-h[show help]' '*:file:_files'

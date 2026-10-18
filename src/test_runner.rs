@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -115,7 +116,7 @@ pub fn cli(arguments: &[String]) -> Result<()> {
     } else {
         tap_report(&outcomes)
     };
-    println!("{output}");
+    writeln!(io::stdout(), "{output}")?;
     if failed > 0 {
         std::process::exit(1);
     }

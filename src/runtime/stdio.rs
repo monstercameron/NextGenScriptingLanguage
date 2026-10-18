@@ -166,6 +166,20 @@ fn wait_until_writable(fd: RawFd, wait: Duration) -> bool {
     }
 }
 
+/// The size of stdin when it is a regular file, which can be read without polling, or
+/// `None` for a pipe, terminal or socket, or when fstat fails.
+fn stdin_regular_file_size() -> Option<u64> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `stat` is writable storage for one libc::stat, and STDIN_FILENO is a plain
+    // descriptor number; fstat writes the struct only when it returns 0.
+    if unsafe { libc::fstat(libc::STDIN_FILENO, stat.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: fstat returned 0 above, so it initialized `stat`.
+    let stat = unsafe { stat.assume_init() };
+    (stat.st_mode & libc::S_IFMT == libc::S_IFREG).then(|| u64::try_from(stat.st_size).unwrap_or(0))
+}
+
 /// Read inherited stdin without changing its shared open-file-description flags.
 /// Poll before each read so a quiet pipe remains cancellable and deadline-bound.
 pub(super) fn capture_stdin(
@@ -180,19 +194,11 @@ pub(super) fn capture_stdin(
                 .context("stdin timeout is too large")
         })
         .transpose()?;
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: `stat` is writable storage for one libc::stat. STDIN_FILENO is the
-    // inherited descriptor; a failed fstat falls back to the pollable path below.
-    let regular_file = unsafe { libc::fstat(libc::STDIN_FILENO, stat.as_mut_ptr()) } == 0
-        && unsafe { stat.assume_init_ref() }.st_mode & libc::S_IFMT == libc::S_IFREG;
-    let initial_capacity = if regular_file {
-        // SAFETY: fstat succeeded when regular_file is true, so stat is initialized.
-        usize::try_from(unsafe { stat.assume_init_ref() }.st_size)
-            .unwrap_or(0)
-            .min(limit)
-    } else {
-        0
-    };
+    let regular_file_size = stdin_regular_file_size();
+    let regular_file = regular_file_size.is_some();
+    let initial_capacity = regular_file_size
+        .map_or(0, |size| usize::try_from(size).unwrap_or(0))
+        .min(limit);
     let mut output = Vec::with_capacity(initial_capacity);
     let mut chunk = [0u8; 64 * 1024];
     loop {

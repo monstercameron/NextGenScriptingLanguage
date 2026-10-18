@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use flow::{manifest::Registry, parser, runtime};
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 #[test]
 fn applet_listener_uses_its_child_scoped_environment_overlay() {

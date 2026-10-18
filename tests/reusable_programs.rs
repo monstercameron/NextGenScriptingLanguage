@@ -5,7 +5,6 @@ use flow::{
     parser, runtime,
 };
 use std::{
-    collections::BTreeMap,
     fs,
     io::Write,
     path::Path,

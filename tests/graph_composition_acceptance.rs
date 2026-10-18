@@ -11,7 +11,6 @@ use flow::modules::{load_program_module_package, ProgramModuleSession};
 use flow::runtime::RunOptions;
 use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};

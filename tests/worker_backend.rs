@@ -39,7 +39,6 @@ const _: fn() = || {
 
 use flow::ast::Value;
 use flow::{parser, runtime};
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};

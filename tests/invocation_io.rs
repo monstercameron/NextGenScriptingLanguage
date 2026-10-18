@@ -2,7 +2,7 @@
 
 use flow::{manifest::Registry, parser, runtime};
 use serde_json::json;
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{path::Path, time::Duration};
 
 fn options(cwd: &Path) -> runtime::RunOptions {
     runtime::RunOptions {

@@ -2,7 +2,7 @@
 
 use flow::{manifest::Registry, parser, runtime};
 use serde_json::json;
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 #[test]
 fn failed_child_echoing_declared_environment_secret_redacts_errors_but_keeps_raw_capture() {

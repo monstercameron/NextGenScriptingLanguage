@@ -191,6 +191,9 @@ mod tests {
         Arc,
     };
 
+    // The shared constant exists only with the live control plane; the tests need it everywhere.
+    const IO_TIMEOUT: Duration = Duration::from_secs(2);
+
     #[test]
     fn framing_preserves_lf_eof_and_extra_byte_limit_detection() {
         for (wire, limit, expected) in [

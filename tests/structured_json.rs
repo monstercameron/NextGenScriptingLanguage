@@ -1,7 +1,6 @@
 #![cfg(unix)]
 use flow::{ast::Value, manifest::Registry, parser, runtime};
 use std::{
-    collections::BTreeMap,
     fs,
     path::Path,
     process::{Command, Output},

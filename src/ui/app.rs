@@ -28,7 +28,7 @@ use ratatui::{
     },
     Frame, Terminal,
 };
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "tui"))]
 use serde_json::json;
 use serde_json::Value as Json;
 use std::{
@@ -1831,7 +1831,8 @@ pub fn run(
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+// The tests render through ratatui, so they need the terminal UI feature.
+#[cfg(all(test, unix, feature = "tui"))]
 mod tests {
     use super::*;
 

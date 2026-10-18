@@ -8,7 +8,6 @@ use flow::graph::{
 use flow::manifest::Registry;
 use flow::runtime::RunOptions;
 use serde_json::{json, Value as JsonValue};
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

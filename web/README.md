@@ -24,9 +24,9 @@ require its documented system dependencies; CI uses `playwright install --with-d
 | `worker.mjs` | Loads the WASM module and handles requests off the UI thread. |
 | `abi.mjs` | Owned-buffer JSON transport across the Rust ABI. |
 | `build.mjs` | Bundles local assets and emits a source/hash receipt. |
-| `examples.json`, `fixtures.json` | Runnable scripts, inputs and exact expected output. |
+| `examples.json`, `fixtures.json` | Thirty runnable workflows (script, group, hint, exact expected output and files) and the virtual files they read. |
 | `benchmark.mjs` | Checked worker and round-trip latency samples, with timer limits. |
-| `test/` | WASM contracts, native-output comparisons and real browser interactions. |
+| `test/` | WASM contracts, native-output comparisons, per-demo scenario tests and real browser interactions. |
 
 Run `npm --prefix web run format` to format owned JS, JSON and CSS, or
 `npm --prefix web run format:check` to check without modifying files. The locked
@@ -36,3 +36,29 @@ The Python build helper adds full dependency license texts after bundling.
 
 See the [browser contract](../docs/playground.md), [Rust host](../browser/README.md),
 and [contributor guide](../CONTRIBUTING.md) for execution limits and the full check matrix.
+
+## Adding a demo
+
+A demo is an entry in `examples.json` plus any new virtual files in `fixtures.json`.
+Fixture names are flat and shared by every demo, and the page seeds one program file
+per demo, so keep the total (fixtures, programs and files a full run generates) under
+the 128-file limit; `test/demos.test.mjs` fails above 120.
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `file` | Unique id for `#example=ID` links and the `.program` file name. |
+| `group` | Heading in the picker. Consecutive demos with the same group share a heading. |
+| `title`, `subtitle` | Button text, at most 40 and 70 characters. |
+| `hint` | One sentence under the picker naming an edit to try. |
+| `source`, `stdin` | The program and optional preloaded standard input. |
+| `expected`, `expectedFiles` | Exact stdout and the files the run writes. |
+| `previewFile` | A generated dashboard JSON (`title`, `status`, up to eight `metrics`) shown as cards. |
+
+Write the program with the applets the browser host has (see the
+[playground guide](../docs/playground.md)), run `npm test`, and add a scenario test that
+edits a fixture and checks the changed result. The test suite runs each demo under WASM
+and compares its stdout and files with native Execute, so every demo must produce the
+same bytes in both. Point `EXECUTE_TEST_BINARY` at a native build, and run the parity
+tests where GNU `grep`, `sort`, `uniq`, `wc`, `head` and `printf` are on `PATH`: on
+Windows, the `printf` bundled with Git for Windows mis-parses double quotes in
+arguments, so printf-built JSON fails there while it passes on Linux and macOS.

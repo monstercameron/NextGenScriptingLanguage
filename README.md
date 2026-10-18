@@ -233,7 +233,7 @@ require explicit retry. See the [recovery contract](docs/language.md#recover-aft
 | [Model operations](docs/models.md) | TypeSafe Jev classification, judgment and scoring; OpenAI generation and JSON extraction. |
 | [VS Code extension](editors/vscode/README.md) | Syntax highlighting, snippets and grammar tests. |
 | [Language server and discovery](docs/language-server.md) | Source-build stdio LSP diagnostics/completion, local reusable-program navigation and rename, safe applet discovery and typed port matching. |
-| [Browser playground](docs/playground.md) | Rust/WASM language core, terminal, virtual files and ten runnable workflows with checked outputs and generated reports. |
+| [Browser playground](docs/playground.md) | Rust/WASM language core, terminal, virtual files and thirty runnable workflows, twenty of them sysadmin and day-to-day audits, with checked outputs and generated reports. |
 
 The browser uses bounded Rust applet ports and buffered pipelines. Installed
 executables, native pipes, services, model calls and TUI screens use native Execute.

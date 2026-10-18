@@ -6,7 +6,8 @@ Edit a `.program`, press **Run program** (Cmd/Ctrl+Enter), and inspect the termi
 virtual files and execution trace. **Check** and **Explain** use the Rust validator.
 Nothing calls an LLM, logs into a server, or reads your computer's files.
 
-Ten workflows have fixtures and checked stdout and generated files. Start with
+Thirty workflows have fixtures and checked stdout and generated files. The page
+groups them by purpose; **Reset files** restores every fixture. Start with
 **Incident command**, **Launch control**, or **Support signal**: each combines
 several inputs, branches and reusable programs into reports and a dashboard.
 Edit a regional incident log, release candidate, or support queue and rerun to
@@ -15,7 +16,7 @@ render bounded JSON written by the current execution; retained files from an
 older run cannot masquerade as fresh results. Direction-control characters are
 shown as visible escapes, and markup stays literal text.
 
-The other seven workflows cover log triage, a typed release gate, a reusable
+The seven basics cover log triage, a typed release gate, a reusable
 shortlist, explicit caching, exit-status branching, stdin cleanup, and a batch file loop.
 Try changing `checks_passed` in `release.json`, or enter `{"limit":"2"}` in
 **Inputs & stdin**. Input values use the same CLI type parser as native Execute.
@@ -23,6 +24,55 @@ Click any virtual file to edit it; `.program` files open in the main editor.
 Import reads only the file you select. Download saves the open script. Share puts
 only the source into a URL fragment: recipients must supply any additional files
 and inputs. A shared script loads for inspection and never runs automatically.
+
+## Day-to-day and sysadmin demos
+
+Twenty demos do small audits and reports of the kind a person runs on a server or
+a project folder. Each reads realistic fixtures, which are pasted output of the real
+command named in its header comment (`df`, `ps`, `ss`, `apt list --upgradable`,
+`git log`, `cksum`), because the playground starts no processes. Each has a hint under
+the picker that names an edit to try. The fixtures are samples; the demos show the
+shape of an audit, not your machine.
+
+| Demo | Virtual files it reads | What it reports |
+| --- | --- | --- |
+| Web traffic: top endpoints | `nginx-access.log` | Busiest requests, status-code counts, 4xx and 5xx totals, and the requests that returned 5xx. |
+| Failed SSH logins | `auth.log` | Failures by watched account and network, accepted logins, and an alert when a password login succeeded from a network that was guessing. |
+| Errors by hour | `app-errors.log` | Errors per hour and per service, plus the first and last error. |
+| Listening ports audit | `ss-listen.txt`, `allowed-ports.json` | Public listeners that are not on the allowlist, and ports that must never be public. |
+| Accounts and sudo audit | `passwd.txt`, `group.txt` | UID 0 accounts, password fields outside `/etc/shadow`, login shells, sudo group drift against an approved list. |
+| Disk usage report | `df.txt`, `df-inodes.txt` | Filesystems and inode tables at 90% or more, the fullest three, and a dashboard (`disk-dashboard.json`). |
+| Top memory processes | `ps.txt` | Largest five by RSS, a 1 GiB check, process counts per user and the largest for one user. |
+| Package update summary | `apt-upgradable.txt` | Security updates first, routine updates, and restart-sensitive packages. |
+| Service health dashboard | `health.json` | Up, degraded and down services from a health response, and a dashboard (`health-dashboard.json`). |
+| Certificate expiry check | `certs.json` | Expired and expiring certificates for a given `today` and `warn_by`, and a dashboard (`cert-dashboard.json`). |
+| Cron and timer audit | `crontab.txt`, `timers.txt` | Jobs that pipe a download into a shell, jobs that discard output, boot jobs, and timers that are unscheduled or never ran. |
+| Env file validation | `app.env`, `required-env.json` | Missing, empty and sample-valued required keys by name, never by value, and discouraged settings. |
+| sshd_config change review | `sshd_config.current`, `sshd_config.proposed`, `sshd-policy.json` | Directive lines only in one file, and pass or fail against a hardening policy. |
+| CSV to JSON report | `inventory.csv` | A header check, rows with empty fields and a validated JSON summary (`inventory-report.json`). |
+| CI results triage | `ci-runs.json` | Which failed runs page the on-call and which go to the author, and a dashboard (`ci-dashboard.json`). |
+| Backup rotation plan | `backups.json` | Keep the newest N (input `keep`), keep monthly firsts, delete the rest, and `backup-delete-list.txt`. Nothing is deleted. |
+| Batch rename plan | `photos.json`, `photos-existing.txt` | A reviewable `mv` script (`rename-plan.sh`) that skips dated names and existing targets. |
+| Duplicate file finder | `cksums.json` | Files that share a checksum and size, grouped. |
+| Git log summary | `git-log.txt`, `git-authors.txt` | Top authors, commits by conventional type, reverts, and a release-notes draft (`release-notes.txt`). |
+| Action items from notes | `meeting-notes.txt` | Open and done items, urgent items, items per owner and items with no owner (`open-items.txt`). |
+
+These programs use only what the browser host supports, which shapes how they are
+written, and the same programs produce the same bytes under native Execute:
+
+- Applets are the ones in the applet table under "What actually executes". Sorting is bytewise and has no numeric mode, so ranked
+  reports use right-aligned columns, which sort correctly as text (`df`, `ps`), or
+  `sort | uniq -c | sort -r | head`, whose count column is fixed width.
+- There is no arithmetic and equality is the only comparison on numbers. Counts come
+  from `wc -l` through the `count lines` applet, ISO dates compare by sorting two of
+  them, and thresholds are lists of literal patterns.
+- Reports accumulate in text bindings that a loop rebinds
+  (`run "printf" with arguments ["%s%s\n", report, row] as report`), and a pipeline
+  value can flow through a loop, as in the allowlist filter of the ports audit.
+- Set differences use `sort | uniq -c` over the files concatenated with one of them
+  repeated, so a count of 1 or 2 shows which file a line came from.
+- `grep` is literal only, so patterns such as `" ERROR "` or `"from 203.0.113."` stand
+  in for regular expressions.
 
 The terminal supports quoted literal arguments and command history:
 
@@ -135,8 +185,9 @@ cannot load a module worker; use HTTP. Generated JS, CSS, WASM and `build.json`
 are ignored. `docs/playground/index.html`, Rust, fixtures and UI sources are
 tracked. `build.json` contains the WASM SHA-256 and source hashes.
 
-The WASM tests execute the module in Node, including six exact-output native
-comparisons. Playwright checks real module workers, file editing, terminal input,
+The WASM tests execute the module in Node, including an exact-output native
+comparison for every one of the thirty workflows, scenario tests that edit a fixture
+and assert the changed result, and a check that all workflows fit in one session. Playwright checks real module workers, file editing, terminal input,
 cache state, errors, Stop/restart, downloads, shared URLs, CSP, and mobile width.
 Stop's integration test deliberately holds a worker request at the transport
 boundary; it proves termination/recovery, not the timing of a busy WASM workload.

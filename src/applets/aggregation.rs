@@ -196,17 +196,32 @@ fn count_lines_by(input: &[u8], args: &Map<String, Value>) -> Result<Value, Appl
     if delimiter.is_empty() {
         return Err(invalid("args.delimiter cannot be empty"));
     }
-    let field = args.get("field").and_then(Value::as_u64).unwrap_or(0) as usize;
+    if input.len() > MAX_BYTES {
+        return Err(invalid(format!(
+            "stdin exceeds the bounded {MAX_BYTES}-byte limit"
+        )));
+    }
+    let field = usize::try_from(args.get("field").and_then(Value::as_u64).unwrap_or(0))
+        .map_err(|_| invalid("args.field is too large"))?;
+    // Keys keep first-seen order; the index makes each line a constant-time lookup.
     let mut counts: Vec<(String, usize)> = Vec::new();
-    for line in text.lines() {
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (number, line) in text.lines().enumerate() {
+        if number >= MAX_ITEMS {
+            return Err(invalid(format!(
+                "stdin exceeds the bounded {MAX_ITEMS}-line limit"
+            )));
+        }
         let key = line
             .split(delimiter)
             .nth(field)
             .ok_or_else(|| invalid(format!("line has no field {field}")))?;
-        if let Some((_, count)) = counts.iter_mut().find(|(candidate, _)| candidate == key) {
-            *count += 1;
-        } else {
-            counts.push((key.to_owned(), 1));
+        match index.get(key) {
+            Some(&position) => counts[position].1 += 1,
+            None => {
+                index.insert(key.to_owned(), counts.len());
+                counts.push((key.to_owned(), 1));
+            }
         }
     }
     Ok(Value::Array(

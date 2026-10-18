@@ -20,6 +20,175 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+/// The preflight owner stays alive through command construction and spawn.
+pub(super) struct PreparedLaunch<'a> {
+    binary: std::borrow::Cow<'a, std::path::Path>,
+    argv: std::borrow::Cow<'a, [String]>,
+}
+
+impl<'a> PreparedLaunch<'a> {
+    pub(super) fn new(prepared: &'a (PathBuf, Vec<String>)) -> Self {
+        Self {
+            binary: std::borrow::Cow::Borrowed(&prepared.0),
+            argv: std::borrow::Cow::Borrowed(&prepared.1),
+        }
+    }
+
+    pub(super) fn command(
+        &self,
+        registry: &Registry,
+        name: &str,
+        cwd: &crate::working_dir::WorkingDirectory,
+    ) -> Result<std::process::Command> {
+        crate::capabilities::command_for(
+            &self.binary,
+            self.argv.iter().map(String::as_str),
+            registry,
+            name,
+            cwd,
+        )
+    }
+}
+
+#[cfg(test)]
+mod lane_v2_tests {
+    use super::*;
+
+    #[test]
+    fn lane_v2_prepared_launch_borrows_preflight_storage() {
+        let prepared = (
+            PathBuf::from("fixture"),
+            vec!["first".into(), "second".into()],
+        );
+        let launch = PreparedLaunch::new(&prepared);
+        assert!(matches!(launch.binary, std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(launch.argv, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(launch.argv.as_ptr(), prepared.1.as_ptr());
+    }
+
+    #[test]
+    #[ignore = "prepared storage allocation microbenchmark; run in isolation"]
+    fn lane_v2_prepared_storage_benchmark() {
+        for arguments in [0, 1, 16] {
+            let prepared = (
+                PathBuf::from("fixture"),
+                vec!["argument".repeat(8); arguments],
+            );
+            let mut timings = [Vec::new(), Vec::new()];
+            for batch in 0..7 {
+                for mode in if batch % 2 == 0 { [0, 1] } else { [1, 0] } {
+                    let start = Instant::now();
+                    for _ in 0..100_000 {
+                        std::hint::black_box(if mode == 0 {
+                            PreparedLaunch {
+                                binary: std::borrow::Cow::Owned(prepared.0.clone()),
+                                argv: std::borrow::Cow::Owned(prepared.1.clone()),
+                            }
+                        } else {
+                            PreparedLaunch::new(&prepared)
+                        });
+                    }
+                    timings[mode].push(start.elapsed());
+                }
+            }
+            for timing in &mut timings {
+                timing.sort_unstable();
+            }
+            eprintln!(
+                "prepared arguments={arguments}: cloned {:?}; borrowed {:?}; 100000 iterations",
+                timings[0][3], timings[1][3]
+            );
+        }
+    }
+
+    fn setup(filtered: bool) -> (Registry, crate::working_dir::WorkingDirectory) {
+        let cwd = crate::working_dir::WorkingDirectory::plain(std::env::current_dir().unwrap());
+        let registry = Registry::from_sources(&[serde_json::json!({
+            "name": "fixture", "binary": "fixture", "arguments": [],
+            "contract": {"version": 1, "capabilities": ["process.exec"]}
+        })
+        .to_string()])
+        .unwrap();
+        if filtered {
+            registry.set_host_state(Some(crate::capabilities::ExecutionMode::Trusted));
+            registry.set_host_state(Some(
+                crate::capabilities::CapabilityPolicy::from_json(
+                    r#"{"version":1,"applets":{"fixture":{"capabilities":["process.exec"]}}}"#,
+                )
+                .unwrap(),
+            ));
+        }
+        (registry, cwd)
+    }
+
+    #[test]
+    fn lane_v2_prepared_command_preserves_argv_and_environment() {
+        let prepared = (
+            PathBuf::from("fixture"),
+            vec!["first".into(), "".into(), "two words".into()],
+        );
+        for filtered in [false, true] {
+            let (registry, cwd) = setup(filtered);
+            let borrowed = PreparedLaunch::new(&prepared)
+                .command(&registry, "fixture", &cwd)
+                .unwrap();
+            let legacy = PreparedLaunch {
+                binary: std::borrow::Cow::Owned(prepared.0.clone()),
+                argv: std::borrow::Cow::Owned(prepared.1.clone()),
+            }
+            .command(&registry, "fixture", &cwd)
+            .unwrap();
+            assert_eq!(borrowed.get_program(), legacy.get_program());
+            assert_eq!(
+                borrowed.get_args().collect::<Vec<_>>(),
+                legacy.get_args().collect::<Vec<_>>()
+            );
+            assert_eq!(
+                borrowed.get_envs().collect::<Vec<_>>(),
+                legacy.get_envs().collect::<Vec<_>>()
+            );
+            assert_eq!(borrowed.get_current_dir(), legacy.get_current_dir());
+            if !filtered {
+                assert_eq!(borrowed.get_envs().count(), 0);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "repeated command setup benchmark; run in isolation"]
+    fn lane_v2_command_setup_benchmark() {
+        let prepared = (PathBuf::from("fixture"), vec!["argument".repeat(8); 16]);
+        for filtered in [false, true] {
+            let (registry, cwd) = setup(filtered);
+            let mut timings = [Vec::new(), Vec::new()];
+            for batch in 0..7 {
+                for mode in if batch % 2 == 0 { [0, 1] } else { [1, 0] } {
+                    let start = Instant::now();
+                    for _ in 0..2000 {
+                        let launch = if mode == 0 {
+                            PreparedLaunch {
+                                binary: std::borrow::Cow::Owned(prepared.0.clone()),
+                                argv: std::borrow::Cow::Owned(prepared.1.clone()),
+                            }
+                        } else {
+                            PreparedLaunch::new(&prepared)
+                        };
+                        std::hint::black_box(launch.command(&registry, "fixture", &cwd).unwrap());
+                    }
+                    timings[mode].push(start.elapsed());
+                }
+            }
+            for timing in &mut timings {
+                timing.sort_unstable();
+            }
+            eprintln!(
+                "command setup filtered={filtered}: cloned {:?}; borrowed {:?}; 2000 iterations",
+                timings[0][3], timings[1][3]
+            );
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct GroupOutput {
     pub(super) bytes: Vec<u8>,
@@ -415,17 +584,20 @@ pub(super) fn execute_group_with_sink(
     let mut terminal_foreground: Option<TerminalForeground>;
     for (index, (call, manifest, line)) in calls.iter().enumerate() {
         check_native_abort(calls, &children, &observed_stages, signals)?;
-        let (binary, argv) = if let Some(prepared) = &signals.prepared_job_commands {
-            let (binary, argv) = prepared
+        let binary;
+        let mut command = if let Some(prepared) = &signals.prepared_job_commands {
+            let prepared = prepared
                 .get(index)
                 .with_context(|| format!("line {line}: missing preflighted background command"))?;
-            (binary.clone(), GroupArguments::Owned(argv.clone()))
+            binary = Cow::Borrowed(prepared.0.as_path());
+            PreparedLaunch::new(prepared).command(registry, &manifest.name, cwd)?
         } else {
-            match prepared_first_call.take() {
+            let (resolved_binary, argv) = match prepared_first_call.take() {
                 Some((binary, argv)) => (binary, GroupArguments::Owned(argv)),
                 None => {
                     let argv = arguments_for_group_call(call, manifest, bindings)?;
-                    let binary = binary_path(manifest.binary_for(call), cwd).map_err(|error| {
+                    let binary = binary_path_for_launch(manifest.binary_for(call), cwd, registry)
+                        .map_err(|error| {
                         native_spawn_failure(
                             format!(
                                 "line {line}: resolving executable for {}: {error:#}",
@@ -440,23 +612,24 @@ pub(super) fn execute_group_with_sink(
                     })?;
                     (binary, argv)
                 }
+            };
+            binary = Cow::Owned(resolved_binary);
+            match &argv {
+                GroupArguments::Owned(argv) => crate::capabilities::command_for(
+                    &binary,
+                    argv.iter().map(|argument| OsStr::new(argument.as_str())),
+                    registry,
+                    &manifest.name,
+                    cwd,
+                )?,
+                GroupArguments::Borrowed(argv) => crate::capabilities::command_for(
+                    &binary,
+                    argv.iter().map(|argument| OsStr::new(argument.as_ref())),
+                    registry,
+                    &manifest.name,
+                    cwd,
+                )?,
             }
-        };
-        let mut command = match &argv {
-            GroupArguments::Owned(argv) => crate::capabilities::command_for(
-                &binary,
-                argv.iter().map(|argument| OsStr::new(argument.as_str())),
-                registry,
-                &manifest.name,
-                cwd,
-            )?,
-            GroupArguments::Borrowed(argv) => crate::capabilities::command_for(
-                &binary,
-                argv.iter().map(|argument| OsStr::new(argument.as_ref())),
-                registry,
-                &manifest.name,
-                cwd,
-            )?,
         };
         let resolved_io = resolved_call_stdio(call, manifest, signals);
         let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());
@@ -666,11 +839,25 @@ pub(super) fn execute_group_with_sink(
         let mut reached_eof = false;
         if !eof {
             loop {
-                match stdout
-                    .as_mut()
-                    .expect("captured stdout pipe")
-                    .read(&mut chunk)
-                {
+                let previous_length = output.len();
+                let pipe = stdout.as_mut().expect("captured stdout pipe");
+                let capture_length = chunk.len().min(
+                    options
+                        .max_output_bytes
+                        .saturating_sub(previous_length)
+                        .saturating_add(1),
+                );
+                // Stage the first/growth chunk rather than allocating speculatively
+                // for WouldBlock or EOF. All reads into existing spare capacity go
+                // straight to their final location, including the large-copy path.
+                let direct_capture = sink.is_none()
+                    && output.capacity().saturating_sub(previous_length) >= capture_length;
+                let read = if direct_capture {
+                    invocation_io::read_into_capture(pipe, &mut output, capture_length)
+                } else {
+                    pipe.read(&mut chunk)
+                };
+                match read {
                     Ok(0) => {
                         eof = true;
                         reached_eof = true;
@@ -717,11 +904,16 @@ pub(super) fn execute_group_with_sink(
                                 });
                             }
                         } else {
-                            let remaining = options.max_output_bytes.saturating_sub(output.len());
+                            let remaining =
+                                options.max_output_bytes.saturating_sub(previous_length);
                             let job_exceeded = count > remaining;
                             let requested = count.min(remaining);
                             let retained = signals.reserve_job_output(requested);
-                            output.extend_from_slice(&chunk[..retained]);
+                            if direct_capture {
+                                output.truncate(previous_length + retained);
+                            } else {
+                                output.extend_from_slice(&chunk[..retained]);
+                            }
                             if retained < count {
                                 let message = if job_exceeded {
                                     output_limit_message(false, options.max_output_bytes)

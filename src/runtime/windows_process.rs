@@ -184,6 +184,7 @@ fn execute_group_with_sink(
         launched,
         signals,
     } = request;
+    let launch_cwd = cwd;
     let cwd: &Path = cwd;
     let mut children = Children(
         Vec::with_capacity(calls.len()),
@@ -285,47 +286,56 @@ fn execute_group_with_sink(
         }
         for (index, (call, manifest, line)) in calls.iter().enumerate() {
             check_native_abort(calls, &children, &observed_stages, signals)?;
-            let (binary, argv) = if let Some(prepared) = &signals.prepared_job_commands {
-                let (binary, argv) = prepared.get(index).with_context(|| {
+            let binary;
+            let mut command = if let Some(prepared) = &signals.prepared_job_commands {
+                let prepared = prepared.get(index).with_context(|| {
                     format!("line {line}: missing preflighted background command")
                 })?;
-                (binary.clone(), GroupArguments::Owned(argv.clone()))
+                binary = Cow::Borrowed(prepared.0.as_path());
+                spawn::PreparedLaunch::new(prepared).command(
+                    registry,
+                    &manifest.name,
+                    launch_cwd,
+                )?
             } else {
-                match prepared_first_call.take() {
+                let (resolved_binary, argv) = match prepared_first_call.take() {
                     Some((path, argv)) => (path, GroupArguments::Owned(argv)),
                     None => (
-                        binary_path(manifest.binary_for(call), cwd).map_err(|error| {
-                            native_spawn_failure(
-                                format!(
-                                    "line {line}: resolving executable for {}: {error:#}",
-                                    manifest.name_for(call)
-                                ),
-                                index,
-                                calls,
-                                &children,
-                                &mut observed_stages,
-                                signals,
-                            )
-                        })?,
+                        binary_path_for_launch(manifest.binary_for(call), cwd, registry).map_err(
+                            |error| {
+                                native_spawn_failure(
+                                    format!(
+                                        "line {line}: resolving executable for {}: {error:#}",
+                                        manifest.name_for(call)
+                                    ),
+                                    index,
+                                    calls,
+                                    &children,
+                                    &mut observed_stages,
+                                    signals,
+                                )
+                            },
+                        )?,
                         arguments_for_group_call(call, manifest, bindings)?,
                     ),
+                };
+                binary = Cow::Owned(resolved_binary);
+                match &argv {
+                    GroupArguments::Owned(argv) => crate::capabilities::command_for(
+                        &binary,
+                        argv.iter().map(|argument| OsStr::new(argument.as_str())),
+                        registry,
+                        &manifest.name,
+                        launch_cwd,
+                    )?,
+                    GroupArguments::Borrowed(argv) => crate::capabilities::command_for(
+                        &binary,
+                        argv.iter().map(|argument| OsStr::new(argument.as_ref())),
+                        registry,
+                        &manifest.name,
+                        launch_cwd,
+                    )?,
                 }
-            };
-            let mut command = match &argv {
-                GroupArguments::Owned(argv) => crate::capabilities::command_for(
-                    &binary,
-                    argv.iter().map(|argument| OsStr::new(argument.as_str())),
-                    registry,
-                    &manifest.name,
-                    &crate::working_dir::WorkingDirectory::plain(cwd.to_path_buf()),
-                )?,
-                GroupArguments::Borrowed(argv) => crate::capabilities::command_for(
-                    &binary,
-                    argv.iter().map(|argument| OsStr::new(argument.as_ref())),
-                    registry,
-                    &manifest.name,
-                    &crate::working_dir::WorkingDirectory::plain(cwd.to_path_buf()),
-                )?,
             };
             let resolved_io = resolved_call_stdio(call, manifest, signals);
             let stdout_disposition = resolved_io.stdout_for_stage(index + 1 == calls.len());

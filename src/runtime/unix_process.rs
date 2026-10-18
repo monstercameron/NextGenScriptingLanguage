@@ -212,7 +212,7 @@ struct ChildObserver {
     epoll: OwnedFd,
     // Linux pidfds stay open while registered: closing one removes it from the set.
     #[cfg(target_os = "linux")]
-    pidfds: Mutex<Vec<OwnedFd>>,
+    pidfds: Mutex<Vec<(u32, OwnedFd)>>,
 }
 impl ChildObserver {
     #[cfg(target_os = "macos")]
@@ -333,6 +333,20 @@ impl ChildObserver {
     // An epoll set of pidfds: the set becomes readable as soon as any observed
     // child exits, so the wait loop wakes on the exit itself, not on a timer.
     fn new() -> Option<Self> {
+        // Readiness replaces WNOWAIT only when the host retains child zombies.
+        // Preserve an embedding host's SIGCHLD disposition and use the existing
+        // waitid fallback if it requests automatic reaping instead.
+        let mut action = std::mem::MaybeUninit::<libc::sigaction>::uninit();
+        // SAFETY: this only queries SIGCHLD into live writable storage. No new
+        // action is installed and a successful query initializes the structure.
+        if unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), action.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        // SAFETY: the successful sigaction query above initialized action.
+        let action = unsafe { action.assume_init() };
+        if action.sa_sigaction == libc::SIG_IGN || action.sa_flags & libc::SA_NOCLDWAIT != 0 {
+            return None;
+        }
         // SAFETY: epoll_create1 takes only flags, and EPOLL_CLOEXEC keeps the descriptor out
         // of child processes. A -1 result returns None just below, so `fd` is a new one.
         let fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
@@ -366,7 +380,7 @@ impl ChildObserver {
         let pidfd = unsafe { OwnedFd::from_raw_fd(raw as libc::c_int) };
         let mut event = libc::epoll_event {
             events: libc::EPOLLIN as u32,
-            u64: raw as u64,
+            u64: u64::from(pid),
         };
         // SAFETY: `self.epoll` is the open epoll set, and `pidfd` is a live descriptor that
         // this frame owns until it is stored in `pidfds`. `event` is a live local that the
@@ -385,11 +399,12 @@ impl ChildObserver {
         self.pidfds
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(pidfd);
+            .push((pid, pidfd));
         Ok(())
     }
 
-    fn drain(&self) -> std::io::Result<()> {
+    fn drain(&self) -> std::io::Result<Vec<u32>> {
+        let mut exited = Vec::new();
         // SAFETY: epoll_event is a C struct of integers, so the all-zero bit pattern is valid.
         let mut events: [libc::epoll_event; 16] = unsafe { std::mem::zeroed() };
         loop {
@@ -407,32 +422,31 @@ impl ChildObserver {
             if ready == -1 {
                 let error = std::io::Error::last_os_error();
                 if error.kind() == std::io::ErrorKind::Interrupted {
-                    return Ok(());
+                    return Ok(exited);
                 }
                 return Err(error);
             }
             if ready == 0 {
-                return Ok(());
+                return Ok(exited);
             }
             let mut pidfds = self
                 .pidfds
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             for event in &events[..ready as usize] {
-                // Each registration stores its pidfd number in `u64`.
-                let fd = event.u64 as libc::c_int;
-                // SAFETY: `self.epoll` is open. `fd` is a pidfd still held in `pidfds`, which
-                // this loop has locked. It is closed only after this DEL, so it is still open.
-                // DEL ignores the event argument, so the null pointer is never read.
-                unsafe {
-                    libc::epoll_ctl(
-                        self.epoll.as_raw_fd(),
-                        libc::EPOLL_CTL_DEL,
-                        fd,
-                        std::ptr::null_mut(),
-                    );
+                // A pidfd reports leader exit without reaping it. Closing our
+                // descriptor automatically removes its epoll registration; the
+                // Child owner still reserves the PID until group cleanup/reap.
+                let pid = event.u64 as u32;
+                // Error/hangup notifications do not authorize skipping the
+                // identity-preserving waitid check (for example, an auto-reaped
+                // child). Keep the ordinary status probe for those events.
+                if event.events & libc::EPOLLIN as u32 != 0
+                    && event.events & (libc::EPOLLERR | libc::EPOLLHUP) as u32 == 0
+                {
+                    exited.push(pid);
                 }
-                pidfds.retain(|pidfd| pidfd.as_raw_fd() != fd);
+                pidfds.retain(|(registered_pid, _)| *registered_pid != pid);
             }
         }
     }
@@ -441,6 +455,71 @@ impl ChildObserver {
 #[cfg(all(test, target_os = "linux"))]
 mod pidfd_observer_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "isolated process-wide SIGCHLD disposition check"]
+    fn lane_v2_pidfd_fast_reap_refuses_automatic_reaping() {
+        let mut original = std::mem::MaybeUninit::<libc::sigaction>::uninit();
+        let queried =
+            // SAFETY: this queries the current action into valid writable storage.
+            unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), original.as_mut_ptr()) };
+        assert_eq!(queried, 0);
+        // SAFETY: the query succeeded and initialized the structure.
+        let original = unsafe { original.assume_init() };
+        struct Restore(libc::sigaction);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                // SAFETY: the saved action was initialized by sigaction above.
+                unsafe {
+                    libc::sigaction(libc::SIGCHLD, &self.0, std::ptr::null_mut());
+                }
+            }
+        }
+        let _restore = Restore(original);
+        for ignore in [false, true] {
+            let mut action = original;
+            if ignore {
+                action.sa_sigaction = libc::SIG_IGN;
+            } else {
+                action.sa_flags |= libc::SA_NOCLDWAIT;
+            }
+            let installed =
+                // SAFETY: action is initialized and this isolated test restores the
+                // process-wide disposition before returning, including on panic.
+                unsafe { libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()) };
+            assert_eq!(installed, 0);
+            assert!(ChildObserver::new().is_none());
+        }
+    }
+
+    #[test]
+    fn lane_v2_pidfd_ready_identities_survive_exit_before_registration() {
+        let observer = ChildObserver::new().expect("creating epoll set");
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "exit 7"])
+            .process_group(0)
+            .spawn()
+            .expect("spawning child");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !exited_unreaped(child.id()).expect("probing child without reaping") {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        if let Err(error) = observer.observe(child.id()) {
+            child.wait().expect("reaping child on unsupported kernel");
+            assert_eq!(error.raw_os_error(), Some(libc::ENOSYS));
+            return;
+        }
+        assert_eq!(
+            observer.drain().expect("draining ready pidfd"),
+            [child.id()]
+        );
+        assert!(observer.drain().expect("no duplicate exit").is_empty());
+        // The observer did not reap the zombie. Killing its group is still safe;
+        // Child::wait, rather than readiness, remains the exit-status authority.
+        kill_group(child.id());
+        assert_eq!(child.wait().expect("reaping child").code(), Some(7));
+    }
 
     #[test]
     fn exited_child_wakes_observer_before_it_is_reaped() {
@@ -467,7 +546,14 @@ mod pidfd_observer_tests {
         // SAFETY: `descriptor` is a live pollfd and the count is 1. Its fd is the epoll set
         // owned by `observer`, which lives until the end of this test.
         assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 10_000) }, 1);
-        observer.drain().expect("draining exit notification");
+        assert_eq!(
+            observer.drain().expect("draining exit notification"),
+            vec![child.id()]
+        );
+        assert!(observer
+            .drain()
+            .expect("draining empty observer")
+            .is_empty());
         let mut quiet = libc::pollfd {
             fd: observer.raw_fd(),
             events: libc::POLLIN,

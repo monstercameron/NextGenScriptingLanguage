@@ -1176,6 +1176,79 @@ fn binary_path_from_path(binary: &str, cwd: &Path, path: &std::ffi::OsStr) -> Re
     }
     Err(anyhow!("executable {binary:?} not found in PATH"))
 }
+
+/// Cache only PATH parsing, never an executable or its metadata. Registry host state
+/// scopes this lazy cache to the caller without adding process-global state.
+#[derive(Default)]
+struct LaunchPathCache {
+    key: Option<(OsString, PathBuf)>,
+    entries: Arc<[PathBuf]>,
+}
+
+impl LaunchPathCache {
+    fn components(&mut self, cwd: &Path, path: &OsStr) -> Arc<[PathBuf]> {
+        if !self.key.as_ref().is_some_and(|(saved_path, saved_cwd)| {
+            saved_path == path && saved_cwd.as_os_str() == cwd.as_os_str()
+        }) {
+            self.entries = std::env::split_paths(path)
+                .map(|entry| cwd.join(entry))
+                .collect::<Vec<_>>()
+                .into();
+            self.key = Some((path.to_owned(), cwd.to_path_buf()));
+        }
+        Arc::clone(&self.entries)
+    }
+
+    #[cfg(test)]
+    fn lookup(&mut self, binary: &str, cwd: &Path, path: &OsStr) -> Result<PathBuf> {
+        binary_path_in_components(binary, &self.components(cwd, path))
+    }
+}
+
+fn binary_path_in_components(binary: &str, entries: &[PathBuf]) -> Result<PathBuf> {
+    let mut candidate = PathBuf::new();
+    for entry in entries {
+        candidate.clear();
+        candidate.push(entry);
+        candidate.push(binary);
+        candidate = crate::platform::executable_path(candidate)?;
+        let Ok(metadata) = fs::metadata(&candidate) else {
+            continue;
+        };
+        if metadata.is_file() && crate::platform::executable(&metadata) {
+            return Ok(candidate);
+        }
+    }
+    Err(anyhow!("executable {binary:?} not found in PATH"))
+}
+
+fn binary_path_from_cached_path(
+    binary: &str,
+    cwd: &Path,
+    path: &OsStr,
+    registry: &Registry,
+) -> Result<PathBuf> {
+    let entries = registry
+        .host_state::<Mutex<LaunchPathCache>>()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .components(cwd, path);
+    // Release the cache lock before filesystem I/O, so parallel jobs can resolve
+    // executables concurrently, including runs with different PATH/cwd keys.
+    binary_path_in_components(binary, &entries)
+}
+
+fn binary_path_for_launch(binary: &str, cwd: &Path, registry: &Registry) -> Result<PathBuf> {
+    if matches!(binary, "@execute-model" | "@execute-applet")
+        || binary.contains('/')
+        || (cfg!(windows) && binary.contains('\\'))
+        || Path::new(binary).is_absolute()
+    {
+        return binary_path(binary, cwd);
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    binary_path_from_cached_path(binary, cwd, &path, registry)
+}
 fn event(enabled: bool, mut value: serde_json::Value, signals: &Signals) -> Result<()> {
     if enabled {
         if let (Some(object), Some(id)) = (value.as_object_mut(), current_step_id()) {
@@ -1359,10 +1432,23 @@ fn scan_child_statuses(
         signals,
         started,
     } = scan;
+    #[cfg(target_os = "linux")]
+    let mut exited_pids = Vec::new();
     let drain_failed = *observer_ready
-        && observer
-            .as_ref()
-            .is_some_and(|current| current.drain().is_err());
+        && observer.as_ref().is_some_and(|current| {
+            #[cfg(target_os = "linux")]
+            {
+                match current.drain() {
+                    Ok(exited) => {
+                        exited_pids = exited;
+                        false
+                    }
+                    Err(_) => true,
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            current.drain().is_err()
+        });
     *observer_ready = false;
     if drain_failed {
         // The readiness source is optional. On failure, use the periodic poll
@@ -1374,7 +1460,19 @@ fn scan_child_statuses(
         if !managed.reaped {
             // An applet must stay alive until its work is complete. Reclaim descendants
             // that outlive their owning applet: reap_exited signals the group before reaping.
-            if let Some(status) = reap_exited(&mut managed.child)? {
+            #[cfg(target_os = "linux")]
+            let known_exited = exited_pids.contains(&managed.child.id());
+            #[cfg(not(target_os = "linux"))]
+            let known_exited = false;
+            let status = if known_exited {
+                // Readiness leaves the leader unreaped: its PID is still reserved
+                // while we kill descendants, just as in reap_exited's WNOWAIT path.
+                kill_group(managed.child.id());
+                Some(managed.child.wait()?)
+            } else {
+                reap_exited(&mut managed.child)?
+            };
+            if let Some(status) = status {
                 managed.reaped = true;
                 let code = status.code();
                 let stderr = captured_stage_stderr(calls[index].0, calls[index].1, signals)
@@ -3065,7 +3163,7 @@ fn worker_launch_for_call(
     worker_backend::WorkerLaunch::inherited(
         registry.clone(),
         manifest.name_for(call).to_owned(),
-        binary_path(manifest.binary_for(call), cwd)?,
+        binary_path_for_launch(manifest.binary_for(call), cwd, registry)?,
         cwd.to_path_buf(),
         startup_arguments.iter().map(OsString::from).collect(),
         worker_backend::WorkerLimits {
@@ -4303,6 +4401,16 @@ mod opt_manifest_binary_path_tests {
     fn opt_manifest_assert_path_parity(binary: &str, cwd: &Path, path: &OsStr) {
         let legacy = opt_manifest_legacy_binary_path(binary, cwd, path);
         let optimized = binary_path_from_path(binary, cwd, path);
+        let mut cache = LaunchPathCache::default();
+        for _ in 0..2 {
+            match (&optimized, cache.lookup(binary, cwd, path)) {
+                (Ok(expected), Ok(actual)) => assert_eq!(expected.as_os_str(), actual.as_os_str()),
+                (Err(expected), Err(actual)) => {
+                    assert_eq!(expected.to_string(), actual.to_string())
+                }
+                (expected, actual) => panic!("cached lookup differs: {expected:?}, {actual:?}"),
+            }
+        }
         match (legacy, optimized) {
             (Ok(legacy), Ok(optimized)) => assert_eq!(
                 legacy.as_os_str().as_encoded_bytes(),
@@ -5300,5 +5408,160 @@ mod drain_tests {
         assert!(!cancelled.load(Ordering::SeqCst));
         assert_eq!(drain.load(Ordering::SeqCst), crate::platform::DRAIN_IDLE);
         stop.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod lane_v2_path_tests {
+    use super::*;
+
+    #[test]
+    fn lane_v2_path_components_reused_but_filesystem_rechecked() {
+        let root = tempfile::tempdir().unwrap();
+        let early = root.path().join("early");
+        let late = root.path().join("late");
+        fs::create_dir(&early).unwrap();
+        fs::create_dir(&late).unwrap();
+        let name = if cfg!(windows) { "probe.exe" } else { "probe" };
+        let write = |path: &Path| {
+            fs::write(path, b"fixture").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        };
+        write(&late.join(name));
+        let path = std::env::join_paths([&early, &late]).unwrap();
+        let mut cache = LaunchPathCache::default();
+        assert_eq!(
+            cache.lookup(name, root.path(), &path).unwrap(),
+            late.join(name)
+        );
+        let storage = cache.entries[0].as_os_str().as_encoded_bytes().as_ptr();
+        assert_eq!(
+            cache.lookup(name, root.path(), &path).unwrap(),
+            late.join(name)
+        );
+        assert_eq!(
+            storage,
+            cache.entries[0].as_os_str().as_encoded_bytes().as_ptr()
+        );
+        write(&early.join(name));
+        assert_eq!(
+            cache.lookup(name, root.path(), &path).unwrap(),
+            early.join(name)
+        );
+        fs::remove_file(early.join(name)).unwrap();
+        assert_eq!(
+            cache.lookup(name, root.path(), &path).unwrap(),
+            late.join(name)
+        );
+        fs::remove_file(late.join(name)).unwrap();
+        assert_eq!(
+            cache
+                .lookup(name, root.path(), &path)
+                .unwrap_err()
+                .to_string(),
+            format!("executable {name:?} not found in PATH")
+        );
+    }
+
+    #[test]
+    fn lane_v2_path_cache_invalidates_path_and_cwd() {
+        let root = tempfile::tempdir().unwrap();
+        let mut cache = LaunchPathCache::default();
+        for (cwd, path) in [
+            (root.path().join("one"), OsStr::new("relative")),
+            (root.path().join("two"), OsStr::new("relative")),
+            (root.path().join("two"), OsStr::new("changed")),
+            (root.path().join("two").join("."), OsStr::new("changed")),
+        ] {
+            assert!(cache.lookup("absent", &cwd, path).is_err());
+            assert_eq!(cache.entries[0].as_os_str(), cwd.join(path).as_os_str());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lane_v2_path_cache_preserves_symlink_alias_and_permission_changes() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        fs::write(&target, b"fixture").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        let alias = root.path().join("alias");
+        symlink(&target, &alias).unwrap();
+        let mut cache = LaunchPathCache::default();
+        let path = root.path().as_os_str();
+        assert_eq!(cache.lookup("alias", root.path(), path).unwrap(), alias);
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(cache.lookup("alias", root.path(), path).is_err());
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(cache.lookup("alias", root.path(), path).unwrap(), alias);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lane_v2_path_cache_preserves_non_unicode_components() {
+        use std::os::windows::ffi::OsStringExt;
+        let root = tempfile::tempdir().unwrap();
+        let entry = OsString::from_wide(&[b'x' as u16, 0xd800, b'y' as u16]);
+        let mut cache = LaunchPathCache::default();
+        assert!(cache.lookup("absent", root.path(), &entry).is_err());
+        assert_eq!(
+            cache.entries[0].as_os_str(),
+            root.path().join(&entry).as_os_str()
+        );
+        assert!(cache.lookup("absent", root.path(), &entry).is_err());
+        assert_eq!(
+            cache.entries[0].as_os_str(),
+            root.path().join(&entry).as_os_str()
+        );
+    }
+
+    #[test]
+    #[ignore = "cached PATH lookup microbenchmark; run in isolation"]
+    fn lane_v2_path_lookup_benchmark() {
+        let root = tempfile::tempdir().unwrap();
+        let name = if cfg!(windows) { "probe.exe" } else { "probe" };
+        fs::write(root.path().join(name), b"fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(root.path().join(name), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        for prefix in [0, 16] {
+            let path = std::env::join_paths(
+                (0..prefix)
+                    .map(|i| root.path().join(format!("missing-{i}")))
+                    .chain(std::iter::once(root.path().to_path_buf())),
+            )
+            .unwrap();
+            let registry = Registry::default();
+            let mut samples = [Vec::new(), Vec::new()];
+            for batch in 0..7 {
+                for mode in if batch % 2 == 0 { [0, 1] } else { [1, 0] } {
+                    let started = Instant::now();
+                    for _ in 0..2000 {
+                        let selected = if mode == 0 {
+                            binary_path_from_path(name, root.path(), &path).unwrap()
+                        } else {
+                            binary_path_from_cached_path(name, root.path(), &path, &registry)
+                                .unwrap()
+                        };
+                        std::hint::black_box(selected);
+                    }
+                    samples[mode].push(started.elapsed());
+                }
+            }
+            for sample in &mut samples {
+                sample.sort_unstable();
+            }
+            eprintln!(
+                "PATH misses={prefix}: parsed {:?}; cached {:?}; 2000 lookups",
+                samples[0][3], samples[1][3]
+            );
+        }
     }
 }

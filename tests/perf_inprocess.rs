@@ -284,3 +284,64 @@ fn text_upper_does_not_regress_standard_mapping() {
     eprintln!("text upper gate: standard {standard:?}, applet {applet:?}");
     assert!(applet <= standard.mul_f64(1.10) + Duration::from_micros(1));
 }
+
+#[test]
+#[ignore = "1 MiB explicit execution-result allocation benchmark; run in isolation"]
+fn lane_v2_result_binding_one_mib() {
+    let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let registry = Registry::from_bundled(&cwd.join("manifests")).unwrap();
+    let program =
+        parser::parse("run text.upper with text text and keep result as execution\n").unwrap();
+    let input = "a".repeat(1024 * 1024);
+    let expected = vec![b'A'; input.len()];
+    let expected_serialized = serde_json::to_vec(&expected).unwrap();
+    let options = RunOptions::new(cwd);
+    let mut samples = Vec::new();
+    let mut peak_extra = 0;
+    for _ in 0..7 {
+        let bindings = std::collections::BTreeMap::from([(
+            "text".into(),
+            flow::ast::Value::String(input.clone()),
+        )]);
+        let baseline = LIVE_BYTES.load(Ordering::Relaxed);
+        PEAK_BYTES.store(baseline, Ordering::Relaxed);
+        let start = Instant::now();
+        let result = runtime::run_with_context(
+            &program,
+            &registry,
+            &options,
+            bindings,
+            Vec::new(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        samples.push(start.elapsed());
+        peak_extra = peak_extra.max(PEAK_BYTES.load(Ordering::Relaxed).saturating_sub(baseline));
+        assert_eq!(result.output, expected);
+        black_box(result);
+    }
+    // Validate the source-visible record through the language's public JSON
+    // boundary, outside the allocation/timing sample above.
+    let encoded_program = parser::parse("run text.upper with text text and keep result as execution\nthen encode execution as json\n").unwrap();
+    let mut encoded_options = options.clone();
+    encoded_options.max_output_bytes = 8 * 1024 * 1024;
+    let encoded = runtime::run_with_context(
+        &encoded_program,
+        &registry,
+        &encoded_options,
+        std::collections::BTreeMap::from([("text".into(), flow::ast::Value::String(input))]),
+        Vec::new(),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let record: serde_json::Value = serde_json::from_slice(&encoded.output).unwrap();
+    assert_eq!(record["stdout_captured"], true);
+    assert_eq!(
+        serde_json::to_vec(&record["stdout"]).unwrap(),
+        expected_serialized
+    );
+    eprintln!(
+        "1 MiB result binding: median {:?}; peak additional heap {peak_extra} bytes",
+        median(samples)
+    );
+}

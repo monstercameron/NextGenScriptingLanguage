@@ -45,7 +45,6 @@ VM_ACCEPTANCE_SECONDS=900
 IMAGE_NAME="Arch-Linux-x86_64-cloudimg-$ARCH_BOXES_RELEASE.qcow2"
 IMAGE_BASE_URL="https://fastly.mirror.pkgbuild.com/images/v$ARCH_BOXES_RELEASE"
 IMAGE_URL="$IMAGE_BASE_URL/$IMAGE_NAME"
-CHECKSUM_URL="$IMAGE_URL.SHA256"
 ARTIFACT_DIR="$RUNNER_TEMP/desktop-ci-artifacts"
 RUN_DIR=""
 SOURCE_SHA="$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
@@ -327,14 +326,10 @@ LIBGL_ALWAYS_SOFTWARE=true GALLIUM_DRIVER=llvmpipe LP_NUM_THREADS=2 \
 
 curl --fail --location --retry 3 --retry-all-errors \
     --output "$RUN_DIR/$IMAGE_NAME" "$IMAGE_URL"
-curl --fail --location --retry 3 --retry-all-errors \
-    --output "$RUN_DIR/image.sha256" "$CHECKSUM_URL"
-(
-    cd "$RUN_DIR"
-    sha256sum --check image.sha256
-)
-sha256sum "$RUN_DIR/$IMAGE_NAME" > "$ARTIFACT_DIR/arch-cloud-image.sha256"
-cp "$RUN_DIR/image.sha256" "$ARTIFACT_DIR/arch-cloud-image.upstream-sha256"
+python3 "$ROOT/tools/desktop_ci/verify_image_sha256.py" \
+    "$RUN_DIR/$IMAGE_NAME" "${ARCH_IMAGE_SHA256:-}"
+printf '%s  %s\n' "$ARCH_IMAGE_SHA256" "$IMAGE_NAME" \
+    > "$ARTIFACT_DIR/arch-cloud-image.sha256"
 qemu-img info --output=json "$RUN_DIR/$IMAGE_NAME" > "$ARTIFACT_DIR/arch-cloud-image-info.json"
 
 ssh-keygen -q -t ed25519 -N "" -C "desktop-acceptance-$RUN_ID" -f "$RUN_DIR/ci_ed25519"

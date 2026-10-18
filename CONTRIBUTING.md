@@ -192,6 +192,9 @@ Every change that touches a path, a process, the terminal, secret values or a
 resource limit answers the [threat model](docs/threat-model.md) for its vector.
 Before opening a pull request, check the items that apply:
 
+- Run `python3 tools/check_unsafe.py` before pushing; every unsafe block and impl
+  needs a nearby `// SAFETY:` explanation.
+
 - Data that comes from applet output, environment, inputs, file contents or file
   names is untrusted. Do not build a path, an argument list or a shell command from it
   without the existing checks.

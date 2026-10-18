@@ -13,6 +13,49 @@ concurrency:
   group: native-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
+  feature-matrix:
+    # Every optional feature alone, the core build and the default build, linted in one
+    # job per platform with one shared cache. The full feature set is linted and tested
+    # by the Unix and Windows jobs below, so it is not repeated here.
+    name: Feature matrix (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Clippy every feature combination
+        shell: bash
+        run: |
+          set -euo pipefail
+          for args in "--no-default-features" \
+                      "--no-default-features --features graph" \
+                      "--no-default-features --features screens" \
+                      "--no-default-features --features records" \
+                      "--no-default-features --features tooling" \
+                      "--no-default-features --features module-tools" \
+                      "--no-default-features --features agent-advisory" \
+                      ""; do
+            echo "::group::cargo clippy $args"
+            # shellcheck disable=SC2086
+            cargo clippy --locked $args --all-targets -- -D warnings
+            echo "::endgroup::"
+          done
+      - name: Test the core and default builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --no-default-features --lib --tests
+          cargo test --locked --lib --tests
   workflows:
     name: Release contracts and workflow lint
     runs-on: ubuntu-24.04

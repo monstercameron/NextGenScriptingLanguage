@@ -95,6 +95,10 @@ jobs:
           retention-days: 14
   flatpak:
     name: Flatpak (${{ matrix.arch }})
+    # Flathub runtime/SDK commits are not recorded in this repository. Keep this
+    # package smoke test non-blocking until org.freedesktop.Platform and
+    # org.freedesktop.Sdk are pinned to immutable runtime commits.
+    continue-on-error: true
     needs: packages
     strategy:
       fail-fast: false
@@ -134,7 +138,9 @@ jobs:
           retention-days: 14
   arch:
     name: Arch packages (x86_64)
-    # The rolling Arch repositories are a smoke-test environment, not a release gate.
+    # archlinux:latest and its rolling repositories are not pinned to an image
+    # digest or archive date, so this smoke test is not a release gate. Pin both
+    # before making it blocking.
     continue-on-error: true
     needs: packages
     runs-on: ubuntu-24.04

@@ -13,6 +13,10 @@ on:
         required: true
         default: "2026/10/14"
         type: string
+      arch_image_sha256:
+        description: SHA-256 of the cloud image, obtained from a source independent of the image download server
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -62,6 +66,7 @@ jobs:
         env:
           ARCH_BOXES_RELEASE: ${{ inputs.arch_boxes_release }}
           ARCH_ARCHIVE_DATE: ${{ inputs.arch_archive_date }}
+          ARCH_IMAGE_SHA256: ${{ inputs.arch_image_sha256 }}
           GH_RUN_ID: ${{ github.run_id }}
           GH_RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_SOURCE_SHA: ${{ github.sha }}

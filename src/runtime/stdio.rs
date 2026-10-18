@@ -180,30 +180,45 @@ pub(super) fn capture_stdin(
                 .context("stdin timeout is too large")
         })
         .transpose()?;
-    let mut output = Vec::new();
-    let mut chunk = [0u8; 8192];
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `stat` is writable storage for one libc::stat. STDIN_FILENO is the
+    // inherited descriptor; a failed fstat falls back to the pollable path below.
+    let regular_file = unsafe { libc::fstat(libc::STDIN_FILENO, stat.as_mut_ptr()) } == 0
+        && unsafe { stat.assume_init_ref() }.st_mode & libc::S_IFMT == libc::S_IFREG;
+    let initial_capacity = if regular_file {
+        // SAFETY: fstat succeeded when regular_file is true, so stat is initialized.
+        usize::try_from(unsafe { stat.assume_init_ref() }.st_size)
+            .unwrap_or(0)
+            .min(limit)
+    } else {
+        0
+    };
+    let mut output = Vec::with_capacity(initial_capacity);
+    let mut chunk = [0u8; 64 * 1024];
     loop {
         if signals.cancelled.load(Ordering::Relaxed) {
             bail!("workflow cancelled by signal");
         }
         check_deadline(deadline)?;
-        let wait = deadline.map_or(20, |end| poll_timeout_ms(end, Instant::now()));
-        // wait is 20 or poll_timeout_ms(), which lies in 0..=20, so it is a valid bounded timeout.
-        let (ready, revents) =
-            match crate::platform::unix_ffi::poll_one(libc::STDIN_FILENO, libc::POLLIN, wait) {
-                Ok(result) => result,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(error).context("waiting for stdin"),
-            };
-        if ready == 0 {
-            continue;
-        }
-        if signals.cancelled.load(Ordering::Relaxed) {
-            bail!("workflow cancelled by signal");
-        }
-        check_deadline(deadline)?;
-        if revents & libc::POLLNVAL != 0 {
-            bail!("stdin is not an open file descriptor");
+        if !regular_file {
+            let wait = deadline.map_or(20, |end| poll_timeout_ms(end, Instant::now()));
+            // wait is 20 or poll_timeout_ms(), which lies in 0..=20, so it is a valid bounded timeout.
+            let (ready, revents) =
+                match crate::platform::unix_ffi::poll_one(libc::STDIN_FILENO, libc::POLLIN, wait) {
+                    Ok(result) => result,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error).context("waiting for stdin"),
+                };
+            if ready == 0 {
+                continue;
+            }
+            if signals.cancelled.load(Ordering::Relaxed) {
+                bail!("workflow cancelled by signal");
+            }
+            check_deadline(deadline)?;
+            if revents & libc::POLLNVAL != 0 {
+                bail!("stdin is not an open file descriptor");
+            }
         }
         let count =
             // SAFETY: chunk is a live local array, and chunk.len() is the length passed, so the

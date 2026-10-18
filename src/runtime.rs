@@ -2193,12 +2193,24 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
     match result {
         Ok(value) => {
             // Text and path results are raw UTF-8; records and lists stay JSON.
-            let bytes = match value.as_str() {
-                Some(text) if manifest.in_process_text_output() => text.as_bytes().to_vec(),
-                _ => {
+            // The byte output owns the same allocation as the applet's String.
+            let keep_typed_value = (call.binding.is_some() || call.result_binding.is_some())
+                && manifest.has_json_encoded_output_schema();
+            let (bytes, value) = match value {
+                serde_json::Value::String(text) if manifest.in_process_text_output() => {
+                    if keep_typed_value {
+                        (
+                            text.as_bytes().to_vec(),
+                            Some(serde_json::Value::String(text)),
+                        )
+                    } else {
+                        (text.into_bytes(), None)
+                    }
+                }
+                value => {
                     let mut json = serde_json::to_vec(&value)?;
                     json.push(b'\n');
-                    json
+                    (json, Some(value))
                 }
             };
             let outcome = manifest.outcome_for(0);
@@ -2214,7 +2226,11 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
                     outcome,
                     Some(bytes.clone()),
                     None,
-                    Some(crate::structured::from_json(value.clone())),
+                    value.clone().map(crate::structured::from_json).or_else(|| {
+                        String::from_utf8(bytes.clone())
+                            .ok()
+                            .map(crate::ast::Value::String)
+                    }),
                     vec![stage],
                 );
                 failure.kind = execution_result::ExecutionKind::Timeout;
@@ -2226,7 +2242,11 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
                     outcome,
                     Some(bytes.clone()),
                     None,
-                    Some(crate::structured::from_json(value.clone())),
+                    value.clone().map(crate::structured::from_json).or_else(|| {
+                        String::from_utf8(bytes.clone())
+                            .ok()
+                            .map(crate::ast::Value::String)
+                    }),
                     vec![stage],
                 );
                 failure.kind = execution_result::ExecutionKind::Cancelled;
@@ -2250,13 +2270,7 @@ fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> R
             }
             Ok(GroupOutput {
                 bytes,
-                typed_json: if (call.binding.is_some() || call.result_binding.is_some())
-                    && manifest.has_json_encoded_output_schema()
-                {
-                    Some(value)
-                } else {
-                    None
-                },
+                typed_json: if keep_typed_value { value } else { None },
                 status: Some(0),
                 diagnostic: Vec::new(),
                 stdout_captured: true,

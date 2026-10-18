@@ -13,7 +13,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Return true when the first non-input source statement is a graph declaration.
 pub fn is_graph(source: &str) -> bool {
-    for line in source.lines().map(parser::strip_comment).map(str::trim) {
+    let Ok(mut lines) = parser::logical_lines(source) else {
+        return false;
+    };
+    if parser::take_language_version(&mut lines).is_err() {
+        return false;
+    }
+    for statement in lines {
+        let line = statement.text.trim();
         if line.is_empty() || parser::is_input_header(line) {
             continue;
         }
@@ -30,25 +37,25 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
     let mut pending_edges = Vec::new();
     let mut inputs = Vec::new();
     let mut saw_node_or_edge = false;
-    let lines = source.lines().collect::<Vec<_>>();
+    let mut lines = parser::logical_lines(source)?;
+    parser::take_language_version(&mut lines)?;
     let mut index = 0usize;
 
     while index < lines.len() {
-        let raw = lines[index];
-        let line_number = index + 1;
+        let statement = &lines[index];
+        let line_number = statement.number;
         index += 1;
-        let uncommented = parser::strip_comment(raw);
-        let line = uncommented.trim();
+        let line = statement.text.trim();
         if line.is_empty() {
             continue;
         }
-        if uncommented.contains('\t') {
-            bail!("line {line_number}: tabs are not allowed in graph declarations");
+        if line.split_ascii_whitespace().next() == Some("execute") {
+            bail!("line {line_number}: the `execute N` version marker must be the first statement");
         }
         if graph.is_none() {
             if parser::is_input_header(line) {
-                let mut declaration = parser::parse(line)
-                    .map_err(|error| anyhow!("line {line_number}: {error:#}"))?;
+                let mut declaration =
+                    parser::parse(line).map_err(|error| graph_parse_error(error, line_number))?;
                 if !declaration.steps.is_empty() || declaration.inputs.len() != 1 {
                     bail!("line {line_number}: expected one top-level input declaration");
                 }
@@ -97,7 +104,7 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
         }
         if line.starts_with("run ") {
             let mut program =
-                parser::parse(line).map_err(|error| anyhow!("line {line_number}: {error:#}"))?;
+                parser::parse(line).map_err(|error| graph_parse_error(error, line_number))?;
             if program.steps.len() != 1 {
                 bail!("line {line_number}: a graph `run` must declare one applet invocation");
             }
@@ -229,8 +236,7 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
             let mut stream_source = format!("stream from {source_phrase}\n");
             let mut saw_sink = false;
             while index < lines.len() {
-                let raw_directive = parser::strip_comment(lines[index]);
-                let directive = raw_directive.trim();
+                let directive = lines[index].text.trim();
                 if directive.is_empty() {
                     stream_source.push('\n');
                     index += 1;
@@ -308,6 +314,12 @@ pub fn parse(source: &str, registry: &Registry) -> Result<GraphPlan> {
     }
     graph.validate_with_registry(registry)?;
     Ok(graph)
+}
+
+fn graph_parse_error(error: anyhow::Error, line_number: usize) -> anyhow::Error {
+    let message = error.to_string();
+    let message = message.strip_prefix("line 1: ").unwrap_or(&message);
+    anyhow!("line {line_number}: {message}")
 }
 
 fn split_graph_binding(source: &str) -> Result<(String, String)> {

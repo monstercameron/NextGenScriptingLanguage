@@ -35,6 +35,12 @@ pub(super) fn parse_spawn<'arena, 'source: 'arena>(
     let mut stages = Vec::new();
     *cursor += 1;
     while let Some(child) = line_at(*cursor).filter(|child| child.indent > indent) {
+        if let Some(label) = child.label {
+            bail!(
+                "line {}: background pipeline stages cannot have step labels ({label:?})",
+                child.number
+            );
+        }
         if child.indent != body_indent {
             bail!(
                 "line {}: background pipeline stages must use one consistent indentation level",

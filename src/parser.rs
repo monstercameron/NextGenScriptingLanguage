@@ -116,18 +116,14 @@ pub(super) fn parse_reusable_statement<'arena, 'source: 'arena>(
 
 /// Statement heads that cannot name a step: a label with one of these names would read
 /// like the statement it labels.
-const LABEL_KEYWORDS: &[&str] = &[
+const STATEMENT_KEYWORDS: &[&str] = &[
     "accept",
-    "append",
     "break",
     "cancel",
     "catch",
     "cd",
     "continue",
     "define",
-    "detach",
-    "else",
-    "encode",
     "every",
     "exit",
     "fail",
@@ -138,16 +134,13 @@ const LABEL_KEYWORDS: &[&str] = &[
     "inspect",
     "interactively",
     "listen",
-    "loop",
     "otherwise",
-    "parse",
     "pipe",
     "read",
     "redirect",
     "repeat",
     "return",
     "run",
-    "save",
     "spawn",
     "take",
     "then",
@@ -156,6 +149,13 @@ const LABEL_KEYWORDS: &[&str] = &[
     "use",
     "whenever",
     "while",
+    "await",
+    "parallel",
+    "race",
+    "with",
+    "on",
+    "launch",
+    "execute",
 ];
 
 /// A statement may start with `fetch:`, a label for its first step. Returns the label
@@ -176,7 +176,7 @@ fn statement_label(tokens: &[Token<'_>], number: usize) -> Result<Option<String>
             "line {number}: step label {name:?} must start with a letter and use only letters, digits, _ or -"
         );
     }
-    if LABEL_KEYWORDS.contains(&name) {
+    if STATEMENT_KEYWORDS.contains(&name) {
         bail!("line {number}: step label {name:?} is a keyword and cannot label a step");
     }
     if tokens.len() == 1 {
@@ -203,6 +203,12 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
     if is_trigger_header(line.tokens) || is_listener_event_header(line.tokens) {
         bail!(
             "line {}: nested trigger blocks are unsupported",
+            line.number
+        );
+    }
+    if word_is(line.tokens.first(), "execute") {
+        bail!(
+            "line {}: the `execute N` version marker must be the first statement",
             line.number
         );
     }
@@ -273,7 +279,7 @@ fn parse_statement_in_scope<'arena, 'source: 'arena>(
     }
     if !word_is(line.tokens.first(), "if") {
         for kind in parse_simple_statement(line.tokens)
-            .map_err(|error| anyhow!("line {}: {error}", line.number))?
+            .map_err(|error| anyhow!("line {}: {error:#}", line.number))?
         {
             steps.push(Step {
                 line: line.number,
@@ -376,8 +382,16 @@ fn parse_if_block<'arena, 'source: 'arena>(
                     otherwise.number
                 );
             }
+            let otherwise_body_indent = line_at(*cursor).expect("otherwise body").indent;
             while line_at(*cursor).is_some_and(|child| child.indent > indent) {
-                parse_statement_in_scope(line_at, cursor, body_indent, steps, depth + 1, scope)?;
+                parse_statement_in_scope(
+                    line_at,
+                    cursor,
+                    otherwise_body_indent,
+                    steps,
+                    depth + 1,
+                    scope,
+                )?;
             }
         }
     }
@@ -567,17 +581,18 @@ fn parse_loop<'arena, 'source: 'arena>(
 }
 
 /// One statement after joining its continuation lines and raw block strings.
-struct LogicalLine {
-    number: usize,
-    indent: usize,
-    text: String,
+pub(crate) struct LogicalLine {
+    pub(crate) number: usize,
+    pub(crate) indent: usize,
+    pub(crate) text: String,
 }
 
 /// Physical lines form statements. An open `[` or `{` continues the statement onto
 /// following lines until the brackets balance. A piece ending in ` """` takes a raw
 /// block up to a line holding only `"""`; the block becomes one quoted string with
 /// no escape processing, so embedded programs need no backslash escaping.
-fn logical_lines(source: &str) -> Result<Vec<LogicalLine>> {
+pub(crate) fn logical_lines(source: &str) -> Result<Vec<LogicalLine>> {
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let physical: Vec<&str> = source.lines().collect();
     let mut statements = Vec::new();
     let mut index = 0;
@@ -597,8 +612,12 @@ fn logical_lines(source: &str) -> Result<Vec<LogicalLine>> {
             }
         }
         let mut text = take_piece(first.trim_start_matches(' '), number, &physical, &mut index)?;
-        // Most statements have no bracket, so skip the second tokenize for them.
-        while (text.contains('[') || text.contains('{')) && bracket_depth(&text, number)? > 0 {
+        let mut depth = if text.contains(['[', ']', '{', '}']) {
+            bracket_delta(&text, number)?
+        } else {
+            0
+        };
+        while depth > 0 {
             // At end of file the statement goes to its own parser unchanged, which
             // names the unclosed bracket with the cause for that statement.
             let Some(next) = physical.get(index) else {
@@ -609,8 +628,11 @@ fn logical_lines(source: &str) -> Result<Vec<LogicalLine>> {
             if next.trim().is_empty() {
                 continue;
             }
+            let piece_number = index;
+            let piece = take_piece(next.trim(), piece_number, &physical, &mut index)?;
+            depth += bracket_delta(&piece, piece_number)?;
             text.push(' ');
-            text.push_str(&take_piece(next.trim(), number, &physical, &mut index)?);
+            text.push_str(&piece);
         }
         statements.push(LogicalLine {
             number,
@@ -643,9 +665,9 @@ fn take_piece(piece: &str, number: usize, physical: &[&str], index: &mut usize) 
 }
 
 /// Net count of open brackets and braces in a statement's tokens.
-fn bracket_depth(text: &str, number: usize) -> Result<i64> {
+fn bracket_delta(text: &str, number: usize) -> Result<i64> {
     let mut tokens = Vec::new();
-    tokenize_into(text, &mut tokens).with_context(|| format!("line {number}"))?;
+    tokenize_into(text, &mut tokens).map_err(|error| anyhow!("line {number}: {error:#}"))?;
     Ok(tokens.iter().fold(0, |depth, token| match token {
         Token::LeftBracket | Token::LeftBrace => depth + 1,
         Token::RightBracket | Token::RightBrace => depth - 1,
@@ -658,18 +680,28 @@ pub const LANGUAGE_VERSION: u32 = 1;
 
 /// A first statement `execute N` declares the language version it was written for.
 /// Only the implemented version is accepted; other versions fail with an upgrade message.
-fn take_language_version(statements: &mut Vec<LogicalLine>) -> Result<()> {
+pub(crate) fn take_language_version(statements: &mut Vec<LogicalLine>) -> Result<()> {
     let Some(first) = statements.first() else {
         return Ok(());
     };
     let words: Vec<&str> = first.text.split_ascii_whitespace().collect();
-    let declared = match words.as_slice() {
-        ["execute", version] if first.indent == 0 => version.parse::<u32>().ok(),
-        _ => None,
-    };
-    let Some(declared) = declared else {
+    if words.first() != Some(&"execute") {
         return Ok(());
-    };
+    }
+    if first.indent != 0
+        || words.len() != 2
+        || !words[1].bytes().all(|byte| byte.is_ascii_digit())
+        || (words[1].len() > 1 && words[1].starts_with('0'))
+    {
+        bail!("line {}: malformed language version marker; expected `execute <ASCII digits>` as the first statement", first.number);
+    }
+    let declared = words[1].parse::<u32>().map_err(|_| {
+        anyhow!(
+            "line {}: language version {:?} is outside the supported numeric range",
+            first.number,
+            words[1]
+        )
+    })?;
     if declared != LANGUAGE_VERSION {
         bail!(
             "line {}: program declares language version {declared}, but this execute implements version {LANGUAGE_VERSION}; upgrade execute or remove the marker to use version {LANGUAGE_VERSION}",
@@ -1185,7 +1217,7 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
             bail!("program location inputs must be text");
         }
         if let InputSource::Prompt { question, secret } = &source {
-            if question.is_empty() || question.contains(' ') {
+            if question.is_empty() || question.contains('\0') {
                 bail!("the prompt question must be nonempty and contain no NUL bytes");
             }
             // A choice error would quote the answer, so a secret answer has no choices.
@@ -2496,20 +2528,17 @@ fn parse_value_depth(tokens: &[Token<'_>], cursor: &mut usize, depth: usize) -> 
         }
         Token::Word(word) => {
             *cursor += 1;
-            if let Ok(integer) = word.parse::<i64>() {
-                Ok(Value::Integer(integer))
-            } else if word
+            if word
                 .as_bytes()
                 .first()
-                .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'-')
+                .is_some_and(|byte| byte.is_ascii_digit() || matches!(*byte, b'-' | b'+'))
             {
-                word.parse::<serde_json::Number>()
-                    .map(Value::Number)
-                    .map_err(|_| {
-                        anyhow!(
-                            "invalid JSON number `{word}`; quote strings containing punctuation"
-                        )
-                    })
+                let number = word.parse::<serde_json::Number>().map_err(|_| {
+                    anyhow!("invalid JSON number `{word}`; quote it as a string if it is a mode or identifier")
+                })?;
+                Ok(number
+                    .as_i64()
+                    .map_or(Value::Number(number), Value::Integer))
             } else if is_identifier(word) {
                 Ok(Value::Reference((*word).to_owned()))
             } else {
@@ -2601,8 +2630,8 @@ fn parse_identifier(token: Option<&Token<'_>>, description: &str) -> Result<Stri
 
 fn parse_binding_identifier(token: Option<&Token<'_>>, description: &str) -> Result<String> {
     let name = parse_identifier(token, description)?;
-    if matches!(name.as_str(), "true" | "false") {
-        bail!("reserved boolean `{name}` cannot be used as a {description}");
+    if matches!(name.as_str(), "true" | "false" | "null") {
+        bail!("reserved literal `{name}` cannot be used as a {description}");
     }
     Ok(name)
 }
@@ -3080,14 +3109,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_boolean_words_as_result_bindings() {
+    fn rejects_literal_words_as_result_bindings() {
         for source in [
             "run printf with message \"hello\" as true",
             "read file \"input.txt\" as false",
+            "run printf with message \"hello\" as null",
             "listen to stdin\nwhenever a line arrives as true\n  run printf with message \"ok\"",
         ] {
             let error = parse(source).unwrap_err().to_string();
-            assert!(error.contains("reserved boolean"), "{source:?}: {error}");
+            assert!(error.contains("reserved literal"), "{source:?}: {error}");
         }
     }
 

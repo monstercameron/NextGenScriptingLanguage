@@ -63,6 +63,12 @@ pub(super) fn parse_group<'arena, 'source: 'arena>(
     let mut names = BTreeSet::new();
     *cursor += 1;
     while let Some(child) = line_at(*cursor).filter(|child| child.indent > indent) {
+        if let Some(label) = child.label {
+            bail!(
+                "line {}: task group entries cannot have step labels ({label:?})",
+                child.number
+            );
+        }
         if child.indent != body_indent {
             bail!(
                 "line {}: task group tasks must use one consistent indentation level",

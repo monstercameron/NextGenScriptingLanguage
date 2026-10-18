@@ -249,13 +249,26 @@ fn expand<'a>(
             active.push(name);
             let body = expand(&definition.steps, definitions, active, budget, true)?;
             active.pop();
+            let call_scope = step
+                .label
+                .clone()
+                .unwrap_or_else(|| format!("CallProgram@{}", step.line));
+            let body = body
+                .into_iter()
+                .map(|mut expanded| {
+                    if let Some(label) = expanded.label.take() {
+                        expanded.label = Some(format!("{call_scope}::{label}"));
+                    }
+                    expanded
+                })
+                .collect::<Vec<_>>();
             let end = body
                 .len()
                 .checked_add(2)
                 .context("program call length overflow")?;
             steps.push(Step {
                 line: step.line,
-                label: None,
+                label: step.label.clone(),
                 kind: StepKind::CallProgram {
                     call: call.clone(),
                     inputs: definition.inputs.clone(),
@@ -285,7 +298,7 @@ fn expand<'a>(
             };
             steps.push(Step {
                 line: step.line,
-                label: None,
+                label: step.label.clone(),
                 kind: StepKind::ReadCallInput {
                     binding: binding.clone(),
                 },

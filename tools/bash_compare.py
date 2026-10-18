@@ -114,41 +114,66 @@ INPUTS = {"text": text_input, "json": json_input}
 
 
 def run_once(command, stdin_path):
-    """Return (elapsed_ms, peak_rss_kb or None, returncode, stderr text)."""
+    """Return (elapsed_ms, returncode, stderr text)."""
     stdin = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
     try:
-        with tempfile.TemporaryFile() as stderr:
-            started = time.perf_counter()
-            if hasattr(os, "wait4"):
-                process = subprocess.Popen(command, stdin=stdin, stdout=subprocess.DEVNULL, stderr=stderr)
-                _, status, usage = os.wait4(process.pid, 0)
-                elapsed = (time.perf_counter() - started) * 1000.0
-                returncode = os.waitstatus_to_exitcode(status)
-                rss = usage.ru_maxrss / 1024 if sys.platform == "darwin" else usage.ru_maxrss
-            else:
-                result = subprocess.run(command, stdin=stdin, stdout=subprocess.DEVNULL, stderr=stderr, check=False)
-                elapsed = (time.perf_counter() - started) * 1000.0
-                returncode, rss = result.returncode, None
-            stderr.seek(0)
-            message = stderr.read().decode("utf-8", "replace").strip()
+        started = time.perf_counter()
+        result = subprocess.run(command, stdin=stdin, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False)
+        elapsed = (time.perf_counter() - started) * 1000.0
     finally:
         if stdin_path:
             stdin.close()
-    return elapsed, rss, returncode, message
+    return elapsed, result.returncode, result.stderr.decode("utf-8", "replace").strip()
 
 
-def measure(command, stdin_path, runs, warmup, label):
+def peak_rss_kb(command, stdin_path, time_binary, repeats=3):
+    """Peak RSS in KiB through GNU time, or None without it.
+
+    os.wait4 is not used: on Linux a child keeps the high-water mark of the memory
+    it was forked from, so every command would report the Python parent's size.
+    GNU time forks from a small process, so its %M is the command's own peak.
+    """
+    if not time_binary:
+        return None
+    peak = None
+    with tempfile.NamedTemporaryFile(prefix="rss-", delete=False) as output:
+        path = output.name
+    try:
+        for _ in range(repeats):
+            stdin = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
+            try:
+                subprocess.run([time_binary, "-f", "%M", "-o", path, *command], stdin=stdin,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            finally:
+                if stdin_path:
+                    stdin.close()
+            value = float(Path(path).read_text().strip().splitlines()[-1])
+            peak = value if peak is None else max(peak, value)
+    finally:
+        os.unlink(path)
+    return peak
+
+
+def measure(command, stdin_path, runs, warmup, label, time_binary):
     for _ in range(warmup):
         run_once(command, stdin_path)
-    samples, peak = [], None
+    samples = []
     for _ in range(runs):
-        elapsed, rss, returncode, message = run_once(command, stdin_path)
+        elapsed, returncode, message = run_once(command, stdin_path)
         if returncode != 0:
             raise RuntimeError(f"{label} failed with status {returncode}: {message}")
         samples.append(elapsed)
-        if rss is not None:
-            peak = rss if peak is None else max(peak, rss)
-    return {"median_ms": statistics.median(samples), "runs": runs, "max_rss_kb": peak}
+    return {
+        "median_ms": statistics.median(samples),
+        "min_ms": min(samples),
+        "runs": runs,
+        "max_rss_kb": peak_rss_kb(command, stdin_path, time_binary),
+    }
+
+
+def gnu_time():
+    candidate = Path("/usr/bin/time")
+    return str(candidate) if candidate.is_file() else None
 
 
 def binary_size(path):
@@ -205,6 +230,7 @@ def main(argv=None):
     parser.add_argument("--manifest-dir", type=Path, default=Path("manifests"))
     parser.add_argument("--bash", default=shutil.which("bash"))
     parser.add_argument("--dash", default=shutil.which("dash"))
+    parser.add_argument("--time", default=gnu_time(), help="GNU time, for peak RSS")
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--only", action="append", help="run only these scenario keys")
@@ -239,16 +265,17 @@ def main(argv=None):
             runs = max(3, args.runs // scenario.runs_divisor)
             row = {"key": scenario.key, "label": scenario.label}
             row["bash"] = measure(
-                [args.bash, "--norc", "--noprofile", "-c", scenario.bash], stdin_path, runs, args.warmup, f"bash {scenario.key}"
+                [args.bash, "--norc", "--noprofile", "-c", scenario.bash], stdin_path, runs, args.warmup, f"bash {scenario.key}", args.time
             )
             if scenario.dash and args.dash:
-                row["dash"] = measure([args.dash, "-c", scenario.bash], stdin_path, runs, args.warmup, f"dash {scenario.key}")
+                row["dash"] = measure([args.dash, "-c", scenario.bash], stdin_path, runs, args.warmup, f"dash {scenario.key}", args.time)
             row["execute"] = measure(
                 [str(args.binary), "run", str(program), "--manifest-dir", str(args.manifest_dir)],
                 stdin_path,
                 runs,
                 args.warmup,
                 f"execute {scenario.key}",
+                args.time,
             )
             results.append(row)
             print(f"{scenario.key}: bash {row['bash']['median_ms']:.2f} ms, execute {row['execute']['median_ms']:.2f} ms")

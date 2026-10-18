@@ -1553,6 +1553,29 @@ Full stdout and trace pipes backpressure execution while remaining responsive
 to cancellation. If stderr is full during shutdown, the final error diagnostic
 may be omitted. Trigger-only limits are rejected on programs that cannot use them.
 
+## Warm daemon (`--daemon`)
+
+`execute daemon serve` keeps a per-user process running behind a Unix socket, by default under `$XDG_RUNTIME_DIR`. `execute daemon status` reports whether it is running, and `execute daemon stop` stops it. Nothing runs in the background unless you start the daemon.
+
+`execute run program.program --daemon`, or `run` with `EXECUTE_DAEMON=1`, sends the run to the daemon when one answers. The daemon forks a child that takes the client's working directory, environment, umask, resource limits and standard streams, so the program sees what it would see run directly. When no daemon answers, the run happens in the client as usual. A program that may take the terminal (`interactively`, `hand over`, or a prompted input) is declined before it runs and runs in the client.
+
+A forwarded run with `--manifest-dir` or `--manifest-catalog` uses a parsed registry the daemon keeps for up to 8 manifest sources, least recently used first. An entry is reused while the source's top-level JSON files keep their names, sizes and modification times, and a changed file rebuilds it. Capability and data-flow policies are applied to each run's own registry, so one run's policy never applies to another run. `EXECUTE_DAEMON_TRACE=1` prints a timestamp at each stage of a forwarded run to stderr.
+
+**When it helps.** A forwarded run pays for the client process, a fork and the run itself. The daemon saves the cost of loading manifests, so it helps when that cost dominates. For a run that is already cheap, it does not.
+
+Measured on the Linux CI runner (Ubuntu 24.04, release build), as medians of 10 runs on commit `dfce921`:
+
+| Case | Cold | `--daemon` |
+|---|---|---|
+| One-line program, shipped manifests (`--manifest-dir`), end to end | 4.25 ms | 4.93 ms |
+| One-line program, a user directory of the shipped manifests, end to end | 3.91 ms | 4.47 ms |
+
+Before the registry cache (commit `1291955`), the user-directory case was 4.57 ms cold and 5.46 ms forwarded. The cache cut the time a forwarded run spends in its child from 3.5 ms to 1.8 ms. The fork itself costs about 0.1 ms, and a ping to the daemon about 60 µs.
+
+So on this workload, `--daemon` makes a one-line program about 0.5 to 0.7 ms slower than running it cold. The daemon should help when manifest loading or policy setup is large, but we have not measured a larger manifest set or a large policy file, so this section makes no claim about those. Measure your own program before relying on `--daemon`.
+
+A stage is a timestamp in the trace, so the stamp covers only the top-level manifest files. Subdirectories of a manifest directory are not part of the registry.
+
 ## Recover after a failure
 
 The harmless [`examples/repair.program`](../examples/repair.program) intentionally runs `false` after a cached

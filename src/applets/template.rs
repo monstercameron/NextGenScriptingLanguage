@@ -159,7 +159,7 @@ fn push_value(
             }
             format!("'{}'", raw.replace('\'', "'\\''"))
         }
-        Some("url") => percent_encode(&raw),
+        Some("url") => percent_encode(&raw)?,
         Some("csv") => format!("\"{}\"", raw.replace('"', "\"\"")),
         Some("html") => raw.chars().map(|character| match character {
             '&' => "&amp;".to_owned(), '<' => "&lt;".to_owned(), '>' => "&gt;".to_owned(),
@@ -174,9 +174,24 @@ fn push_value(
     check_size(output.len())
 }
 
-fn percent_encode(text: &str) -> String {
+fn percent_encode(text: &str) -> Result<String, AppletError> {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut output = String::with_capacity(text.len());
+    let encoded_len = text.bytes().try_fold(0usize, |length, byte| {
+        length.checked_add(
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                1
+            } else {
+                3
+            },
+        )
+    });
+    let encoded_len = encoded_len.ok_or_else(|| {
+        invalid(format!(
+            "text.render output exceeds the {MAX_TEMPLATE_BYTES}-byte limit"
+        ))
+    })?;
+    check_size(encoded_len)?;
+    let mut output = String::with_capacity(encoded_len);
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
             output.push(char::from(byte));
@@ -186,7 +201,7 @@ fn percent_encode(text: &str) -> String {
             output.push(char::from(HEX[usize::from(byte & 0x0f)]));
         }
     }
-    output
+    Ok(output)
 }
 
 fn check_size(length: usize) -> Result<(), AppletError> {
@@ -196,4 +211,17 @@ fn check_size(length: usize) -> Result<(), AppletError> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percent_encoder_reserves_the_exact_encoded_length() {
+        for input in ["plain ASCII", "!@#$%^&*()", "é漢字"] {
+            let encoded = percent_encode(input).unwrap();
+            assert_eq!(encoded.capacity(), encoded.len());
+        }
+    }
 }

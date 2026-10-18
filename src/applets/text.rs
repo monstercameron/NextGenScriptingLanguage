@@ -39,7 +39,9 @@ pub(super) fn lines(
         return Ok(Value::Array(Vec::new()));
     }
     let content = text.strip_suffix('\n').unwrap_or(text);
-    let mut items = Vec::new();
+    let line_count =
+        crate::bytes::count_newlines(text.as_bytes()) + usize::from(!text.ends_with('\n'));
+    let mut items = Vec::with_capacity(line_count);
     for (index, line) in content.split('\n').enumerate() {
         checkpoint_work(context, index)?;
         push_list_item(

@@ -161,4 +161,126 @@ fn end_to_end_json_and_text() {
         &registry,
         31,
     );
+    benchmark(
+        "JSON map small selection",
+        "then parse json as document\nrun json.map with document document and pointer \"/a/b\" and select \"/name\" as selected\n",
+        &json,
+        Default::default,
+        &registry,
+        11,
+    );
+    benchmark(
+        "JSON map large selection",
+        "then parse json as document\nrun json.map with document document and pointer \"/a/b\" and select \"\" as selected\n",
+        &json,
+        Default::default,
+        &registry,
+        11,
+    );
+    benchmark(
+        "JSON filter small selection",
+        "then parse json as document\nrun json.filter with document document and pointer \"/a/b\" and where [{\"pointer\":\"/id\",\"equals\":17}] as selected\n",
+        &json,
+        Default::default,
+        &registry,
+        11,
+    );
+    benchmark(
+        "JSON filter large selection",
+        "then parse json as document\nrun json.filter with document document and pointer \"/a/b\" and where [{\"exists\":true}] as selected\n",
+        &json,
+        Default::default,
+        &registry,
+        11,
+    );
+    benchmark(
+        "JSON runtime encode",
+        "then parse json as document\nthen encode document as json\n",
+        &json,
+        Default::default,
+        &registry,
+        11,
+    );
+    benchmark(
+        "JSON stringify applet",
+        "then parse json as document\nrun json.stringify with value document as encoded\n",
+        &json,
+        Default::default,
+        &registry,
+        11,
+    );
+}
+
+/// These components overlap; they are diagnostics, not an additive cost model.
+/// In particular, the runtime also clones bindings and validates applet contracts.
+#[test]
+#[ignore = "in-process text cost breakdown"]
+fn text_upper_cost_breakdown() {
+    fn measure<T>(label: &str, mut operation: impl FnMut() -> T) {
+        let mut samples = Vec::with_capacity(101);
+        for _ in 0..101 {
+            let started = Instant::now();
+            black_box(operation());
+            samples.push(started.elapsed());
+        }
+        eprintln!("text component {label}: median {:?}", median(samples));
+    }
+
+    let line = "the quick brown fox jumps over the lazy dog 0123456789\n";
+    let mut text = line.repeat(1_000_000 / line.len() + 1);
+    text.truncate(1_000_000);
+    let args =
+        serde_json::Map::from_iter([("text".into(), serde_json::Value::String(text.clone()))]);
+    let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    measure("allocate + copy input", || black_box(&text).clone());
+    measure("ASCII scan", || black_box(text.as_bytes()).is_ascii());
+    measure("UTF-8 validation", || {
+        std::str::from_utf8(black_box(text.as_bytes())).unwrap()
+    });
+    let mut output = Vec::with_capacity(text.len());
+    measure("scalar conversion into reused allocation", || {
+        output.clear();
+        output.extend(
+            black_box(text.as_bytes())
+                .iter()
+                .map(u8::to_ascii_uppercase),
+        );
+        black_box(&output);
+    });
+    measure("standard Unicode uppercase + allocation", || {
+        black_box(&text).to_uppercase()
+    });
+    measure("applet with borrowed arguments", || {
+        flow::applets::execute_in_cwd("text.upper", black_box(&args), &[], &cwd).unwrap()
+    });
+    measure("allocate + copy output bytes", || {
+        black_box(text.as_bytes()).to_vec()
+    });
+}
+
+#[test]
+#[ignore = "relative performance gate; run on an otherwise idle machine"]
+fn text_upper_does_not_regress_standard_mapping() {
+    let text = "the quick brown fox 0123456789\n".repeat(1_000_000 / 30 + 1);
+    let text = &text[..1_000_000];
+    let args =
+        serde_json::Map::from_iter([("text".into(), serde_json::Value::String(text.to_owned()))]);
+    let cwd = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut standard = Vec::with_capacity(101);
+    let mut applet = Vec::with_capacity(101);
+    for _ in 0..101 {
+        let started = Instant::now();
+        black_box(black_box(text).to_uppercase());
+        standard.push(started.elapsed());
+        let started = Instant::now();
+        black_box(
+            flow::applets::execute_in_cwd("text.upper", black_box(&args), &[], &cwd).unwrap(),
+        );
+        applet.push(started.elapsed());
+    }
+    let standard = median(standard);
+    let applet = median(applet);
+    eprintln!("text upper gate: standard {standard:?}, applet {applet:?}");
+    assert!(applet <= standard.mul_f64(1.10) + Duration::from_micros(1));
 }

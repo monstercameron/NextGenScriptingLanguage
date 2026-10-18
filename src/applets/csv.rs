@@ -192,6 +192,23 @@ fn read_records(
     let mut work = 0usize;
 
     while index < text.len() {
+        if state == FieldState::Unquoted {
+            // Bound both memchr scans. A missing punctuation group must not
+            // rescan every later record for each field in the input.
+            let end = index.saturating_add(256).min(text.len());
+            let remaining = &text[index..end];
+            let span_len = crate::bytes::find_any(remaining, b",\"\r\n").unwrap_or(remaining.len());
+            if span_len > 0 {
+                for (offset, &byte) in remaining[..span_len].iter().enumerate() {
+                    checkpoint_work(context, work)?;
+                    work = work.saturating_add(1);
+                    validate_data_byte(byte, index + offset)?;
+                }
+                field.extend_from_slice(&remaining[..span_len]);
+                index += span_len;
+                continue;
+            }
+        }
         checkpoint_work(context, work)?;
         work = work.saturating_add(1);
         let byte = text[index];
@@ -477,11 +494,10 @@ fn write_field(
     work: &mut usize,
     context: &ExecutionContext<'_>,
 ) -> Result<(), AppletError> {
-    let mut quoted = false;
+    let quoted = crate::bytes::find_any(field.as_bytes(), b",\"\r\n").is_some();
     for character in field.chars() {
         checkpoint_work(context, *work)?;
         *work = work.saturating_add(1);
-        quoted |= matches!(character, ',' | '"' | '\r' | '\n');
         if is_disallowed_control(character) {
             return Err(invalid(
                 "CSV fields cannot contain unsupported control characters",

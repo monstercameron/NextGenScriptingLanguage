@@ -204,23 +204,36 @@ fn count_lines_by(input: &[u8], args: &Map<String, Value>) -> Result<Value, Appl
     let field = usize::try_from(args.get("field").and_then(Value::as_u64).unwrap_or(0))
         .map_err(|_| invalid("args.field is too large"))?;
     // Keys keep first-seen order; the index makes each line a constant-time lookup.
-    let mut counts: Vec<(String, usize)> = Vec::new();
-    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    let mut index: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (number, line) in text.lines().enumerate() {
         if number >= MAX_ITEMS {
             return Err(invalid(format!(
                 "stdin exceeds the bounded {MAX_ITEMS}-line limit"
             )));
         }
-        let key = line
-            .split(delimiter)
-            .nth(field)
-            .ok_or_else(|| invalid(format!("line has no field {field}")))?;
+        let key = if delimiter.len() == 1 {
+            let mut remaining = line;
+            for _ in 0..field {
+                let Some(position) = memchr::memchr(delimiter.as_bytes()[0], remaining.as_bytes())
+                else {
+                    return Err(invalid(format!("line has no field {field}")));
+                };
+                remaining = &remaining[position + 1..];
+            }
+            remaining
+                .split_once(delimiter)
+                .map_or(remaining, |(key, _)| key)
+        } else {
+            line.split(delimiter)
+                .nth(field)
+                .ok_or_else(|| invalid(format!("line has no field {field}")))?
+        };
         match index.get(key) {
             Some(&position) => counts[position].1 += 1,
             None => {
-                index.insert(key.to_owned(), counts.len());
-                counts.push((key.to_owned(), 1));
+                index.insert(key, counts.len());
+                counts.push((key, 1));
             }
         }
     }

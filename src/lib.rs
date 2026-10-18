@@ -4,6 +4,7 @@ pub mod agent;
 pub mod applets;
 pub mod ast;
 pub mod bundled_manifests;
+mod bytes;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capabilities;
 #[cfg(feature = "tooling")]

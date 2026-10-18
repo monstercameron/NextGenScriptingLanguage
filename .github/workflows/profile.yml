@@ -46,6 +46,8 @@ jobs:
           (d / "startup.program").write_text('use value ""\n')
           (d / "one.program").write_text('run "cat" with arguments ["/dev/null"]\n')
           (d / "upper.program").write_text("read from stdin as text\nrun text.upper with text text\n")
+          (d / "pipe5.program").write_text('run "printf" with arguments ["a\\nb\\n"]\npipe to "cat"\npipe to "cat"\npipe to "cat"\npipe to "wc" with arguments ["-l"]\n')
+          (d / "pipe100.program").write_text('run "head" with arguments ["-c", "100000000", "/dev/zero"]\npipe to "cat"\n')
           (d / "json.program").write_text('read from stdin\nthen parse json as document\nrun json.get with document document and pointer "/meta/count"\n')
           PY
       - name: Profile
@@ -70,3 +72,9 @@ jobs:
           profile one one.program /dev/null
           profile upper upper.program "$d/text.input"
           profile json json.program "$d/json.input"
+          profile pipe5 pipe5.program /dev/null
+          profile pipe100 pipe100.program /dev/null
+          echo "::group::bash pipeline for comparison"
+          strace -f -c -o "$d/bash-pipe5.strace" bash --norc --noprofile -c "printf 'a\\nb\\n' | cat | cat | cat | wc -l" > /dev/null
+          cat "$d/bash-pipe5.strace"
+          echo "::endgroup::"

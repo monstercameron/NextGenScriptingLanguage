@@ -47,6 +47,210 @@ pub(super) struct ElementAnchor {
 const ELEMENT_CHAIN_LABEL: &str = "execute-checkpoint-elements/v4";
 const ELEMENT_FINGERPRINT_LABEL: &str = "execute-element-v1";
 
+#[cfg(test)]
+mod lane_v3_tests {
+    use super::super::lane_v3_tests::{journal, measured};
+    use super::*;
+
+    fn open_elements(journal: &mut Journal) {
+        journal.elements_file = Some(
+            fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(journal.directory.join(ELEMENT_LOG))
+                .unwrap(),
+        );
+    }
+
+    fn legacy_fingerprint(node: &str, index: usize, item: &Value) -> String {
+        let mut hash = Sha256::new();
+        hash.update(ELEMENT_FINGERPRINT_LABEL.as_bytes());
+        hash.update(b"\n");
+        hash.update(node.as_bytes());
+        hash.update(b"\n");
+        hash.update(index.to_string().as_bytes());
+        hash.update(b"\n");
+        hash.update(serde_json::to_vec(item).unwrap());
+        format!("{:x}", hash.finalize())
+    }
+
+    #[test]
+    fn fingerprint_parity_and_allocation_reduction() {
+        for item in [
+            Value::Integer(i64::MIN),
+            Value::String("雪\n\"\\".repeat(4096)),
+            Value::List(vec![
+                Value::Bool(true),
+                Value::List(vec![Value::Integer(0)]),
+            ]),
+        ] {
+            for index in [0, 9, 10, usize::MAX] {
+                let (old, old_calls, _) = measured(|| legacy_fingerprint("node", index, &item));
+                let (new, calls, _) =
+                    measured(|| element_fingerprint("node", index, &item).unwrap());
+                assert_eq!(new, old);
+                assert!(calls < old_calls, "old={old_calls}, new={calls}");
+            }
+        }
+    }
+
+    #[test]
+    fn element_line_has_no_second_buffer() {
+        let (_temp, _options, mut journal) = journal();
+        open_elements(&mut journal);
+        journal
+            .write_element_bytes(&mut b"{}".to_vec(), false)
+            .unwrap();
+        let mut line = vec![b'x'; 128 * 1024];
+        line.reserve(1);
+        let (result, _, bytes) = measured(|| journal.write_element_bytes(&mut line, false));
+        result.unwrap();
+        assert!(bytes < line.len(), "allocated {bytes} bytes");
+    }
+
+    #[test]
+    fn element_serialization_reuses_capacity() {
+        let (_temp, _options, mut journal) = journal();
+        open_elements(&mut journal);
+        let entry = ElementLine::Begin {
+            index: 0,
+            fingerprint: "x".repeat(128 * 1024),
+            uncertain: false,
+        };
+        journal.write_element_line(&entry, false).unwrap();
+        let (result, _, bytes) = measured(|| journal.write_element_line(&entry, false));
+        result.unwrap();
+        assert!(bytes < 4096, "allocated {bytes} bytes");
+    }
+
+    #[test]
+    fn collection_preserves_every_element_state_until_node_commits() {
+        let (_temp, _options, mut journal) = journal();
+        let cwd = journal.directory.parent().unwrap().to_path_buf();
+        journal
+            .begin_node_record(NodeBegin {
+                fingerprint: "loop",
+                start: 0,
+                end: 2,
+                line: 1,
+                cwd_before: &cwd,
+                retry_safe: true,
+                step_id: None,
+            })
+            .unwrap();
+        open_elements(&mut journal);
+        for index in 0..3 {
+            let bindings =
+                BTreeMap::from([("acc".to_owned(), Value::String(format!("state-{index}")))]);
+            journal
+                .commit_state(index, format!("element-{index}"), &cwd, b"", &bindings)
+                .unwrap();
+        }
+        journal.sync_elements().unwrap();
+        journal.collect_unreferenced_blobs();
+        for index in 0..3 {
+            let bytes = serde_json::to_vec(&Value::String(format!("state-{index}"))).unwrap();
+            assert!(
+                journal.blobs_directory.join(hex_digest(&bytes)).exists(),
+                "lost state blob for element {index}"
+            );
+        }
+        journal.load_elements().unwrap();
+        assert_eq!(journal.element_replay.as_ref().unwrap().commits.len(), 3);
+        journal
+            .complete_node_parts(&cwd, b"", std::iter::empty())
+            .unwrap();
+        assert_eq!(fs::read_dir(&journal.blobs_directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn element_framing_and_chain_stay_identical() {
+        let (_temp, _options, mut journal) = journal();
+        open_elements(&mut journal);
+        let entry = ElementLine::Begin {
+            index: 17,
+            fingerprint: "雪\nquoted\"".to_owned(),
+            uncertain: true,
+        };
+        let mut expected = serde_json::to_vec(&entry).unwrap();
+        let expected_chain = chain_step(&journal.elements_chain, &expected);
+        journal.write_element_line(&entry, true).unwrap();
+        expected.push(b'\n');
+        assert_eq!(
+            fs::read(journal.directory.join(ELEMENT_LOG)).unwrap(),
+            expected
+        );
+        assert_eq!(journal.elements_chain, expected_chain);
+        assert_eq!(journal.elements_bytes, expected.len() as u64);
+        assert_eq!(journal.elements_lines, 1);
+        assert!(journal.element_buffer.is_empty());
+    }
+
+    fn legacy_write_element(journal: &mut Journal, entry: &ElementLine) {
+        let line = serde_json::to_vec(entry).unwrap();
+        let mut record = Vec::with_capacity(line.len() + 1);
+        record.extend_from_slice(&line);
+        record.push(b'\n');
+        journal
+            .elements_file
+            .as_mut()
+            .unwrap()
+            .write_all(&record)
+            .unwrap();
+        journal.elements_chain = chain_step(&journal.elements_chain, &line);
+        journal.elements_bytes += record.len() as u64;
+        journal.elements_lines += 1;
+        if journal.elements_synced_at.elapsed() >= ELEMENT_SYNC_INTERVAL {
+            journal.sync_open_element_file().unwrap();
+        } else {
+            journal.elements_dirty = true;
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit checkpoint allocation and elapsed-time microbenchmark"]
+    fn checkpoint_memory_microbenchmark() {
+        for size in [16, 4096] {
+            let item = Value::String("x".repeat(size));
+            for optimized in [false, true] {
+                let started = std::time::Instant::now();
+                let (_, calls, bytes) = measured(|| {
+                    for index in 0..1000 {
+                        std::hint::black_box(if optimized {
+                            element_fingerprint("node", index, &item).unwrap()
+                        } else {
+                            legacy_fingerprint("node", index, &item)
+                        });
+                    }
+                });
+                eprintln!("fingerprint size={size} optimized={optimized}: {:?}, {calls} allocations, {bytes} bytes", started.elapsed());
+                let (_temp, _options, mut journal) = journal();
+                open_elements(&mut journal);
+                let entry = ElementLine::Begin {
+                    index: 0,
+                    fingerprint: "x".repeat(size),
+                    uncertain: false,
+                };
+                // Warm both file and reusable buffer before measuring steady commits.
+                journal.write_element_line(&entry, false).unwrap();
+                let started = std::time::Instant::now();
+                let (_, calls, bytes) = measured(|| {
+                    for _ in 0..1000 {
+                        if optimized {
+                            journal.write_element_line(&entry, false).unwrap();
+                        } else {
+                            legacy_write_element(&mut journal, &entry);
+                        }
+                    }
+                });
+                journal.sync_elements().unwrap();
+                eprintln!("element size={size} optimized={optimized}: {:?}, {calls} allocations, {bytes} bytes", started.elapsed());
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum ElementLine {
@@ -236,10 +440,22 @@ fn element_fingerprint(node_fingerprint: &str, index: usize, item: &Value) -> Re
     hash.update(b"\n");
     hash.update(node_fingerprint.as_bytes());
     hash.update(b"\n");
-    hash.update(index.to_string().as_bytes());
+    let mut digits = [0u8; 3 * std::mem::size_of::<usize>()];
+    let mut position = digits.len();
+    let mut number = index;
+    loop {
+        position -= 1;
+        digits[position] = b'0' + (number % 10) as u8;
+        number /= 10;
+        if number == 0 {
+            break;
+        }
+    }
+    hash.update(&digits[position..]);
     hash.update(b"\n");
-    hash.update(serde_json::to_vec(item).context("encoding element identity")?);
-    Ok(format!("{:x}", hash.finalize()))
+    let mut writer = DigestWriter(hash);
+    serde_json::to_writer(&mut writer, item).context("encoding element identity")?;
+    Ok(format!("{:x}", writer.0.finalize()))
 }
 
 /// Uncertainty of one element body: anything that can leave an effect unknown.
@@ -714,14 +930,31 @@ impl Journal {
     }
 
     fn write_element_line(&mut self, entry: &ElementLine, durable: bool) -> Result<()> {
-        let line = serde_json::to_vec(entry).context("encoding checkpoint element")?;
+        let mut line = std::mem::take(&mut self.element_buffer);
+        line.clear();
+        let result = self.encode_and_write_element(entry, durable, &mut line);
+        // Values can be embedded in a line. Erase the used bytes before retaining
+        // its allocation for the next commit, including on serialization failure.
+        line.fill(0);
+        line.clear();
+        self.element_buffer = line;
+        result
+    }
+
+    fn encode_and_write_element(
+        &mut self,
+        entry: &ElementLine,
+        durable: bool,
+        line: &mut Vec<u8>,
+    ) -> Result<()> {
+        serde_json::to_writer(&mut *line, entry).context("encoding checkpoint element")?;
         let limit = element_line_limit(self.max_output_bytes);
         if line.len() > limit {
             // Resume reads lines up to this bound, so a longer one is never written.
             self.persistence_failed = true;
             bail!("checkpoint element record exceeds the {limit}-byte element log line limit");
         }
-        if let Err(error) = self.write_element_bytes(&line, durable) {
+        if let Err(error) = self.write_element_bytes(line, durable) {
             // The element may have run; keep the durable in-flight record for resume.
             self.persistence_failed = true;
             return Err(error);
@@ -729,7 +962,7 @@ impl Journal {
         Ok(())
     }
 
-    fn write_element_bytes(&mut self, line: &[u8], durable: bool) -> Result<()> {
+    fn write_element_bytes(&mut self, line: &mut Vec<u8>, durable: bool) -> Result<()> {
         if self.elements_file.is_none() {
             let path = self.directory.join(ELEMENT_LOG);
             let mut file = open_regular(&path, "checkpoint element log", true)?;
@@ -745,13 +978,14 @@ impl Journal {
             .elements_file
             .as_mut()
             .context("checkpoint element log is not open")?;
-        let mut record = Vec::with_capacity(line.len() + 1);
-        record.extend_from_slice(line);
-        record.push(b'\n');
-        file.write_all(&record)
-            .context("appending checkpoint element")?;
+        // Frame in the existing serialization allocation, then restore the exact
+        // line before hashing it. This also keeps one file write per element.
+        line.push(b'\n');
+        let written = file.write_all(line);
+        line.pop();
+        written.context("appending checkpoint element")?;
         self.elements_chain = chain_step(&self.elements_chain, line);
-        self.elements_bytes += record.len() as u64;
+        self.elements_bytes += line.len() as u64 + 1;
         self.elements_lines += 1;
         if durable || self.elements_synced_at.elapsed() >= ELEMENT_SYNC_INTERVAL {
             self.sync_open_element_file()?;
@@ -800,12 +1034,16 @@ impl Journal {
                     self.max_output_bytes
                 );
             }
-            let bytes = serde_json::to_vec(value)
-                .with_context(|| format!("encoding checkpoint binding {name:?}"))?;
             let encoded_limit = self.max_output_bytes.saturating_mul(6).saturating_add(16);
             refs.insert(
                 name.clone(),
-                store_blob(&self.blobs_directory, &bytes, encoded_limit)?,
+                store_value_blob(
+                    &self.blobs_directory,
+                    value,
+                    encoded_limit,
+                    &mut self.element_buffer,
+                )
+                .with_context(|| format!("encoding checkpoint binding {name:?}"))?,
             );
         }
         self.element_state_cache = Some(ElementStateCache {

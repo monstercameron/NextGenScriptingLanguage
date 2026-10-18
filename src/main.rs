@@ -837,15 +837,13 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         let graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
         if args.checkpoint_dir.is_some()
-            && graph.input_declarations().iter().any(|input| {
-                matches!(
-                    input.source,
-                    Some(flow::ast::InputSource::Prompt { secret: true, .. })
-                )
-            })
+            && graph
+                .input_declarations()
+                .iter()
+                .any(flow::ast::is_sensitive)
         {
             bail!(
-                "--checkpoint cannot be used with a secret prompt input: a journal would keep the answer or data computed from it"
+                "--checkpoint cannot be used with a sensitive input: a journal would keep the value or data computed from it"
             );
         }
         // Graph plans are not checked against an execute-policy header yet, so a graph

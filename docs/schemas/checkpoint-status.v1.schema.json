@@ -74,9 +74,11 @@
       }
     },
     "lock_file_present": { "type": "boolean" },
+    "lock_held": { "type": "boolean" },
     "resume_action": {
       "type": "string",
       "enum": [
+        "locked",
         "restores_completed_result",
         "idle_no_action",
         "requires_retry_uncertain",

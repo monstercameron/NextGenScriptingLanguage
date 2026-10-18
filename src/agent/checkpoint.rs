@@ -1,6 +1,6 @@
 //! `execute checkpoint status DIR [--json]`: a read-only summary of a checkpoint.
 //!
-//! The command never takes the checkpoint lock, never writes, and never runs a
+//! The command probes the checkpoint lock without blocking, never writes, and never runs a
 //! program. It reads `journal.json` and the blobs directory and reports what a
 //! resume would do. It does not verify the journal checksum, because that check
 //! depends on the runtime's private serialization. The output says so.
@@ -51,6 +51,7 @@ fn status_cli(arguments: &[String]) -> Result<i32> {
 
 /// Build the summary object for one checkpoint directory.
 pub fn summarize(directory: &Path) -> Result<Value> {
+    let lock_held = crate::runtime::checkpoint::directory_lock_held(directory)?;
     let journal_path = directory.join("journal.json");
     let journal = read_journal_value(&journal_path)?;
     let data = journal
@@ -58,7 +59,7 @@ pub fn summarize(directory: &Path) -> Result<Value> {
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("checkpoint journal has no data object"))?;
     if data.get("kind").and_then(Value::as_str) == Some("graph") {
-        return summarize_graph(directory, &journal, data);
+        return summarize_graph(directory, &journal, data, lock_held);
     }
     let status = data
         .get("status")
@@ -99,7 +100,9 @@ pub fn summarize(directory: &Path) -> Result<Value> {
     let (blob_count, blob_bytes) = blob_totals(&directory.join("blobs"))?;
     // The element log belongs to the in-flight node. A pending `for each` element
     // whose body may have started needs the same override as an uncertain node.
-    let resume_action = if !matches!(status, "completed" | "idle")
+    let resume_action = if lock_held {
+        "locked"
+    } else if !matches!(status, "completed" | "idle")
         && in_flight.is_some()
         && pending_element_is_uncertain(directory)?
     {
@@ -127,6 +130,7 @@ pub fn summarize(directory: &Path) -> Result<Value> {
         },
         "blobs": { "count": blob_count, "bytes": blob_bytes },
         "lock_file_present": directory.join("lock").is_file(),
+        "lock_held": lock_held,
         "resume_action": resume_action,
     }))
 }
@@ -188,6 +192,7 @@ fn summarize_graph(
     directory: &Path,
     journal: &Value,
     data: &serde_json::Map<String, Value>,
+    lock_held: bool,
 ) -> Result<Value> {
     let completed_nodes = data
         .get("completed_count")
@@ -209,7 +214,9 @@ fn summarize_graph(
         })
         .unwrap_or_default();
     let (blob_count, blob_bytes) = blob_totals(&directory.join("blobs"))?;
-    let action = if in_flight.is_empty() {
+    let action = if lock_held {
+        "locked"
+    } else if in_flight.is_empty() {
         "continues_from_last_completed_node"
     } else if in_flight
         .iter()
@@ -232,6 +239,7 @@ fn summarize_graph(
         },
         "blobs": { "count": blob_count, "bytes": blob_bytes },
         "lock_file_present": directory.join("lock").is_file(),
+        "lock_held": lock_held,
         "resume_action": action,
     }))
 }

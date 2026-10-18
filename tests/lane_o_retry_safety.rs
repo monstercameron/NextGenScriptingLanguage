@@ -77,16 +77,33 @@ fn a_native_command_loop_writes_a_begin_record_per_element() {
     fs::write(directory.path().join("native.program"), program).unwrap();
     fs::create_dir(directory.path().join("gates")).unwrap();
     fs::create_dir(directory.path().join("counters")).unwrap();
-    let output = execute(
-        &["run", "native.program", "--checkpoint", "ck"],
-        directory.path(),
-    );
+    // The element log is cleared once the loop node commits (#206), so the last element
+    // is held open while the log is read.
+    let hold = directory.path().join("gates").join("c.hold");
+    fs::write(&hold, "").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["run", "native.program", "--checkpoint", "ck"])
+        .current_dir(directory.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut log = String::new();
+    while std::time::Instant::now() < deadline {
+        log = elements_log(&directory.path().join("ck"));
+        if begin_records(&log) >= 3 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    fs::remove_file(&hold).unwrap();
+    let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let log = elements_log(&directory.path().join("ck"));
     assert_eq!(
         begin_records(&log),
         3,

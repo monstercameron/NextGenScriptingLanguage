@@ -7,9 +7,8 @@
 //! line past the committed prefix is ignored on open, and the next append truncates it.
 
 use super::{
-    atomic_write, encode_envelope, hex_digest, lock_directory, open_regular, real_directory,
-    restrict_directory, restrict_file, serialized_digest, sync_directory, JournalEnvelope,
-    JOURNAL_VERSION,
+    hex_digest, lock_directory, open_regular, real_directory, restrict_directory, restrict_file,
+    serialized_digest, sync_directory, write_envelope, JournalEnvelope, JOURNAL_VERSION,
 };
 use crate::graph::{CompletedNode, GraphCheckpointState, GraphCheckpointStore, InterruptedNode};
 use crate::security::SensitivitySet;
@@ -273,13 +272,7 @@ fn read_disk(path: &Path) -> Result<GraphJournalDisk> {
 
 /// Write the journal atomically, with a checksum over its body.
 fn write_disk(directory: &Path, disk: &GraphJournalDisk) -> Result<()> {
-    let data = serde_json::to_vec(disk).context("encoding graph checkpoint journal")?;
-    let bytes = encode_envelope(&hex_digest(&data), &data);
-    if bytes.len() > MAX_JOURNAL_BYTES {
-        bail!("graph checkpoint journal exceeds 16 MiB");
-    }
-    atomic_write(directory, "journal", "json", &bytes)
-        .context("persisting graph checkpoint journal")
+    write_envelope(directory, disk, "graph checkpoint journal")
 }
 
 struct GraphLog {
@@ -360,4 +353,31 @@ fn append_line(directory: &Path, committed_bytes: u64, line: &[u8]) -> Result<()
         .and_then(|()| file.write_all(b"\n"))
         .and_then(|()| file.sync_data())
         .context("appending graph completed node")
+}
+
+#[cfg(test)]
+mod lane_v3_tests {
+    use super::*;
+
+    #[test]
+    fn graph_envelope_streams_without_a_second_buffer() {
+        let directory = tempfile::tempdir().unwrap();
+        let disk = GraphJournalDisk {
+            version: JOURNAL_VERSION,
+            kind: GRAPH_KIND.to_owned(),
+            identity: "x".repeat(1024 * 1024),
+            completed_count: 0,
+            completed_chain: chain_start(),
+            in_flight: Vec::new(),
+        };
+        let (result, _, bytes) =
+            super::super::lane_v3_tests::measured(|| write_disk(directory.path(), &disk));
+        result.unwrap();
+        assert!(bytes < 64 * 1024, "allocated {bytes} bytes");
+        let data = serde_json::to_vec(&disk).unwrap();
+        assert_eq!(
+            fs::read(directory.path().join("journal.json")).unwrap(),
+            super::super::encode_envelope(&hex_digest(&data), &data)
+        );
+    }
 }

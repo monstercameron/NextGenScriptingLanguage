@@ -566,6 +566,22 @@ pub(super) fn uncertain_on_failure(
     Ok(false)
 }
 pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registry) -> Result<()> {
+    if let Some(input) = program
+        .inputs
+        .iter()
+        .chain(
+            program
+                .definitions
+                .values()
+                .flat_map(|definition| &definition.inputs),
+        )
+        .find(|input| crate::ast::is_sensitive(input))
+    {
+        bail!(
+            "checkpointed and resumed programs do not support sensitive input {:?}: a journal would keep the value or data computed from it",
+            input.name
+        );
+    }
     if let Some(step) = program
         .steps
         .iter()

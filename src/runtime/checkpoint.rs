@@ -42,6 +42,9 @@ mod leaf_cursor;
 pub(crate) use elements::element_line_limit;
 use elements::ElementReplay;
 
+#[cfg(test)]
+mod lane_v3_tests;
+
 const LEGACY_JOURNAL_VERSION: u32 = 1;
 /// Version 2 keeps completed nodes inline in the journal.
 const INLINE_JOURNAL_VERSION: u32 = 2;
@@ -312,6 +315,21 @@ struct JournalDisk {
     listener_cursor: Option<ListenerEventCursor>,
 }
 
+/// Borrow the large snapshot and identity while retaining the on-disk field order.
+#[derive(Serialize)]
+struct JournalDiskRef<'a> {
+    version: u32,
+    identity: &'a Identity,
+    status: Status,
+    completed_count: usize,
+    completed_chain: &'a str,
+    in_flight: &'a Option<InFlightNode>,
+    snapshot: &'a SnapshotRef,
+    error: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    listener_cursor: &'a Option<ListenerEventCursor>,
+}
+
 /// The envelope around any version's body. The body stays raw, so the checksum is
 /// verified against the shape of the version the body declares.
 #[derive(Deserialize)]
@@ -349,6 +367,81 @@ impl Write for DigestWriter {
     }
 }
 
+struct CountingWriter<W> {
+    writer: W,
+    bytes: usize,
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.writer.write(bytes)?;
+        self.bytes = self.bytes.saturating_add(written);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+fn collect_log_blob_refs(
+    path: &Path,
+    limit: usize,
+    retained: &mut std::collections::BTreeSet<String>,
+) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("inspecting checkpoint reference log"),
+    }
+    let file = open_regular_readonly(path, "checkpoint reference log")?;
+    let mut reader = io::BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if read_bounded_line(&mut reader, &mut line, limit)? == 0 {
+            return Ok(());
+        }
+        if line.last() != Some(&b'\n') {
+            bail!("checkpoint reference log has an incomplete line");
+        }
+        let value: serde_json::Value = serde_json::from_slice(&line)?;
+        collect_value_blob_refs(&value, retained)?;
+    }
+}
+
+fn collect_value_blob_refs(
+    value: &serde_json::Value,
+    retained: &mut std::collections::BTreeSet<String>,
+) -> Result<()> {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if let (Some(digest), Some(length)) = (fields.get("sha256"), fields.get("length")) {
+                let digest = digest
+                    .as_str()
+                    .context("invalid checkpoint blob reference")?;
+                if length.as_u64().is_none()
+                    || digest.len() != 64
+                    || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                {
+                    bail!("invalid checkpoint blob reference");
+                }
+                retained.insert(digest.to_owned());
+            }
+            for child in fields.values() {
+                collect_value_blob_refs(child, retained)?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                collect_value_blob_refs(child, retained)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// An open checkpoint journal. Holding this value also holds the nonblocking
 /// exclusive lock for its entire lifetime.
 pub(super) struct Journal {
@@ -380,6 +473,8 @@ pub(super) struct Journal {
     element_state_cache: Option<elements::ElementStateCache>,
     /// The element log replayed at open, held until the runtime takes it.
     element_replay: Option<ElementReplay>,
+    /// Reused for element and binding JSON; erased after every write, including errors.
+    element_buffer: Vec<u8>,
     _lock: File,
 }
 
@@ -570,6 +665,7 @@ impl Journal {
                 elements_synced_at: std::time::Instant::now(),
                 element_state_cache: None,
                 element_replay: None,
+                element_buffer: Vec::new(),
                 _lock: lock,
             };
             // Fail at open on truncated, missing, oversized, or corrupt state blobs.
@@ -649,6 +745,7 @@ impl Journal {
                 elements_synced_at: std::time::Instant::now(),
                 element_state_cache: None,
                 element_replay: None,
+                element_buffer: Vec::new(),
                 _lock: lock,
             };
             journal.persist()?;
@@ -798,6 +895,7 @@ impl Journal {
             output,
             bindings,
             self.max_output_bytes,
+            &mut self.element_buffer,
         )?;
         let previous_status = self.data.status;
         let previous_completed = std::mem::take(&mut self.data.completed);
@@ -988,6 +1086,7 @@ impl Journal {
             output,
             bindings,
             self.max_output_bytes,
+            &mut self.element_buffer,
         ) {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -1022,6 +1121,10 @@ impl Journal {
             return Err(error);
         }
         self.preloaded_state = None;
+        // The durable snapshot supersedes this node's element log. A crash before
+        // this truncation leaves its references intact for the collector to retain.
+        let _ = self.reset_elements("", 0, 0);
+        self.collect_unreferenced_blobs();
         Ok(())
     }
 
@@ -1110,23 +1213,31 @@ impl Journal {
             self.data.listener_cursor = previous_listener_cursor;
             return Err(error);
         }
-        // A finite run's element log and completed nodes reference result and state
-        // blobs that resume reloads, so only other journal modes collect here (#206).
-        if self.data.identity.mode != "finite" {
-            self.collect_unreferenced_blobs();
-        }
+        self.collect_unreferenced_blobs();
         Ok(())
     }
 
     fn collect_unreferenced_blobs(&self) {
-        let mut retained = BTreeMap::new();
-        retained.insert(self.data.snapshot.output.sha256.as_str(), ());
+        let mut retained = std::collections::BTreeSet::new();
+        retained.insert(self.data.snapshot.output.sha256.clone());
         for blob in self.data.snapshot.bindings.values() {
-            retained.insert(blob.sha256.as_str(), ());
+            retained.insert(blob.sha256.clone());
         }
         if let Some(cache) = self.element_state_cache.as_ref() {
             for blob in cache.refs.values() {
-                retained.insert(blob.sha256.as_str(), ());
+                retained.insert(blob.sha256.clone());
+            }
+        }
+        // Scan every retained line before deleting anything. If a log cannot be
+        // read completely, collection withholds deletion rather than guessing.
+        for name in [COMPLETED_LOG, "elements.jsonl"] {
+            let limit = if name == COMPLETED_LOG {
+                MAX_CHECKPOINT_LOG_LINE
+            } else {
+                elements::element_line_limit(self.max_output_bytes)
+            };
+            if collect_log_blob_refs(&self.directory.join(name), limit, &mut retained).is_err() {
+                return;
             }
         }
         let Ok(entries) = fs::read_dir(&self.blobs_directory) else {
@@ -1139,7 +1250,7 @@ impl Journal {
             };
             if name.len() != 64
                 || !name.bytes().all(|byte| byte.is_ascii_hexdigit())
-                || retained.contains_key(name)
+                || retained.contains(name)
             {
                 continue;
             }
@@ -1174,8 +1285,8 @@ impl Journal {
         // Element commits are group-synced. The journal may name them as its anchor,
         // so they reach disk before the journal does.
         self.sync_elements()?;
-        // Serialize the body once. The checksum covers exactly these bytes, which
-        // are the ones embedded in the envelope.
+        // Hash the borrowed body before streaming the same serialization into the
+        // atomic replacement file, without materializing either full JSON buffer.
         // The anchor is what the element log holds now, which is the state this write
         // makes durable. Later element commits lag behind it until the next write.
         let in_flight = self.data.in_flight.clone().map(|mut node| {
@@ -1185,30 +1296,52 @@ impl Journal {
             });
             node
         });
-        let body = JournalDisk {
+        let body = JournalDiskRef {
             version: JOURNAL_VERSION,
-            identity: self.data.identity.clone(),
+            identity: &self.data.identity,
             status: self.data.status,
             completed_count: self.data.completed.len(),
-            completed_chain: self.completed_chain.clone(),
-            in_flight,
-            snapshot: self.data.snapshot.clone(),
-            error: self.data.error.clone(),
-            listener_cursor: self.data.listener_cursor.clone(),
+            completed_chain: &self.completed_chain,
+            in_flight: &in_flight,
+            snapshot: &self.data.snapshot,
+            error: &self.data.error,
+            listener_cursor: &self.data.listener_cursor,
         };
-        let data = serde_json::to_vec(&body).context("encoding checkpoint journal")?;
-        let bytes = encode_envelope(&hex_digest(&data), &data);
-        if bytes.len() > 16 * 1024 * 1024 {
-            bail!("checkpoint journal exceeds 16 MiB");
-        }
-        if let Err(error) = atomic_write(&self.directory, "journal", "json", &bytes)
-            .context("persisting checkpoint journal")
-        {
+        if let Err(error) = write_envelope(&self.directory, &body, "checkpoint journal") {
             self.persistence_failed = true;
             return Err(error);
         }
         Ok(())
     }
+}
+
+fn write_envelope(directory: &Path, body: &impl Serialize, label: &str) -> Result<()> {
+    let mut digest = DigestWriter::default();
+    let mut counter = CountingWriter {
+        writer: &mut digest,
+        bytes: 0,
+    };
+    serde_json::to_writer(&mut counter, body).with_context(|| format!("encoding {label}"))?;
+    // The envelope adds exactly 23 framing bytes and 64 checksum bytes.
+    if counter.bytes > 16 * 1024 * 1024 - 87 {
+        bail!("{label} exceeds 16 MiB");
+    }
+    let buffer_capacity = (counter.bytes + 87).min(8192);
+    let checksum = format!("{:x}", digest.0.finalize());
+    atomic_write_with(directory, "journal", "json", &[], |file, _| {
+        // A second serialization pass avoids both journal-sized byte buffers.
+        // The borrowed body cannot change between the digest and write passes.
+        let mut writer = io::BufWriter::with_capacity(buffer_capacity, &mut *file);
+        writer.write_all(br#"{"checksum":""#)?;
+        writer.write_all(checksum.as_bytes())?;
+        writer.write_all(br#"","data":"#)?;
+        serde_json::to_writer(&mut writer, body).map_err(io::Error::other)?;
+        writer.write_all(b"}")?;
+        writer.flush()?;
+        drop(writer);
+        file.sync_all()
+    })
+    .with_context(|| format!("persisting {label}"))
 }
 
 /// Take the exclusive lock of a checkpoint directory. Every journal mode, program or
@@ -1235,9 +1368,75 @@ fn lock_directory(directory: &Path) -> Result<File> {
     Ok(lock)
 }
 
+/// Probe the existing lock without creating files or changing permissions. All
+/// errors other than lock contention are reported rather than treated as unlocked.
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+pub(crate) fn directory_lock_held(directory: &Path) -> Result<bool> {
+    let path = directory.join("lock");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if !metadata.is_file() || metadata.file_type().is_symlink() => {
+            bail!("checkpoint lock must be a regular file");
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("inspecting checkpoint lock"),
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::*;
+        options
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+    }
+    let file = options
+        .open(&path)
+        .context("opening checkpoint lock for status")?;
+    if !file.metadata()?.is_file() {
+        bail!("checkpoint lock must be a regular file");
+    }
+    #[cfg(windows)]
+    {
+        if crate::platform::windows::is_reparse(&file.metadata()?) {
+            bail!("checkpoint lock cannot be a reparse point");
+        }
+        match crate::platform::windows::lock(&file) {
+            Ok(()) => Ok(false),
+            Err(error)
+                if error
+                    .downcast_ref::<io::Error>()
+                    .and_then(io::Error::raw_os_error)
+                    == Some(windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION as i32) =>
+            {
+                Ok(true)
+            }
+            Err(error) => Err(error).context("probing checkpoint lock"),
+        }
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: file is a live descriptor. flock takes only descriptor and flags,
+        // and closing file releases a successful nonblocking probe's lock.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(false);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            Ok(true)
+        } else {
+            Err(error).context("probing checkpoint lock")
+        }
+    }
+}
+
 /// Assemble `{"checksum":…,"data":…}` exactly as `JournalEnvelopeRef` serializes
 /// it, around data that is already encoded. The checksum is lowercase hex, so it
 /// needs no JSON escaping.
+#[cfg(test)]
 fn encode_envelope(checksum: &str, data: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(checksum.len() + data.len() + 32);
     bytes.extend_from_slice(br#"{"checksum":""#);
@@ -1272,6 +1471,19 @@ fn real_directory(path: &Path, label: &str, create: bool) -> Result<fs::Metadata
 }
 
 fn open_regular(path: &Path, label: &str, create: bool) -> Result<File> {
+    open_regular_with_permissions(path, label, create, true)
+}
+
+fn open_regular_readonly(path: &Path, label: &str) -> Result<File> {
+    open_regular_with_permissions(path, label, false, false)
+}
+
+fn open_regular_with_permissions(
+    path: &Path,
+    label: &str,
+    create: bool,
+    change_permissions: bool,
+) -> Result<File> {
     // Reject known special files before open; recheck the opened descriptor too.
     if let Ok(metadata) = fs::symlink_metadata(path) {
         if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -1284,6 +1496,8 @@ fn open_regular(path: &Path, label: &str, create: bool) -> Result<File> {
         .write(create)
         .create(create)
         .truncate(false);
+    #[cfg(not(windows))]
+    let _ = change_permissions;
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY);
     #[cfg(windows)]
@@ -1292,7 +1506,13 @@ fn open_regular(path: &Path, label: &str, create: bool) -> Result<File> {
         use windows_sys::Win32::{Foundation::*, Storage::FileSystem::*};
         options
             .access_mode(
-                GENERIC_READ | WRITE_DAC | READ_CONTROL | if create { GENERIC_WRITE } else { 0 },
+                GENERIC_READ
+                    | if change_permissions {
+                        WRITE_DAC | READ_CONTROL
+                    } else {
+                        0
+                    }
+                    | if create { GENERIC_WRITE } else { 0 },
             )
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
@@ -1657,6 +1877,7 @@ fn store_snapshot(
             .iter()
             .map(|(name, value)| (name.as_str(), value)),
         max_output_bytes,
+        &mut Vec::new(),
     )
 }
 
@@ -1666,6 +1887,7 @@ fn store_snapshot_parts<'a>(
     output_bytes: &[u8],
     bindings: impl IntoIterator<Item = (&'a str, &'a Value)>,
     max_output_bytes: usize,
+    buffer: &mut Vec<u8>,
 ) -> Result<SnapshotRef> {
     if output_bytes.len() > max_output_bytes {
         bail!("checkpoint output exceeds maximum of {max_output_bytes} bytes");
@@ -1676,12 +1898,11 @@ fn store_snapshot_parts<'a>(
         if value_size(value) > max_output_bytes {
             bail!("checkpoint binding {name:?} exceeds maximum of {max_output_bytes} bytes");
         }
-        let bytes = serde_json::to_vec(value)
-            .with_context(|| format!("encoding checkpoint binding {name:?}"))?;
         let encoded_limit = max_output_bytes.saturating_mul(6).saturating_add(16);
         binding_refs.insert(
             name.to_owned(),
-            store_blob(blobs_directory, &bytes, encoded_limit)?,
+            store_value_blob(blobs_directory, value, encoded_limit, buffer)
+                .with_context(|| format!("encoding checkpoint binding {name:?}"))?,
         );
     }
     Ok(SnapshotRef {
@@ -1689,6 +1910,21 @@ fn store_snapshot_parts<'a>(
         output,
         bindings: binding_refs,
     })
+}
+
+fn store_value_blob(
+    directory: &Path,
+    value: &Value,
+    limit: usize,
+    buffer: &mut Vec<u8>,
+) -> Result<BlobRef> {
+    buffer.clear();
+    let result = serde_json::to_writer(&mut *buffer, value)
+        .map_err(anyhow::Error::from)
+        .and_then(|()| store_blob(directory, buffer, limit));
+    buffer.fill(0);
+    buffer.clear();
+    result
 }
 
 fn load_snapshot(

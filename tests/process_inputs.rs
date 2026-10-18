@@ -193,37 +193,17 @@ fn process_input_headers_reject_ambiguous_or_invalid_sources() {
         .contains("source"));
 }
 #[test]
-fn checkpoint_environment_values_are_frozen_and_changed_values_do_not_replay_commands() {
+fn checkpoint_environment_values_are_refused_before_any_journal_is_written() {
     let directory = tempfile::tempdir().unwrap();
     let source = "accept value as text from environment \"EXECUTE_CHECKPOINT_VALUE\"\nrun \"printf\" with arguments [\"%s\", value]\n";
-    let output = success(
-        command(source, directory.path())
-            .env("EXECUTE_CHECKPOINT_VALUE", "first")
-            .args(["--checkpoint", "checkpoint"])
-            .output()
-            .unwrap(),
-    );
-    assert_eq!(output.stdout, b"first");
-    let file = directory.path().join("process.program");
-    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
-        .arg("resume")
-        .arg(&file)
+    let output = command(source, directory.path())
+        .env("EXECUTE_CHECKPOINT_VALUE", "first")
         .args(["--checkpoint", "checkpoint"])
-        .env("EXECUTE_CHECKPOINT_VALUE", "changed")
-        .current_dir(directory.path())
         .output()
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    let output = success(
-        Command::new(env!("CARGO_BIN_EXE_execute"))
-            .arg("resume")
-            .arg(file)
-            .args(["--checkpoint", "checkpoint"])
-            .env("EXECUTE_CHECKPOINT_VALUE", "first")
-            .current_dir(directory.path())
-            .output()
-            .unwrap(),
-    );
-    assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("sensitive input"), "{error}");
+    assert!(!directory.path().join("checkpoint").exists());
 }

@@ -12,21 +12,17 @@ define a program named set_browser
   accept desktop_id as text
   accept message as text
   accept glyph as text
-  # Bash prints both commands' stdout as they run, also on failure. `keep status`
-  # captures, so the set output is named and written back out; a command streams
-  # only when a fresh command follows it, hence the empty printf after each one.
+  # Captured stdout is explicitly emitted; unbound notification stdout streams.
   run "env" with arguments ["-u", "BROWSER", "xdg-settings", "set", "default-web-browser", desktop_id] as set_output and keep status as set_status
   run "printf" with arguments ["%s", set_output]
-  run "printf" with arguments [""]
   if set_status is 0
     run "omarchy-notification-send" with arguments ["-g", glyph, message]
-    run "printf" with arguments [""]
   otherwise
     run "false"
 
-run "printf" with arguments [""] as supplied
+use value "" as supplied
 for each argument in supplied_arguments
-  run "printf" with arguments ["yes"] as supplied
+  use value "yes" as supplied
 if supplied is ""
   run "env" with arguments ["-u", "BROWSER", "xdg-settings", "get", "default-web-browser"] and keep status as query_status
   then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as desktop_id

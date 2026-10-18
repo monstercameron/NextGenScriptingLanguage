@@ -58,7 +58,7 @@ fn on_exit_programs_can_spawn_and_await_jobs() {
     assert!(checked.status.success(), "{}", text(&checked.stderr));
     let output = run(directory.path(), script, "run");
     assert!(output.status.success(), "{}", text(&output.stderr));
-    assert_eq!(text(&output.stdout), "cleanup\n");
+    assert_eq!(text(&output.stdout), "hi\nmain\ncleanup\n");
 }
 
 #[test]

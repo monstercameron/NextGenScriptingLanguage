@@ -44,7 +44,7 @@ fn on_exit_runs_after_normal_completion() {
     let (_directory, output) =
         run("on exit\n  run printf with message \"exit\"\nrun printf with message \"main\"\n");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "exit\n");
+    assert_eq!(stdout(&output), "main\nexit\n");
 }
 
 #[test]
@@ -53,7 +53,7 @@ fn on_exit_runs_after_exit_and_keeps_the_status() {
         "on exit\n  run printf with message \"exit\"\nrun printf with message \"main\"\nexit with status 3\n",
     );
     assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "exit\n");
+    assert_eq!(stdout(&output), "main\nexit\n");
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn on_exit_runs_after_fail_and_keeps_the_message() {
     );
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(stderr(&output).contains("boom"), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "exit\n");
+    assert_eq!(stdout(&output), "main\nexit\n");
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn on_exit_runs_with_checkpoints_and_on_interrupt_is_refused() {
         &["--checkpoint", checkpoint.to_str().unwrap()],
     );
     assert_eq!(exit.status.code(), Some(0), "{}", stderr(&exit));
-    assert_eq!(stdout(&exit), "exit\n");
+    assert_eq!(stdout(&exit), "main\nexit\n");
 
     let interrupt = run_script(
         directory.path(),

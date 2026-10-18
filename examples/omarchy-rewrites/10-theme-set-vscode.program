@@ -52,10 +52,9 @@ define a program named read_json_string_property
     run json.stringify with value property as property_source
     if property_source is "null"
       run program report_failure with operation "JSON property must be a string" and path path and status 2
-      run "printf" with arguments ["\"\""]
+      use value "\"\""
     otherwise
-      run "printf" with arguments ["[{\"type\":\"string\"}]"] as predicate_source
-      run json.parse with text predicate_source as string_predicate
+      use value [{"type": "string"}] as string_predicate
       run text.concat with parts ["[", property_source, "]"] as singleton_source
       run json.parse with text singleton_source as singleton
       run json.filter with document singleton and where string_predicate as matching_strings
@@ -68,35 +67,32 @@ define a program named read_json_string_property
       otherwise
         if type_status is 1
           run program report_failure with operation "JSON property must be a string" and path path and status 2
-          run "printf" with arguments ["\"\""]
+          use value "\"\""
         otherwise
           run program report_failure with operation "JSON property type read" and path path and status type_status
-          run "printf" with arguments ["\"\""]
+          use value "\"\""
   otherwise
     if property_status is 1
       # jq's `.field // empty` policy is an empty string for absent values.
-      run "printf" with arguments ["\"\""]
+      use value "\"\""
     otherwise
       run program report_failure with operation "JSON property read" and path path and status property_status
-      run "printf" with arguments ["\"\""]
+      use value "\"\""
 
 define a program named remove_file_cas
   accept home as text
   accept path as text
   accept expected_hash as text
-  run "printf" with arguments ["{}"]
-  then parse json as operation
+  use value {} as operation
   then encode path as json
   then parse json as path_value
   run json.set with document operation and pointer "/path" and value path_value as operation_with_path
   then encode expected_hash as json
   then parse json as hash_value
   run json.set with document operation_with_path and pointer "/expected_content_hash" and value hash_value as operation_with_hash
-  run "printf" with arguments ["\"remove\""]
-  then parse json as action_value
+  use value "remove" as action_value
   run json.set with document operation_with_hash and pointer "/action" and value action_value as operation_with_action
-  run "printf" with arguments ["[]"]
-  then parse json as empty_operations
+  use value [] as empty_operations
   run json.set with document empty_operations and pointer "/-" and value operation_with_action as operations
   run "printf" with arguments ["%s/.local/state/execute/transactions", home] as transaction_root
   run "mkdir" with arguments ["-p", "-m", "700", transaction_root] and keep status as mkdir_status
@@ -171,12 +167,10 @@ define a program named register_generated
     run json.parse with text registry_content and keep status as registry_parse_status
     if registry_parse_status is 0
       run json.parse with text registry_content as registry_document
-      run "printf" with arguments ["[{\"pointer\":\"/identifier/id\",\"not_equals\":\"local.omarchy-theme\"}]"] as registry_predicate_text
-      run json.parse with text registry_predicate_text as registry_predicate
+      use value [{"pointer": "/identifier/id", "not_equals": "local.omarchy-theme"}] as registry_predicate
       run json.filter with document registry_document and where registry_predicate as registry_without_previous and keep status as registry_filter_status
       if registry_filter_status is 0
-        run "printf" with arguments ["{\"identifier\":{\"id\":\"local.omarchy-theme\"},\"version\":\"1.0.0\",\"location\":{\"$mid\":1,\"fsPath\":\"\",\"external\":\"\",\"path\":\"\",\"scheme\":\"file\"},\"relativeLocation\":\"omarchy-theme\"}"] as new_entry_text
-        run json.parse with text new_entry_text as new_entry
+        use value {"identifier": {"id": "local.omarchy-theme"}, "version": "1.0.0", "location": {"$mid": 1, "fsPath": "", "external": "", "path": "", "scheme": "file"}, "relativeLocation": "omarchy-theme"} as new_entry
         then encode extension_directory as json
         then parse json as extension_path_value
         run json.set with document new_entry and pointer "/location/fsPath" and value extension_path_value as entry_with_fs_path
@@ -201,7 +195,6 @@ define a program named register_generated
       run program report_failure with operation "extension registry JSON parse" and path registry and status registry_parse_status
   otherwise
     run program report_failure with operation "extension registry snapshot" and path registry and status registry_snapshot_status
-  run "printf" with arguments [""]
 
 define a program named install_generated
   accept home as text
@@ -218,15 +211,15 @@ define a program named install_generated
       take text at "" from theme_type_value as theme_type
       run text.trim_final_lf with text theme_type as normalized_type
       if normalized_type is "light"
-        run "printf" with arguments ["vs"] as ui_theme
+        use value "vs" as ui_theme
       otherwise
-        run "printf" with arguments ["vs-dark"] as ui_theme
+        use value "vs-dark" as ui_theme
     otherwise
       run program report_failure with operation "generated theme JSON parse" and path generated and status parse_status
-      run "printf" with arguments ["vs-dark"] as ui_theme
+      use value "vs-dark" as ui_theme
   otherwise
     run program report_failure with operation "generated theme snapshot" and path generated and status snapshot_status
-    run "printf" with arguments ["vs-dark"] as ui_theme
+    use value "vs-dark" as ui_theme
   run "printf" with arguments ["%s/themes", extension_directory] as themes
   run "printf" with arguments ["%s/themes/omarchy-color-theme.json", extension_directory] as theme_link
   run "printf" with arguments ["%s/package.json", extension_directory] as package
@@ -249,10 +242,8 @@ define a program named update_setting
     run json.stringify with value theme_name as encoded_theme_name
     if encoded_theme_name is "\"\""
       run jsonc.remove with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and key "workbench.colorTheme" and keep status as mutation_status
-      run "printf" with arguments [""]
     otherwise
       run jsonc.set with path path and expected_content_hash expected_hash and symlink_policy "preserve" and permissions_policy "preserve" and key "workbench.colorTheme" and value theme_name and keep status as mutation_status
-      run "printf" with arguments [""]
     if mutation_status is not 0
       run program report_failure with operation "JSONC theme setting update" and path path and status mutation_status
   otherwise
@@ -276,7 +267,8 @@ define a program named set_editor_theme
         if descriptor_parse_status is 0
           run json.parse with text descriptor_content as descriptor_document
           run program read_json_string_property with document descriptor_document and pointer "/name" and path descriptor
-          then parse json as theme_name
+          then parse json as theme_name_json
+          take text at "" from theme_name_json as theme_name
           run program read_json_string_property with document descriptor_document and pointer "/extension" and path descriptor
           then parse json as extension_value
           run json.stringify with value extension_value as extension_source
@@ -311,28 +303,23 @@ define a program named set_editor_theme
               run program report_failure with operation "theme descriptor extension validation" and path descriptor and status extension_valid
         otherwise
           run program report_failure with operation "theme descriptor JSON parse" and path descriptor and status descriptor_parse_status
-          run "printf" with arguments ["\"\""]
-          then parse json as theme_name
+          use value "" as theme_name
       otherwise
         run program report_failure with operation "theme descriptor snapshot" and path descriptor and status descriptor_snapshot_status
-        run "printf" with arguments ["\"\""]
-        then parse json as theme_name
+        use value "" as theme_name
     otherwise
       if descriptor_status is 1
         run "test" with arguments ["-f", generated] and keep status as generated_status
         if generated_status is 0
           run program install_generated with home home and extension_directory extension_directory and generated generated
-          run "printf" with arguments ["\"Omarchy\""]
-          then parse json as theme_name
+          use value "Omarchy" as theme_name
         otherwise
-          run "printf" with arguments ["\"\""]
-          then parse json as theme_name
+          use value "" as theme_name
           if generated_status is not 1
             run program report_failure with operation "generated theme presence check" and path generated and status generated_status
       otherwise
         run program report_failure with operation "theme descriptor presence check" and path descriptor and status descriptor_status
-        run "printf" with arguments ["\"\""]
-        then parse json as theme_name
+        use value "" as theme_name
     run json.stringify with value theme_name as encoded_theme_name
     if encoded_theme_name is not "\"\""
       run path.dirname with path settings as settings_directory
@@ -355,8 +342,7 @@ define a program named set_editor_theme
     otherwise
       run "test" with arguments ["-f", settings] and keep status as settings_status
       if settings_status is 0
-        run "printf" with arguments ["\"\""]
-        then parse json as empty_theme
+        use value "" as empty_theme
         run program update_setting with path settings and theme_name empty_theme
       otherwise
         if settings_status is not 1
@@ -364,7 +350,6 @@ define a program named set_editor_theme
   otherwise
     if present is not 1
       run program report_failure with operation "editor presence check" and path editor and status present
-  run "printf" with arguments [""]
 
 accept home as text from environment "HOME"
 accept ignored_arguments as list of text from arguments
@@ -395,4 +380,3 @@ if skip_cursor is not 0
 otherwise
   # Bash's final ! toggle-enabled && ... expression exits 1 when skipped.
   run "false"
-run "printf" with arguments [""]

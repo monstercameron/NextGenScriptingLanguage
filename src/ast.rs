@@ -67,6 +67,12 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+impl Invocation {
+    pub(crate) fn program_stdout_unbound(&self) -> bool {
+        self.binding.is_none() && self.result_binding.is_none() && self.status_binding.is_none()
+    }
+}
+
 /// A typed comparison. Equality supports JSON values; containment is limited to
 /// strings, arrays, and object keys and never performs implicit coercion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -261,6 +267,11 @@ pub enum StepKind {
     UseValue {
         source: Value,
     },
+    /// `use value VALUE as NAME`: bind a resolved typed value without a process.
+    BindValue {
+        source: Value,
+        binding: String,
+    },
     /// `then capture bytes as NAME`: binds the pipeline bytes, unchanged and unchecked for
     /// UTF-8, to a byte binding; the pipeline continues with the same bytes.
     CaptureBytes {
@@ -373,6 +384,172 @@ pub struct Step {
     /// first step across edits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+impl StepKind {
+    /// Whether this statement makes the pipeline value eligible for implicit
+    /// program stdout. Control markers preserve the last executed decision.
+    pub(crate) fn program_stdout(&self) -> Option<bool> {
+        match self {
+            Self::Invoke { call, .. } => Some(call.program_stdout_unbound()),
+            Self::Read { binding, .. }
+            | Self::ReadStdin { binding }
+            | Self::ReadCallInput { binding } => Some(binding.is_none()),
+            Self::BindValue { .. }
+            | Self::CaptureBytes { .. }
+            | Self::ParseJson { .. }
+            | Self::TakeJson { .. }
+            | Self::TakeJsonDynamic { .. }
+            | Self::TaskGroup { .. }
+            | Self::InspectJob { .. } => Some(false),
+            Self::AwaitJob {
+                status_binding,
+                result_binding,
+                ..
+            } => Some(status_binding.is_none() && result_binding.is_none()),
+            Self::UseValue { .. }
+            | Self::UseBytes { .. }
+            | Self::EncodeJson { .. }
+            | Self::Save { .. }
+            | Self::Append { .. } => Some(true),
+            _ => None,
+        }
+    }
+}
+
+/// Could any reachable continuation read these pipeline bytes before replacing
+/// them? Keep the common straight-line cases allocation-free. Block traversal is
+/// conservative at reusable-program returns and exceptional transfers.
+pub(crate) fn has_stdout_consumer(steps: &[Step], start: usize) -> bool {
+    fn immediate(kind: &StepKind) -> Option<bool> {
+        match kind {
+            StepKind::Invoke { connection, .. } | StepKind::CallProgram { connection, .. } => {
+                Some(*connection != Connection::Start)
+            }
+            StepKind::UseValue { .. }
+            | StepKind::BindValue { .. }
+            | StepKind::UseBytes { .. }
+            | StepKind::Read { .. }
+            | StepKind::ReadStdin { .. }
+            | StepKind::EncodeJson { .. }
+            | StepKind::TaskGroup { .. }
+            | StepKind::AwaitJob { .. }
+            | StepKind::Exit { .. }
+            | StepKind::Fail { .. } => Some(false),
+            StepKind::ParseJson { .. }
+            | StepKind::CaptureBytes { .. }
+            | StepKind::ReadCallInput { .. }
+            | StepKind::Save { .. }
+            | StepKind::Append { .. }
+            | StepKind::Return => Some(true),
+            _ => None,
+        }
+    }
+    let Some(step) = steps.get(start) else {
+        return false;
+    };
+    if let Some(consumed) = immediate(&step.kind) {
+        return consumed;
+    }
+    let mut pending = vec![start];
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(index) = pending.pop() {
+        let Some(step) = steps.get(index) else {
+            continue;
+        };
+        if !visited.insert(index) {
+            continue;
+        }
+        if let Some(consumed) = immediate(&step.kind) {
+            if consumed {
+                return true;
+            }
+            continue;
+        }
+        match &step.kind {
+            StepKind::BreakLoop | StepKind::ContinueLoop => {
+                let enclosing =
+                    steps[..index]
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find_map(|(header, step)| match step.kind {
+                            StepKind::Loop { end, .. } if header + end > index => {
+                                Some((header, header + end))
+                            }
+                            _ => None,
+                        });
+                let Some((header, finish)) = enclosing else {
+                    return true;
+                };
+                pending.push(if matches!(step.kind, StepKind::ContinueLoop) {
+                    finish - 1
+                } else {
+                    finish
+                });
+                // A transfer still runs any finally blocks it crosses. Keep
+                // capture if one of those cleanups could consume the bytes.
+                for (offset, step) in steps[header + 1..index].iter().enumerate() {
+                    if let StepKind::Try {
+                        finally: Some(finally),
+                        end,
+                        ..
+                    } = step.kind
+                    {
+                        let opener = header + 1 + offset;
+                        if opener + end > index && opener + finally > index {
+                            pending.push(opener + finally);
+                        }
+                    }
+                }
+            }
+            StepKind::EndCall => {
+                let caller = steps[..index]
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(header, step)| match &step.kind {
+                        StepKind::CallProgram { call, end, .. } if header + end == index + 1 => {
+                            Some(call)
+                        }
+                        _ => None,
+                    });
+                if caller.is_none_or(|call| !call.program_stdout_unbound()) {
+                    return true;
+                }
+                pending.push(index + 1);
+            }
+            StepKind::If { otherwise, .. } | StepKind::IfCommand { otherwise, .. } => {
+                pending.push(index + otherwise);
+                pending.push(index + 1);
+            }
+            StepKind::Otherwise { end }
+            | StepKind::OnInterrupt { end }
+            | StepKind::Catch { end, .. } => {
+                pending.push(index + end);
+            }
+            StepKind::Loop { end, .. } => {
+                pending.push(index + end);
+                pending.push(index + 1);
+            }
+            StepKind::EndLoop { back } => {
+                if let Some(header) = index.checked_sub(*back) {
+                    pending.push(header);
+                } else {
+                    return true;
+                }
+            }
+            StepKind::Try { catch, finally, .. } => {
+                // Failure enters the catch body, whereas ordinary success
+                // reaches its marker and skips that body.
+                pending.extend(catch.iter().map(|offset| index + offset + 1));
+                pending.extend(finally.iter().map(|offset| index + offset));
+                pending.push(index + 1);
+            }
+            _ => pending.push(index + 1),
+        }
+    }
+    false
 }
 
 /// Stable id for each step, in order: its label when present, else a derived id made of

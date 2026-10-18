@@ -180,8 +180,8 @@ fn breakpoint_in_a_loop_reads_the_iteration_steps_once_and_continues() {
     let stdout = hosted.stdout.join().unwrap();
     let stderr = hosted.stderr.join().unwrap();
     assert!(status.success(), "{stderr:?}");
-    // Plain run prints the loop's final pipeline value, which is `c`.
-    assert_eq!(stdout, "c\n");
+    // Every unconsumed iteration writes its stdout in order.
+    assert_eq!(stdout, "a\nb\nc\n");
     assert!(!endpoint.exists(), "the endpoint should be removed on exit");
 }
 

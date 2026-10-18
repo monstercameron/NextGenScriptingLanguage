@@ -1793,6 +1793,11 @@ fn parse_use(tokens: &[Token<'_>]) -> Result<StepKind> {
         }
         let mut cursor = 2;
         let source = parse_value(tokens, &mut cursor)?;
+        if word_is(tokens.get(cursor), "as") {
+            let binding = parse_binding_identifier(tokens.get(cursor + 1), "value binding")?;
+            ensure_end(tokens, cursor + 2)?;
+            return Ok(StepKind::BindValue { source, binding });
+        }
         ensure_end(tokens, cursor)?;
         return Ok(StepKind::UseValue { source });
     }
@@ -3351,5 +3356,32 @@ mod tests {
             assert!(matches!(program.steps[0].kind, StepKind::Loop { .. }));
             assert!(matches!(program.steps.last().unwrap().kind, StepKind::EndLoop { .. }));
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod lane_g1_tests {
+    #[test]
+    fn bound_value_suffix_parses() {
+        super::parse("use value 7 as count\n").expect("typed value binding");
+    }
+
+    #[test]
+    fn bound_final_value_is_not_program_stdout() {
+        let program = super::parse("run text.concat with parts [\"internal\"] as name\n").unwrap();
+        let registry = crate::manifest::Registry::from_sources(&[include_str!(
+            "../manifests/core.text_concat.json"
+        )])
+        .unwrap();
+        let options = crate::runtime::RunOptions::new(std::env::current_dir().unwrap());
+        let result = crate::runtime::with_streamed_stdout(|| {
+            crate::runtime::run(&program, &registry, &options)
+        })
+        .unwrap();
+        assert!(
+            result.output.is_empty(),
+            "bound bytes leaked: {:?}",
+            result.output
+        );
     }
 }

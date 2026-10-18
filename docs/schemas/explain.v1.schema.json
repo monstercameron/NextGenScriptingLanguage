@@ -10,6 +10,7 @@
     "protocol": { "const": "execute.explain/1" },
     "language_version": { "const": 1 },
     "program": { "type": "string" },
+    "execution_mode": { "enum": ["trusted", "untrusted"] },
     "flags": {
       "type": "array",
       "items": {
@@ -61,12 +62,16 @@
           "resolved_path", "argv", "effects",
           "capabilities", "writes", "network", "reads", "cwd_change",
           "modifies_next_invocation", "environment_sensitive", "environment_tainted",
-          "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared", "privileged", "retry"
+          "path", "path_is_runtime", "escapes_cwd", "resolved", "undeclared", "privileged", "retry",
+          "binding", "program_stdout"
         ],
         "properties": {
           "id": { "type": ["string", "null"] },
           "line": { "type": "integer", "minimum": 1 },
           "kind": { "type": "string" },
+          "binding": { "type": ["string", "null"] },
+          "program_stdout": { "enum": ["none", "stream", "unbound_final_value"] },
+          "enforcement": { "enum": ["refused", "os_sandbox_required", "declared_only", "host_managed"] },
           "scope": { "type": ["string", "null"] },
           "direct": { "type": "boolean" },
           "applet": { "type": ["string", "null"] },

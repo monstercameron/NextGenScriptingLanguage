@@ -47,6 +47,7 @@ pub fn compile(
         loops: Vec::new(),
         next_id: 0,
         pipelines: false,
+        values: BTreeMap::new(),
     };
     emitter.block(0, program.steps.len(), 0)?;
     let digest = Sha256::digest(source);
@@ -84,17 +85,20 @@ pub fn compile(
         script.push_str("trap 'exit 143' TERM\n");
     }
     script.push_str("__execute_value=''\n");
+    script.push_str("__execute_emit=1\n");
     for line in &emitter.lines {
         script.push_str(line);
         script.push('\n');
     }
-    script.push_str("printf '%s' \"$__execute_value\"\n");
+    script.push_str(PRINT_VALUE);
+    script.push('\n');
     script.push_str("exit 0\n");
     Ok(script)
 }
 
 /// Print the pipeline value, which is what execute writes before it ends a run.
-const PRINT_VALUE: &str = "printf '%s' \"$__execute_value\"";
+const PRINT_VALUE: &str =
+    "if [ \"$__execute_emit\" = 1 ]; then printf '%s' \"$__execute_value\"; fi";
 
 /// The shell variable naming the script's private directory for pipeline statuses.
 const STATUS_DIR: &str = "__execute_dir";
@@ -142,6 +146,7 @@ struct Emitter<'a> {
     next_id: usize,
     /// Whether any multi-stage pipeline was emitted, which needs the status directory.
     pipelines: bool,
+    values: BTreeMap<String, Value>,
 }
 
 /// One command, ready to render as a pipeline stage.
@@ -211,11 +216,40 @@ impl Emitter<'_> {
             let step = &steps[index];
             let line = step.line;
             index = match &step.kind {
+                StepKind::BindValue { source, binding } => {
+                    if depth != 0 {
+                        bail!("line {line}: scoped value bindings cannot compile to sh yet");
+                    }
+                    let value = self.literal(source, line)?;
+                    let bytes = match &value {
+                        Value::String(text) => text.clone(),
+                        _ => crate::structured::to_json(&value)?.to_string(),
+                    };
+                    self.push(depth, &format!("__execute_value={}", quote(&bytes)?));
+                    self.push(depth, "__execute_emit=0");
+                    self.values.insert(binding.clone(), value);
+                    index + 1
+                }
+                StepKind::UseValue { source } => {
+                    let Value::String(text) = self.literal(source, line)? else {
+                        bail!("line {line}: unbound use value requires text");
+                    };
+                    self.push(depth, &format!("__execute_value={}", quote(&text)?));
+                    self.push(depth, "__execute_emit=1");
+                    index + 1
+                }
+                StepKind::EncodeJson { source } => {
+                    let value = self.literal(source, line)?;
+                    let text = crate::structured::to_json(&value)?.to_string();
+                    self.push(depth, &format!("__execute_value={}", quote(&text)?));
+                    self.push(depth, "__execute_emit=1");
+                    index + 1
+                }
                 StepKind::Redirect { .. }
                 | StepKind::Environment { .. }
                 | StepKind::Invoke { .. } => self.group(index, end, depth)?,
                 StepKind::Exit { status } => {
-                    let code = literal_status(status, line, 0..=255)?;
+                    let code = literal_status(&self.literal(status, line)?, line, 0..=255)?;
                     self.push(depth, PRINT_VALUE);
                     self.push(depth, &format!("exit {code}"));
                     index + 1
@@ -223,7 +257,9 @@ impl Emitter<'_> {
                 StepKind::Fail { message, status } => {
                     let text = self.text(message, line)?;
                     let code = match status {
-                        Some(status) => literal_status(status, line, 1..=255)?,
+                        Some(status) => {
+                            literal_status(&self.literal(status, line)?, line, 1..=255)?
+                        }
                         None => 1,
                     };
                     self.push(depth, PRINT_VALUE);
@@ -335,13 +371,11 @@ impl Emitter<'_> {
         let StepKind::Invoke { connection, .. } = &self.steps[invoke].kind else {
             bail!("internal error: expected a command");
         };
-        if *connection != Connection::Start {
-            bail!(
-                "line {}: a `then` or `pipe to` command has no command before it to compile to sh",
-                self.steps[invoke].line
-            );
-        }
+        let consumes_value = *connection != Connection::Start;
         let mut stages = vec![self.stage(invoke, environment, redirects)?];
+        if consumes_value {
+            stages[0].close_stdin = false;
+        }
         let mut next = invoke + 1;
         while next < end {
             let StepKind::Invoke { connection, .. } = &self.steps[next].kind else {
@@ -362,7 +396,7 @@ impl Emitter<'_> {
         // pipeline records its status in a file instead and the pipeline itself always
         // succeeds. An `if` condition is exempt from `set -e`, and `$?` at the start of
         // the else branch is the condition's status.
-        let rendered = if count == 1 {
+        let mut rendered = if count == 1 {
             stages[0].render()
         } else {
             stages
@@ -378,6 +412,9 @@ impl Emitter<'_> {
                 .collect::<Vec<_>>()
                 .join(" | ")
         };
+        if consumes_value {
+            rendered = format!("printf '%s' \"$__execute_value\" | {rendered}");
+        }
         // The runtime decides by position: a command followed by another fresh command,
         // or by the end of the program, streams its stdout straight to the terminal and
         // leaves an empty pipeline value. Any other command captures its stdout as the
@@ -388,15 +425,7 @@ impl Emitter<'_> {
                 .iter()
                 .any(|redirect| redirect.starts_with("2>") && redirect != "2>/dev/null")
         });
-        let streams = !captures_stderr
-            && match self.steps.get(next).map(|step| &step.kind) {
-                None => true,
-                Some(StepKind::Invoke {
-                    connection: Connection::Start,
-                    ..
-                }) => true,
-                Some(_) => false,
-            };
+        let streams = !captures_stderr && !crate::ast::has_stdout_consumer(self.steps, next);
         if streams {
             self.push(depth, "__execute_value=''");
             self.push(depth, &rendered);
@@ -421,6 +450,7 @@ impl Emitter<'_> {
         }
         self.fail_on_status(depth);
         self.push(depth, "__execute_value=${__execute_out%x}");
+        self.push(depth, "__execute_emit=1");
         Ok(next)
     }
 
@@ -510,7 +540,12 @@ impl Emitter<'_> {
                 if name != "arguments" {
                     bail!("line {line}: direct command parameter {name:?} cannot compile to sh");
                 }
-                let Value::List(items) = value else {
+                let value = if let Value::Reference(_) = value {
+                    self.literal(value, line)?
+                } else {
+                    value.clone()
+                };
+                let Value::List(items) = &value else {
                     bail!("line {line}: direct command arguments must be a list to compile to sh");
                 };
                 for item in items {
@@ -526,13 +561,7 @@ impl Emitter<'_> {
         ensure_native_command(manifest, line)?;
         let mut literal = BTreeMap::new();
         for (name, value) in &call.parameters {
-            if matches!(value, Value::Reference(_)) {
-                bail!(
-                    "line {line}: applet {} receives a binding; only literal parameters compile to sh",
-                    manifest.name
-                );
-            }
-            literal.insert(name.clone(), value.clone());
+            literal.insert(name.clone(), self.literal(value, line)?);
         }
         let arguments = manifest.build_arguments(&literal)?;
         let mut words = vec![quote(manifest.binary_for(call))?];
@@ -548,9 +577,16 @@ impl Emitter<'_> {
     /// Render a value as one sh word: a literal is quoted, and a loop binding in scope
     /// is expanded inside double quotes.
     fn text(&self, value: &Value, line: usize) -> Result<String> {
+        if let Value::Reference(name) = value {
+            if let Some(value) = self.values.get(name) {
+                return self.text(value, line);
+            }
+        }
         match value {
             Value::String(text) => quote(text),
             Value::Integer(number) => Ok(number.to_string()),
+            Value::Bool(flag) => Ok(flag.to_string()),
+            Value::Number(number) => Ok(number.to_string()),
             Value::Reference(name) => self
                 .loops
                 .iter()
@@ -560,6 +596,29 @@ impl Emitter<'_> {
                 .ok_or_else(|| anyhow::anyhow!("line {line}: binding {name:?} is not a loop variable in scope, so it cannot compile to sh")),
             _ => bail!("line {line}: this value kind cannot compile to sh"),
         }
+    }
+
+    fn literal(&self, value: &Value, line: usize) -> Result<Value> {
+        Ok(match value {
+            Value::Reference(name) => self.values.get(name).cloned().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "line {line}: binding {name:?} is not a known constant; cannot compile to sh"
+                )
+            })?,
+            Value::List(items) => Value::List(
+                items
+                    .iter()
+                    .map(|item| self.literal(item, line))
+                    .collect::<Result<_>>()?,
+            ),
+            Value::Record(fields) => Value::Record(
+                fields
+                    .iter()
+                    .map(|(name, value)| Ok((name.clone(), self.literal(value, line)?)))
+                    .collect::<Result<_>>()?,
+            ),
+            value => value.clone(),
+        })
     }
 
     fn redirect(
@@ -594,10 +653,11 @@ impl Emitter<'_> {
         let body_end = start + self.loop_end(start);
         match kind {
             LoopKind::Repeat { count } => {
+                let count = self.literal(count, line)?;
                 let Value::Integer(count) = count else {
                     bail!("line {line}: repeat counts must be literal integers to compile to sh");
                 };
-                if *count < 0 {
+                if count < 0 {
                     bail!("line {line}: repeat counts cannot be negative");
                 }
                 let counter = self.fresh_name("repeat");
@@ -611,6 +671,7 @@ impl Emitter<'_> {
                 if !is_sh_name(binding) {
                     bail!("line {line}: loop variable {binding:?} is not a valid sh name");
                 }
+                let values = self.literal(values, line)?;
                 let Value::List(items) = values else {
                     bail!("line {line}: for each lists must be literal to compile to sh");
                 };
@@ -621,7 +682,7 @@ impl Emitter<'_> {
                             "line {line}: for each lists must hold literal text to compile to sh"
                         );
                     };
-                    words.push(quote(text)?);
+                    words.push(quote(&text)?);
                 }
                 if words.is_empty() {
                     return Ok(());

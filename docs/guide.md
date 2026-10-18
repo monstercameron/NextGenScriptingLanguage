@@ -37,6 +37,19 @@ define a program with typed inputs, then call it with `run program name` or
 `then program name`. Calls keep local bindings/cwd and return bytes through the
 shared runtime; no additional interpreter process is launched.
 
+Use `use value` to name a literal without starting an applet. Build JSON records
+from literals and typed bindings in an object value, then serialize them safely:
+
+```text
+accept path as text
+accept count as integer
+run json.stringify with value {"path": path, "count": count} as report
+then save to "summary.json"
+```
+
+The object fields keep their types, and `json.stringify` handles quoting and
+escaping. Use `json.set` with pointer `"/-"` to append a record to a JSON list.
+
 `then` creates a finite, buffered boundary. `pipe to` keeps stages running
 concurrently with native backpressure. A finite program buffers its final output
 until completion; choose a stream or listener when results must arrive live.

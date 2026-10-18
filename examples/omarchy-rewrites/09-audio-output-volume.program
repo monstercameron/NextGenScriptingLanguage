@@ -16,25 +16,23 @@ define a program named osd
   accept sink as text
   run program percent with sink sink as volume
   if volume is ""
-    run "printf" with arguments ["0"] as display_volume
+    use value "0" as display_volume
   otherwise
-    run "printf" with arguments ["%s", volume] as display_volume
+    use value volume as display_volume
   run "pactl" with arguments ["get-sink-mute", sink] and discard stderr and keep status as mute_status
   then "jq" with arguments ["-Rs", "sub(\"\\n+$\"; \"\") | {muted: endswith(\"yes\")}"]
   then parse json as mute_data
   take boolean at "/muted" from mute_data as muted
   if muted is true
-    run "printf" with arguments ["volume-muted"] as icon
+    use value "volume-muted" as icon
   otherwise
     run "test" with arguments [display_volume, "-eq", "0"] and keep status as zero_status
     if zero_status is 0
-      run "printf" with arguments ["volume-muted"] as icon
+      use value "volume-muted" as icon
     otherwise
-      run "printf" with arguments ["volume-high"] as icon
-  # A command streams only when a fresh command follows it, so the empty printf
-  # lets the OSD output reach stdout as it runs and survive an OSD failure.
+      use value "volume-high" as icon
+  # Unbound OSD stdout streams, including on failure.
   run "omarchy-osd" with arguments ["-i", icon, "-p", display_volume]
-  run "printf" with arguments [""]
 
 define a program named report_file_failure
   accept path as text
@@ -109,14 +107,14 @@ define a program named apply_adjustment
   run number.compare with left calculated_value and right floor_value as floor_comparison
   if direction is "+"
     if ceiling_comparison is 1
-      run "printf" with arguments ["100"] as next
+      use value 100 as next
     otherwise
-      run "printf" with arguments ["%s", calculated] as next
+      use value calculated as next
   otherwise
     if floor_comparison is -1
-      run "printf" with arguments ["0"] as next
+      use value 0 as next
     otherwise
-      run "printf" with arguments ["%s", calculated] as next
+      use value calculated as next
   run "printf" with arguments ["%s%%", next] as volume_argument
   # Bash prints each pactl output, also on failure, and still shows the OSD.
   # `keep status` captures, so each output is named and written back out; the
@@ -140,9 +138,9 @@ otherwise
   otherwise
     if action is "mute-toggle"
       if runtime_directory is ""
-        run "printf" with arguments ["/tmp"] as runtime
+        use value "/tmp" as runtime
       otherwise
-        run "printf" with arguments ["%s", runtime_directory] as runtime
+        use value runtime_directory as runtime
       run "printf" with arguments ["%s/omarchy-audio-output-volume-mute-toggle.last", runtime] as debounce_file
       run "date" with arguments ["+%s%3N"] and keep status as date_status
       then "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as now
@@ -152,18 +150,16 @@ otherwise
         # read -r takes just the first line and trims default IFS whitespace.
         run "jq" with arguments ["-Rsj", "(split(\"\\n\")[0] // \"\") | gsub(\"^[ \\t]+|[ \\t]+$\"; \"\")", debounce_file] as read_value and keep status as read_status
         if read_status is 0
-          run "printf" with arguments ["%s", read_value] as last
+          use value read_value as last
         otherwise
           run program report_file_failure with path debounce_file and operation "mute debounce read; using zero" and status read_status
-          run "printf" with arguments ["0"] as last
+          use value "0" as last
       otherwise
-        run "printf" with arguments ["0"] as last
+        use value "0" as last
       run "jq" with arguments ["-n", "--arg", "now", now, "--arg", "last", last, "{elapsed: (($now|tonumber) - (if $last == \"\" then 0 else ($last|tonumber) end))} | {debounced: (.elapsed < 250)}"]
       then parse json as debounce
       take boolean at "/debounced" from debounce as debounced
-      if debounced is true
-        run "printf" with arguments [""]
-      otherwise
+      if debounced is false
         run fs.snapshot with path debounce_file as debounce_snapshot and keep status as snapshot_status
         if snapshot_status is 0
           take text at "/value/content_hash" from debounce_snapshot as expected_hash

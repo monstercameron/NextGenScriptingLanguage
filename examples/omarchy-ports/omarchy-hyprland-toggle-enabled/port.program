@@ -6,8 +6,6 @@ accept arguments as list of text from arguments
 accept name_arg as text from argument 1 with default ""
 accept home_dir as text from environment "HOME" with default ""
 run text.concat with parts [home_dir, "/.local/state/omarchy/toggles/hypr/", name_arg, ".lua"] as flag_path
-# The predicate sets only status; keep the bound path out of final stdout.
-run text.concat with parts [""]
 if run "test" with arguments ["-f", flag_path] succeeds
   exit with status 0
 otherwise

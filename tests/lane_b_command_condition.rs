@@ -210,7 +210,10 @@ fn command_condition_works_in_checkpointed_programs() {
         .output()
         .unwrap();
     assert_eq!(status(&resumed), 0, "{}", stderr(&resumed));
-    assert_eq!(stdout(&resumed), "checkpointed\n");
+    assert!(
+        stdout(&resumed).is_empty(),
+        "committed branch output must not replay"
+    );
 }
 
 #[test]

@@ -25,10 +25,10 @@ if argument_count is "0\n"
     run "printf" with arguments ["No web apps to remove.\n"]
     # Bind app_name on this path too so every path defines it; the message above has
     # already streamed, as Bash prints it.
-    run "printf" with arguments [""] as app_name
+    use value "" as app_name
     run "false"
   otherwise
-    run "printf" with arguments [""] as menu_lines
+    use value "" as menu_lines
     for each path in paths
       run path.remove_suffix with path path and suffix ".desktop" as menu_path_without_suffix
       run path.basename with path menu_path_without_suffix as menu_name
@@ -52,29 +52,24 @@ run "printf" with arguments ["%s\n", app_name]
 pipe to "tr" with arguments ["[:upper:]", "[:lower:]"]
 pipe to "sed" with arguments ["s/[^[:alnum:]]\\+/-/g; s/^-//; s/-$//"]
 pipe to "jq" with arguments ["-Rsj", "sub(\"\\n+$\"; \"\")"] as icon_name
-run "printf" with arguments [""] as desktop_file
+use value "" as desktop_file
 for each path in paths
   if desktop_file is ""
     run path.remove_suffix with path path and suffix ".desktop" as suffixless_path
     run path.basename with path suffixless_path as indexed_name
     if indexed_name is app_name
-      run "printf" with arguments ["%s", path] as desktop_file
+      use value path as desktop_file
 if desktop_file is ""
   run "printf" with arguments ["%s/%s.desktop", desktop_dir, app_name] as selected_desktop
 otherwise
-  run "printf" with arguments ["%s", desktop_file] as selected_desktop
+  use value desktop_file as selected_desktop
 run "rm" with arguments ["-f", selected_desktop]
 run "printf" with arguments ["%s/%s.png", icon_dir, icon_name] as normalized_icon
 run "printf" with arguments ["%s/%s.png", icon_dir, app_name] as named_icon
 run "printf" with arguments ["%s/%s.png", old_icon_dir, app_name] as old_icon
 run "rm" with arguments ["-f", normalized_icon, named_icon, old_icon]
-# Upstream runs under set -e: a failed notification ends the script with its
-# status before the database refresh, and its output streams as Bash prints it
-# (a command streams only when a fresh command follows it, hence the empty
-# printf). The refresh status becomes the script status; its stdout is captured
-# and then replaced by the empty final value, as Bash sends it to /dev/null.
+# Upstream runs under set -e: notification stdout streams, including on failure.
+# The bound database output stays internal, matching Bash redirection to /dev/null.
 if notify is not "false"
   run "omarchy-notification-send" with arguments ["-g", "", "Web app removed", app_name]
-  run "printf" with arguments [""]
 run "update-desktop-database" with arguments [desktop_dir] as database_output and discard stderr
-run "printf" with arguments [""]

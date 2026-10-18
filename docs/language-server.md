@@ -70,6 +70,7 @@ meaning gets a new code. The family names the stage that finds the problem.
 | `source.invisible_format` | validate | source contains a Unicode format control that can change how it is displayed |
 | `check.undefined_name` | validate | a referenced result or input name is not defined at this point |
 | `check.type_mismatch` | type | statically known value types are incompatible at a use site |
+| `check.bound_output_withheld` | validate | a final bound value is internal; explicitly reuse it to produce program stdout |
 | `check.diagnostics.truncated` | validate | more diagnostics were found than the response limit permits |
 | `applet.unknown` | resolve | the operation names no declared applet and is not a quoted executable |
 | `applet.parameter.unknown` | resolve | the applet declares no parameter with this name |

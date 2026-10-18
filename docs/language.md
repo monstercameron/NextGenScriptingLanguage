@@ -698,6 +698,24 @@ no process; `explain` shows it as launching no process. Only text is accepted.
 Structured values are rejected before effects; encode them first with
 `then encode value as json`.
 
+Add `as NAME` to name a literal or another binding without an applet call:
+
+```program
+use value "CLEAR" as state
+use value 3 as attempts
+use value true as enabled
+use value ["one", "two"] as names
+use value {"state": state, "attempts": attempts} as report
+then encode report as json
+```
+
+The binding retains its static type: text, integer, boolean, list of text, or
+JSON for other structured values. References inside lists and records resolve
+when the statement runs. The pipeline representation is text bytes for text,
+and compact JSON for other values, subject to the existing output limit.
+`use value VALUE as NAME` launches no process and produces no implicit stdout.
+Use `use value NAME` to emit text or `then encode NAME as json` to emit JSON.
+
 `accept data as json` accepts a complete JSON value through `--input`, for example
 `--input 'data={"count":7}'`. Inspection and live state expose ordinary JSON
 objects and arrays. Object, null and numeric literals are also available in
@@ -1126,14 +1144,17 @@ explicitly retrying.
 
 A top-level `run` from the CLI's `run` or `resume` command writes its stdout to
 the terminal as it runs when nothing consumes that stdout. Consumers are a
-binding (`as`), `keep result`, `cache`, a following `pipe to`, or any later
-statement that could read the pipeline value. Consumed output keeps the buffered
-behavior and is printed once when it is the program's final value.
+binding (`as`), `keep result`, `keep status`, `cache`, a following `pipe to`, or
+any reachable later statement that reads the pipeline value before it is
+replaced. Consumed output stays buffered. A step whose result is bound never
+becomes implicit program stdout, including file reads, JSON selections, byte
+captures, and task results. The end-of-run print applies only to an unbound
+final value. Buffered bytes remain available to subsequent pipeline consumers.
 
-A `run` is treated as unconsumed when the next statement starts a fresh command
-or the program ends, because a fresh command replaces the value. Inside `if`,
-`repeat`, `for`, `while`, and `try` bodies, output is buffered unless that rule
-holds inside the body, so a block boundary never streams. Native commands inherit
+A `run` is treated as unconsumed when its continuations replace the value or
+end the program without reading it. This includes block boundaries when no
+reachable continuation reads the bytes. Bound reusable-program returns and exceptional
+transfers conservatively retain capture. Native commands inherit
 the terminal stdout. Other applets write their captured bytes after success. A
 failing step has already written any inherited output; its error goes to stderr.
 
@@ -1142,8 +1163,21 @@ streamed bytes reach the caller's stdout without a policy check. Only the CLI's
 top-level finite run streams. Library runs, program modules, TUI
 handlers, services, and listeners keep capture. Streamed output is not bounded by
 `--max-output-bytes`, because it is not captured. A checkpointed run streams the
-same way, but resume does not replay streamed output: a completed run whose final
-output streamed resumes with empty output.
+same way, but resume does not replay committed output: a completed run resumes
+with empty output, including when its final value was explicitly emitted.
+An unbound `await` emits its job's stdout when no continuation consumes it;
+`await ... keep status/result as ...` withholds it until explicitly reused.
+
+Migration: replace literal assignments such as `run "printf" with arguments
+["CLEAR"] as state` with `use value "CLEAR" as state`. Programs that relied on a
+final bound value being printed must explicitly reuse it with unbound `use value`
+(text) or `then encode ... as json` (structured values). `check` warns about a
+final bound value that the old rule would have printed; `explain` marks stdout
+as streamed, a possible unbound final value, or absent. Empty commands used only
+to hide internal final values can be removed. A resumed checkpoint withholds the
+restored final value until an unbound producing step executes. Library callers,
+services and listeners also receive only unbound final output in their run result;
+buffered bytes remain available during execution and in live pipeline state.
 
 The syntax is distinct from `read stdin`, which still refers to a binding named
 `stdin`. Services use `listen to stdin` for UTF-8 records, managed programs use

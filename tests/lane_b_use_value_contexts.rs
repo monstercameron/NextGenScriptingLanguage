@@ -85,5 +85,7 @@ fn checkpointed_use_value_survives_resume() {
         "{}",
         String::from_utf8_lossy(&resumed.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&resumed.stdout).trim(), "5");
+    // The final output streamed during the first run, so a completed resume does not
+    // replay it (#366).
+    assert!(resumed.stdout.is_empty(), "{:?}", resumed.stdout);
 }

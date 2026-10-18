@@ -118,11 +118,7 @@ fn interrupted_job_is_an_uncertain_node_that_needs_explicit_retry() {
     let marker = directory.path().join("started.marker");
     let manifests = controlled_manifests(directory.path(), &marker);
     let workflow = directory.path().join("workflow.program");
-    fs::write(
-        &workflow,
-        "spawn as work\n  run controlled\nawait work and keep status as code\n",
-    )
-    .unwrap();
+    fs::write(&workflow, "spawn as work\n  run controlled\nawait work\n").unwrap();
     let checkpoint = directory.path().join("checkpoint");
     let manifests_text = manifests.to_string_lossy().into_owned();
 
@@ -197,7 +193,7 @@ fn completed_job_checkpoint_matches_plain_run_and_resumes_without_repeating() {
     let workflow = directory.path().join("workflow.program");
     fs::write(
         &workflow,
-        "spawn as work\n  run printf with message \"done\"\ninspect work as state\nawait work and keep status as code\n",
+        "spawn as work\n  run printf with message \"done\"\ninspect work as state\nawait work\n",
     )
     .unwrap();
     let workflow_text = workflow.to_string_lossy().into_owned();
@@ -249,5 +245,8 @@ fn completed_job_checkpoint_matches_plain_run_and_resumes_without_repeating() {
         "{}",
         String::from_utf8_lossy(&resumed.stderr)
     );
-    assert_eq!(resumed.stdout, plain.stdout);
+    assert!(
+        resumed.stdout.is_empty(),
+        "committed job output must not replay"
+    );
 }

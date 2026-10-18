@@ -1159,7 +1159,11 @@ fn validate_range(
                             || call.result_binding.is_some()
                     }
                     StepKind::ParseJson { .. }
+                    | StepKind::BindValue { .. }
                     | StepKind::TakeJson { .. }
+                    | StepKind::TakeJsonDynamic { .. }
+                    | StepKind::CaptureBytes { .. }
+                    | StepKind::TempScope { .. }
                     | StepKind::TaskGroup { .. }
                     | StepKind::SpawnJob { .. }
                     | StepKind::InspectJob { .. }
@@ -1304,6 +1308,22 @@ fn validate_range(
                 }
                 StepKind::UseValue { source } => {
                     validate_text_operand(source, flow, "use value")?;
+                    flow.has_data = true;
+                    flow.stdout_unavailable = false;
+                    flow.started = true;
+                }
+                StepKind::BindValue {
+                    source,
+                    binding: name,
+                } => {
+                    check_value(source, &flow.names)?;
+                    let kind = binding_value_type(source, &flow.types)?;
+                    binding(
+                        &Some(name.clone()),
+                        &mut flow.names,
+                        allow_rebinding || flow.loop_depth > 0,
+                    )?;
+                    flow.bind_type(name, kind)?;
                     flow.has_data = true;
                     flow.stdout_unavailable = false;
                     flow.started = true;
@@ -1756,6 +1776,7 @@ fn validate_range(
                                     | StepKind::ReadStdin { .. }
                                     | StepKind::ReadCallInput { .. }
                                     | StepKind::UseValue { .. }
+                                    | StepKind::BindValue { .. }
                                     | StepKind::CaptureBytes { .. }
                                     | StepKind::UseBytes { .. }
                                     | StepKind::Invoke { .. }
@@ -2035,7 +2056,7 @@ pub fn explain_with_inputs(
             rows.push("listener: producer stays alive; native handler commands launch per record; emitted handler output goes to stdout; EOF, signal, failure or --max-runs stops the service".into());
         }
     }
-    for step in &program.steps {
+    for (index, step) in program.steps.iter().enumerate() {
         let description = match &step.kind {
             StepKind::Loop {
                 kind:
@@ -2121,6 +2142,9 @@ pub fn explain_with_inputs(
             ),
             StepKind::UseValue { source } => {
                 format!("use value {source:?} as pipeline input; launches no process")
+            }
+            StepKind::BindValue { source, binding } => {
+                format!("bind value {source:?} as {binding}; typed binding; launches no process; no program stdout")
             }
             StepKind::CaptureBytes { binding } => {
                 format!("capture pipeline bytes unchanged as {binding}; pipeline continues")
@@ -2317,7 +2341,18 @@ pub fn explain_with_inputs(
                 }
             }
         };
-        rows.push(format!("line {}: {description}", step.line));
+        let stdout = match step.kind.program_stdout() {
+            Some(true)
+                if (matches!(&step.kind, StepKind::Invoke { call, .. } if !call.cache)
+                    || matches!(&step.kind, StepKind::AwaitJob { .. }))
+                    && !crate::ast::has_stdout_consumer(&program.steps, index + 1) =>
+            {
+                "program stdout: stream"
+            }
+            Some(true) => "program stdout: only if this is the final unbound value",
+            _ => "program stdout: none",
+        };
+        rows.push(format!("line {}: {description}; {stdout}", step.line));
     }
     Ok(rows.join("\n"))
 }
@@ -2363,6 +2398,59 @@ fn text_value_bytes(
         _ => bail!(
             "line {line}: use value requires text; encode structured values first with `then encode ... as json`"
         ),
+    }
+}
+
+/// Preserve scalar and text-list types, and retain other literals as JSON.
+fn binding_value_type(
+    value: &Value,
+    types: &BTreeMap<String, crate::ast::InputType>,
+) -> Result<crate::ast::InputType> {
+    use crate::ast::InputType;
+    Ok(match value {
+        Value::Reference(name) => {
+            let kind = *types
+                .get(name)
+                .with_context(|| format!("value binding {name:?} has no known type"))?;
+            if kind == InputType::Bytes {
+                bail!("use value cannot bind bytes; use bytes {name} instead");
+            }
+            kind
+        }
+        Value::String(_) => InputType::Text,
+        Value::Integer(_) => InputType::Integer,
+        Value::Bool(_) => InputType::Boolean,
+        Value::List(items) => {
+            let mut text = true;
+            for item in items {
+                text &= binding_value_type(item, types)? == InputType::Text;
+            }
+            if text {
+                InputType::TextList
+            } else {
+                InputType::Json
+            }
+        }
+        Value::Record(fields) => {
+            for value in fields.values() {
+                binding_value_type(value, types)?;
+            }
+            InputType::Json
+        }
+        _ => InputType::Json,
+    })
+}
+
+/// Bound values retain their type in the name; their pipeline representation is
+/// UTF-8 text or compact JSON. Serialization remains subject to the output bound.
+fn bound_value_bytes(value: &Value, limit: usize) -> Result<Vec<u8>> {
+    if let Value::String(text) = value {
+        if text.len() > limit {
+            bail!("bound value exceeds the output limit of {limit} bytes");
+        }
+        Ok(text.as_bytes().to_vec())
+    } else {
+        crate::structured::encode(value, limit)
     }
 }
 

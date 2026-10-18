@@ -34,6 +34,17 @@ formatter skips generated lockfiles and dependencies. Generated site assets live
 under ignored `docs/playground/`; change source here or the tracked HTML there.
 The Python build helper adds full dependency license texts after bundling.
 
+The browser supports typed, process-free `use value VALUE as NAME` bindings.
+Bound results stay internal; explicitly reuse text with `use value NAME` or
+encode structured values with `then encode NAME as json` to produce stdout.
+Unbound commands stream when no later pipeline consumer needs their bytes.
+The complete browser stdout response remains limited to 1 MiB.
+
+The demos also use `json.parse`, `json.stringify`, `json.set`, and `text.format`.
+Browser `text.format` supports `escape "plain"`; other escape modes and caching
+these four data applets are refused. Set `EXECUTE_TEST_WASM` to test a WASM build
+in a lane-specific target directory without replacing generated site assets.
+
 See the [browser contract](../docs/playground.md), [Rust host](../browser/README.md),
 and [contributor guide](../CONTRIBUTING.md) for execution limits and the full check matrix.
 

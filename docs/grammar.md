@@ -93,12 +93,18 @@ then "cat"
 ## Pipeline input
 
 ```text
-statement   = ... | "use" "value" value | "use" "bytes" NAME
+statement   = ... | "use" "value" value [ "as" NAME ] | "use" "bytes" NAME
 ```
 
 `use value` sets the pipeline input to a text value. `use bytes` sets it from a
 captured byte binding. A following `pipe to` or `then` stage reads those bytes.
 Neither form launches a process.
+
+The optional `as NAME` suffix binds the value with its static type: text,
+integer, boolean, list of text, or JSON. References (including those inside
+lists and records) are resolved before binding. Its pipeline bytes are the text
+itself or compact JSON for other values. A bound result is internal and never
+becomes implicit program stdout.
 
 ```program
 use value "hello"

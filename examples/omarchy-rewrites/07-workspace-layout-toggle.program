@@ -35,11 +35,11 @@ if valid_id is true
   otherwise
     # The source case statement maps an empty jq result to its default arm.
     # Keep that policy explicit after recording a malformed second response.
-    run "printf" with arguments [""] as current_layout
+    use value "" as current_layout
   if current_layout is "dwindle"
-    run "printf" with arguments ["%s", "scrolling"] as new_layout
+    use value "scrolling" as new_layout
   otherwise
-    run "printf" with arguments ["%s", "dwindle"] as new_layout
+    use value "dwindle" as new_layout
   run "printf" with arguments ["%s/.local/state/omarchy/workspace-layouts", home] as layouts_dir
   run "printf" with arguments ["%s/%s.lua", layouts_dir, workspace_id] as layout_file
   run "printf" with arguments ["hl.workspace_rule({ workspace = \"%s\", layout = \"%s\" })\n", workspace_id, new_layout] as layout_content
@@ -62,15 +62,12 @@ if valid_id is true
   run "printf" with arguments ["Workspace layout set to %s", new_layout] as notification
   if eval_status is 0
     run "omarchy-notification-send" with arguments ["-g", "󱂬", notification]
-    run "printf" with arguments [""]
   otherwise
     run "printf" with arguments ["%s, layout:%s", workspace_id, new_layout] as keyword_rule
     # Bash prints the keyword output, also when it fails, and still notifies.
-    # `keep status` captures, so the output is named and written back out; the
-    # fresh notification command that follows lets that write stream.
+    # Captured stdout is explicitly emitted before the notification.
     run "hyprctl" with arguments ["keyword", "workspace", keyword_rule] as keyword_output and keep status as keyword_status
     run "printf" with arguments ["%s", keyword_output]
     run "omarchy-notification-send" with arguments ["-g", "󱂬", notification]
-    run "printf" with arguments [""]
 otherwise
   run "false"

@@ -271,7 +271,7 @@ fn parallel_for_each_runs_every_element_and_keeps_failures_as_records() {
 #[test]
 fn parallel_for_each_of_an_empty_list_returns_empty_records() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source = "parallel for each word in [] at most 4 as results\n  run text.concat with parts [word, \"!\"] and separator \"\"\n";
+    let source = "parallel for each word in [] at most 4 as results\n  run text.concat with parts [word, \"!\"] and separator \"\"\nthen encode results as json\n";
     let program = flow::parser::parse(source)?;
     let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
     let options = flow::runtime::RunOptions {
@@ -348,7 +348,7 @@ fn parallel_for_each_bounds_concurrent_direct_executables() -> Result<()> {
         "#!/bin/sh\nmkdir \"active.$1\"\nls -d active.* | wc -l | tr -d ' ' >> seen\nsleep 0.2\nrmdir \"active.$1\"\nprintf 'done %s\\n' \"$1\"\n",
     )?;
     let source = format!(
-        "parallel for each n in [\"1\", \"2\", \"3\", \"4\", \"5\", \"6\"] at most 2 as results\n  run {} with arguments [n]\n",
+        "parallel for each n in [\"1\", \"2\", \"3\", \"4\", \"5\", \"6\"] at most 2 as results\n  run {} with arguments [n]\nthen encode results as json\n",
         quote_path(&worker)?
     );
     let manifests = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
@@ -655,7 +655,7 @@ fn task_group_starts_only_the_configured_number_of_workers_before_the_barrier() 
         root.join("three.started"),
     ];
     let source = format!(
-        "parallel at most 2 as result\n  run fixture.barrier with started {} and gate {} as one\n  run fixture.barrier with started {} and gate {} as two\n  run fixture.barrier with started {} and gate {} as three\n",
+        "parallel at most 2 as result\n  run fixture.barrier with started {} and gate {} as one\n  run fixture.barrier with started {} and gate {} as two\n  run fixture.barrier with started {} and gate {} as three\nthen encode result as json\n",
         quote_path(&started[0])?,
         quote_path(&gate)?,
         quote_path(&started[1])?,

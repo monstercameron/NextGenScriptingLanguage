@@ -264,8 +264,8 @@ fn scripted_session_pauses_inspects_steps_continues_and_terminates() {
     assert_eq!(exited["body"]["exitCode"], 0, "{exited}");
     client.event("terminated");
 
-    // Plain run prints the loop's final value, so the output is `b`.
-    assert_eq!(client.output(), "b\n");
+    // Every unconsumed iteration writes its stdout in order.
+    assert_eq!(client.output(), "a\nb\n");
 
     let disconnected = client.request("disconnect", json!({}));
     assert_eq!(disconnected["success"], true, "{disconnected}");

@@ -220,16 +220,26 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         exit: None,
     };
     let mut execution_history = execution_result::ExecutionHistory::default();
+    // This name cannot be written in source. Checkpoints retain stdout eligibility
+    // separately from pipeline bytes, which remain available to later consumers.
+    const STDOUT_ELIGIBILITY: &str = "@execute/program-stdout";
+    let mut program_stdout = true;
     // The step index of a declared retry in progress, and its failed attempts so far.
     let mut retry_failures: Option<(usize, u32)> = None;
     let mut index = 0;
     let mut call_frames: Vec<calls::Frame<'_>> = Vec::new();
+    let mut bound_call_depths = Vec::new();
     let mut loop_frames = loops::LoopStack::default();
     let mut temp_scopes = temp::ScopeStack::default();
     let mut control_state = control_flow::RuntimeState::default();
     if let Some(journal) = journal.as_deref_mut() {
         if state_source == FiniteStateSource::Restore {
             let mut state = journal.take_restored_state()?;
+            state.bindings.remove(STDOUT_ELIGIBILITY);
+            // Restored bytes remain pipeline input, but a committed value was
+            // already delivered by its original run. Only newly executed value
+            // producers may make the resumed run's final output eligible.
+            program_stdout = false;
             // The declared inputs join the restored bindings before anything reads
             // them: with no completed node yet, the restored state is the initial
             // one, and a first loop over an input resolves its list from it.
@@ -247,6 +257,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     resumed.consumed,
                 )?;
                 state = resumed.state;
+                state.bindings.remove(STDOUT_ELIGIBILITY);
             }
             cwd = enter_directory(registry, &state.cwd, &cwd)?;
             bindings = state.bindings;
@@ -552,13 +563,16 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 signals,
                                 options.command_timeout,
                             )?;
+                            let mut element_bindings = bindings.clone();
+                            element_bindings
+                                .insert(STDOUT_ELIGIBILITY.to_owned(), Value::Bool(program_stdout));
                             checkpoint::elements::for_each_element_commit(
                                 journal,
                                 &loop_frames,
                                 header,
                                 &cwd,
                                 &bytes,
-                                &bindings,
+                                &element_bindings,
                             )?;
                             data = Input::Bytes(bytes);
                         }
@@ -642,6 +656,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         bindings: std::mem::replace(&mut bindings, child),
                         cwd: cwd.duplicate()?,
                     });
+                    if call.binding.is_some() {
+                        bound_call_depths.push(call_frames.len());
+                    }
                     if *connection == Connection::Start {
                         data = Input::Empty;
                     }
@@ -661,6 +678,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     })?;
                     control_state.leave_call(index + 1)?;
                     let frame = call_frames.pop().context("program return without call")?;
+                    if frame.binding.is_some() {
+                        program_stdout = false;
+                    }
                     bindings = frame.bindings;
                     cwd = frame.cwd;
                     if let Some(name) = frame.binding {
@@ -829,6 +849,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::UseValue { source } => {
                     data = Input::Bytes(text_value_bytes(source, &bindings, step.line)?);
+                }
+                StepKind::BindValue { source, binding } => {
+                    let value = resolve(source, &bindings)?;
+                    data = Input::Bytes(bound_value_bytes(&value, options.max_output_bytes)?);
+                    bindings.insert(binding.clone(), value);
                 }
                 StepKind::CaptureBytes { binding } => {
                     let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
@@ -1180,6 +1205,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         bindings.insert(binding.clone(), value);
                     }
                     data = Input::Bytes(terminal.stdout.take().unwrap_or_default());
+                    if stream_top
+                        && status_binding.is_none()
+                        && result_binding.is_none()
+                        && !crate::ast::has_stdout_consumer(&program.steps, index + 1)
+                    {
+                        if let Input::Bytes(bytes) = &data {
+                            if !observe::suppresses_terminal_output(step.line) {
+                                write_streamed_stdout(bytes, signals)?;
+                            }
+                        }
+                        data = Input::Empty;
+                    }
                     lazy_event(
                         options.trace,
                         signals,
@@ -1883,6 +1920,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             }
             Ok(())
         })();
+        if execution.is_ok() {
+            if let Some(eligible) = program.steps[index].kind.program_stdout() {
+                program_stdout = eligible;
+            }
+        }
         // A declared retry runs the command again from its first marker. The journal
         // node stays open, because the step has not completed.
         let execution = match execution {
@@ -1998,6 +2040,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         // An exit ends the run at the program boundary. Checkpoint validation
         // allows it only as a top-level statement, so the in-flight node is the
         // exit step itself and completes here as the terminal node.
+        while bound_call_depths
+            .last()
+            .is_some_and(|depth| *depth > call_frames.len())
+        {
+            bound_call_depths.pop();
+            program_stdout = false;
+        }
         let exited = control_state.exit_pending();
         index = jump_to.unwrap_or(index + 1);
         if let Some(journal) = journal.as_deref_mut().filter(|_| {
@@ -2014,7 +2063,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             journal.complete_node_parts(
                 &cwd,
                 &bytes,
-                bindings.iter().map(|(name, value)| (name.as_str(), value)),
+                bindings
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value))
+                    .chain(std::iter::once((
+                        STDOUT_ELIGIBILITY,
+                        &Value::Bool(program_stdout),
+                    ))),
             )?;
             data = Input::Bytes(bytes);
             lazy_event(
@@ -2049,6 +2104,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             bindings,
             data: result.output.clone(),
         };
+    }
+    if !program_stdout {
+        result.output.clear();
     }
     result.executions = execution_history.executions;
     result.dropped_executions = execution_history.dropped_executions;

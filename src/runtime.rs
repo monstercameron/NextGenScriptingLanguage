@@ -1735,8 +1735,8 @@ impl Drop for InheritTerminalStdout {
 
 /// Static consumer rule for uncaptured stdout. A fresh `run` whose output can
 /// only be replaced, or that ends the program, has no consumer and may stream.
-/// Anything that could read the pipeline value (`then`, `pipe to` continuation,
-/// structured steps, enclosing block boundaries) keeps today's buffering.
+/// Bindings (including status/result capture), cache, and reachable pipeline
+/// consumers retain buffering. Control markers alone do not consume stdout.
 fn streams_terminal_stdout(program: &Program, index: usize) -> bool {
     let Some(crate::ast::Step {
         kind:
@@ -1773,18 +1773,7 @@ fn streams_terminal_stdout(program: &Program, index: usize) -> bool {
         }
         end += 1;
     }
-    match program.steps.get(end).map(|step| &step.kind) {
-        None => true,
-        Some(StepKind::Invoke {
-            connection: Connection::Start,
-            ..
-        })
-        | Some(StepKind::CallProgram {
-            connection: Connection::Start,
-            ..
-        }) => true,
-        Some(_) => false,
-    }
+    !crate::ast::has_stdout_consumer(&program.steps, end)
 }
 
 /// Write one streamed step's captured bytes. Native commands that inherit
@@ -3384,6 +3373,7 @@ pub(crate) fn workflow_sensitivity_floor(
             | StepKind::EndTry
             | StepKind::UseFolder { .. }
             | StepKind::UseValue { .. }
+            | StepKind::BindValue { .. }
             | StepKind::CaptureBytes { .. }
             | StepKind::UseBytes { .. }
             | StepKind::Read { .. }

@@ -28,7 +28,7 @@ accept theme_file as text with default ""
 if theme_file is ""
   run "printf" with arguments ["%s/.local/state/omarchy/current/theme/chromium.theme", home] as theme_path
 otherwise
-  run "printf" with arguments ["%s", theme_file] as theme_path
+  use value theme_file as theme_path
 run "test" with arguments ["-f", theme_path] and keep status as theme_exists
 if theme_exists is 0
   run fs.snapshot with path theme_path as theme_snapshot and keep status as theme_read_status
@@ -42,21 +42,18 @@ if theme_exists is 0
     otherwise
       run "printf" with arguments ["Could not parse browser theme color; using 1c2027.\n"]
       then "awk" with arguments ["{ print > \"/dev/stderr\" }"]
-      run "printf" with arguments ["1c2027"] as color
+      use value "1c2027" as color
   otherwise
     take text at "/outcome" from theme_snapshot as read_outcome
     if read_outcome is "absence"
-      run "printf" with arguments ["1c2027"] as color
+      use value "1c2027" as color
     otherwise
       run "printf" with arguments ["Could not read browser theme file (status %s); using 1c2027.\n", theme_read_status]
       then "awk" with arguments ["{ print > \"/dev/stderr\" }"]
-      run "printf" with arguments ["1c2027"] as color
+      use value "1c2027" as color
 otherwise
-  run "printf" with arguments ["1c2027"] as color
-# `keep status` captures stdout, so the policy output is named and printed again.
-# A command streams only when a fresh command follows it; the refresh call below
-# does, so the printf reaches stdout at once, as Bash prints the policy output
-# on success and on failure.
+  use value "1c2027" as color
+# Captured policy stdout is explicitly emitted, on success and failure.
 run "omarchy-theme-set-browser-policy" with arguments [color] as policy_output and keep status as policy_status
 run "printf" with arguments ["%s", policy_output]
 run program refresh_browser with process "chromium" and command "chromium" as chromium_status
@@ -67,9 +64,7 @@ if chrome_status is not "0"
 run program refresh_browser with process "msedge" and command "microsoft-edge-stable" as edge_status
 run program refresh_browser with process "brave" and command "brave" as brave_status
 run program refresh_browser with process "/opt/brave-origin-bin/" and command "brave-origin" and match_flag "-f" as brave_origin_status
-if policy_status is 0
-  run "printf" with arguments [""]
-otherwise
+if policy_status is not 0
   # Normalize every policy error to 1 after all refreshes, matching Bash's failed=1.
   # The policy utility's stdout was written above and is kept on failure, as in Bash.
   run "false"

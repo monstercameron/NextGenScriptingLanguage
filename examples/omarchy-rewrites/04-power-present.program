@@ -21,15 +21,15 @@ if root_directory is 0
       run "find" with arguments [".", "-mindepth", "1", "-maxdepth", "1", "!", "-name", ".*", "-print0"]
       pipe to "jq" with arguments ["-Rs", "split(\"\\u0000\")[:-1] | sort"]
     otherwise
-      run "printf" with arguments ["[]"]
+      use value "[]"
   otherwise
-    run "printf" with arguments ["[]"]
+    use value "[]"
 otherwise
-  run "printf" with arguments ["[]"]
+  use value "[]"
 then parse json as entries
 take list of text at "" from entries as supplies
 
-run "test" with arguments ["0", "=", "1"] and keep status as found
+use value 1 as found
 for each supply in supplies
   # Execute currently has no break/exit. Guard every later iteration after success.
   if found is not 0

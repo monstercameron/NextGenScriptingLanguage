@@ -174,6 +174,7 @@ fn native_references(handler: &Handler) -> BTreeSet<String> {
             match &step.kind {
                 crate::ast::StepKind::UseFolder { path }
                 | crate::ast::StepKind::UseValue { source: path }
+                | crate::ast::StepKind::BindValue { source: path, .. }
                 | crate::ast::StepKind::Read { path, .. }
                 | crate::ast::StepKind::Save { path, .. }
                 | crate::ast::StepKind::Append { path } => references(path, &mut needed),

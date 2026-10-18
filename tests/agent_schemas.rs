@@ -277,6 +277,19 @@ run program inner\n";
     let object: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_conforms("docs/schemas/explain.v1.schema.json", &object);
 
+    for (field, value) in [
+        ("program_stdout", json!(true)),
+        ("binding", json!(7)),
+        ("enforcement", json!("unchecked")),
+    ] {
+        let mut damaged = object.clone();
+        damaged["steps"][0][field] = value;
+        assert_rejects("docs/schemas/explain.v1.schema.json", &damaged);
+    }
+    let mut damaged = object.clone();
+    damaged["execution_mode"] = json!("unchecked");
+    assert_rejects("docs/schemas/explain.v1.schema.json", &damaged);
+
     let mut without_undeclared = object.clone();
     without_undeclared["steps"][0]
         .as_object_mut()

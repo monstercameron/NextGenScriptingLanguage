@@ -64,6 +64,15 @@ pub struct Response {
 }
 
 impl Response {
+    fn append_stdout(&mut self, bytes: &[u8]) -> Result<()> {
+        let text = String::from_utf8_lossy(bytes);
+        if self.stdout.len().saturating_add(text.len()) > LIMIT {
+            bail!("stdout exceeds 1 MiB browser limit");
+        }
+        self.stdout.push_str(&text);
+        Ok(())
+    }
+
     fn push_trace(&mut self, value: impl FnOnce() -> serde_json::Value) {
         if self.trace_truncated {
             return;
@@ -120,6 +129,10 @@ impl Default for BrowserSession {
             include_str!("../manifests/sort.json"),
             include_str!("../manifests/uniq.json"),
             include_str!("../manifests/wc.json"),
+            include_str!("../manifests/core.json_parse.json"),
+            include_str!("../manifests/core.json_stringify.json"),
+            include_str!("../manifests/core.json_set.json"),
+            include_str!("../manifests/core.text_format.json"),
         ];
         Self {
             files: BTreeMap::new(),
@@ -254,6 +267,12 @@ impl BrowserSession {
                 );
             }
             if let StepKind::Invoke { call, .. } = &step.kind {
+                if core::supports(call) && call.cache {
+                    bail!(
+                        "line {}: browser data applets do not support cache",
+                        step.line
+                    );
+                }
                 let manifest = self.registry.resolve_call(call)?;
                 let binary = manifest.binary_for(call);
                 if call.direct && binary == "cd" {
@@ -262,7 +281,7 @@ impl BrowserSession {
                         step.line
                     );
                 }
-                if !APPLETS.contains(&binary) {
+                if !APPLETS.contains(&binary) && !core::supports(call) {
                     bail!(
                         "line {}: {binary:?} is unavailable in the browser; use native execute",
                         step.line
@@ -285,6 +304,7 @@ impl BrowserSession {
         let mut data = Vec::new();
         let mut stdin = Some(request.stdin.as_bytes().to_vec());
         let mut index = 0;
+        let mut program_stdout = true;
         while index < program.steps.len() {
             let step = &program.steps[index];
             let mut jump = None;
@@ -369,6 +389,9 @@ impl BrowserSession {
                     }
                     StepKind::EndCall => {
                         let frame = frames.pop().context("program return without call")?;
+                        if frame.binding.is_some() {
+                            program_stdout = false;
+                        }
                         bindings = frame.bindings;
                         cwd = frame.cwd.path().to_path_buf();
                         bind_text(frame.binding, &data, &mut bindings)?;
@@ -388,6 +411,11 @@ impl BrowserSession {
                     }
                     StepKind::UseValue { source } => {
                         data = text_value_bytes(source, &bindings, step.line)?;
+                    }
+                    StepKind::BindValue { source, binding } => {
+                        let value = resolve(source, &bindings)?;
+                        data = bound_value_bytes(&value, LIMIT)?;
+                        bindings.insert(binding.clone(), value);
                     }
                     StepKind::UseFolder { path } => {
                         let next = path_value(path, &bindings, &cwd)?;
@@ -468,6 +496,7 @@ impl BrowserSession {
                         };
                         let cached = key.as_ref().and_then(|key| self.cache.get(key)).cloned();
                         let hit = cached.is_some();
+                        let mut typed_value = None;
                         let (output, status) = match cached {
                             Some(bytes) => {
                                 response.cache_hits += 1;
@@ -475,7 +504,17 @@ impl BrowserSession {
                             }
                             None => {
                                 response.applet_calls += 1;
-                                self.applet(&binary, &argv, &data, &cwd.to_string_lossy())?
+                                if core::supports(call) {
+                                    let value = core::execute(call, &bindings, &data)?;
+                                    let mut bytes = bound_value_bytes(&value, LIMIT)?;
+                                    if !matches!(value, Value::String(_)) {
+                                        bytes.push(b'\n');
+                                    }
+                                    typed_value = Some(value);
+                                    (bytes, 0)
+                                } else {
+                                    self.applet(&binary, &argv, &data, &cwd.to_string_lossy())?
+                                }
                             }
                         };
                         let outcome = manifest.outcome_for(status);
@@ -500,8 +539,20 @@ impl BrowserSession {
                             self.cache.insert(key.expect("cache requested"), entry);
                         }
                         data = output;
-                        bind_applet_output(call, &manifest, &data, status, &mut bindings)?;
-                        response.push_trace(|| serde_json::json!({"line":step.line,"operation":binary,"argv":argv,"input_bytes":input_bytes,"output_bytes":data.len(),"cache_hit":hit,"status":status}));
+                        if let (Some(name), Some(value)) = (&call.binding, typed_value) {
+                            bindings.insert(name.clone(), value);
+                        } else {
+                            bind_applet_output(call, &manifest, &data, status, &mut bindings)?;
+                        }
+                        let output_bytes = data.len();
+                        if !call.cache
+                            && call.program_stdout_unbound()
+                            && !crate::ast::has_stdout_consumer(&program.steps, index + 1)
+                        {
+                            response.append_stdout(&data)?;
+                            data.clear();
+                        }
+                        response.push_trace(|| serde_json::json!({"line":step.line,"operation":binary,"argv":argv,"input_bytes":input_bytes,"output_bytes":output_bytes,"cache_hit":hit,"status":status}));
                     }
                 }
                 if data.len() > LIMIT {
@@ -510,9 +561,14 @@ impl BrowserSession {
                 Ok(())
             })();
             execution.with_context(|| format!("line {}", step.line))?;
+            if let Some(eligible) = step.kind.program_stdout() {
+                program_stdout = eligible;
+            }
             index = jump.unwrap_or(index + 1);
         }
-        response.stdout = String::from_utf8_lossy(&data).into_owned();
+        if program_stdout {
+            response.append_stdout(&data)?;
+        }
         // Workflow cwd is local, matching native execute. Terminal cd persists separately.
         Ok(())
     }
@@ -688,3 +744,5 @@ fn command_words(source: &str) -> Result<Vec<String>> {
 
 #[path = "browser/applets.rs"]
 mod applets;
+#[path = "browser/core.rs"]
+mod core;

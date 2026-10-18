@@ -27,17 +27,17 @@ fn checkpointed_try_and_on_exit_run_their_handlers() {
         (
             "try\n  then fail\ncatch error\n  run printf with message \"caught\"\nfinally\n  run printf with message \"finally\"\n",
             true,
-            "finally\n",
+            "caught\nfinally\n",
         ),
         (
             "run printf with message \"before\"\non exit\n  run printf with message \"cleanup\"\n",
             true,
-            "cleanup\n",
+            "before\ncleanup\n",
         ),
         (
             "run printf with message \"before\"\nthen fail\non exit\n  run printf with message \"cleanup\"\n",
             false,
-            "",
+            "cleanup\n",
         ),
     ] {
         let checkpoint = directory.path().join("checkpoint");

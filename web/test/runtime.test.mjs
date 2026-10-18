@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { connect } from '../abi.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const bytes = await readFile(path.join(root, 'docs/playground/execute.wasm'));
+const bytes = await readFile(
+  process.env.EXECUTE_TEST_WASM ?? path.join(root, 'docs/playground/execute.wasm'),
+);
 const module = await WebAssembly.compile(bytes);
 const examples = JSON.parse(await readFile(new URL('../examples.json', import.meta.url)));
 const fixtures = JSON.parse(await readFile(new URL('../fixtures.json', import.meta.url)));
@@ -236,7 +238,7 @@ test('loop trace stays bounded and iteration-budget errors preserve worker usabi
   const oversized = good(
     run(
       call,
-      'accept message as text\nrepeat 100 times\n  run "printf" with arguments ["%s", message]',
+      'accept message as text\nrepeat 100 times\n  run "printf" with arguments ["%s", message] as sample',
       { inputs: { message: 'x'.repeat(64 * 1024) } },
     ),
   );
@@ -248,7 +250,7 @@ test('loop trace stays bounded and iteration-budget errors preserve worker usabi
 test('trace byte budget preserves exact UTF8 and escaped JSON boundaries per request', async () => {
   const call = await session();
   const source =
-    'accept message as text\nrepeat 200 times\n  run "printf" with arguments ["%s", message]';
+    'accept message as text\nuse value "" as sample\nrepeat 200 times\n  run "printf" with arguments ["%s", message] as sample\nuse value sample';
   for (const message of ['small', '雪'.repeat(4000), '"\\\u0001\n\r\t\b\f'.repeat(2000)]) {
     for (let repeat = 0; repeat < 2; repeat++) {
       const response = good(run(call, source, { inputs: { message } }));

@@ -94,6 +94,8 @@ struct Row {
     undeclared: bool,
     /// The declared `and retry` policy, shown on the command it applies to.
     retry: Option<Json>,
+    program_stdout: Option<&'static str>,
+    binding: Option<String>,
 }
 
 impl Row {
@@ -139,6 +141,8 @@ impl Row {
             "undeclared": self.undeclared,
             "privileged": row_privileged(self),
             "retry": self.retry,
+            "program_stdout": self.program_stdout.unwrap_or("none"),
+            "binding": self.binding,
         })
     }
 }
@@ -251,6 +255,17 @@ impl Walker<'_> {
                 _ => None,
             };
             let before = self.rows.len();
+            let stdout = match step.kind.program_stdout() {
+                Some(true)
+                    if (matches!(&step.kind, StepKind::Invoke { call, .. } if !call.cache)
+                        || matches!(&step.kind, StepKind::AwaitJob { .. }))
+                        && !crate::ast::has_stdout_consumer(steps, index + 1) =>
+                {
+                    "stream"
+                }
+                Some(true) => "unbound_final_value",
+                _ => "none",
+            };
             let id = ids[index].clone();
             match (&step.kind, target) {
                 (StepKind::CallProgram { call, .. }, Some(target)) => {
@@ -264,6 +279,9 @@ impl Walker<'_> {
             }
             // Rows from a nested body already carry their own ids; this step's rows take its id.
             for row in &mut self.rows[before..] {
+                if row.program_stdout.is_none() {
+                    row.program_stdout = Some(stdout);
+                }
                 row.id.get_or_insert_with(|| id.clone());
             }
         }
@@ -341,6 +359,12 @@ impl Walker<'_> {
                 self.rows.push(row);
             }
             StepKind::UseValue { .. } => self.push_plain(line, "use_value", scope),
+            StepKind::BindValue { binding, .. } => {
+                let mut row = Row::plain(line, "bind_value", scope);
+                row.binding = Some(binding.clone());
+                row.process = Some(false);
+                self.rows.push(row);
+            }
             StepKind::CaptureBytes { .. } => self.push_plain(line, "capture_bytes", scope),
             StepKind::UseBytes { .. } => self.push_plain(line, "use_bytes", scope),
             StepKind::OnInterrupt { .. } => self.push_plain(line, "on_interrupt", scope),

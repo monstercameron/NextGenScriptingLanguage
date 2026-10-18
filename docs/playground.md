@@ -66,9 +66,10 @@ written, and the same programs produce the same bytes under native Execute:
 - There is no arithmetic and equality is the only comparison on numbers. Counts come
   from `wc -l` through the `count lines` applet, ISO dates compare by sorting two of
   them, and thresholds are lists of literal patterns.
-- Reports accumulate in text bindings that a loop rebinds
-  (`run "printf" with arguments ["%s%s\n", report, row] as report`), and a pipeline
-  value can flow through a loop, as in the allowlist filter of the ports audit.
+- Name a literal directly with `use value "CLEAR" as state`. For a JSON report,
+  build its object fields from literals and bindings, then use `json.stringify`;
+  append loop results to a typed list with `json.set` at `"/-"`. Use `text.format`
+  for text that needs placeholders or escaping.
 - Set differences use `sort | uniq -c` over the files concatenated with one of them
   repeated, so a count of 1 or 2 shows which file a line came from.
 - `grep` is literal only, so patterns such as `" ERROR "` or `"from 203.0.113."` stand
@@ -118,6 +119,8 @@ and live-control sockets are native-only and are rejected here.
 | `cat` | Literal file paths or pipeline input, `--`, `-` for the provided input. No other options. |
 | `echo` | Literal argv joined by spaces, optional `-n`; no escape expansion. Quoted direct calls only. |
 | `printf` | A single format pass: `%s`, signed `%d`, `%%`, `\n`, `\r`, `\t`, `\\`. No width/precision, repeated format, or `%b`. |
+| `json.parse`, `json.stringify`, `json.set` | Parse, serialize, or update a typed JSON value. `json.set` can append to an existing list with pointer `"/-"`. |
+| `text.format` | Fill `{{name}}` placeholders from named values with an explicit escape mode. |
 | `sort` | Pipeline input, `-r`, `-u`, `--`; UTF-8 byte order, no locale or numeric mode. |
 | `uniq` | Adjacent input lines, optional `-c`; counts use a seven-column field. |
 | `wc` | Pipeline input; one of `-l`, `-w`, `-c`, or all three by default. Compact decimal output; byte count for `-c`, Unicode whitespace for `-w`. |

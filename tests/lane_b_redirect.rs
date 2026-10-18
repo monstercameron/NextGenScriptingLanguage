@@ -73,7 +73,8 @@ fn stderr_appended_accumulates_across_commands() {
 
 #[test]
 fn stderr_merged_moves_stderr_into_stdout() {
-    let (_directory, output) = run(&failing_command("and stderr merged"));
+    let (_directory, output) = run(&(failing_command("and stderr merged")
+        + "then capture bytes as combined\nuse bytes combined\n"));
     assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("could not read workflow"),

@@ -36,6 +36,11 @@ pub struct CodeInfo {
 /// meaning gets a new code, and the family is documented per code.
 pub const CODES: &[CodeInfo] = &[
     CodeInfo {
+        code: "check.bound_output_withheld",
+        family: "validate",
+        meaning: "a final bound value is internal; explicitly reuse it to produce program stdout",
+    },
+    CodeInfo {
         code: "parse.lexical",
         family: "parse",
         meaning: "a line has an unterminated or invalid quoted or bracketed token",
@@ -321,6 +326,19 @@ pub fn analyze_source_at(
     };
     match crate::program_files::parse_at(source, path, Some(access)) {
         Ok(program) => {
+            if let Some(step) = program
+                .steps
+                .last()
+                .filter(|step| step.kind.program_stdout() == Some(false))
+            {
+                diagnostics.push(Diagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    code: "check.bound_output_withheld".into(),
+                    message: "the final bound value is internal and will not be printed; use an unbound `use value NAME` for text or `then encode NAME as json` to emit it".into(),
+                    span: line_starts.span(source, step.line),
+                    fixes: Vec::new(),
+                });
+            }
             collect_program_diagnostics(source, &program, registry, &line_starts, &mut diagnostics);
             collect_pipeline_diagnostics(
                 source,
@@ -596,7 +614,15 @@ fn collect_program_diagnostics(
         }
     }
     let mut top_level_types = known_types.clone();
-    for (index, (line, call)) in calls.into_iter().enumerate() {
+    for step in &program.steps {
+        if let StepKind::BindValue { source, binding } = &step.kind {
+            if let Some(kind) = known_value_type(source, &known_types) {
+                record_binding_type(&mut known_types, &mut ambiguous_types, binding, kind);
+            }
+        }
+    }
+    top_level_types.clone_from(&known_types);
+    for (index, (line, call)) in calls.iter().copied().enumerate() {
         for value in call.parameters.values() {
             collect_undefined_references(
                 source,
@@ -653,6 +679,31 @@ fn collect_program_diagnostics(
             top_level_types.clone_from(&known_types);
         }
         add_call_bindings(call, &mut known_names);
+    }
+    // Aliases can name typed results learned while walking calls. Resolve those
+    // types before checking their later uses (diagnostics are deduplicated below).
+    for step in &program.steps {
+        if let StepKind::BindValue { source, binding } = &step.kind {
+            if let Some(kind) = known_value_type(source, &top_level_types) {
+                record_binding_type(&mut top_level_types, &mut ambiguous_types, binding, kind);
+            }
+        }
+    }
+    for (line, call) in calls.iter().take(top_level_call_count).copied() {
+        if call.direct {
+            continue;
+        }
+        if let Ok(manifest) = registry.resolve_call(call) {
+            validate_call(
+                source,
+                line,
+                call,
+                manifest,
+                &top_level_types,
+                line_starts,
+                diagnostics,
+            );
+        }
     }
     collect_condition_type_mismatches(
         source,
@@ -713,6 +764,7 @@ fn collect_non_call_bindings(steps: &[Step], known_names: &mut BTreeSet<String>)
             | StepKind::Catch { binding, .. }
             | StepKind::TempScope { binding, .. }
             | StepKind::ParseJson { binding }
+            | StepKind::BindValue { binding, .. }
             | StepKind::TakeJson { binding, .. }
             | StepKind::TakeJsonDynamic { binding, .. }
             | StepKind::CaptureBytes { binding } => {
@@ -849,7 +901,9 @@ fn collect_step_value_references(
                 values.extend(status.iter());
             }
             StepKind::UseFolder { path } | StepKind::Read { path, .. } => values.push(path),
-            StepKind::UseValue { source } | StepKind::EncodeJson { source } => values.push(source),
+            StepKind::UseValue { source }
+            | StepKind::BindValue { source, .. }
+            | StepKind::EncodeJson { source } => values.push(source),
             StepKind::TakeJson { source, .. } => values.push(source),
             StepKind::TakeJsonDynamic {
                 pointer, source, ..
@@ -915,6 +969,7 @@ fn collect_step_value_references(
                 known_names.extend(binding.iter().cloned());
             }
             StepKind::ParseJson { binding }
+            | StepKind::BindValue { binding, .. }
             | StepKind::TakeJson { binding, .. }
             | StepKind::TakeJsonDynamic { binding, .. } => {
                 known_names.insert(binding.clone());
@@ -1010,7 +1065,8 @@ fn known_value_type(
         Value::Integer(_) => Some(OutputType::Integer),
         Value::Number(_) => Some(OutputType::Number),
         Value::Bool(_) => Some(OutputType::Boolean),
-        Value::Null | Value::List(_) | Value::Record(_) => None,
+        Value::List(_) => Some(OutputType::List),
+        Value::Null | Value::Record(_) => Some(OutputType::Json),
     }
 }
 

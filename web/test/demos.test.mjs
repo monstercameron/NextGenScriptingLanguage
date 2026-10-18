@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { connect } from '../abi.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const module = await WebAssembly.compile(
-  await readFile(path.join(root, 'docs/playground/execute.wasm')),
+  await readFile(process.env.EXECUTE_TEST_WASM ?? path.join(root, 'docs/playground/execute.wasm')),
 );
 const examples = JSON.parse(await readFile(new URL('../examples.json', import.meta.url)));
 const fixtures = JSON.parse(await readFile(new URL('../fixtures.json', import.meta.url)));

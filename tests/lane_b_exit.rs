@@ -88,7 +88,7 @@ finally
   run printf with message "cleanup"
 "#);
     assert_eq!(status(&output), 3, "{}", stderr(&output));
-    assert_eq!(stdout(&output), "cleanup\n");
+    assert_eq!(stdout(&output), "body\ncleanup\n");
 }
 
 #[test]
@@ -136,7 +136,7 @@ if "a" is "b"
 run printf with message "end"
 "#);
     assert_eq!(status(&output), 0, "{}", stderr(&output));
-    assert_eq!(stdout(&output), "end\n");
+    assert_eq!(stdout(&output), "start\nend\n");
 
     let (_directory, output) = run(r#"if "a" is "a"
   fail with message "taken" and status 9
@@ -345,7 +345,10 @@ fn checkpointed_exit_is_terminal_and_resume_keeps_status() {
         .arg(&checkpoint);
     let output = resumed.output().unwrap();
     assert_eq!(status(&output), 3, "{}", stderr(&output));
-    assert_eq!(stdout(&output), "one\n");
+    assert!(
+        stdout(&output).is_empty(),
+        "committed output must not replay"
+    );
 }
 
 #[test]

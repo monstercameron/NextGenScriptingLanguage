@@ -190,17 +190,46 @@ enum Manifests {
     Bundled {
         index: &'static bundled_manifests::BundledIndex,
         root: PathBuf,
-        load_root: PathBuf,
         cells: Vec<OnceLock<Manifest>>,
+        /// Whether each entry's file still has its indexed size, checked on first use.
         verified: Vec<OnceLock<bool>>,
-        fallback: OnceLock<std::result::Result<Registry, String>>,
     },
+}
+
+/// How much of the default manifest directory is compared with the bundled index
+/// before a registry is built from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManifestCheck {
+    /// File names at load time; each file's size when its manifest is first used. A
+    /// changed file then fails closed: the registry never switches to disk content
+    /// after it has handed manifests out, so preflight and execution see the same set.
+    Lazy,
+    /// Every file's size at load time. Any difference selects the full load from the
+    /// directory, with its errors. `execute check` and applet listing use this.
+    Full,
+}
+
+impl ManifestCheck {
+    /// `check` compares the whole directory; every other command checks lazily.
+    pub fn for_command(command: &str) -> Self {
+        if command == "check" {
+            Self::Full
+        } else {
+            Self::Lazy
+        }
+    }
 }
 
 impl Default for Manifests {
     fn default() -> Self {
         Self::Parsed(Vec::new())
     }
+}
+
+/// Whether the file for a bundled entry is still a plain file of the indexed size.
+fn entry_matches(root: &Path, entry: &bundled_manifests::BundledEntry) -> bool {
+    fs::metadata(root.join(entry.file()))
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == entry.bytes())
 }
 
 impl Manifests {
@@ -219,18 +248,9 @@ impl Manifests {
             Self::Bundled {
                 index,
                 root,
-                load_root,
                 cells,
                 verified,
-                fallback,
             } => {
-                match fallback.get() {
-                    Some(Ok(registry)) => {
-                        return registry.data.manifests.get(position);
-                    }
-                    Some(Err(message)) => return Err(anyhow!("{message}")),
-                    None => {}
-                }
                 let cell = cells
                     .get(position)
                     .ok_or_else(|| anyhow!("manifest {position} is out of range"))?;
@@ -238,15 +258,15 @@ impl Manifests {
                     return Ok(manifest);
                 }
                 let entry = &index.entries()[position];
-                let matches = verified[position].get_or_init(|| {
-                    fs::metadata(root.join(entry.file()))
-                        .is_ok_and(|metadata| metadata.is_file() && metadata.len() == entry.bytes())
-                });
-                if !matches {
-                    return Self::load_fallback(load_root, fallback)?
-                        .data
-                        .manifests
-                        .get(position);
+                if !verified[position].get_or_init(|| entry_matches(root, entry)) {
+                    bail!(
+                        "manifest {} in {} differs from the bundled copy, so it was not loaded; \
+                         run `execute check` to validate the directory, or pass --manifest-dir {} \
+                         to load it as files",
+                        entry.file(),
+                        root.display(),
+                        root.display()
+                    );
                 }
                 let mut manifest = parse_manifest(index.body(position)?)
                     .with_context(|| format!("invalid bundled manifest {}", entry.file()))?;
@@ -257,53 +277,6 @@ impl Manifests {
                     .ok_or_else(|| anyhow!("bundled manifest {} was not stored", entry.file()))
             }
         }
-    }
-
-    fn load_fallback<'a>(
-        root: &Path,
-        fallback: &'a OnceLock<std::result::Result<Registry, String>>,
-    ) -> Result<&'a Registry> {
-        fallback
-            .get_or_init(|| Registry::load(root).map_err(|error| format!("{error:#}")))
-            .as_ref()
-            .map_err(|message| anyhow!("{message}"))
-    }
-
-    fn fallback(&self) -> Result<Option<&Registry>> {
-        match self {
-            Self::Bundled { fallback, .. } => match fallback.get() {
-                Some(Ok(registry)) => Ok(Some(registry)),
-                Some(Err(message)) => Err(anyhow!("{message}")),
-                None => Ok(None),
-            },
-            Self::Parsed(_) => Ok(None),
-        }
-    }
-
-    fn verify_all(&self) -> Result<()> {
-        let Self::Bundled {
-            index,
-            root,
-            load_root,
-            verified,
-            fallback,
-            ..
-        } = self
-        else {
-            return Ok(());
-        };
-        let mut all_match = true;
-        for (position, entry) in index.entries().iter().enumerate() {
-            let matches = verified[position].get_or_init(|| {
-                fs::metadata(root.join(entry.file()))
-                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() == entry.bytes())
-            });
-            all_match &= *matches;
-        }
-        if !all_match {
-            Self::load_fallback(load_root, fallback)?;
-        }
-        Ok(())
     }
 
     fn all(&self) -> Result<Vec<&Manifest>> {
@@ -582,7 +555,6 @@ impl Registry {
     /// each root gets its own registry.
     pub fn from_bundled(root: &Path) -> Result<Self> {
         let index = bundled_manifests::index()?;
-        let load_root = root.to_path_buf();
         let root = fs::canonicalize(root)
             .with_context(|| format!("canonicalizing manifest root {}", root.display()))?;
         let cells = (0..index.entries().len())
@@ -596,10 +568,8 @@ impl Registry {
                 manifests: Arc::new(Manifests::Bundled {
                     index,
                     root: root.clone(),
-                    load_root,
                     cells,
                     verified,
-                    fallback: OnceLock::new(),
                 }),
                 names: Arc::new(index.names().clone()),
                 module_root: Some(root),
@@ -608,17 +578,25 @@ impl Registry {
         })
     }
 
-    /// Load the default manifest directory. When it holds the bundled file names,
-    /// the index serves it and checks each file's size when first resolved. Any
-    /// name or type mismatch takes the full load; missing directories stay empty.
-    pub fn load_default(path: &Path) -> Result<Self> {
+    /// Load the default manifest directory. When it holds the bundled file names (and,
+    /// with [`ManifestCheck::Full`], their sizes), the bundled index serves it; any other
+    /// directory takes the full load. A missing directory is an empty registry.
+    pub fn load_default(path: &Path, check: ManifestCheck) -> Result<Self> {
         match fs::metadata(path) {
             Ok(metadata) if metadata.is_dir() => {
                 let index = bundled_manifests::index()?;
-                if matches!(bundled_manifests::directory_matches(path, index), Ok(true)) {
-                    return Self::from_bundled(path);
+                if !matches!(bundled_manifests::directory_matches(path, index), Ok(true)) {
+                    return Self::load(path);
                 }
-                Self::load(path)
+                if check == ManifestCheck::Full
+                    && !index
+                        .entries()
+                        .iter()
+                        .all(|entry| entry_matches(path, entry))
+                {
+                    return Self::load(path);
+                }
+                Self::from_bundled(path)
             }
             Ok(_) => Self::load(path),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -654,45 +632,23 @@ impl Registry {
     }
 
     pub fn resolve(&self, name_or_phrase: &str) -> Result<&Manifest> {
-        if let Some(fallback) = self.data.manifests.fallback()? {
-            return fallback.resolve(name_or_phrase);
-        }
         let &index = self
             .data
             .names
             .get(name_or_phrase)
             .ok_or_else(|| anyhow!("unknown applet {name_or_phrase:?}"))?;
-        let manifest = self.data.manifests.get(index)?;
-        // Resolving may find a changed file and switch to the full load, whose names can
-        // differ from the bundled index (an edit that renamed the applet).
-        if let Some(fallback) = self.data.manifests.fallback()? {
-            return fallback.resolve(name_or_phrase);
-        }
-        Ok(manifest)
-    }
-
-    /// Check every bundled entry's size against its file, switching to the full load if
-    /// any differs, so the full load's errors are reported. File registries pass.
-    pub fn verify_all(&self) -> Result<()> {
-        self.data.manifests.verify_all()
+        self.data.manifests.get(index)
     }
 
     /// Every manifest in resolution order. On a bundled registry this parses any entry
     /// not yet used, so the first call parses the whole set.
     pub fn manifests(&self) -> Result<Vec<&Manifest>> {
-        self.data.manifests.verify_all()?;
-        if let Some(fallback) = self.data.manifests.fallback()? {
-            return fallback.manifests();
-        }
         self.data.manifests.all()
     }
 
     /// Canonical applet names in resolution order, without parsing any manifest. A
     /// bundled registry reads them from its index.
     pub fn applet_names(&self) -> Vec<&str> {
-        if let Ok(Some(fallback)) = self.data.manifests.fallback() {
-            return fallback.applet_names();
-        }
         match self.data.manifests.as_ref() {
             Manifests::Parsed(list) => list.iter().map(|manifest| manifest.name.as_str()).collect(),
             Manifests::Bundled { index, .. } => index
@@ -2978,7 +2934,7 @@ mod tests {
     #[test]
     fn gated_applets_report_availability_for_this_build() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
-        let registry = Registry::load_default(&dir).unwrap();
+        let registry = Registry::load_default(&dir, ManifestCheck::Lazy).unwrap();
         let quickshell = registry.resolve("desktop.quickshell").unwrap();
         assert_eq!(quickshell.build_available(), cfg!(feature = "desktop"));
         let remote = registry.resolve("desktop.clock_remote").unwrap();
@@ -2994,7 +2950,7 @@ mod tests {
     fn bundled_registry_matches_a_full_load() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
         let full = Registry::load(&dir).unwrap();
-        let bundled = Registry::load_default(&dir).unwrap();
+        let bundled = Registry::load_default(&dir, ManifestCheck::Lazy).unwrap();
         assert!(
             matches!(*bundled.data.manifests, Manifests::Bundled { .. }),
             "the shipped directory should be served by the bundled index"
@@ -3019,9 +2975,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_changed_default_directory_takes_the_full_load_and_its_errors_on_resolution() {
-        let dir = tempdir().unwrap();
+    fn copy_shipped_manifests(dir: &Path) {
         for entry in fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap()
         {
             let entry = entry.unwrap();
@@ -3030,67 +2984,51 @@ mod tests {
                 .extension()
                 .is_some_and(|extension| extension == "json")
             {
-                fs::copy(entry.path(), dir.path().join(entry.file_name())).unwrap();
+                fs::copy(entry.path(), dir.join(entry.file_name())).unwrap();
             }
         }
-        fs::write(dir.path().join("awk.json"), "{").unwrap();
-        let full_error = format!("{:#}", Registry::load(dir.path()).err().unwrap());
-        let bundled = Registry::load_default(dir.path()).unwrap();
-        let default_error = format!("{:#}", bundled.resolve("awk").err().unwrap());
-        assert_eq!(default_error, full_error);
     }
 
     #[test]
-    fn verify_all_falls_back_and_reports_a_broken_manifest() {
+    fn a_full_check_of_a_changed_default_directory_takes_the_full_load_and_its_errors() {
         let dir = tempdir().unwrap();
-        for entry in fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap()
-        {
-            let entry = entry.unwrap();
-            if entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                fs::copy(entry.path(), dir.path().join(entry.file_name())).unwrap();
-            }
-        }
+        copy_shipped_manifests(dir.path());
         fs::write(dir.path().join("awk.json"), "{").unwrap();
         let full_error = format!("{:#}", Registry::load(dir.path()).err().unwrap());
-        let bundled = Registry::load_default(dir.path()).unwrap();
-        let check_error = format!("{:#}", bundled.verify_all().err().unwrap());
+        let check_error = format!(
+            "{:#}",
+            Registry::load_default(dir.path(), ManifestCheck::Full)
+                .err()
+                .unwrap()
+        );
         assert_eq!(check_error, full_error);
     }
 
     #[test]
-    fn a_changed_manifest_size_switches_to_the_file_registry_on_first_use() {
+    fn a_lazily_checked_changed_manifest_fails_closed_on_first_use() {
         let dir = tempdir().unwrap();
-        for entry in fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap()
-        {
-            let entry = entry.unwrap();
-            if entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                fs::copy(entry.path(), dir.path().join(entry.file_name())).unwrap();
-            }
-        }
+        copy_shipped_manifests(dir.path());
         let path = dir.path().join("awk.json");
         let mut changed = fs::read_to_string(&path).unwrap();
         changed.push(' ');
         fs::write(&path, changed).unwrap();
 
-        let registry = Registry::load_default(dir.path()).unwrap();
+        let registry = Registry::load_default(dir.path(), ManifestCheck::Lazy).unwrap();
         assert!(matches!(
             *registry.data.manifests,
             Manifests::Bundled { .. }
         ));
-        assert_eq!(registry.resolve("awk").unwrap().name, "awk");
-        assert!(matches!(
-            *registry.data.manifests,
-            Manifests::Bundled { .. }
-        ));
-        assert!(registry.data.manifests.fallback().unwrap().is_some());
+        // Unchanged manifests still resolve from the bundled index.
+        assert_eq!(registry.resolve("cat").unwrap().name, "cat");
+        let error = format!("{:#}", registry.resolve("awk").err().unwrap());
+        assert!(error.contains("differs from the bundled copy"), "{error}");
+        // The registry never switches to disk content, so enumeration fails closed too.
+        assert!(registry.manifests().is_err());
+
+        // A full check of the same directory loads the edited file instead.
+        let full = Registry::load_default(dir.path(), ManifestCheck::Full).unwrap();
+        assert!(matches!(*full.data.manifests, Manifests::Parsed(_)));
+        assert_eq!(full.resolve("awk").unwrap().name, "awk");
     }
 
     #[test]

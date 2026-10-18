@@ -143,7 +143,13 @@ pub fn replay(arguments: &[String]) -> Result<()> {
     }
     let inputs: BTreeMap<String, Value> = serde_json::from_value(record.run["inputs"].clone())
         .context("the record's inputs cannot be read")?;
-    let registry = crate::load_workflow_registry(manifest_dir, None, None, None)?;
+    let registry = crate::load_workflow_registry(
+        manifest_dir,
+        None,
+        flow::manifest::ManifestCheck::Lazy,
+        None,
+        None,
+    )?;
     let replayer = Arc::new(Replayer::new(record, &registry, until)?);
     let guard = runtime::observe::install(replayer.clone())?;
     let options = RunOptions {

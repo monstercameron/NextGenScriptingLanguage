@@ -24,7 +24,13 @@ pub fn repl(arguments: &[String]) -> Result<()> {
         }
         index += 1;
     }
-    let registry = crate::load_workflow_registry(manifest_dir, None, None, None)?;
+    let registry = crate::load_workflow_registry(
+        manifest_dir,
+        None,
+        flow::manifest::ManifestCheck::Lazy,
+        None,
+        None,
+    )?;
     let working_directory = env::current_dir().context("could not determine current directory")?;
     let mut session = Session::new(&registry, working_directory);
     let interactive = io::stdin().is_terminal();

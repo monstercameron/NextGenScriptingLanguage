@@ -51,7 +51,13 @@ pub fn repair(arguments: &[String]) -> Result<()> {
     let (program_path, completed_steps) = repair::repairable_program(&directory)?;
     let source = fs::read_to_string(&program_path)
         .with_context(|| format!("reading {}", program_path.display()))?;
-    let registry = crate::load_workflow_registry(manifest_dir, None, None, None)?;
+    let registry = crate::load_workflow_registry(
+        manifest_dir,
+        None,
+        flow::manifest::ManifestCheck::Lazy,
+        None,
+        None,
+    )?;
     let boundary = repair::boundary_line(&source, completed_steps)?;
     let plan = repair::apply(&source, &operation, boundary, &registry)?;
 

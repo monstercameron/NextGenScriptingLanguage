@@ -8,10 +8,13 @@
 //! each manifest is parsed on first use.
 //!
 //! A registry uses the index only when the directory it was asked for holds exactly
-//! the indexed file names and plain files. Names and types are checked at startup;
-//! a file's size is checked when its manifest is first resolved. Any directory
-//! mismatch or changed file takes the full load, so errors for broken manifests are
-//! reported as before. The check is by name and size: equal-size edits are not seen.
+//! the indexed file names as plain files; any other directory takes the full load.
+//! Sizes are compared too: all of them at load time for `execute check` and applet
+//! listing (`ManifestCheck::Full`, where a difference selects the full load and its
+//! errors), or each one when its manifest is first used by a run
+//! (`ManifestCheck::Lazy`, where a difference fails closed instead of switching a
+//! registry already in use). The check is by name and size: equal-size edits are
+//! not seen.
 //!
 //! `generate` rebuilds both artifacts from a manifest directory after a full load has
 //! validated every file. A test fails when the checked-in artifacts no longer match
@@ -384,11 +387,11 @@ mod tests {
         assert!(directory_matches(dir.path(), index).expect("check"));
         fs::write(dir.path().join("extra.json"), "{}").expect("extra");
         assert!(!directory_matches(dir.path(), index).expect("check"));
-        assert!(Registry::load_default(dir.path()).is_err());
+        assert!(Registry::load_default(dir.path(), crate::manifest::ManifestCheck::Lazy).is_err());
         fs::remove_file(dir.path().join("extra.json")).expect("remove extra");
         fs::remove_file(dir.path().join(index.entries()[0].file())).expect("remove indexed file");
         assert!(!directory_matches(dir.path(), index).expect("check missing"));
-        assert!(Registry::load_default(dir.path()).is_ok());
+        assert!(Registry::load_default(dir.path(), crate::manifest::ManifestCheck::Lazy).is_ok());
     }
 
     #[test]

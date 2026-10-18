@@ -969,7 +969,7 @@ mod retry_rule_tests {
     #[test]
     fn in_process_applets_are_retry_safe_only_when_they_declare_reads_or_nothing() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
-        let registry = Registry::load_default(&dir).unwrap();
+        let registry = Registry::load_default(&dir, crate::manifest::ManifestCheck::Lazy).unwrap();
         let safe = |name: &str| applet_retry_safe(registry.resolve(name).unwrap());
         assert!(safe("text.upper"), "a pure transform declares no effects");
         assert!(safe("fs.test"), "a read of the filesystem");

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use flow::ast::Trigger;
 use flow::capabilities::CapabilityPolicy;
-use flow::manifest::Registry;
+use flow::manifest::{ManifestCheck, Registry};
 use flow::runtime::{self, CheckpointOptions, RunOptions, ServiceLimits};
 use std::collections::BTreeMap;
 use std::env;
@@ -186,7 +186,7 @@ fn execute_forwarded(arguments: Vec<String>, registry: &Registry) -> Result<()> 
 /// The registry a daemon serves from: the default manifests, loaded and fully parsed
 /// before the first request, so each forked run inherits the parsed applets.
 fn preload_daemon_registry() -> Result<Registry> {
-    let registry = load_registry(None, None)?;
+    let registry = load_registry(None, None, ManifestCheck::Lazy)?;
     registry.manifests()?;
     Ok(registry)
 }
@@ -365,9 +365,12 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
                     && !flow::stream::is_stream(&source)
                     && !flow::graph::is_graph(&source) =>
             {
-                match load_registry(args.manifest_dir.clone(), args.manifest_catalog.clone()) {
+                match load_registry(
+                    args.manifest_dir.clone(),
+                    args.manifest_catalog.clone(),
+                    ManifestCheck::Full,
+                ) {
                     Ok(registry) => {
-                        registry.verify_all()?;
                         // The policy must be installed here too: static analysis reads
                         // the files that the program calls, and those reads are authorized.
                         let policies = args
@@ -592,12 +595,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         let registry = load_workflow_registry(
             args.manifest_dir,
             args.manifest_catalog,
+            ManifestCheck::for_command(&args.command),
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
-        if args.command == "check" {
-            registry.verify_all()?;
-        }
         let graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
         let supplied_inputs = flow::inputs::parse_cli_arguments(
             graph.input_declarations(),
@@ -721,12 +722,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         let registry = load_workflow_registry(
             args.manifest_dir,
             args.manifest_catalog,
+            ManifestCheck::for_command(&args.command),
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
-        if args.command == "check" {
-            registry.verify_all()?;
-        }
         let cwd = env::current_dir()?;
         flow::ui::syntax::validate(&screen, &registry)?;
         if capability_policy.is_some() {
@@ -854,12 +853,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         let registry = load_workflow_registry(
             args.manifest_dir,
             args.manifest_catalog,
+            ManifestCheck::for_command(&args.command),
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
-        if args.command == "check" {
-            registry.verify_all()?;
-        }
         let cwd = env::current_dir()?;
         if capability_policy.is_some() {
             flow::stream::validate(&stream, &registry)?;
@@ -938,6 +935,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         None => match load_workflow_registry(
             args.manifest_dir.clone(),
             args.manifest_catalog.clone(),
+            ManifestCheck::for_command(&args.command),
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         ) {
@@ -959,9 +957,6 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             }
         },
     };
-    if args.command == "check" {
-        registry.verify_all()?;
-    }
     // The registry carries the capability policy, which authorizes the reads of any
     // program file the program calls, so it is loaded before the program is parsed.
     let cwd = env::current_dir()?;
@@ -1501,7 +1496,8 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
             "commands": flow::discovery::inventory_commands()?
         }));
     }
-    let registry = load_registry(manifest_dir, manifest_catalog)?;
+    // Listing and matching read every manifest, so compare the whole directory first.
+    let registry = load_registry(manifest_dir, manifest_catalog, ManifestCheck::Full)?;
     if command == "match" {
         if name.is_some() {
             bail!("applets match takes no positional arguments");
@@ -1600,7 +1596,7 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
         bail!("compile needs --to sh\n{HELP}");
     }
     let file = file.context(HELP)?;
-    let registry = load_registry(manifest_dir, manifest_catalog)?;
+    let registry = load_registry(manifest_dir, manifest_catalog, ManifestCheck::Lazy)?;
     let bytes = fs::read(&file).with_context(|| format!("reading program {}", file.display()))?;
     let source = std::str::from_utf8(&bytes)
         .with_context(|| format!("program {} is not valid UTF-8", file.display()))?;
@@ -1921,6 +1917,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
     let registry = load_workflow_registry(
         manifest_dir.clone(),
         manifest_catalog.clone(),
+        ManifestCheck::Lazy,
         capability_policy.as_ref(),
         data_flow_policy.as_ref(),
     )?;
@@ -1965,6 +1962,7 @@ fn service_cli(arguments: &[String]) -> Result<()> {
 fn load_registry(
     explicit_path: Option<PathBuf>,
     explicit_catalog: Option<PathBuf>,
+    check: ManifestCheck,
 ) -> Result<Registry> {
     if explicit_path.is_some() && explicit_catalog.is_some() {
         bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
@@ -1983,7 +1981,7 @@ fn load_registry(
                 })
             })
         }
-        (None, None) => Registry::load_default(&default_manifest_dir()),
+        (None, None) => Registry::load_default(&default_manifest_dir(), check),
         (Some(_), Some(_)) => unreachable!("selector conflict checked above"),
     }
 }
@@ -2044,10 +2042,11 @@ fn load_data_flow_policy(path: &Path) -> Result<flow::security::DataFlowPolicy> 
 fn load_workflow_registry(
     explicit_path: Option<PathBuf>,
     explicit_catalog: Option<PathBuf>,
+    check: ManifestCheck,
     capability_policy: Option<&CapabilityPolicy>,
     data_flow_policy: Option<&flow::security::DataFlowPolicy>,
 ) -> Result<Registry> {
-    let registry = load_registry(explicit_path, explicit_catalog)?;
+    let registry = load_registry(explicit_path, explicit_catalog, check)?;
     Ok(install_workflow_policy_state(
         registry,
         capability_policy,

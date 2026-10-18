@@ -8,6 +8,20 @@ for executable lookup, quoting, cancellation, checkpoints and live IPC.
 Persistent native streams have a [separate guide](streaming.md); managed runtime
 and widget edits are covered by the [live-control API](live-control.md).
 
+Bracketed lists and objects continue across physical lines until their delimiters
+balance; blank and comment lines inside a continuation are ignored. Raw text uses
+a trailing ` """` opener and a closing line containing only `"""`. The raw body
+is inserted as one string without escape processing, and closing it ends that
+statement. After an opening bracket, include a space before the raw delimiter.
+
+```program
+use value """
+first line
+second line
+"""
+then "cat"
+```
+
 This reference describes the current native 0.9.0-rc.5 source candidate, which
 has not been released. Features added since the published 0.9.0-rc.4 candidate,
 including loop blocks, named background jobs and per-command stderr discard,
@@ -17,7 +31,11 @@ own explicit applet and lifecycle limits.
 
 ## Language and Unix contracts
 
-One statement per line; `#` comments and blank lines are allowed. Strings use JSON
+One logical statement per line; `#` comments and blank lines are allowed. A
+statement can span physical lines while a bracketed list or object remains open.
+Triple-quoted raw blocks can contain multiline text; a closing `"""` line ends
+the statement, and the block can only appear at its end. When a raw block follows
+a bracketed expression, put a space before its opening `"""`. Strings use JSON
 double-quote escaping. Identifiers reference named results. Trigger bodies use
 consistent space indentation, with nested conditional and loop command blocks.
 
@@ -43,6 +61,10 @@ environment variables, or shell expressions.
 | `listen to ...` and `whenever a line arrives as event` followed by a body | Keep one input producer alive and run the body sequentially for each record. |
 | `stream from ...` through `show each line` | Keep native stages alive and forward complete byte records, without a per-record handler. |
 | `open a screen ...` with `define a program named ...` | A TUI file contains component layouts, ports, and event handlers; see the [TUI catalog](tui-catalog.md). |
+
+In a native pipeline, a producer stopped by SIGPIPE because a consumer exited
+early is not considered a pipeline failure. A streamed final command that
+receives a closed stdout reader exits with status 141.
 
 Each file selects one execution form: finite commands, one service trigger, one
 native stream, or a screen. Finite statements and service handlers share command
@@ -254,7 +276,8 @@ body. `otherwise if <condition>` adds a clause with its own indented body; a
 chain runs at most one body, in order, and may end without a final `otherwise`.
 Each clause nests in the previous else branch, so the chain counts toward the
 64-level nesting limit. Dedenting ends a block;
-there is no written end marker. Both bodies use the same space indentation.
+there is no written end marker. Each body uses a consistent positive number of
+spaces; the `otherwise` keyword aligns with its matching `if`.
 Nested conditionals are allowed to 64 levels; use a nested `if` within
 `otherwise` for another case. Scalar equality is exact text, integer or boolean
 equality, including text newlines. JSON arrays and objects use deep equality,
@@ -493,7 +516,9 @@ and the parent workflow deadline remains a hard upper bound. If that deadline
 has expired, cleanup can be skipped or stopped. A cleanup failure cannot replace
 the original cancellation; with an ordinary pending failure, a finally failure
 becomes the reported error and retains the earlier failure as context. A transfer
-inside finally overrides a pending ordinary failure or transfer. These rules do
+inside finally overrides a pending ordinary failure or transfer. Nested cleanup
+has a 16,384 VM-step budget as well as a five-second budget and the parent
+workflow deadline. These rules do
 not make external effects reversible or exactly once.
 
 ### Explicit exit and failure
@@ -611,6 +636,9 @@ command parameters.
 `--max-output-bytes`, validates one complete UTF-8 JSON value and binds its typed
 tree. It preserves the original pipeline bytes exactly. A subsequent `take`
 reads a binding without changing those bytes. Neither step launches a helper.
+`then capture bytes as name` binds the current bytes without parsing them;
+`use bytes name` later supplies that exact byte value as pipeline input. A leading
+UTF-8 BOM is stripped by text parsers.
 
 `take <text|integer|boolean|list of text|json> at "<pointer>" from <value> as name`
 selects a value using a literal JSON pointer. An unquoted identifier after `at`
@@ -619,17 +647,18 @@ repository as name`; that binding must contain a valid pointer when the step
 executes. `/items/0/name` selects an array
 element's field; `~1` means `/`, `~0` means `~`, and `""` selects the root.
 Empty object keys work. Array indexes are unsigned decimal with no leading
-zeroes; `-` does not append or select. Missing fields, invalid pointers, null
+zeroes; `-` does not append or select, and a nonnumeric array index is treated
+as an absent value. Missing fields, invalid pointers, null
 where text is requested, mixed text lists and wrong scalar types fail with the
 source line. There is no automatic parsing of a text binding: parse its bytes
 first. Conditions and native argv require a selected typed scalar or text list.
 
 `then encode value as json` replaces the pipeline bytes with compact JSON,
 without a trailing newline. It accepts a literal, reference or list of values
-and supports native pipes and `then save`. Encoding writes directly from the
+and supports native pipes and `then save`. Duplicate object keys are refused.
+Encoding writes directly from the
 typed tree and checks the byte limit as it writes. Object keys are ordered;
-whitespace, duplicate keys and numeric spelling are not preserved. Parsing
-duplicate object keys keeps the last value. JSON integers through signed/unsigned
+whitespace and numeric spelling are not preserved. JSON integers through signed/unsigned
 64-bit ranges retain exact values.
 Fractional and larger numbers use finite 64-bit floating point and may round;
 use JSON strings for values requiring greater precision. Nonfinite/overflowing
@@ -884,6 +913,10 @@ or a pipe stage. `and stdin from <path>` reads the file as the command's stdin; 
 applies to a command that starts a statement, and it is a `read` followed by the
 command as a consumer. `then append to <path>` adds the pipeline value to the file
 and keeps it as the pipeline value. Unlike `save`, it does not replace the file.
+Per-command environment suffixes use `and environment {"NAME": "value"}` to
+set values and `and without environment ["NAME"]` to remove inherited values.
+Names beginning with `LD_` or `DYLD_` are refused unless an applicable capability
+policy authorizes them.
 Redirection to a file is a persistence sink for data-flow policy. Live programs
 reject these forms. Under a capability policy, a redirect or append target needs a
 filesystem write grant, and the check runs before any command starts. A target is
@@ -952,7 +985,9 @@ then save to "hello.txt"
 
 The final finite result goes to stdout, including after a save. Intermediate
 results remain pipeline values. To inspect multiple command results separately,
-use separate programs or explicitly save the results you need.
+use separate programs or explicitly save the results you need. `then save to`
+preserves the existing file mode and refuses symlinks, hard links, non-regular
+files, and Windows device names, matching append and redirect safety.
 
 ### Hand over and detached launch
 
@@ -984,11 +1019,19 @@ FIFOs and stdout-to-path job routing are not part of this version. Temporary sco
 
 `execute compile --to sh FILE [--out PATH]` writes a POSIX sh script for the part of a program that has a faithful sh form. Without `--out` the script goes to standard output; with it, only that path is written. The compiler never drops or approximates a statement: every statement it cannot translate is refused by name and line, and nothing is written.
 
-The compiled forms are native commands (`run "program" with arguments [...]` and named applets whose manifest renders a native command), `pipe to`, `and stderr to`, `and stderr appended to`, `and stderr merged`, `and stdout to stderr`, `and discard stderr`, `with environment` on one command, `if run ... succeeds` or `fails` with `otherwise`, `repeat N times`, `for each NAME in [...]` over literal text, `break`, `continue`, `exit with status`, and `fail with message`.
+The compiled forms are native commands (`run "program" with arguments [...]` and named applets whose manifest renders a native command), `pipe to`, `and stderr to`, `and stderr appended to`, `and stdout to stderr`, `and discard stderr`, `and environment {"NAME": "value"}` on one command, `and without environment ["NAME"]` on one command, `if run ... succeeds` or `fails` with `otherwise`, `repeat N times`, `for each NAME in [...]` over literal text, `break`, `continue`, `exit with status`, and `fail with message`. `and stderr merged` and environment names beginning `LD_` or `DYLD_` are refused by the compiler.
 
 These are refused: in-process applets such as `number.to_text`, built-in commands, applets whose contract remaps exit statuses, programs with inputs, triggers, or reusable definitions, bindings and `keep` options, retries, caching, `save`, `append`, `read`, `while` loops, try and catch, background jobs, parallel groups, temporary scopes, hand over, detached launch, and interactive commands.
 
-The script keeps execute's output rule. A command's stdout becomes the pipeline value, except that a command followed by another fresh command or by the end of the program streams straight to stdout, as it does under `execute run`. A failed command leaves the previous value in place, and the final value is printed before the script exits, on success or failure.
+Commands run with stdin closed unless a pipeline supplies it. The script keeps
+execute's output rule. A command's stdout becomes the pipeline value, except that
+a command followed by another fresh command or by the end of the program streams
+straight to stdout, as it does under `execute run`. Multi-stage pipelines enable
+`set -o pipefail`; if the selected shell does not support it, the script exits
+with status 70. A pipeline producer terminated by SIGPIPE because its consumer
+finished early is not a failure. A streamed final command whose reader closed
+stdout exits 141. A failed command leaves the previous value in place, and the
+final value is printed before the script exits, on success or failure.
 
 The script must pass `dash -n`. The integration tests also compare its stdout and success with `execute run` under dash on Unix, and run shellcheck when it is installed.
 
@@ -1574,6 +1617,9 @@ named reads, and cache input. Intermediate native pipe traffic streams directly.
 An overflow stops the active commands and skips later saves. This version buffers
 each finite terminal result until completion; a live listener emits after each
 record handler, rather than waiting for the unbounded source to finish.
+For output larger than the capture limit, stream a final `pipe to` stage such as
+`tee` so bytes flow without collecting the whole result. `parallel for each`
+divides the available output allowance by its concurrency limit.
 
 Cache keys include the manifest, resolved argv, directory, executable path/content,
 environment, and exact input. Failed results are never published. Cache files use

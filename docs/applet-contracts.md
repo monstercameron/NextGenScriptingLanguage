@@ -420,6 +420,7 @@ helper executable.
 | --- | --- |
 | `path.dirname`, `path.basename`, `path.remove_suffix` | Small path-string transformations; they do not access the filesystem. |
 | `text.trim_final_lf`, `text.normalize` | Return supplied `args.text` or UTF-8 stdin with one final LF removed. `text.normalize` is currently the same operation; neither trims other whitespace nor normalizes line endings. |
+
 | `text.concat`, `text.matches` | Join a string list with an optional separator; or return match presence, count and UTF-8 byte offsets for a literal needle. |
 | `number.add`, `number.subtract`, `number.multiply`, `number.divide`, `number.compare` | Operate on finite JSON numbers and declare Number input/output ports (compare returns an integer). Integral add/subtract/multiply use checked integer arithmetic; division and fractional arithmetic use IEEE-754 binary64, so decimal results are not guaranteed to be exact. Division by zero fails; compare returns -1, 0 or 1. |
 | `number.to_text` | Accepts a Number and returns its deterministic, locale-independent JSON numeric representation as text. It does not coerce strings or promise exact-decimal formatting. |
@@ -435,6 +436,16 @@ helper executable.
 | `fs.transaction.recover` | Complete or roll back a retained transaction journal if every target still matches its recorded before or after state, including a requested absent state. A third state is a manual-recovery conflict. |
 | `jsonc.set`, `jsonc.remove` | Apply a root-property update to JSONC with line/block comments and trailing commas, with at most 256 levels of nesting. `set` replaces the last active duplicate or inserts the key; `remove` removes every active duplicate. Keys in comments and nested objects are ignored. Both return a typed receipt with path, content hash, snapshot and whether content changed. Malformed input fails before mutation. |
 | `jsonc.edit_content` | Apply the same bounded root-property set/remove logic to supplied JSONC text or UTF-8 stdin and return updated text. It is a pure transformation and never writes a file. |
+
+Every text parser strips one leading UTF-8 BOM. Duplicate JSON object keys are
+refused everywhere. `json.filter` compares numeric values by value (so `1`,
+`1.0` and `1e0` match). For JSON Pointer array selection, a nonnumeric index is
+an absent value. YAML and TOML stringification refuses nesting beyond the
+parser's depth limit.
+
+`fs.ensure_line` matches lines after ignoring one leading BOM and preserves that
+BOM in the file. When appending, it uses CRLF if the file's first line ending is
+CRLF. `path.dirname` and `path.basename` follow POSIX path rules.
 
 The filesystem write helper locks one path, checks the expected content,
 writes a same-directory temporary file, syncs the file and (on Unix) its parent,

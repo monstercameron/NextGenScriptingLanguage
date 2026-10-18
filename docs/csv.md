@@ -24,9 +24,11 @@ shape:
 With `has_headers: true`, the first record becomes `headers`; later records
 must have the same width, and header names must be unique. With
 `has_headers: false`, `headers` is empty and all records are rows with a
-consistent width. A UTF-8 byte-order mark is preserved as part of the first
-field. Empty input has no records; a blank record or an explicitly quoted empty
-field has one empty cell. A final record terminator does not add another row.
+consistent width. A single leading UTF-8 byte-order mark is stripped before
+parsing. Empty input has no records; a blank record or an explicitly quoted
+empty field has one empty cell. One trailing blank record is ignored. A final
+record terminator does not add another row. TAB is ordinary cell content; other
+unsupported ASCII control characters fail.
 
 The parser follows RFC 4180 quoting: commas and line breaks inside a quoted
 field are retained, and an embedded quote is written as `""`. It accepts CRLF
@@ -43,7 +45,8 @@ malformed quotes, duplicate headers and ragged records fail with status 2. See
 and `rows` fields. Every cell must be a string, each row must be rectangular,
 and nonempty headers must be unique. It writes a header record only when
 `headers` is nonempty. Fields containing commas, quotes, CR or LF are quoted;
-embedded quotes are doubled. Records end in CRLF. An empty header list
+embedded quotes are doubled. A single empty cell is written as `""`. Records end
+in CRLF. An empty header list
 represents a headerless table, so it can stringify the result of parsing with
 `has_headers: false`.
 

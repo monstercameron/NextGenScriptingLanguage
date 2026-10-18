@@ -118,10 +118,13 @@ checks uploaded server SHA-256 digests before publication. A retry may repair
 an owned draft; a published release is only accepted unchanged, byte for byte.
 
 Actions are pinned to commit SHAs. Build jobs have read-only tokens; only the
-publication job receives release and OIDC attestation permissions. Builds use
-locked Rust dependencies and native hosted runners. Archive timestamps and
-ownership are normalized to the source commit. This does not claim fully
-reproducible compiler output or identical signatures across independent builds.
+publication job receives release and OIDC attestation permissions. Release
+builds use locked Rust dependencies, `SOURCE_DATE_EPOCH` from the source commit,
+and path-remapping flags on native hosted runners. Archive timestamps and
+ownership are normalized to the source commit. The reproducibility comparison
+builds the x86_64 musl binaries from two checkouts with those settings; it does
+not establish byte-for-byte reproducibility for other targets, packages, or
+independent toolchains, and signatures can differ between builds.
 
 The first published multi-platform candidate is **[0.9.0-rc.4](https://github.com/monstercameron/NextGenScriptingLanguage/releases/tag/v0.9.0-rc.4)**. Its complete [validation receipt](release-validation-0.9.0-rc.4.json)
 records the source commit, every package digest, native test cohorts and verified
@@ -144,11 +147,18 @@ Each release publishes `SHA256SUMS`, a Sigstore bundle that signs it
 Verify the signature, then the checksums, before installing:
 
 ```sh
-cosign verify-blob --bundle SHA256SUMS.sigstore.json \n  --certificate-identity "https://github.com/monstercameron/NextGenScriptingLanguage/.github/workflows/release.yml@refs/tags/vVERSION" \n  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/monstercameron/NextGenScriptingLanguage/.github/workflows/release.yml@refs/tags/vVERSION" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum -c SHA256SUMS
 gh attestation verify ./execute-VERSION-linux-x64.tar.gz --repo monstercameron/NextGenScriptingLanguage
 ```
 
-Replace `VERSION` with the release version. The release workflow rebuilds the
-x86_64 Linux binaries from a second checkout and fails unless every binary is
-byte-identical.
+Replace `VERSION` with the release version. The reproducibility job compares
+the x86_64 Linux musl binaries from two checkouts and fails unless they are
+byte-identical under the release build's path remapping and source epoch. This
+comparison covers that target only; it does not compare the other shipped
+binaries or packages.
+
+The `set-version` release helper also updates `fuzz/Cargo.lock` alongside the
+workspace version files.

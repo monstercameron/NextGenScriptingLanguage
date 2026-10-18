@@ -79,7 +79,7 @@ ancestor directories remain open (below).
 | Check-then-open | Opened file descriptor is checked again on Unix cache reads. | `tests/cache_security.rs` |
 | Argument and environment injection | Literal argument vectors for ordinary commands; policy environment allowlist; explicit shells only on request. | `tests/direct_commands.rs`, `tests/capability_policy.rs` |
 | Terminal escapes | Error text and diagnostics escape control bytes (ESC, CSI, OSC, C1) before they reach a terminal (`terminal_text::escape_controls`). Streamed stdout stays raw so pipes keep their bytes (H17). | Unit tests in `src/terminal_text.rs`. |
-| Secrets in traces, journals, records, explain and what-if | Secret prompts are read with echo off. Their values are withheld from inspect, records (replay refuses them), live reads and snapshots, and checkpoint signatures (a keyed HMAC). A checkpoint refuses a run with a secret prompt input. Redaction is by exact value (H14). | `tests/security_redaction.rs`, `tests/prompt_inputs.rs`, `tests/what_if_confirm.rs` |
+| Secrets in traces, journals, records, explain and what-if | Secret prompts are read with echo off. Secret and environment input values are redacted from `--record`; values are withheld from inspect, live reads and snapshots, and checkpoint signatures use a keyed HMAC. A checkpoint refuses a run with a secret prompt input. Redaction is by exact value (H14). | `tests/security_redaction.rs`, `tests/prompt_inputs.rs`, `tests/what_if_confirm.rs` |
 | Checkpoint state tampering and guessing | Journals are checksummed and chained; input digests are an HMAC under a per-user key (H11); element and graph logs are anchored in the journal, and a shorter or re-chained log refuses the resume. | `src/runtime/checkpoint.rs` unit tests, `tests/checkpoint_*.rs`, `tests/crash_consistency.rs` |
 | Working directory | `use folder` and `cd` open the folder, authorize the resolved path, check identity and record the resolved path; children enter the opened directory (H12). | `tests/security_fixes.rs` (Unix) |
 | Daemon socket | A private per-user socket directory, owner checks on the socket and the directory, a peer user-id check after connect, and refusal of a second daemon. Forwarded runs inherit the client's directory, environment, umask and limits. | `tests/daemon_cli.rs` (Unix) |
@@ -87,7 +87,8 @@ ancestor directories remain open (below).
 | Live control | Peer identity check; two-second wire budgets; explicit grants; same-user plane. | `benchmarks/security-2026-10-15-live-transport.json` |
 | Model transport | HTTPS, with HTTP only for loopback; redirects and environment proxies disabled. | `tests/models.rs` |
 | Resource limits | Output limits, record size limits, command timeouts, parser nesting depth, live budgets. | `tests/cache_security.rs`, `tests/conditions.rs`, `tests/adversarial.rs` |
-| Policy (opt-in) | Strict policy schema; per-applet grants; environment cleared and allowlisted; path grants checked before effects; OS sandbox when required. | `tests/capability_policy.rs`, `tests/security_dataflow_runtime.rs` |
+| Policy (opt-in) | Strict policy schema; per-applet grants; environment cleared and allowlisted; `host_environment` allows selected `accept ... from environment` inputs and defaults empty; path grants checked before effects; OS sandbox when required. `deny_privileged` treats interpreter/text-processor wrappers (including versioned executable names) as requiring `allow_wrappers`; the explain/effects gate marks launchers as privileged. | `tests/capability_policy.rs`, `tests/security_dataflow_runtime.rs` |
+| Review, record and replay | Review fingerprints cover module source and packages. `--record` redacts secret and environment inputs. Replay refuses detached launches and handovers. | `src/agent/what_if.rs`, `src/record.rs`, `tests/security_redaction.rs` |
 
 ## Known holes
 
@@ -116,7 +117,7 @@ Severity scale: **High** breaks a documented guarantee for a supported configura
 | H16 | With no policy, a child inherits the caller's full environment, except that the dynamic loader's variables (`LD_*`, `DYLD_*`) cannot be set from a program or manifest. | Informational, Bash-model | *audit* |
 | H17 | Applet stdout is passed through raw so Unix pipes keep their bytes. Terminal control bytes in error text and diagnostics are escaped; streamed stdout is not. | Informational | *audit* |
 | H18 | Listeners and persistent workers launch with a path-based working directory, not a handle. A link swapped in after a `use folder` that set their directory can move them. Background jobs and handoffs already carry the run's handle. | Low, follow-up | *audit* |
-| H19 | The daemon reads each request on its single accepting thread (it must stay single-threaded because it forks), with a 2 second timeout. A same-user client that connects and sends nothing delays other clients for up to 2 seconds. Other users cannot connect. | Low, same-user delay | *Documented in `src/agent/daemon.rs`* |
+| H19 | The daemon reads each request on its single accepting thread (it must stay single-threaded because it forks), with one total 2 second deadline for the request read. A same-user client that connects and sends nothing delays other clients for up to 2 seconds. Other users cannot connect. | Low, same-user delay | *Documented in `src/agent/daemon.rs`* |
 
 Fixed in the audit, with the test that shows each fix:
 

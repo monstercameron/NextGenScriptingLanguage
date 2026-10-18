@@ -151,7 +151,7 @@ default lean build, default manifest path, medians in milliseconds:
 | 1000-iteration builtin loop | 4.37 | n/a | 2.80 | 0.64 |
 | 100-spawn loop | 67.07 | n/a | 63.86 | 0.95 |
 | Uppercase 1 MB (`tr` vs `text.upper`) | 2.84 | 2.25 | 5.47 | 1.93 |
-| JSON pointer lookup, 400 KB (`jq` vs `json.get`) | 11.19 | 10.23 | 23.53 | 2.10 |
+| JSON pointer lookup, about 240 KB (`jq` vs `json.get`) | 11.19 | 10.23 | 23.53 | 2.10 |
 | 100 MB through a pipe | 25.95 | 25.48 | 27.45 | 1.06 |
 
 Peak resident memory at startup is 3.4 MB for bash and 6.2 MB for Execute. Binary

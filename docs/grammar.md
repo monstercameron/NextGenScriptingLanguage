@@ -1,10 +1,8 @@
 # Execute glue grammar
 
-This is an EBNF-style description of the statements and modifiers in the current
-source. It covers glue only: running native commands and manifest applets, moving
-their output between them, and a few control forms. Computation belongs to applets,
-not to this grammar. The [language reference](language.md) explains behavior; this
-page states what text is accepted.
+This is an EBNF-style index of the accepted program forms in the current source.
+It summarizes syntax; the [language reference](language.md) explains behavior and
+restrictions. Computation belongs to applets, not to this grammar.
 
 Every ```` ```program ```` block below is parsed by the real parser in
 `tests/lane_a_grammar_doc.rs`, so an example that drifts from the grammar fails the
@@ -69,14 +67,38 @@ A leading comment block may hold one policy header, `# execute-policy: allow
 CATEGORY...`. It is an ordinary comment, so it is not part of the grammar. See the
 language reference for the categories.
 
+## Logical lines, continuation, and raw text
+
+Statements may continue across physical lines while brackets remain open. The
+closing bracket completes the logical statement. A triple-quoted raw block can
+also span lines and ends at a line containing `"""`; it can only finish a
+statement. When the opening delimiter follows a bracketed expression it needs a
+preceding space. See [the language reference](language.md#reading-a-program) for
+raw block examples.
+
+```program
+run "printf" with arguments [
+  "%s\\n",
+  "continued"
+]
+use value """
+first line
+second line
+"""
+then capture bytes as payload
+use bytes payload
+then "cat"
+```
+
 ## Pipeline input
 
 ```text
-statement   = ... | "use" "value" value
+statement   = ... | "use" "value" value | "use" "bytes" NAME
 ```
 
-`use value` sets the pipeline input to a text value. A following `pipe to` or `then`
-stage reads those bytes. It launches no process.
+`use value` sets the pipeline input to a text value. `use bytes` sets it from a
+captured byte binding. A following `pipe to` or `then` stage reads those bytes.
+Neither form launches a process.
 
 ```program
 use value "hello"
@@ -164,16 +186,41 @@ run "printf" with arguments ["{\"ok\": true}"] as reply
 take boolean at "/ok" from reply as ok
 ```
 
+`then capture bytes as NAME` stores pipeline bytes without decoding them as text;
+`use bytes NAME` supplies such a binding as pipeline input. The `read` statement
+reads a file into a binding. Pipeline transforms also include JSON parsing and
+encoding:
+
+```text
+then capture bytes as NAME
+use bytes NAME
+read = "read" [ "file" ] value [ "as" NAME ]
+     | "read" "from" "stdin" [ "as" NAME ]
+then parse json as NAME
+then encode VALUE as json
+```
+
 ## Control
 
 ```text
-conditional = "if" operand ( "is" | "is not" | "contains" | "does not contain" ) operand
-              body [ "otherwise" ( conditional | body ) ]
+conditional = "if" condition body { "otherwise if" condition body } [ "otherwise" body ]
+condition   = operand ( "is" | "is not" | "contains" | "does not contain" ) operand
+            | "run" invocation ( "succeeds" | "fails" )
 loop        = "for" "each" NAME "in" operand body
             | "repeat" INTEGER "times" body
             | "while" operand ( "is" | "is not" ) operand body
 operand     = NAME | TEXT | INTEGER | BOOL | list
 body        = indented statements
+flow        = "break" | "continue" | "return" [ value ]
+            | "exit" "with" "status" INTEGER | "fail" "with" "message" TEXT
+exception   = "try" body { "catch" [ NAME ] body } [ "finally" body ]
+            | "on" ( "exit" | "interrupt" ) body
+task_group  = ( "parallel" | "race" ) "at" "most" INTEGER "as" NAME body
+            | "parallel" "for" "each" NAME "in" operand "at" "most"
+              INTEGER "as" NAME body
+task_entry  = "run" NAME [ "with" argument { "and" argument } ] "as" NAME
+job         = "spawn" "as" NAME body | "await" NAME | "inspect" NAME "as" NAME
+            | "cancel" NAME
 ```
 
 ```program
@@ -195,6 +242,12 @@ for each item in arguments
 repeat 2 times
   run "printf" with arguments ["tick\n"]
 ```
+
+Other accepted control forms include `otherwise if`, command success conditions,
+try/catch/finally, `on exit`, `on interrupt`, `break`, `continue`, `return`,
+`exit with status`, and `fail with message`. Background task forms include
+`spawn`, `parallel for each`, `race`, `await`, `inspect`, and `cancel`; see the
+language reference for complete syntax and restrictions.
 
 ## Reusable programs
 
@@ -244,7 +297,8 @@ A trigger wraps its body and runs it repeatedly. A file has at most one trigger,
 a trigger cannot be combined with ordinary finite statements after it.
 
 ```text
-interval    = "every" INTEGER ( "seconds" | "minutes" | "hours" ) body
+interval    = "every" INTEGER ( "millisecond" | "milliseconds" | "second" | "seconds"
+            | "minute" | "minutes" | "hour" | "hours" ) body
 schedule    = "on" "schedule" TEXT body
 listener    = "listen" "to" target [ "with" argument { "and" argument } ]
               "whenever" "a" "line" "arrives" "as" NAME body
@@ -260,6 +314,16 @@ listen to stdin
 whenever a line arrives as message
   then "cat"
 ```
+
+## Suffixes and scoped forms
+
+Accepted command suffix families include environment changes (`and environment
+{...}` and `and without environment [...]`), `and retry ...`, stderr/stdin/stdout
+redirections, `then append to`, `interactively`, `hand over to`, and
+`launch detached`. Scoped statements include `with temporary file as NAME` and
+`with temporary directory as NAME`; lifecycle blocks include `on exit` and
+`on interrupt`. Their complete shapes and context restrictions are in the
+[language reference](language.md).
 
 ## Modifier contexts
 

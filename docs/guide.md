@@ -23,8 +23,10 @@ The [browser playground](playground.md) supports a bounded subset.
 | `then save to "report.txt"` | Atomically replace a file with the current output. |
 | `run cd with path "reports"` | Change the program's working directory. |
 
-One statement per line. Use double-quoted JSON strings, `#` comments, named
-parameters, and consistently indented event bodies. Strings, integers, booleans,
+One logical statement per line. Bracketed lists and objects may continue across
+physical lines, and triple-quoted raw blocks hold multiline text at the end of a
+statement. Use double-quoted JSON strings, `#` comments, named parameters, and
+consistently indented event bodies. Strings, integers, booleans,
 references, and lists are supported. The runtime also provides
 [JSON parsing, typed field selection and encoding](../docs/language.md#structured-json),
 with JSON inputs and editable structured bindings. Broader computation stays in tools such as `jq`,

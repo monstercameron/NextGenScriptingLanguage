@@ -10,41 +10,59 @@
     "protocol": { "const": "execute.checkpoint_status/1" },
     "directory": { "type": "string" },
     "journal": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "version",
-        "status",
-        "program_path",
-        "completed_nodes",
-        "in_flight",
-        "error",
-        "checksum",
-        "checksum_verified"
-      ],
-      "properties": {
-        "version": { "type": ["integer", "null"] },
-        "status": {
-          "type": "string",
-          "enum": ["running", "failed", "interrupted", "completed", "idle"]
-        },
-        "program_path": { "type": ["string", "null"] },
-        "completed_nodes": { "type": "integer", "minimum": 0 },
-        "in_flight": {
-          "type": ["object", "null"],
+      "oneOf": [
+        {
+          "description": "Program checkpoint status.",
+          "type": "object",
           "additionalProperties": false,
-          "required": ["line", "start", "end", "retry_safe"],
+          "required": ["version", "status", "program_path", "completed_nodes", "in_flight", "error", "checksum", "checksum_verified"],
           "properties": {
-            "line": { "type": ["integer", "null"] },
-            "start": { "type": ["integer", "null"] },
-            "end": { "type": ["integer", "null"] },
-            "retry_safe": { "type": ["boolean", "null"] }
+            "version": { "type": ["integer", "null"] },
+            "status": { "type": "string", "enum": ["running", "failed", "interrupted", "completed", "idle"] },
+            "program_path": { "type": ["string", "null"] },
+            "completed_nodes": { "type": "integer", "minimum": 0 },
+            "in_flight": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": ["line", "start", "end", "retry_safe"],
+              "properties": {
+                "line": { "type": ["integer", "null"] },
+                "start": { "type": ["integer", "null"] },
+                "end": { "type": ["integer", "null"] },
+                "retry_safe": { "type": ["boolean", "null"] }
+              }
+            },
+            "error": { "type": ["string", "null"] },
+            "checksum": { "type": "string", "enum": ["present", "missing"] },
+            "checksum_verified": { "const": false }
           }
         },
-        "error": { "type": ["string", "null"] },
-        "checksum": { "type": "string", "enum": ["present", "missing"] },
-        "checksum_verified": { "const": false }
-      }
+        {
+          "description": "Finite graph checkpoint status.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "version", "completed_nodes", "in_flight", "checksum", "checksum_verified"],
+          "properties": {
+            "kind": { "const": "graph" },
+            "version": { "type": ["integer", "null"] },
+            "completed_nodes": { "type": "integer", "minimum": 0 },
+            "in_flight": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["node", "retry_safe"],
+                "properties": {
+                  "node": { "type": ["string", "null"] },
+                  "retry_safe": { "type": ["boolean", "null"] }
+                }
+              }
+            },
+            "checksum": { "type": "string", "enum": ["present", "missing"] },
+            "checksum_verified": { "const": false }
+          }
+        }
+      ]
     },
     "blobs": {
       "type": "object",

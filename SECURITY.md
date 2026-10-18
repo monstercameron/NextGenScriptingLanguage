@@ -108,6 +108,17 @@ against each cacheable applet's own read and write grants. When the program
 changes working directory, a relative or default cache path is rejected because
 preflight cannot resolve the eventual cache directory safely.
 
+The policy's optional `host_environment` list controls which process environment
+variables a program may read through `accept ... from environment`; it is empty
+by default. `deny_privileged` classifies interpreters and text processors such
+as Python, Perl, Node, awk, sed, git, make and tar as wrappers that require
+`allow_wrappers`. The explain/effects gate marks launchers such as find, xargs,
+ssh, parallel, bwrap and tmux as privileged. Versioned executable names such as
+`python3.12` use the same classification as `python`.
+
+`--record` redacts secret and environment input values. The review fingerprint
+covers module sources and packages. Replay refuses detached launches and handovers.
+
 Optional `network_origins` lists canonical HTTP(S) origins, without a path,
 query, fragment, credentials or wildcard. The list requires `network: true`
 and the `network.connect` grant, and is supported only for host-managed remote

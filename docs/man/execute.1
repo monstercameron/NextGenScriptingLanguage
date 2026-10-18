@@ -16,8 +16,13 @@ execute \- readable Unix workflows with declarative applets and direct pipes
 .B \-\-checkpoint
 .I DIR
 .br
+.B execute
+.BR test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon
+.RI [ ARGUMENTS ]
+.br
 .B execute applets
 .BR list|inspect|discover|match
+.RI [ OPTIONS ]
 .br
 .B execute modules
 .BR inspect|verify|lock
@@ -26,6 +31,7 @@ execute \- readable Unix workflows with declarative applets and direct pipes
 .B execute service generate
 .BR systemd|launchd
 .I FILE
+.RI [ OPTIONS ]
 .br
 .B execute lsp
 .RB [ \-\-stdio ]
@@ -71,6 +77,43 @@ for the help generated from its declarations.
 .TP
 .B resume \fIFILE\fR \fB\-\-checkpoint\fR \fIDIR\fR
 Continue a checkpointed run from its last durable step.
+.TP
+.B test
+Run program tests using answers supplied by the test configuration or
+.BR \-\-answers .
+.TP
+.B run-parts \fIDIR\fR
+Run eligible programs in a directory.
+.TP
+.B show-run \fIDIR\fR
+Display a recorded run.
+.TP
+.B replay \fIDIR\fR
+Replay a recorded run without repeating refused effects.
+.TP
+.B repl
+Start the interactive interpreter.
+.TP
+.B repair \fIFILE\fR
+Inspect and repair a checkpointed program run.
+.TP
+.B compile
+Compile a supported program form, including POSIX sh output.
+.TP
+.B checkpoint status \fIDIR\fR
+Report checkpoint state; add \fB\-\-json\fR for structured output.
+.TP
+.B help
+Show command help.
+.TP
+.B attach \fIPATH\fR
+Connect to a live run control endpoint.
+.TP
+.B dap
+Run the Debug Adapter Protocol server.
+.TP
+.B daemon
+Serve, inspect or stop the per-user run daemon.
 .SH OPTIONS
 .TP
 .BI \-\-input " NAME=VALUE"
@@ -81,6 +124,70 @@ Structured result for
 .B check
 and
 .BR explain .
+.TP
+.BI \-\-answers " FILE"
+Answers file for
+.BR test .
+.TP
+.BI \-\-record " DIR"
+Record a finite run for inspection or replay.
+.TP
+.B \-\-what-if
+Print the run plan and review fingerprint without running it.
+.TP
+.BI \-\-confirm " FINGERPRINT"
+Run only when the current plan matches a reviewed fingerprint.
+.TP
+.BI \-\-allow " CAPABILITY"
+Grant a capability for the effects gate. May be repeated.
+.TP
+.B \-\-policy-header
+Include the capability policy header in explain output.
+.TP
+.BI \-\-format " FORMAT"
+Select output format: \fBgithub\fR or \fBjson\fR.
+.TP
+.BI \-\-single-instance " FILE"
+Prevent concurrent runs with an exclusive lock file.
+.TP
+.B \-\-control
+Enable the live control socket for a run.
+.TP
+.BI \-\-break-at " LINE"
+Pause execution at a source line for debugging.
+.TP
+.B \-\-daemon
+Forward a run through the per-user daemon when available.
+.TP
+.B \-\-json-errors
+Emit structured runtime errors on standard error. Place before \fB\-\-\fR.
+.TP
+.B \-V, \-\-version
+Print the version.
+.TP
+.B \-\-headless
+Run a UI once and print JSON state.
+.TP
+.B \-\-once
+Run one calendar activation and exit.
+.TP
+.B \-\-init
+Supervise a worker as PID 1 (Unix).
+.TP
+.BI \-\-max\-runs " N"
+Maximum trigger runs or interactive UI jobs.
+.TP
+.BI \-\-missed\-ticks " POLICY"
+Select trigger backlog handling policy.
+.TP
+.BI \-\-max\-catch\-up " N"
+Bound catch-up runs to 1 through 64.
+.TP
+.BI \-\-calendar\-dedup " MODE"
+Select calendar fold deduplication mode.
+.TP
+.BI \-\-max\-record\-bytes " N"
+Maximum listener or stream record size in bytes.
 .TP
 .BI \-\-manifest\-dir " DIR"
 Directory containing applet manifests. Defaults to the installed manifests.
@@ -133,6 +240,12 @@ Budget for an interrupt to finish running work before the run is cancelled. Defa
 Show the command help, or with a program file and
 .B \-\-
 the program's generated help.
+.PP
+Options that take values require a separate following argument; the
+.B \-\-option=value
+form is not accepted. The same usage text is printed by
+.B \-\-help
+and on argument errors.
 .SH EXIT STATUS
 A program's explicit
 .B exit with status

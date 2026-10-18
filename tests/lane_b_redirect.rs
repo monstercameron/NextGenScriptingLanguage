@@ -170,3 +170,24 @@ fn a_failing_command_still_writes_its_stderr_to_the_file() {
     let file = fs::read_to_string(directory.path().join("err.txt")).unwrap();
     assert!(file.contains("could not read workflow"), "{file}");
 }
+
+#[cfg(unix)]
+#[test]
+fn stderr_redirect_does_not_stop_at_the_diagnostic_capture_limit() {
+    let (directory, output) = run(
+        "run \"sh\" with arguments [\"-c\", \"head -c 200000 /dev/zero >&2\"] and stderr to \"err.bin\"\n",
+    );
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let file = fs::read(directory.path().join("err.bin")).unwrap();
+    assert_eq!(file.len(), 200_000);
+}
+
+#[cfg(unix)]
+#[test]
+fn merged_stderr_does_not_stop_at_the_diagnostic_capture_limit() {
+    let (_directory, output) = run(
+        "run \"sh\" with arguments [\"-c\", \"head -c 200000 /dev/zero >&2\"] and stderr merged as combined\nuse value combined\n",
+    );
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(output.stdout.len(), 200_000);
+}

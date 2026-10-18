@@ -46,7 +46,12 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
                 Some(0) => break,
                 Some(count) => {
                     let count = reader.read(&mut buffer[..count.min(8192)])?;
-                    let remaining = 65536usize.saturating_sub(child.diagnostic.len());
+                    let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get) {
+                        FORCED_STDERR_CAPTURE_LIMIT
+                    } else {
+                        65536
+                    };
+                    let remaining = limit.saturating_sub(child.diagnostic.len());
                     let keep = count.min(remaining);
                     child.diagnostic.extend_from_slice(&buffer[..keep]);
                     child.diagnostic_truncated |= keep < count;

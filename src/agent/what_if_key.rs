@@ -83,6 +83,24 @@ pub fn load_or_create_at(path: &Path) -> Result<[u8; KEY_BYTES]> {
     }
 }
 
+/// Read the existing per-user key without creating a replacement. Resume paths
+/// use this when a checkpoint records keyed inputs, because a new key cannot
+/// authenticate the inputs already stored in its journal.
+pub fn load_existing() -> Result<[u8; KEY_BYTES]> {
+    load_existing_at(&key_path()?)
+}
+
+/// Read an existing key without creating one, and explain how to recover if it
+/// is missing.
+pub fn load_existing_at(path: &Path) -> Result<[u8; KEY_BYTES]> {
+    read_existing(path)?.with_context(|| {
+        format!(
+            "the per-user input key is missing at {}; restore that key from backup before resuming this checkpoint",
+            path.display()
+        )
+    })
+}
+
 /// Read an existing key, refusing any file that is not a private 32-byte regular file.
 fn read_existing(path: &Path) -> Result<Option<[u8; KEY_BYTES]>> {
     let metadata = match fs::symlink_metadata(path) {
@@ -125,6 +143,25 @@ fn read_existing(path: &Path) -> Result<Option<[u8; KEY_BYTES]>> {
     let mut key = [0u8; KEY_BYTES];
     key.copy_from_slice(&bytes);
     Ok(Some(key))
+}
+
+#[cfg(test)]
+mod missing_key_tests {
+    use super::load_existing_at;
+
+    #[test]
+    fn reading_a_missing_checkpoint_key_never_creates_a_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("execute").join("what-if.key");
+        let error = load_existing_at(&path).expect_err("a missing key must be refused");
+        let message = format!("{error:#}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        assert!(
+            message.contains("restore that key from backup"),
+            "{message}"
+        );
+        assert!(!path.exists(), "reading a missing key must not create one");
+    }
 }
 
 /// Create a new key at `path` with owner-only permissions. If another process creates

@@ -271,11 +271,40 @@ fn program_exit(
                     Some(code) => status(code, bindings, 1)?,
                     None => 1,
                 },
-                message: Some(text),
+                message: Some(crate::terminal_text::escape_controls(&text)),
             })
         }
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod program_exit_tests {
+    use super::program_exit;
+    use crate::ast::{StepKind, Value};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn fail_messages_escape_terminal_controls() {
+        let mut bindings = BTreeMap::new();
+        bindings.insert(
+            "msg".to_owned(),
+            Value::String("before\u{1b}[2J\u{9b}31m\nafter".to_owned()),
+        );
+        let exit = program_exit(
+            &StepKind::Fail {
+                message: Value::Reference("msg".to_owned()),
+                status: None,
+            },
+            &bindings,
+        )
+        .unwrap()
+        .expect("fail should produce an exit");
+        assert_eq!(
+            exit.message.as_deref(),
+            Some("before\\u{1b}[2J\\u{9b}31m\nafter")
+        );
+    }
 }
 
 /// Result of one explicit applet invocation through its declared backend.
@@ -1468,6 +1497,11 @@ pub(crate) fn current_step_id() -> Option<std::sync::Arc<str>> {
             .and_then(|ids| ids.get(STEP_INDEX.with(std::cell::Cell::get)).cloned())
     })
 }
+
+/// Stderr kept for a command whose stderr is redirected or merged: it is the
+/// redirected output itself, not a diagnostic tail, so it is kept far past the
+/// diagnostic cap, but still bounded so a runaway command cannot exhaust memory.
+pub(crate) const FORCED_STDERR_CAPTURE_LIMIT: usize = 64 * 1024 * 1024;
 
 thread_local! {
     /// Set by the CLI around a top-level finite run. Nested runs never see it.
@@ -3723,7 +3757,12 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
                 break;
             }
             Ok(count) => {
-                let remaining = 8192usize.saturating_sub(child.diagnostic.len());
+                let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get) {
+                    FORCED_STDERR_CAPTURE_LIMIT
+                } else {
+                    8192
+                };
+                let remaining = limit.saturating_sub(child.diagnostic.len());
                 let keep = count.min(remaining);
                 child.diagnostic.extend_from_slice(&buffer[..keep]);
                 child.diagnostic_truncated |= keep < count;

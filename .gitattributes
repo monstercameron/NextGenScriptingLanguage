@@ -63,3 +63,6 @@ benchmarks/text-json-decoder-macos-arm64-20261016/**/*.diff binary
 # Bundled manifest index: text with LF endings, and a binary compressed body blob.
 src/bundled_manifests/index.tsv text eol=lf
 src/bundled_manifests/bodies.bin binary
+
+# Model fixtures match the exact request text, so their sources must keep LF on every checkout.
+examples/ai-gauntlet/** text eol=lf

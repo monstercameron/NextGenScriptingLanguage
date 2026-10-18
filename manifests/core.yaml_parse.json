@@ -1,5 +1,6 @@
 {
   "name": "yaml.parse",
+  "description": "Parse YAML text into structured data.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

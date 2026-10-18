@@ -1,5 +1,6 @@
 {
   "name": "printf",
+  "description": "Provides the printf operation for controlled scripts.",
   "phrases": [
     "print"
   ],

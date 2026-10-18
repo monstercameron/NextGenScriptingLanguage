@@ -1,5 +1,6 @@
 {
   "name": "toml.parse",
+  "description": "Provides the toml parse operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

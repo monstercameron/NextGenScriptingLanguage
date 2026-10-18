@@ -1,5 +1,6 @@
 {
   "name": "text.lines",
+  "description": "Provides the text lines operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

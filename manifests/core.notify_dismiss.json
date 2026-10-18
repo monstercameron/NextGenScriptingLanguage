@@ -1,5 +1,6 @@
 {
   "name": "notify.dismiss",
+  "description": "Provides the notify dismiss operation for controlled scripts.",
   "binary": "makoctl",
   "accepts_stdin": false,
   "cacheable": false,

@@ -1,5 +1,6 @@
 {
   "name": "grep",
+  "description": "Provides the grep operation for controlled scripts.",
   "binary": "grep",
   "accepts_stdin": true,
   "parameters": {

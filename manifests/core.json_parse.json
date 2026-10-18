@@ -1,5 +1,6 @@
 {
   "name": "json.parse",
+  "description": "Provides the json parse operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

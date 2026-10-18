@@ -1,5 +1,6 @@
 {
   "name": "text.format",
+  "description": "Provides the text format operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

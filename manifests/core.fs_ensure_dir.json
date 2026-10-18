@@ -1,5 +1,6 @@
 {
   "name": "fs.ensure_dir",
+  "description": "Provides the fs ensure dir operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

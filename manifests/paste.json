@@ -1,5 +1,6 @@
 {
   "name": "paste",
+  "description": "Provides the paste operation for controlled scripts.",
   "binary": "paste",
   "parameters": {
     "flags": {

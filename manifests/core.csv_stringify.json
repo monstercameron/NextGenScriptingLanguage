@@ -1,5 +1,6 @@
 {
   "name": "csv.stringify",
+  "description": "Provides the csv stringify operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

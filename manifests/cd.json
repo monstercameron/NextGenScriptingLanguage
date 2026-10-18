@@ -1,5 +1,6 @@
 {
   "name": "cd",
+  "description": "Provides the cd operation for controlled scripts.",
   "binary": "cd",
   "builtin": "cd",
   "parameters": {

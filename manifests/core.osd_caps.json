@@ -1,5 +1,6 @@
 {
   "name": "osd.caps",
+  "description": "Provides the osd caps operation for controlled scripts.",
   "binary": "swayosd-client",
   "accepts_stdin": false,
   "cacheable": false,

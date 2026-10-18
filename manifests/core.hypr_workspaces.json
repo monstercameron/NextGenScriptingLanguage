@@ -1,5 +1,6 @@
 {
   "name": "hypr.workspaces",
+  "description": "Provides the hypr workspaces operation for controlled scripts.",
   "binary": "hyprctl",
   "accepts_stdin": false,
   "cacheable": false,

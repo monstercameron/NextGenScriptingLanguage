@@ -1,5 +1,6 @@
 {
   "name": "csv.parse",
+  "description": "Provides the csv parse operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

@@ -1,5 +1,6 @@
 {
   "name": "path.dirname",
+  "description": "Provides the path dirname operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

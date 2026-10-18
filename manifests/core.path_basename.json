@@ -1,5 +1,6 @@
 {
   "name": "path.basename",
+  "description": "Provides the path basename operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

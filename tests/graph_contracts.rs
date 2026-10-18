@@ -14,6 +14,43 @@ fn registry() -> Registry {
     .unwrap()
 }
 
+#[test]
+fn sensitivity_validation_scales_to_forty_thousand_isolated_nodes() {
+    let mut plan = GraphPlan::new("large");
+    for index in 0..40_000 {
+        plan.add_node(GraphNode {
+            id: format!("node{index}"),
+            kind: GraphNodeKind::Timer { interval_ms: 1 },
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            events: BTreeMap::new(),
+            line: None,
+        })
+        .unwrap();
+    }
+    let start = std::time::Instant::now();
+    assert!(plan
+        .effective_sensitivity_labels(&Registry::default())
+        .unwrap()
+        .is_empty());
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "40,000-node sensitivity validation took {:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
+fn graph_parser_enforces_the_default_node_limit_during_static_validation() {
+    let mut source = String::from("graph too_many\n");
+    for index in 0..65 {
+        source.push_str(&format!("  run text.source as node{index}\n"));
+    }
+    source.push_str("end graph\n");
+    let error = graph::parse(&source, &registry()).unwrap_err();
+    assert!(format!("{error:#}").contains("max_nodes 64"), "{error:#}");
+}
+
 fn leaf(kind: OutputType) -> ValueSchema {
     ValueSchema {
         kind,

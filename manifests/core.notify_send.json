@@ -1,5 +1,6 @@
 {
   "name": "notify.send",
+  "description": "Provides the notify send operation for controlled scripts.",
   "binary": "notify-send",
   "accepts_stdin": false,
   "cacheable": false,

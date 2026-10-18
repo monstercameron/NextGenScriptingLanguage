@@ -1,5 +1,6 @@
 {
   "name": "pwd",
+  "description": "Provides the pwd operation for controlled scripts.",
   "binary": "pwd",
   "arguments": []
 }

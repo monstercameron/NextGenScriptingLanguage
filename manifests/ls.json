@@ -1,5 +1,6 @@
 {
   "name": "ls",
+  "description": "Provides the ls operation for controlled scripts.",
   "binary": "ls",
   "parameters": {
     "flags": {

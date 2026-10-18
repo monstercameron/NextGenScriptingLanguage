@@ -1,5 +1,6 @@
 {
   "name": "text.matches",
+  "description": "Provides the text matches operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

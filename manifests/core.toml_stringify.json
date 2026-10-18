@@ -1,5 +1,6 @@
 {
   "name": "toml.stringify",
+  "description": "Provides the toml stringify operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

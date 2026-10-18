@@ -1,5 +1,6 @@
 {
   "name": "desktop.clock_remote",
+  "description": "Provides the desktop clock remote operation for controlled scripts.",
   "build_feature": "remote",
   "binary": "@remote-applet",
   "accepts_stdin": false,

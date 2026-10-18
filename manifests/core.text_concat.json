@@ -1,5 +1,6 @@
 {
   "name": "text.concat",
+  "description": "Provides the text concat operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

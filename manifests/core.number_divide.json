@@ -1,5 +1,6 @@
 {
   "name": "number.divide",
+  "description": "Provides the number divide operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

@@ -1,5 +1,6 @@
 {
   "name": "mkdir",
+  "description": "Provides the mkdir operation for controlled scripts.",
   "binary": "mkdir",
   "cacheable": false,
   "parameters": {

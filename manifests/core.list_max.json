@@ -1,5 +1,6 @@
 {
   "name": "list.max",
+  "description": "Provides the list max operation for controlled scripts.",
   "phrases": [
     "maximum value",
     "largest number"

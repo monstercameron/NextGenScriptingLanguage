@@ -1,5 +1,6 @@
 {
   "name": "menu.fuzzel",
+  "description": "Provides the menu fuzzel operation for controlled scripts.",
   "binary": "fuzzel",
   "accepts_stdin": true,
   "cacheable": false,

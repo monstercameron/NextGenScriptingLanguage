@@ -1,5 +1,6 @@
 {
   "name": "omarchy.editor-install",
+  "description": "Provides the omarchy editor-install operation for controlled scripts.",
   "binary": "/usr/bin/env",
   "accepts_stdin": false,
   "cacheable": false,

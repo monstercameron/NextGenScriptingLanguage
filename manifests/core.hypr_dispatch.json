@@ -1,5 +1,6 @@
 {
   "name": "hypr.dispatch",
+  "description": "Provides the hypr dispatch operation for controlled scripts.",
   "binary": "hyprctl",
   "accepts_stdin": false,
   "cacheable": false,

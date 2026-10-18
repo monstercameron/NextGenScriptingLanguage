@@ -1,5 +1,6 @@
 {
   "name": "cat",
+  "description": "Provides the cat operation for controlled scripts.",
   "phrases": [
     "copy"
   ],

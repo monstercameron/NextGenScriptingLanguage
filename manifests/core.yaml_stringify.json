@@ -1,5 +1,6 @@
 {
   "name": "yaml.stringify",
+  "description": "Provides the yaml stringify operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

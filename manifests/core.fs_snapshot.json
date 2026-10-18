@@ -1,5 +1,6 @@
 {
   "name": "fs.snapshot",
+  "description": "Provides the fs snapshot operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "stdio": {

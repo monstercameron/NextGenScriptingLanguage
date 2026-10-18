@@ -1,5 +1,6 @@
 {
   "name": "awk",
+  "description": "Provides the awk operation for controlled scripts.",
   "binary": "awk",
   "accepts_stdin": true,
   "parameters": {

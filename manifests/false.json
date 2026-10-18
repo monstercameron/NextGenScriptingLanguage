@@ -1,5 +1,6 @@
 {
   "name": "false",
+  "description": "Provides the false operation for controlled scripts.",
   "phrases": [
     "fail"
   ],

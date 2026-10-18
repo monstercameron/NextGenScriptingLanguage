@@ -1,5 +1,6 @@
 {
   "name": "json.get",
+  "description": "Provides the json get operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

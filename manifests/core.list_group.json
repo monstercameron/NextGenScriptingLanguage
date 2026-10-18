@@ -1,5 +1,6 @@
 {
   "name": "list.group",
+  "description": "Provides the list group operation for controlled scripts.",
   "phrases": [
     "group records",
     "count by key"

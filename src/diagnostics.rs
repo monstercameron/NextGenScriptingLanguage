@@ -71,6 +71,11 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "statically known value types are incompatible at a use site",
     },
     CodeInfo {
+        code: "check.diagnostics.truncated",
+        family: "validate",
+        meaning: "more diagnostics were found than the response limit permits",
+    },
+    CodeInfo {
         code: "applet.unknown",
         family: "resolve",
         meaning: "the operation names no declared applet and is not a quoted executable",
@@ -200,11 +205,17 @@ pub fn analyze_source_at(
     path: Option<&std::path::Path>,
     registry: &Registry,
 ) -> Vec<Diagnostic> {
+    const MAX_DIAGNOSTICS: usize = 10_000;
     let mut diagnostics = Vec::new();
     let mut local_error_lines = BTreeSet::new();
 
     let line_starts = LineStarts::new(source);
     for (offset, character) in source.char_indices() {
+        // A leading byte-order mark is stripped by the parser, as run does, so it is
+        // not an invisible character inside the program.
+        if offset == 0 && character == '\u{feff}' {
+            continue;
+        }
         if is_invisible_format(character) {
             diagnostics.push(Diagnostic::error(
                 "source.invisible_format",
@@ -345,6 +356,15 @@ pub fn analyze_source_at(
             && left.span.start_byte == right.span.start_byte
             && left.span.end_byte == right.span.end_byte
     });
+    if diagnostics.len() > MAX_DIAGNOSTICS {
+        let omitted = diagnostics.len() - (MAX_DIAGNOSTICS - 1);
+        diagnostics.truncate(MAX_DIAGNOSTICS - 1);
+        diagnostics.push(Diagnostic::error(
+            "check.diagnostics.truncated",
+            format!("diagnostic output limit reached; {omitted} additional diagnostics omitted"),
+            line_starts.span_at(source, source.len(), source.len(), SpanPrecision::Line),
+        ));
+    }
     diagnostics
 }
 
@@ -426,7 +446,10 @@ fn syntax_code(message: &str) -> &'static str {
     }
 }
 
-struct LineStarts(Vec<usize>);
+struct LineStarts {
+    starts: Vec<usize>,
+    ends: Vec<usize>,
+}
 
 impl LineStarts {
     fn new(source: &str) -> Self {
@@ -434,24 +457,34 @@ impl LineStarts {
             Vec::with_capacity(source.bytes().filter(|byte| *byte == b'\n').count() + 1);
         starts.push(0);
         starts.extend(source.match_indices('\n').map(|(offset, _)| offset + 1));
-        Self(starts)
+        let ends = starts
+            .iter()
+            .enumerate()
+            .map(|(index, start)| {
+                let mut end = starts.get(index + 1).map_or(source.len(), |next| next - 1);
+                if end > *start && source.as_bytes()[end - 1] == b'\r' {
+                    end -= 1;
+                }
+                end
+            })
+            .collect();
+        Self { starts, ends }
     }
 
     fn start(&self, line: usize) -> usize {
-        self.0
+        self.starts
             .get(line.saturating_sub(1))
             .copied()
-            .unwrap_or_else(|| *self.0.last().unwrap_or(&0))
+            .unwrap_or_else(|| *self.starts.last().unwrap_or(&0))
     }
 
     fn span(&self, source: &str, line: usize) -> SourceSpan {
         let start = self.start(line);
-        let mut end = source[start..]
-            .find('\n')
-            .map_or(source.len(), |offset| start + offset);
-        if end > start && source.as_bytes()[end - 1] == b'\r' {
-            end -= 1;
-        }
+        let end = self
+            .ends
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or(start);
         self.span_at(source, start, end, SpanPrecision::Line)
     }
 
@@ -479,10 +512,10 @@ impl LineStarts {
 
     fn position(&self, source: &str, offset: usize) -> (usize, usize) {
         let line_index = self
-            .0
+            .starts
             .partition_point(|start| *start <= offset)
             .saturating_sub(1);
-        let start = self.0[line_index];
+        let start = self.starts[line_index];
         (line_index + 1, source[start..offset].chars().count() + 1)
     }
 }
@@ -540,6 +573,12 @@ fn collect_program_diagnostics(
         .iter()
         .map(|input| input.name.as_str().to_owned())
         .collect::<BTreeSet<_>>();
+    known_names.extend(declared_input_names(source));
+    collect_non_call_bindings(&program.steps, &mut known_names);
+    for definition in program.definitions.values() {
+        known_names.extend(definition.inputs.iter().map(|input| input.name.clone()));
+        collect_non_call_bindings(&definition.steps, &mut known_names);
+    }
     let mut known_types = BTreeMap::<String, OutputType>::new();
     let mut ambiguous_types = BTreeSet::<String>::new();
     let mut applet_suggestions = BTreeMap::<String, Option<String>>::new();
@@ -622,6 +661,274 @@ fn collect_program_diagnostics(
         line_starts,
         diagnostics,
     );
+    let mut step_names = program
+        .inputs
+        .iter()
+        .map(|input| input.name.clone())
+        .collect::<BTreeSet<_>>();
+    step_names.extend(declared_input_names(source));
+    collect_non_call_bindings(&program.steps, &mut step_names);
+    for definition in program.definitions.values() {
+        step_names.extend(definition.inputs.iter().map(|input| input.name.clone()));
+        collect_non_call_bindings(&definition.steps, &mut step_names);
+    }
+    collect_step_value_references(
+        source,
+        &program.steps,
+        &mut step_names,
+        line_starts,
+        diagnostics,
+    );
+    for definition in program.definitions.values() {
+        let mut definition_names = definition
+            .inputs
+            .iter()
+            .map(|input| input.name.clone())
+            .collect::<BTreeSet<_>>();
+        definition_names.extend(declared_input_names(source));
+        collect_step_value_references(
+            source,
+            &definition.steps,
+            &mut definition_names,
+            line_starts,
+            diagnostics,
+        );
+    }
+    collect_step_type_mismatches(
+        source,
+        &program.steps,
+        &top_level_types,
+        line_starts,
+        diagnostics,
+    );
+}
+
+fn collect_non_call_bindings(steps: &[Step], known_names: &mut BTreeSet<String>) {
+    for step in steps {
+        match &step.kind {
+            StepKind::Loop {
+                kind: crate::ast::LoopKind::ForEach { binding, .. },
+                ..
+            }
+            | StepKind::Catch { binding, .. }
+            | StepKind::TempScope { binding, .. }
+            | StepKind::ParseJson { binding }
+            | StepKind::TakeJson { binding, .. }
+            | StepKind::TakeJsonDynamic { binding, .. }
+            | StepKind::CaptureBytes { binding } => {
+                known_names.insert(binding.clone());
+            }
+            StepKind::Read { binding, .. }
+            | StepKind::ReadStdin { binding }
+            | StepKind::ReadCallInput { binding } => {
+                known_names.extend(binding.iter().cloned());
+            }
+            StepKind::TaskGroup { binding, each, .. } => {
+                known_names.insert(binding.clone());
+                known_names.extend(each.iter().map(|task| task.binding.clone()));
+            }
+            StepKind::InspectJob { binding, .. } => {
+                known_names.insert(binding.clone());
+            }
+            StepKind::CallProgram { call, .. } => add_call_bindings(call, known_names),
+            StepKind::AwaitJob {
+                status_binding,
+                result_binding,
+                ..
+            } => {
+                known_names.extend(status_binding.iter().cloned());
+                known_names.extend(result_binding.iter().cloned());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn declared_input_names(source: &str) -> BTreeSet<String> {
+    parser::logical_lines(source)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|statement| {
+            let tokens = parser::tokenize(&statement.text).ok()?;
+            match tokens.as_slice() {
+                [Token::Word("accept"), Token::Word(name), ..] => Some((*name).to_owned()),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn collect_step_type_mismatches(
+    source: &str,
+    steps: &[Step],
+    known_types: &BTreeMap<String, OutputType>,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for step in steps {
+        let expected_values = match &step.kind {
+            StepKind::UseValue { source } => vec![(source, &[OutputType::Text][..], "text input")],
+            StepKind::Environment { set, .. } => set
+                .values()
+                .map(|value| (value, &[OutputType::Text][..], "environment text"))
+                .collect(),
+            StepKind::Loop { kind, .. } => match kind {
+                crate::ast::LoopKind::Repeat { count } => {
+                    vec![(count, &[OutputType::Integer][..], "integer repeat count")]
+                }
+                crate::ast::LoopKind::ForEach { values, .. } => {
+                    vec![(values, &[OutputType::List][..], "list iteration values")]
+                }
+                _ => Vec::new(),
+            },
+            StepKind::UseFolder { path }
+            | StepKind::Read { path, .. }
+            | StepKind::Save { path, .. }
+            | StepKind::Append { path } => vec![(
+                path,
+                &[OutputType::Text, OutputType::Path][..],
+                "text or path value",
+            )],
+            StepKind::TakeJsonDynamic { pointer, .. } => {
+                vec![(pointer, &[OutputType::Text][..], "text JSON pointer")]
+            }
+            _ => Vec::new(),
+        };
+        for (value, expected, context) in expected_values {
+            let Some(actual) = known_value_type(value, known_types) else {
+                continue;
+            };
+            if expected.contains(&actual) {
+                continue;
+            }
+            let Value::Reference(name) = value else {
+                continue;
+            };
+            let span = line_words_from_start(source, line_starts.start(step.line))
+                .into_iter()
+                .find(|word| !word.3 && word.0 == *name)
+                .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token));
+            if let Some(span) = span {
+                diagnostics.push(Diagnostic::error(
+                    "check.type_mismatch",
+                    format!(
+                        "{name:?} has type {}; {context} has an incompatible type",
+                        output_type_name(actual)
+                    ),
+                    span,
+                ));
+            }
+        }
+    }
+}
+
+fn collect_step_value_references(
+    source: &str,
+    steps: &[Step],
+    known_names: &mut BTreeSet<String>,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for step in steps {
+        let mut values = Vec::new();
+        match &step.kind {
+            StepKind::If { condition, .. } => {
+                values.extend([&condition.left, &condition.right]);
+            }
+            StepKind::Loop { kind, .. } => match kind {
+                crate::ast::LoopKind::Repeat { count } => values.push(count),
+                crate::ast::LoopKind::ForEach { values: list, .. } => values.push(list),
+                crate::ast::LoopKind::While { condition } => {
+                    values.extend([&condition.left, &condition.right]);
+                }
+                crate::ast::LoopKind::WhileCommand { .. } => {}
+            },
+            StepKind::Exit { status } => values.push(status),
+            StepKind::Fail { message, status } => {
+                values.push(message);
+                values.extend(status.iter());
+            }
+            StepKind::UseFolder { path } | StepKind::Read { path, .. } => values.push(path),
+            StepKind::UseValue { source } | StepKind::EncodeJson { source } => values.push(source),
+            StepKind::TakeJson { source, .. } => values.push(source),
+            StepKind::TakeJsonDynamic {
+                pointer, source, ..
+            } => {
+                values.extend([pointer, source]);
+            }
+            StepKind::Save { path, .. } | StepKind::Append { path } => values.push(path),
+            StepKind::Environment { set, .. } => values.extend(set.values()),
+            _ => {}
+        }
+        for value in values {
+            collect_undefined_references(
+                source,
+                step.line,
+                value,
+                known_names,
+                line_starts,
+                diagnostics,
+            );
+        }
+        match &step.kind {
+            StepKind::Invoke { call, .. } => add_call_bindings(call, known_names),
+            StepKind::TaskGroup {
+                binding,
+                tasks,
+                each,
+                ..
+            } => {
+                known_names.insert(binding.clone());
+                if let Some(each) = each {
+                    known_names.insert(each.binding.clone());
+                }
+                for call in tasks {
+                    add_call_bindings(call, known_names);
+                }
+            }
+            StepKind::SpawnJob { name, stages } => {
+                known_names.insert(name.clone());
+                for stage in stages {
+                    add_call_bindings(&stage.call, known_names);
+                }
+            }
+            StepKind::InspectJob { binding, .. } => {
+                known_names.insert(binding.clone());
+            }
+            StepKind::AwaitJob {
+                status_binding,
+                result_binding,
+                ..
+            } => {
+                known_names.extend(status_binding.iter().cloned());
+                known_names.extend(result_binding.iter().cloned());
+            }
+            StepKind::Catch { binding, .. }
+            | StepKind::TempScope { binding, .. }
+            | StepKind::CaptureBytes { binding } => {
+                known_names.insert(binding.clone());
+            }
+            StepKind::Read { binding, .. } | StepKind::ReadStdin { binding } => {
+                known_names.extend(binding.iter().cloned());
+            }
+            StepKind::ReadCallInput { binding } => {
+                known_names.extend(binding.iter().cloned());
+            }
+            StepKind::ParseJson { binding }
+            | StepKind::TakeJson { binding, .. }
+            | StepKind::TakeJsonDynamic { binding, .. } => {
+                known_names.insert(binding.clone());
+            }
+            StepKind::Loop {
+                kind: crate::ast::LoopKind::ForEach { binding, .. },
+                ..
+            } => {
+                known_names.insert(binding.clone());
+            }
+            StepKind::CallProgram { call, .. } => add_call_bindings(call, known_names),
+            _ => {}
+        }
+    }
 }
 
 fn record_binding_type(
@@ -1355,7 +1662,10 @@ fn line_words_from_start(source: &str, start: usize) -> Vec<(String, usize, usiz
     let mut index = 0;
     let bytes = content.as_bytes();
     while index < bytes.len() {
-        if matches!(bytes[index], b' ' | b'\t' | b'\r' | b'[' | b']' | b',') {
+        if matches!(
+            bytes[index],
+            b' ' | b'\t' | b'\r' | b'[' | b']' | b'{' | b'}' | b':' | b','
+        ) {
             index += 1;
             continue;
         }
@@ -1379,7 +1689,7 @@ fn line_words_from_start(source: &str, start: usize) -> Vec<(String, usize, usiz
             while index < bytes.len()
                 && !matches!(
                     bytes[index],
-                    b' ' | b'\t' | b'\r' | b'[' | b']' | b',' | b'"'
+                    b' ' | b'\t' | b'\r' | b'[' | b']' | b'{' | b'}' | b':' | b',' | b'"'
                 )
             {
                 index += 1;

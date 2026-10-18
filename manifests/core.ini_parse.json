@@ -1,5 +1,6 @@
 {
   "name": "ini.parse",
+  "description": "Provides the ini parse operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

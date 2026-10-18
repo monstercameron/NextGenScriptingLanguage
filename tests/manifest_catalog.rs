@@ -127,6 +127,31 @@ fn packed_catalog_matches_every_manifest_spec_and_representative_argv() {
 }
 
 #[test]
+fn every_shipped_manifest_has_a_description_and_each_in_process_applet_a_phrase() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    let registry = Registry::load(&root).unwrap();
+    let manifests = registry.manifests().unwrap();
+    assert!(!manifests.is_empty());
+    for manifest in manifests {
+        assert!(
+            manifest
+                .description
+                .as_deref()
+                .is_some_and(|description| !description.trim().is_empty()),
+            "{} has no description",
+            manifest.name
+        );
+        if manifest.execution_backend() == AppletBackend::InProcess {
+            assert!(
+                !manifest.phrases.is_empty(),
+                "{} has no discovery phrase",
+                manifest.name
+            );
+        }
+    }
+}
+
+#[test]
 fn packed_entries_validate_in_array_order_and_report_entry_context() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("invalid.catalog");

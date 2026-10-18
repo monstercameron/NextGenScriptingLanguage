@@ -1,5 +1,6 @@
 {
   "name": "uniq",
+  "description": "Provides the uniq operation for controlled scripts.",
   "binary": "uniq",
   "accepts_stdin": true,
   "parameters": {

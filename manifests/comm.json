@@ -1,5 +1,6 @@
 {
   "name": "comm",
+  "description": "Provides the comm operation for controlled scripts.",
   "binary": "comm",
   "parameters": {
     "flags": {

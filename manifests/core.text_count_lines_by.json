@@ -1,5 +1,6 @@
 {
   "name": "text.count_lines_by",
+  "description": "Provides the text count lines by operation for controlled scripts.",
   "phrases": [
     "count lines by field",
     "group lines by key"

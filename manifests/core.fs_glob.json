@@ -1,5 +1,6 @@
 {
   "name": "fs.glob",
+  "description": "Provides the fs glob operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

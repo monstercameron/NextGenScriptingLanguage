@@ -1,5 +1,6 @@
 {
   "name": "systemd.user.disable",
+  "description": "Provides the systemd user disable operation for controlled scripts.",
   "binary": "systemctl",
   "accepts_stdin": false,
   "cacheable": false,

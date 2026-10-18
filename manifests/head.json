@@ -1,5 +1,6 @@
 {
   "name": "head",
+  "description": "Provides the head operation for controlled scripts.",
   "binary": "head",
   "accepts_stdin": true,
   "cacheable": true,

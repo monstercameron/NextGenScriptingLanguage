@@ -1,5 +1,6 @@
 {
   "name": "desktop.quickshell",
+  "description": "Provides the desktop quickshell operation for controlled scripts.",
   "build_feature": "desktop",
   "binary": "qs",
   "accepts_stdin": false,

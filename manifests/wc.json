@@ -1,5 +1,6 @@
 {
   "name": "wc",
+  "description": "Provides the wc operation for controlled scripts.",
   "binary": "wc",
   "accepts_stdin": true,
   "cacheable": false,

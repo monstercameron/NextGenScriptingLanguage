@@ -1,5 +1,6 @@
 {
   "name": "number.subtract",
+  "description": "Provides the number subtract operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

@@ -1,5 +1,6 @@
 {
   "name": "jsonc.set",
+  "description": "Provides the jsonc set operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

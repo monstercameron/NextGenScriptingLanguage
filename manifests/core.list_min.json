@@ -1,5 +1,6 @@
 {
   "name": "list.min",
+  "description": "Provides the list min operation for controlled scripts.",
   "phrases": [
     "minimum value",
     "smallest number"

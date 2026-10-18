@@ -1,5 +1,6 @@
 {
   "name": "sort",
+  "description": "Provides the sort operation for controlled scripts.",
   "binary": "sort",
   "accepts_stdin": true,
   "parameters": {

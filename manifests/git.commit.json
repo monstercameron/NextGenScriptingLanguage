@@ -1,5 +1,6 @@
 {
   "name": "git.commit",
+  "description": "Provides the git commit operation for controlled scripts.",
   "phrases": [
     "commit changes"
   ],

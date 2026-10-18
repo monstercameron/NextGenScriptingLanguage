@@ -597,12 +597,16 @@ fn completion(
         }
     } else if command_context {
         for manifest in manifests {
+            let description = manifest
+                .description
+                .as_deref()
+                .unwrap_or("Declared Execute applet");
             items.push(json!({
                 "label": manifest.name,
                 "kind": 3,
-                "detail": "Declared Execute applet",
+                "detail": description,
                 "insertText": manifest.name,
-                "filterText": format!("{} {}", manifest.name, manifest.contract()["phrases"].as_array().into_iter().flatten().filter_map(JsonValue::as_str).collect::<Vec<_>>().join(" "))
+                "filterText": format!("{} {} {}", manifest.name, manifest.contract()["phrases"].as_array().into_iter().flatten().filter_map(JsonValue::as_str).collect::<Vec<_>>().join(" "), description)
             }));
         }
         if let Ok(program) = crate::parser::parse(&document.text) {
@@ -1454,6 +1458,7 @@ mod tests {
     fn completion_suggests_applets_and_parameters_after_whitespace() {
         let manifest = serde_json::json!({
             "name": "fixture.echo",
+            "description": "Print text to standard output.",
             "binary": "echo",
             "parameters": { "text": { "type": "string", "required": true } },
             "arguments": [{ "parameter": "text" }]
@@ -1475,11 +1480,14 @@ mod tests {
             &registry,
             &registry.manifests().expect("fixture manifests parse"),
         );
-        assert!(command["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| { item["label"] == "fixture.echo" }));
+        assert!(command["items"].as_array().unwrap().iter().any(|item| {
+            item["label"] == "fixture.echo"
+                && item["detail"] == "Print text to standard output."
+                && item["filterText"]
+                    .as_str()
+                    .unwrap()
+                    .contains("standard output")
+        }));
 
         let parameter = completion(
             &json!({

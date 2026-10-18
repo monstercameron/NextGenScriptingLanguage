@@ -1,5 +1,6 @@
 {
   "name": "jev.score",
+  "description": "Provides the jev score operation for controlled scripts.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,

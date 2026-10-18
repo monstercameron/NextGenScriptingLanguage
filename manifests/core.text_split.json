@@ -1,5 +1,6 @@
 {
   "name": "text.split",
+  "description": "Provides the text split operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

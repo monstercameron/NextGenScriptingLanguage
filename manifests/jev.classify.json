@@ -1,5 +1,6 @@
 {
   "name": "jev.classify",
+  "description": "Provides the jev classify operation for controlled scripts.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,

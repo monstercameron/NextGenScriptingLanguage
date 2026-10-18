@@ -1,5 +1,6 @@
 {
   "name": "number.multiply",
+  "description": "Provides the number multiply operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

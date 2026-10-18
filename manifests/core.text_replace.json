@@ -1,5 +1,6 @@
 {
   "name": "text.replace",
+  "description": "Provides the text replace operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

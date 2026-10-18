@@ -1,5 +1,6 @@
 {
   "name": "color.parse_rgb",
+  "description": "Provides the color parse rgb operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

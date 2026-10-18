@@ -1,5 +1,6 @@
 {
   "name": "upper",
+  "description": "Provides the upper operation for controlled scripts.",
   "phrases": [
     "uppercase"
   ],

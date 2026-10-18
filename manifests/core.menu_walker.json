@@ -1,5 +1,6 @@
 {
   "name": "menu.walker",
+  "description": "Provides the menu walker operation for controlled scripts.",
   "binary": "walker",
   "accepts_stdin": true,
   "cacheable": false,

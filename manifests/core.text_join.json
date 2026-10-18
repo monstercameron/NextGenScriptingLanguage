@@ -1,5 +1,6 @@
 {
   "name": "text.join",
+  "description": "Join text values with a chosen separator.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

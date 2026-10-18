@@ -1,5 +1,6 @@
 {
   "name": "json.map",
+  "description": "Provides the json map operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

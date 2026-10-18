@@ -1,5 +1,6 @@
 {
   "name": "jev.judge",
+  "description": "Provides the jev judge operation for controlled scripts.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,

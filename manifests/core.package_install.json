@@ -1,5 +1,6 @@
 {
   "name": "package.install",
+  "description": "Provides the package install operation for controlled scripts.",
   "binary": "pacman",
   "accepts_stdin": false,
   "cacheable": false,

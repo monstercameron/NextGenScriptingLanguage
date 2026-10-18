@@ -6,7 +6,7 @@ use crate::manifest::Registry;
 use crate::security::SensitivitySet;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 /// The message contract of one named graph port. The payload schema is the
 /// repository-wide contract schema; this module adds only graph delivery rules.
@@ -273,7 +273,7 @@ impl std::fmt::Display for GraphDiagnostic {
 
 /// A fully parsed graph. `validate` is a pure preflight operation: it checks
 /// every port and edge before any executor can start a node.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphPlan {
     pub name: String,
     nodes: Vec<GraphNode>,
@@ -282,6 +282,18 @@ pub struct GraphPlan {
     inputs: Vec<InputDeclaration>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     initial_inputs: BTreeMap<String, BTreeMap<String, Value>>,
+    #[serde(skip)]
+    node_ids: HashSet<String>,
+}
+
+impl PartialEq for GraphPlan {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.nodes == other.nodes
+            && self.edges == other.edges
+            && self.inputs == other.inputs
+            && self.initial_inputs == other.initial_inputs
+    }
 }
 
 impl GraphPlan {
@@ -292,6 +304,7 @@ impl GraphPlan {
             edges: Vec::new(),
             inputs: Vec::new(),
             initial_inputs: BTreeMap::new(),
+            node_ids: HashSet::new(),
         }
     }
 
@@ -468,7 +481,19 @@ impl GraphPlan {
     }
 
     pub fn add_node(&mut self, node: GraphNode) -> Result<()> {
-        if self.nodes.iter().any(|existing| existing.id == node.id) {
+        // Rebuild once for plans created by deserialization; subsequent inserts
+        // use the index instead of scanning every node (#167).
+        if self.node_ids.len() != self.nodes.len() {
+            self.node_ids = self
+                .nodes
+                .iter()
+                .map(|existing| existing.id.clone())
+                .collect();
+            if self.node_ids.len() != self.nodes.len() {
+                bail!("graph plan contains duplicate node ids");
+            }
+        }
+        if !self.node_ids.insert(node.id.clone()) {
             bail!("duplicate graph node {:?}", node.id);
         }
         self.nodes.push(node);
@@ -974,6 +999,7 @@ impl GraphPlan {
             .collect::<BTreeMap<_, _>>();
         let mut adjacency = BTreeMap::<String, Vec<String>>::new();
         let mut incoming_edges = BTreeMap::<String, Vec<&EdgeSpec>>::new();
+        let mut incoming_ports = BTreeMap::<String, BTreeSet<String>>::new();
         for edge in &self.edges {
             if indegree.contains_key(&edge.from.node) && indegree.contains_key(&edge.to.node) {
                 *indegree.entry(edge.to.node.clone()).or_default() += 1;
@@ -985,6 +1011,10 @@ impl GraphPlan {
                     .entry(edge.to.node.clone())
                     .or_default()
                     .push(edge);
+                incoming_ports
+                    .entry(edge.to.node.clone())
+                    .or_default()
+                    .insert(edge.to.port.clone());
             }
         }
         let mut ready = indegree
@@ -1012,11 +1042,9 @@ impl GraphPlan {
             | GraphNodeKind::ProgramService { call } = &node.kind
             {
                 for name in call.parameters.keys() {
-                    if !incoming_edges
+                    if !incoming_ports
                         .get(&id)
-                        .into_iter()
-                        .flatten()
-                        .any(|edge| edge.to.port == *name)
+                        .is_some_and(|ports| ports.contains(name))
                     {
                         if let Some(port) = node.inputs.get(name) {
                             insert_sensitivity(&mut incoming, port.sensitivity);

@@ -1,5 +1,6 @@
 {
   "name": "tail.follow",
+  "description": "Provides the tail follow operation for controlled scripts.",
   "phrases": [
     "follow file"
   ],

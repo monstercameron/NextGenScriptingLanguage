@@ -1,5 +1,6 @@
 {
   "name": "jev.ask",
+  "description": "Provides the jev ask operation for controlled scripts.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,

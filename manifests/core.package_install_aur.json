@@ -1,5 +1,6 @@
 {
   "name": "package.install_aur",
+  "description": "Provides the package install aur operation for controlled scripts.",
   "binary": "yay",
   "accepts_stdin": false,
   "cacheable": false,

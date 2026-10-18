@@ -1,5 +1,6 @@
 {
   "name": "text.default_if_empty",
+  "description": "Provides the text default if empty operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

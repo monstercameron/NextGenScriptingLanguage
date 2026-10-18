@@ -1,5 +1,6 @@
 {
   "name": "desktop.fixture_sync",
+  "description": "Provides the desktop fixture sync operation for controlled scripts.",
   "build_feature": "remote",
   "binary": "@remote-applet",
   "accepts_stdin": false,

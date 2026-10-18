@@ -1,5 +1,6 @@
 {
   "name": "list.top",
+  "description": "Provides the list top operation for controlled scripts.",
   "phrases": [
     "top values",
     "largest records"

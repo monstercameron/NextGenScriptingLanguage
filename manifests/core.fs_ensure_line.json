@@ -1,5 +1,6 @@
 {
   "name": "fs.ensure_line",
+  "description": "Provides the fs ensure line operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

@@ -1,5 +1,6 @@
 {
   "name": "jsonc.edit_content",
+  "description": "Provides the jsonc edit content operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

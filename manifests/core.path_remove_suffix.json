@@ -1,5 +1,6 @@
 {
   "name": "path.remove_suffix",
+  "description": "Provides the path remove suffix operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

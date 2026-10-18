@@ -1,5 +1,6 @@
 {
   "name": "json.filter",
+  "description": "Provides the json filter operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

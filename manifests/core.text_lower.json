@@ -1,5 +1,6 @@
 {
   "name": "text.lower",
+  "description": "Provides the text lower operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

@@ -1,5 +1,6 @@
 {
   "name": "text.trim_final_lf",
+  "description": "Provides the text trim final lf operation for controlled scripts.",
   "binary": "@execute-applet",
   "cacheable": true,
   "accepts_stdin": true,

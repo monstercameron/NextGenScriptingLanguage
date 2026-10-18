@@ -1,5 +1,6 @@
 {
   "name": "desktop.clock_format",
+  "description": "Provides the desktop clock format operation for controlled scripts.",
   "binary": "python3",
   "accepts_stdin": false,
   "parameters": {

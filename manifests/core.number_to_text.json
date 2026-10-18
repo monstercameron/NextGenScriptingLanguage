@@ -1,5 +1,6 @@
 {
   "name": "number.to_text",
+  "description": "Provides the number to text operation for controlled scripts.",
   "binary": "@execute-applet",
   "cacheable": true,
   "accepts_stdin": false,

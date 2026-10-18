@@ -1,5 +1,6 @@
 {
   "name": "fs.test",
+  "description": "Provides the fs test operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

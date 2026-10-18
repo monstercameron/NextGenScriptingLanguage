@@ -1,5 +1,6 @@
 {
   "name": "list.sum",
+  "description": "Provides the list sum operation for controlled scripts.",
   "phrases": [
     "sum values",
     "add list numbers"

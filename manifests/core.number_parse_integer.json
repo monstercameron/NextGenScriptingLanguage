@@ -1,5 +1,6 @@
 {
   "name": "number.parse_integer",
+  "description": "Provides the number parse integer operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

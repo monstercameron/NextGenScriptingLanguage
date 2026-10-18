@@ -1,5 +1,6 @@
 {
   "name": "fs.unlink_checked",
+  "description": "Provides the fs unlink checked operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "stdio": {

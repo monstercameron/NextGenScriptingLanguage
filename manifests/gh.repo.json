@@ -1,5 +1,6 @@
 {
   "name": "gh.repo",
+  "description": "Provides the gh repo operation for controlled scripts.",
   "binary": "gh",
   "cacheable": false,
   "parameters": {

@@ -1,5 +1,6 @@
 {
   "name": "cut",
+  "description": "Provides the cut operation for controlled scripts.",
   "binary": "cut",
   "accepts_stdin": true,
   "cacheable": true,

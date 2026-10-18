@@ -1,5 +1,6 @@
 {
   "name": "text.strip_prefix",
+  "description": "Provides the text strip prefix operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

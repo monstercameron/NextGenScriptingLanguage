@@ -1,5 +1,6 @@
 {
   "name": "list.sort",
+  "description": "Provides the list sort operation for controlled scripts.",
   "phrases": [
     "sort list",
     "order records"

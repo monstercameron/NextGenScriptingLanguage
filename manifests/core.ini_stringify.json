@@ -1,5 +1,6 @@
 {
   "name": "ini.stringify",
+  "description": "Provides the ini stringify operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

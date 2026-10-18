@@ -1,5 +1,6 @@
 {
   "name": "list.count",
+  "description": "Provides the list count operation for controlled scripts.",
   "phrases": [
     "count items",
     "count values",

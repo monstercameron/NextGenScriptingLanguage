@@ -1,5 +1,6 @@
 {
   "name": "package.query",
+  "description": "Provides the package query operation for controlled scripts.",
   "binary": "pacman",
   "accepts_stdin": false,
   "cacheable": false,

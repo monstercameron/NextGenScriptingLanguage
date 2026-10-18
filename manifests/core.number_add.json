@@ -1,5 +1,6 @@
 {
   "name": "number.add",
+  "description": "Add two numbers and return their numeric sum.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

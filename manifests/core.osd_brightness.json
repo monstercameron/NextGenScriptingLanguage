@@ -1,5 +1,6 @@
 {
   "name": "osd.brightness",
+  "description": "Provides the osd brightness operation for controlled scripts.",
   "binary": "swayosd-client",
   "accepts_stdin": false,
   "cacheable": false,

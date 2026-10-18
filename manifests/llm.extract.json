@@ -1,5 +1,6 @@
 {
   "name": "llm.extract",
+  "description": "Provides the llm extract operation for controlled scripts.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,

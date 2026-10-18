@@ -1,5 +1,6 @@
 {
   "name": "text.render",
+  "description": "Render a text template by substituting named values.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

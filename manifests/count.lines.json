@@ -1,5 +1,6 @@
 {
   "name": "count.lines",
+  "description": "Provides the count lines operation for controlled scripts.",
   "phrases": [
     "count lines"
   ],

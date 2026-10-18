@@ -1,5 +1,6 @@
 {
   "name": "list.unique",
+  "description": "Provides the list unique operation for controlled scripts.",
   "phrases": [
     "deduplicate list",
     "unique values"

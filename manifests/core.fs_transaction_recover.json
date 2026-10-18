@@ -1,5 +1,6 @@
 {
   "name": "fs.transaction.recover",
+  "description": "Provides the fs transaction recover operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

@@ -1,5 +1,6 @@
 {
   "name": "jq",
+  "description": "Provides the jq operation for controlled scripts.",
   "binary": "jq",
   "accepts_stdin": true,
   "cacheable": false,

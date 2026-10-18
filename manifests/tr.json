@@ -1,5 +1,6 @@
 {
   "name": "tr",
+  "description": "Provides the tr operation for controlled scripts.",
   "binary": "tr",
   "accepts_stdin": true,
   "cacheable": true,

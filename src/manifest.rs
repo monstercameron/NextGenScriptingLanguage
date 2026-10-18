@@ -22,6 +22,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[derive(Debug, Clone, Serialize)]
 pub struct Manifest {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub binary: String,
     pub builtin: Option<Builtin>,
     pub accepts_stdin: bool,
@@ -336,6 +338,7 @@ impl Registry {
         static DIRECT: OnceLock<Manifest> = OnceLock::new();
         Ok(DIRECT.get_or_init(|| Manifest {
             name: "direct executable".into(),
+            description: None,
             binary: "".into(),
             builtin: None,
             accepts_stdin: true,
@@ -650,9 +653,37 @@ impl Registry {
         let index = match self.data.manifests.as_ref() {
             Manifests::Bundled { index, .. } => index.lookup(name_or_phrase),
             Manifests::Parsed(_) => self.data.names.get(name_or_phrase).copied(),
+        };
+        if let Some(index) = index {
+            return self.data.manifests.get(index);
         }
-        .ok_or_else(|| anyhow!("unknown applet {name_or_phrase:?}"))?;
-        self.data.manifests.get(index)
+        let words = normalized_description_words(name_or_phrase);
+        if words.is_empty() {
+            bail!("unknown applet {name_or_phrase:?}");
+        }
+        let candidates = self
+            .data
+            .manifests
+            .all()?
+            .into_iter()
+            .filter(|manifest| {
+                let description = manifest.description.as_deref().unwrap_or_default();
+                let available = normalized_description_words(description);
+                words.iter().all(|word| available.contains(word))
+            })
+            .collect::<Vec<_>>();
+        match candidates.as_slice() {
+            [manifest] => Ok(manifest),
+            [] => bail!("unknown applet {name_or_phrase:?}"),
+            _ => bail!(
+                "ambiguous applet description {name_or_phrase:?}; candidates: {}",
+                candidates
+                    .iter()
+                    .map(|manifest| manifest.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
     }
 
     /// Every manifest in resolution order. On a bundled registry this parses any entry
@@ -736,6 +767,14 @@ impl Registry {
             .insert(TypeId::of::<T>(), state.clone());
         state
     }
+}
+
+fn normalized_description_words(value: &str) -> BTreeSet<String> {
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
 }
 
 fn scoped_registry_identity(
@@ -1044,6 +1083,7 @@ impl Manifest {
             .collect::<Vec<_>>();
         let mut projection = serde_json::json!({
             "name": self.name,
+            "description": self.description,
             "phrases": self.phrases,
             "backend": if self.builtin.is_some() { "builtin" } else { "native_process" },
             "binary": self.binary,
@@ -2152,6 +2192,8 @@ where
 struct RawManifest {
     name: String,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     phrases: Vec<String>,
     binary: String,
     #[serde(default)]
@@ -2348,6 +2390,11 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
     if raw.binary.contains('\0') {
         bail!("manifest binary cannot contain a NUL byte");
     }
+    if raw.description.as_deref().is_some_and(|description| {
+        description.trim().is_empty() || description.contains(['\n', '\r'])
+    }) {
+        bail!("manifest description must be a nonempty single line when present");
+    }
     let mut phrases = BTreeSet::new();
     for phrase in &raw.phrases {
         if phrase.trim().is_empty() || phrase == &raw.name || !phrases.insert(phrase) {
@@ -2436,6 +2483,7 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         .collect::<Result<Vec<_>>>()?;
     let manifest = Manifest {
         name: raw.name,
+        description: raw.description,
         phrases: raw.phrases,
         binary: raw.binary,
         builtin: raw.builtin,

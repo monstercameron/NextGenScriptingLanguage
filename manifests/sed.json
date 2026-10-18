@@ -1,5 +1,6 @@
 {
   "name": "sed",
+  "description": "Provides the sed operation for controlled scripts.",
   "binary": "sed",
   "accepts_stdin": true,
   "parameters": {

@@ -1,5 +1,6 @@
 {
   "name": "ps",
+  "description": "Provides the ps operation for controlled scripts.",
   "binary": "ps",
   "cacheable": false,
   "parameters": {

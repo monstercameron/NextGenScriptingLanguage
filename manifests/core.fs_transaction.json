@@ -1,5 +1,6 @@
 {
   "name": "fs.transaction",
+  "description": "Provides the fs transaction operation for controlled scripts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

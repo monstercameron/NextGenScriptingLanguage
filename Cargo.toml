@@ -44,28 +44,32 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 
 [features]
 # Optional product areas are enabled by default; core builds can opt out of them.
-default = ["graph", "screens", "records", "tooling"]
-full = ["graph", "screens", "records", "tooling", "tui", "model", "desktop", "dap", "remote", "live", "lsp"]
+default = ["graph", "screens", "records", "tooling", "module-tools", "agent-advisory"]
+full = ["graph", "screens", "records", "tooling", "module-tools", "agent-advisory", "tui", "model", "desktop", "dap", "remote", "live", "lsp"]
 graph = []
 screens = []
 records = []
 tooling = []
+# Package inspection and lock management for program modules.
+module-tools = []
+# What-if planning, explain effect gates, and standalone checkpoint inspection.
+agent-advisory = []
 # The terminal UI shows live session state, so it implies the live control plane.
 tui = ["screens", "live", "dep:ratatui", "dep:crossterm", "dep:unicode-width"]
 # The live control endpoint, `run --control`, and `attach`.
-live = []
+live = ["screens"]
 # The language server behind `execute lsp`: editor completions, hovers, and diagnostics.
 lsp = []
 # The model helper and the remote backend share the HTTP client, so each enables it.
 model = ["dep:ureq"]
 remote = ["dep:ureq", "dep:mio"]
 # Quickshell desktop renderer nodes and the DAP adapter. Lean builds refuse both with a clear error.
-desktop = ["screens"]
+desktop = ["screens", "graph"]
 dap = []
 # Test-only fault injection for the crash-consistency tests; never enabled by default.
 failpoints = []
 # Fuzz entry points (src/fuzz_entry.rs) and the regression replay test; never enabled by default.
-fuzzing = ["dap"]
+fuzzing = ["dap", "graph", "records"]
 
 [dev-dependencies]
 tempfile = "3"

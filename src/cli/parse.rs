@@ -26,7 +26,10 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
 
     let mut file = None;
     let mut json = false;
+    #[cfg(feature = "agent-advisory")]
     let mut allow = Vec::new();
+    #[cfg(not(feature = "agent-advisory"))]
+    let allow = Vec::new();
     let mut what_if = false;
     let mut confirm = None;
     let mut policy_header = false;
@@ -126,8 +129,14 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 )?);
             }
             "--allow" if command == "explain" => {
-                let category = take_option_value(&arguments, &mut index, "--allow", "a category")?;
-                allow.push(flow::agent::gate::parse_category(&category)?.to_owned());
+                #[cfg(feature = "agent-advisory")]
+                {
+                    let category =
+                        take_option_value(&arguments, &mut index, "--allow", "a category")?;
+                    allow.push(flow::agent::gate::parse_category(&category)?.to_owned());
+                }
+                #[cfg(not(feature = "agent-advisory"))]
+                bail!("explain --json effect gates require the agent-advisory feature; rebuild with --features agent-advisory");
             }
             "--format" if command == "check" => {
                 let format = take_option_value(&arguments, &mut index, "--format", "github|json")?;

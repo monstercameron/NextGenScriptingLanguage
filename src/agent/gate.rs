@@ -17,16 +17,21 @@
 //! The verdict is advisory. It does not stop a later run. Enforcement remains the
 //! capability policy.
 
+#[cfg(feature = "agent-advisory")]
 use anyhow::{bail, Result};
+#[cfg(feature = "agent-advisory")]
 use serde_json::{json, Value};
+#[cfg(feature = "agent-advisory")]
 use std::collections::BTreeSet;
 
 pub use crate::contracts::effect_category;
 
 /// Protocol identifier of the verdict object.
+#[cfg(feature = "agent-advisory")]
 pub const PROTOCOL: &str = "execute.gate/1";
 
 /// Categories an operator may approve, in report order.
+#[cfg(feature = "agent-advisory")]
 pub const CATEGORIES: &[&str] = &[
     "writes",
     "network",
@@ -40,6 +45,7 @@ pub const CATEGORIES: &[&str] = &[
 ];
 
 /// Step kinds that run a command. Their effects must be stated, or they are undeclared.
+#[cfg(feature = "agent-advisory")]
 const INVOCATION_KINDS: &[&str] = &[
     "task_group",
     "spawn_job",
@@ -49,6 +55,7 @@ const INVOCATION_KINDS: &[&str] = &[
 ];
 
 /// Validate one `--allow` value. Only the listed categories are accepted.
+#[cfg(feature = "agent-advisory")]
 pub fn parse_category(name: &str) -> Result<&'static str> {
     match CATEGORIES.iter().find(|known| **known == name) {
         Some(category) => Ok(category),
@@ -65,6 +72,7 @@ pub fn parse_category(name: &str) -> Result<&'static str> {
 pub const DELIBERATELY_UNDECLARED: &[&str] = &["desktop.notify", "desktop.osd", "desktop.render"];
 
 /// The categories one plan row triggers.
+#[cfg(feature = "agent-advisory")]
 fn triggered(row: &Value) -> Vec<&'static str> {
     // A resolved call row has no effects of its own. Its body is walked as rows.
     if row["kind"] == "call_program" && row["resolved"] == true {
@@ -122,6 +130,7 @@ fn triggered(row: &Value) -> Vec<&'static str> {
 /// header), when the program does not declare it. The header only restricts: it
 /// never approves anything. A step with a retry reports its attempts, because each
 /// attempt may repeat its effects.
+#[cfg(feature = "agent-advisory")]
 pub fn verdict(
     explain: &Value,
     allowed: &BTreeSet<String>,

@@ -13,7 +13,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 
 mod cli;
-#[cfg(feature = "tooling")]
+#[cfg(any(feature = "tooling", feature = "live"))]
 use cli::workflow_path;
 use cli::{parse_args, take_option_value, Args};
 mod github_annotations;
@@ -388,7 +388,10 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         bail!("`lsp` needs the language server, and this build has none; use the full build");
     }
     if arguments.first().is_some_and(|a| a == "modules") {
+        #[cfg(feature = "module-tools")]
         return modules_cli(&arguments[1..]);
+        #[cfg(not(feature = "module-tools"))]
+        bail!("`modules` requires the module-tools feature; rebuild with --features module-tools");
     }
     if arguments.first().is_some_and(|a| a == "compile") {
         #[cfg(feature = "tooling")]
@@ -416,7 +419,10 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         }
     }
     if arguments.first().is_some_and(|a| a == "checkpoint") {
+        #[cfg(feature = "agent-advisory")]
         std::process::exit(flow::agent::checkpoint::cli(&arguments[1..])?);
+        #[cfg(not(feature = "agent-advisory"))]
+        bail!("`checkpoint` requires the agent-advisory feature; rebuild with --features agent-advisory");
     }
     if arguments.first().is_some_and(|a| a == "help") {
         std::process::exit(flow::agent::help::cli(&arguments[1..])?);
@@ -1164,6 +1170,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         flow::capabilities::preflight(&program, &registry, &cwd)?;
     }
 
+    #[cfg(feature = "agent-advisory")]
     if args.what_if || args.confirm.is_some() {
         if args.command != "run" {
             bail!("--what-if and --confirm apply only to run");
@@ -1198,6 +1205,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 );
             }
         }
+    }
+    #[cfg(not(feature = "agent-advisory"))]
+    if args.what_if || args.confirm.is_some() {
+        bail!("--what-if and --confirm require the agent-advisory feature; rebuild with --features agent-advisory");
     }
 
     match args.command.as_str() {
@@ -1248,25 +1259,32 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             if args.allow.is_empty() && !args.policy_header {
                 write_json(&plan)
             } else {
-                // Gate mode: report violations, and exit nonzero unless all are approved.
-                // Approvals come only from --allow. The policy header declares intent:
-                // with --policy-header, an undeclared category is a violation too.
-                let allowed: std::collections::BTreeSet<String> =
-                    args.allow.iter().cloned().collect();
-                let declared = if args.policy_header {
-                    let source = fs::read_to_string(&args.file)
-                        .with_context(|| format!("reading {}", args.file.display()))?;
-                    Some(flow::agent::policy::header_categories(&source)?)
-                } else {
-                    None
-                };
-                let verdict = flow::agent::gate::verdict(&plan, &allowed, declared.as_ref());
-                let passed = verdict["allowed"] == true;
-                write_json(&verdict)?;
-                if !passed {
-                    std::process::exit(1);
+                #[cfg(feature = "agent-advisory")]
+                {
+                    // Gate mode: report violations, and exit nonzero unless all are approved.
+                    // Approvals come only from --allow. The policy header declares intent:
+                    // with --policy-header, an undeclared category is a violation too.
+                    let allowed: std::collections::BTreeSet<String> =
+                        args.allow.iter().cloned().collect();
+                    let declared = if args.policy_header {
+                        let source = fs::read_to_string(&args.file)
+                            .with_context(|| format!("reading {}", args.file.display()))?;
+                        Some(flow::agent::policy::header_categories(&source)?)
+                    } else {
+                        None
+                    };
+                    let verdict = flow::agent::gate::verdict(&plan, &allowed, declared.as_ref());
+                    let passed = verdict["allowed"] == true;
+                    write_json(&verdict)?;
+                    if !passed {
+                        std::process::exit(1);
+                    }
+                    Ok(())
                 }
-                Ok(())
+                #[cfg(not(feature = "agent-advisory"))]
+                {
+                    bail!("explain --json effect gates require the agent-advisory feature; rebuild with --features agent-advisory")
+                }
             }
         }
         "explain" => {
@@ -1752,6 +1770,7 @@ fn compile_cli(arguments: &[String]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "module-tools")]
 fn modules_cli(arguments: &[String]) -> Result<()> {
     const HELP: &str = "Usage: execute modules inspect MANIFEST [--root DIR] [--lock FILE]\n       execute modules verify MANIFEST --lock FILE [--root DIR]\n       execute modules lock MANIFEST --output FILE [--root DIR]\n\nValidate a local program-module package graph. No packages are fetched or installed. A lock command writes only to its explicit --output path.";
     if arguments == ["--help"] || arguments == ["-h"] {

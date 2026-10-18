@@ -3,7 +3,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod attach;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
 pub mod checkpoint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod daemon;
@@ -20,8 +20,8 @@ pub mod gate;
 pub mod help;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod instance;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
 pub mod policy;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
 pub mod what_if;
 pub mod what_if_key;

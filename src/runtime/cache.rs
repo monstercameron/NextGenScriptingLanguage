@@ -5,7 +5,7 @@ use std::io::Seek;
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -421,8 +421,23 @@ fn maintenance_lock(directory: &Path, shared: bool) -> Result<CacheLock> {
     }
     #[cfg(windows)]
     {
-        let _ = shared; // The Windows lock is exclusive for both read and write phases.
-        crate::platform::windows::lock(&file).context("locking cache maintenance file")?;
+        let _ = shared; // Windows uses an exclusive lock for both read and write phases.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match crate::platform::windows::lock(&file) {
+                Ok(()) => break,
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .and_then(std::io::Error::raw_os_error)
+                        == Some(33)
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => return Err(error).context("locking cache maintenance file"),
+            }
+        }
     }
     Ok(CacheLock(file))
 }

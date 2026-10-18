@@ -768,7 +768,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         crate::capabilities::HostAccess::Read,
                         &cwd,
                     )?;
-                    cwd = enter_directory(registry, &folder, &cwd)?;
+                    cwd = enter_directory(registry, &folder, &cwd).with_context(|| {
+                        format!("line {}: use folder {:?}", step.line, folder.display())
+                    })?;
                     if !cwd.is_dir() {
                         bail!("line {}: use folder requires a directory", step.line);
                     }
@@ -1397,7 +1399,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         }
                         let output_call = calls.last().expect("invocation group is nonempty").0;
                         let output_manifest = calls.last().expect("invocation group is nonempty").1;
-                        let (bytes, status, stdout_captured, stages, typed_json) = if call.cache {
+                        let (mut bytes, status, stdout_captured, stages, typed_json) = if call.cache
+                        {
                             let input = input.materialize(
                                 options.max_output_bytes,
                                 signals,
@@ -1662,6 +1665,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 .unwrap_or_default(),
                             None => Vec::new(),
                         };
+                        let merged_redirect = redirect.as_mut().filter(|pending| {
+                            matches!(pending.target, crate::ast::RedirectTarget::StderrMerged)
+                        });
+                        if let Some(pending) = merged_redirect {
+                            bytes = pending.route(bytes, &redirected_stderr, signals)?;
+                        }
                         if let Some(name) = &call.status_binding {
                             let code = status.context("applet finished without an exit code")?;
                             bindings.insert(name.clone(), Value::Integer(i64::from(code)));
@@ -1765,6 +1774,14 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             }
                         }
                         let bytes = match &mut redirect {
+                            Some(redirect)
+                                if matches!(
+                                    redirect.target,
+                                    crate::ast::RedirectTarget::StderrMerged
+                                ) =>
+                            {
+                                bytes
+                            }
                             Some(redirect) => {
                                 let bytes = redirect.route(bytes, &redirected_stderr, signals)?;
                                 if journal.is_some() {

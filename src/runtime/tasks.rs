@@ -757,15 +757,12 @@ pub(super) fn run_each(
         });
     }
     let max_output_bytes = options.max_output_bytes;
-    let per_task_output_limit = max_output_bytes / prepared.len();
-    if per_task_output_limit == 0 {
-        bail!(
-            "output limit of {max_output_bytes} bytes is too small for {} elements",
-            prepared.len()
-        );
-    }
     let direct = template.direct;
     let limit = limit.min(prepared.len());
+    // Divide the in-flight budget among active elements, then enforce the true
+    // aggregate limit as each completion is collected. The full list length is
+    // not relevant when elements run in bounded waves.
+    let per_task_output_limit = (max_output_bytes / limit).max(1);
     let group_cancelled = Arc::new(AtomicBool::new(false));
     let _bridge = CancellationBridge::new(Arc::clone(&cancelled), Arc::clone(&group_cancelled))?;
     let mut scope =
@@ -794,6 +791,9 @@ pub(super) fn run_each(
 
     while next < prepared.len() || active > 0 {
         while active < limit && next < prepared.len() {
+            if stopped.is_some() {
+                break;
+            }
             if skip.contains_key(&next) {
                 next += 1;
                 continue;
@@ -910,6 +910,16 @@ pub(super) fn run_each(
             &prepared,
             &mut total_output_bytes,
         );
+        if records[index]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("output exceeds the limit of"))
+        {
+            stopped = Some((
+                index,
+                format!("parallel for each element exceeded its output limit of {max_output_bytes} bytes"),
+            ));
+        }
         if let Some(sink) = sink.as_deref_mut() {
             if matches!(records[index].state, TaskState::Succeeded) {
                 if let Some(result) = &records[index].invocation {
@@ -919,7 +929,7 @@ pub(super) fn run_each(
                 }
             }
         }
-        if total_output_bytes > max_output_bytes {
+        if stopped.is_none() && total_output_bytes > max_output_bytes {
             stopped = Some((
                 index,
                 format!("parallel for each output exceeded {max_output_bytes} bytes"),

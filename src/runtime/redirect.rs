@@ -81,7 +81,7 @@ impl PendingRedirect {
 
 /// Volume, file index and link count of an open Windows file.
 #[cfg(windows)]
-fn windows_file_info(
+pub(super) fn windows_file_info(
     file: &File,
 ) -> Result<windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION> {
     use std::os::windows::io::AsRawHandle;
@@ -159,6 +159,8 @@ pub(super) fn open_output_file(
     registry: &Registry,
     cwd: &Path,
 ) -> Result<File> {
+    #[cfg(windows)]
+    reject_reserved_device_name(destination)?;
     // New files are owner-only (0600 on Unix).
     let mut options = crate::platform::private_options();
     options.write(true).create(true);
@@ -169,7 +171,7 @@ pub(super) fn open_output_file(
     {
         use std::os::unix::fs::OpenOptionsExt;
         // Refuse a symlink in the final component instead of following it.
-        options.custom_flags(libc::O_NOFOLLOW);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
     }
     #[cfg(windows)]
     {
@@ -181,6 +183,16 @@ pub(super) fn open_output_file(
     let file = options
         .open(destination)
         .with_context(|| format!("opening {} for output", destination.display()))?;
+    if !file
+        .metadata()
+        .with_context(|| format!("checking {}", destination.display()))?
+        .is_file()
+    {
+        bail!(
+            "refusing to write to a non-regular file: {}",
+            destination.display()
+        );
+    }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -265,6 +277,47 @@ pub(super) fn open_output_file(
             .with_context(|| format!("truncating {}", destination.display()))?;
     }
     Ok(file)
+}
+
+#[cfg(windows)]
+fn reject_reserved_device_name(destination: &Path) -> Result<()> {
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let stem = name
+        .trim_end_matches([' ', '.'])
+        .split('.')
+        .next()
+        .unwrap_or_default();
+    let upper = stem.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || upper
+            .strip_prefix("COM")
+            .or_else(|| upper.strip_prefix("LPT"))
+            .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
+    {
+        bail!(
+            "refusing to write to reserved device name: {}",
+            destination.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod reserved_device_tests {
+    use super::reject_reserved_device_name;
+    use std::path::Path;
+
+    #[test]
+    fn redirect_targets_refuse_windows_device_names_case_insensitively() {
+        for name in ["NUL", "con.txt", "PRN", "COM1", "LPT9"] {
+            let error = reject_reserved_device_name(Path::new(name)).unwrap_err();
+            assert!(format!("{error:#}").contains("reserved device name"));
+        }
+        reject_reserved_device_name(Path::new("nulled.txt")).unwrap();
+    }
 }
 
 /// Append bytes through a handle opened by `open_output_file`, and make them durable.

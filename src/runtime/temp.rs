@@ -107,7 +107,16 @@ fn write_owner(root: &Path) -> Result<()> {
         .create_new(true)
         .open(root.join(OWNER_FILE))
         .context("recording the temporary scope owner")?;
-    write!(file, "{}", std::process::id()).context("recording the temporary scope owner")
+    #[cfg(target_os = "linux")]
+    {
+        let pid = std::process::id();
+        let start = process_start_time(pid).context("reading temporary scope owner identity")?;
+        write!(file, "{pid}:{start}").context("recording the temporary scope owner")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        write!(file, "{}", std::process::id()).context("recording the temporary scope owner")
+    }
 }
 
 #[cfg(unix)]
@@ -152,16 +161,46 @@ fn sweep_stale(temp: &Path) {
         if owner_meta.file_type().is_symlink() {
             continue;
         }
-        let Some(pid) = fs::read_to_string(&owner)
-            .ok()
-            .and_then(|text| text.trim().parse::<u32>().ok())
-        else {
+        let Some(owner_text) = fs::read_to_string(&owner).ok() else {
             continue;
         };
-        if !process_alive(pid) {
+        if !scope_owner_alive(&owner_text) {
             let _ = fs::remove_dir_all(&path);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn scope_owner_alive(owner: &str) -> bool {
+    let Some((pid, start)) = owner.trim().split_once(':') else {
+        // Older or malformed records cannot be proven stale, so retain them.
+        return true;
+    };
+    let (Ok(pid), Ok(start)) = (pid.parse::<u32>(), start.parse::<u64>()) else {
+        return true;
+    };
+    match process_start_time(pid) {
+        // A missing PID can belong to another PID namespace sharing this temp directory.
+        // Keep its scope; only a visible, different process start proves PID reuse.
+        None => true,
+        Some(current_start) => current_start == start,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn scope_owner_alive(owner: &str) -> bool {
+    owner.trim().parse::<u32>().map_or(true, process_alive)
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_time(pid: u32) -> Option<u64> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_command = stat.rsplit_once(')')?.1;
+    after_command
+        .split_whitespace()
+        .nth(19)?
+        .parse::<u64>()
+        .ok()
 }
 
 #[cfg(unix)]
@@ -177,7 +216,7 @@ fn owned_by_current_user(_meta: &fs::Metadata) -> bool {
     true
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn process_alive(pid: u32) -> bool {
     if pid == 0 {
         return true;
@@ -257,16 +296,37 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let dead = temp.path().join(format!("{SCOPE_PREFIX}dead"));
         let live = temp.path().join(format!("{SCOPE_PREFIX}live"));
+        let unknown = temp.path().join(format!("{SCOPE_PREFIX}unknown"));
         let other = temp.path().join("unrelated");
-        for dir in [&dead, &live, &other] {
+        for dir in [&dead, &live, &unknown, &other] {
             fs::create_dir(dir).unwrap();
         }
-        // A pid this large is not a live process on any supported system.
-        fs::write(dead.join(OWNER_FILE), "4000000000").unwrap();
-        fs::write(live.join(OWNER_FILE), std::process::id().to_string()).unwrap();
+        #[cfg(target_os = "linux")]
+        {
+            let start = process_start_time(std::process::id()).unwrap();
+            fs::write(
+                dead.join(OWNER_FILE),
+                format!("{}:{}", std::process::id(), start.saturating_add(1)),
+            )
+            .unwrap();
+            fs::write(
+                live.join(OWNER_FILE),
+                format!("{}:{start}", std::process::id()),
+            )
+            .unwrap();
+            fs::write(unknown.join(OWNER_FILE), "4000000000:1").unwrap();
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // A pid this large is not a live process on any supported system.
+            fs::write(dead.join(OWNER_FILE), "4000000000").unwrap();
+            fs::write(live.join(OWNER_FILE), std::process::id().to_string()).unwrap();
+        }
         sweep_stale(temp.path());
         assert!(!dead.exists());
         assert!(live.exists());
+        #[cfg(target_os = "linux")]
+        assert!(unknown.exists());
         assert!(other.exists());
     }
 }

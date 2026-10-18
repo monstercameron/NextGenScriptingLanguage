@@ -757,7 +757,13 @@ pub(super) fn execute_group_with_sink(
     let status = observed_stages
         .last()
         .and_then(Option::as_ref)
-        .and_then(|stage| stage.status);
+        .and_then(|stage| {
+            stage.status.or_else(|| {
+                (stage.signal == Some(libc::SIGPIPE)
+                    && INHERIT_TERMINAL_STDOUT.with(|flag| flag.get()))
+                .then_some(128 + libc::SIGPIPE)
+            })
+        });
     Ok(GroupOutput {
         bytes: output,
         typed_json: None,

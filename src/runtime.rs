@@ -1355,6 +1355,12 @@ fn scan_child_statuses(
                     calls[index].1.outcome_for(code).kind == crate::contracts::OutcomeKind::Success
                 });
                 let status_kept = calls[index].0.status_binding.is_some() && code.is_some();
+                let broken_pipe = execution_result::exit_signal(status) == Some(libc::SIGPIPE);
+                let inherited_reader_closed =
+                    index + 1 == calls.len() && INHERIT_TERMINAL_STDOUT.with(|flag| flag.get());
+                if broken_pipe && (index + 1 < calls.len() || inherited_reader_closed) {
+                    continue;
+                }
                 if !(implicit_success || status_kept) {
                     drain_diagnostic(managed)?;
                     return Err(CommandFailed {
@@ -1518,7 +1524,7 @@ pub(crate) fn output_limit_message(run_wide: bool, limit: usize) -> String {
         format!("{kind} output exceeds the limit of {limit} bytes")
     };
     format!(
-        "{scope}; pipe the output to a consuming step (for example `then save to FILE`) or raise --max-output-bytes"
+        "{scope}; use a streaming final `pipe to` command such as `tee FILE`, or raise --max-output-bytes"
     )
 }
 
@@ -1787,6 +1793,62 @@ pub(crate) fn program_module_body_call_fingerprint(
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
+    #[cfg(windows)]
+    {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let stem = name
+            .trim_end_matches([' ', '.'])
+            .split('.')
+            .next()
+            .unwrap_or_default();
+        let upper = stem.to_ascii_uppercase();
+        if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || (upper
+                .strip_prefix("COM")
+                .or_else(|| upper.strip_prefix("LPT"))
+                .is_some_and(|suffix| {
+                    suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9')
+                }))
+        {
+            bail!(
+                "refusing to write to reserved device name: {}",
+                path.display()
+            );
+        }
+    }
+    let existing_permissions = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!("refusing to replace a symbolic link: {}", path.display());
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            bail!("refusing to replace a non-regular file: {}", path.display());
+        }
+        Ok(metadata) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if metadata.nlink() > 1 {
+                    bail!("refusing to write a hard-linked file: {}", path.display());
+                }
+            }
+            #[cfg(windows)]
+            {
+                let existing =
+                    File::open(path).with_context(|| format!("checking {}", path.display()))?;
+                if redirect::windows_file_info(&existing)?.nNumberOfLinks > 1 {
+                    bail!("refusing to write a hard-linked file: {}", path.display());
+                }
+            }
+            #[cfg(not(unix))]
+            let _ = &metadata;
+            Some(metadata.permissions())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error).with_context(|| format!("checking {}", path.display())),
+    };
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let temporary = parent.join(format!(
         ".flow-{}-{}.tmp",
@@ -1800,6 +1862,9 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         .with_context(|| format!("creating temporary output for {}", path.display()))?;
     let result = (|| -> Result<()> {
         file.write_all(data)?;
+        if let Some(permissions) = existing_permissions {
+            file.set_permissions(permissions)?;
+        }
         file.sync_all()?;
         crate::platform::replace_file(&temporary, path)?;
         Ok(())
@@ -2538,6 +2603,7 @@ fn run_command_condition(request: ConditionRequest<'_>, launched: &mut usize) ->
     // never bound, and it is set only on this private copy.
     let mut retained = call.clone();
     retained.status_binding = Some(String::from("command condition"));
+    retained.discard_stderr = true;
     let completed = execute_call_group(GroupRequest {
         calls: &[(&retained, manifest, line)],
         input: Input::Empty,
@@ -4771,7 +4837,10 @@ mod output_limit_message_tests {
         let foreground = output_limit_message(false, 16);
         assert!(foreground.starts_with("foreground command output exceeds the limit of 16 bytes"));
         assert!(!foreground.contains("background"), "{foreground}");
-        assert!(foreground.contains("pipe the output"), "{foreground}");
+        assert!(
+            foreground.contains("streaming final `pipe to`"),
+            "{foreground}"
+        );
         assert!(foreground.contains("--max-output-bytes"), "{foreground}");
 
         {
@@ -4792,6 +4861,67 @@ mod output_limit_message_tests {
         }
         // The guard restores the foreground scope when it is dropped.
         assert!(output_limit_message(false, 1).starts_with("foreground command"));
+        assert!(output_limit_message(false, 1).contains("streaming final `pipe to`"));
+        assert!(!output_limit_message(false, 1).contains("then save to FILE"));
+    }
+}
+
+#[cfg(test)]
+mod atomic_write_target_tests {
+    use super::atomic_write;
+    use std::fs;
+
+    #[test]
+    fn save_refuses_hard_links_instead_of_splitting_the_link() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first");
+        let second = directory.path().join("second");
+        fs::write(&first, b"old").unwrap();
+        fs::hard_link(&first, &second).unwrap();
+
+        let error = atomic_write(&first, b"new").unwrap_err();
+
+        assert!(format!("{error:#}").contains("hard-linked"));
+        assert_eq!(fs::read(&first).unwrap(), b"old");
+        assert_eq!(fs::read(&second).unwrap(), b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_preserves_existing_file_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        fs::write(&target, b"old").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o754)).unwrap();
+
+        atomic_write(&target, b"new").unwrap();
+
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o754
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_refuses_symbolic_links_instead_of_replacing_the_link() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        fs::write(&target, b"old").unwrap();
+        symlink(&target, &link).unwrap();
+
+        let error = atomic_write(&link, b"new").unwrap_err();
+
+        assert!(format!("{error:#}").contains("symbolic link"));
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 }
 

@@ -3,7 +3,7 @@ use super::ProgramExit;
 use anyhow::{anyhow, bail, Context, Error, Result};
 use std::time::{Duration, Instant};
 
-const CLEANUP_STEP_BUDGET: usize = 128;
+const CLEANUP_STEP_BUDGET: usize = 16_384;
 const CLEANUP_TIME_BUDGET: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -748,6 +748,18 @@ mod tests {
         assert_eq!(transfer, Some(TransferKind::Break));
         assert!(!state.cleanup_active());
         assert_eq!(state.cleanup_deadline(), None);
+    }
+
+    #[test]
+    fn cleanup_budget_allows_a_sixty_four_item_loop() {
+        let mut state = RuntimeState::default();
+        state.enter_try(0, None, Some(2), 4).unwrap();
+        state
+            .transfer(TransferKind::Exit, 5, UnwindTo::new(0, 0))
+            .unwrap();
+        for _ in 0..(64 * 3) {
+            state.charge_cleanup_step().unwrap();
+        }
     }
 
     #[test]

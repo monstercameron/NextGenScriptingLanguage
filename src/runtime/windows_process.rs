@@ -77,7 +77,13 @@ fn windows_statuses(
                 managed.job.terminate();
                 let code = status.code();
                 if index + 1 == calls.len() {
-                    *last_status = code;
+                    *last_status = code.map(|code| {
+                        if code == (13 << 8) && INHERIT_TERMINAL_STDOUT.with(|flag| flag.get()) {
+                            141
+                        } else {
+                            code
+                        }
+                    });
                 }
                 let stderr = captured_stage_stderr(calls[index].0, calls[index].1, signals)
                     .then(|| managed.diagnostic.clone());
@@ -111,6 +117,12 @@ fn windows_statuses(
                 let implicit_success = code.is_some_and(|code| {
                     calls[index].1.outcome_for(code).kind == crate::contracts::OutcomeKind::Success
                 });
+                let broken_pipe = code == Some(13 << 8);
+                let inherited_reader_closed =
+                    index + 1 == calls.len() && INHERIT_TERMINAL_STDOUT.with(|flag| flag.get());
+                if broken_pipe && (index + 1 < calls.len() || inherited_reader_closed) {
+                    continue;
+                }
                 if !(implicit_success || calls[index].0.status_binding.is_some() && code.is_some())
                 {
                     drain_diagnostic(managed)?;

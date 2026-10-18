@@ -78,6 +78,16 @@ def sample(pid):
     return rss_kb, threads, descriptors
 
 
+def steady_samples(samples, paused):
+    """The samples the flatness check reads. A sample taken during a pause is replaced by the
+    sample before it, so the pause phase is judged on its own and does not move the check.
+    The list keeps its length, so warm-up indices still line up with the timeline."""
+    steady = []
+    for sample_value, held in zip(samples, paused):
+        steady.append(steady[-1] if held and steady else sample_value)
+    return steady
+
+
 def violations(samples, warmup_index, limits):
     """Flatness after warm-up for a sampled process. Returns a list of failures."""
     if len(samples) <= warmup_index:
@@ -202,6 +212,9 @@ def soak_live(binary, duration, warmup, interval, limits):
                 stop(server)
                 return {"ok": False, "failures": ["the live socket never appeared"]}
             samples = []
+            paused = []
+            paused_peak = 0
+            paused_targets = None
             failed_calls = []
             early = None
             targets = None
@@ -230,7 +243,16 @@ def soak_live(binary, duration, warmup, interval, limits):
                             f"call {calls} exited {result.returncode}: "
                             f"{result.stderr.decode(errors='replace').strip()}"
                         )
-                    samples.append(sample(server.pid))
+                    current = sample(server.pid)
+                    samples.append(current)
+                    held = arguments[1:3] == ["control", "pause"]
+                    paused.append(held)
+                    if held:
+                        # A paused producer keeps its run's pipes open until it resumes; record
+                        # what they are, once, so the report names them.
+                        paused_peak = max(paused_peak, current[2])
+                        if paused_targets is None:
+                            paused_targets = fd_targets(server.pid)
                     time.sleep(interval)
             finally:
                 if server.poll() is None:
@@ -242,7 +264,14 @@ def soak_live(binary, duration, warmup, interval, limits):
                     timeout=60,
                 )
                 stop(server)
-        result = finish("live", samples, early, server.returncode, warmup, interval, limits)
+        checked = steady_samples(samples, paused)
+        result = finish("live", checked, early, server.returncode, warmup, interval, limits)
+        result["timeline"] = [
+            [round(index * interval, 1), rss_kb, threads, fds]
+            for index, (rss_kb, threads, fds) in enumerate(samples)
+        ]
+        result["paused_peak_fds"] = paused_peak
+        result["paused_fd_targets"] = paused_targets
         result["calls"] = calls
         result["fd_targets"] = targets
         result["failed_calls"] = failed_calls[:10]

@@ -38,10 +38,19 @@ jobs:
           tool: cargo-nextest
       - name: Build the test archive with the CI feature set
         run: cargo nextest archive --locked --release --features full --archive-file nextest-archive.tar.zst
+      # The archive holds the test executables, not the binaries that tests run through
+      # CARGO_BIN_EXE_*. Those are built here and handed to the run jobs at the same path.
+      - name: Build the binaries the tests run
+        run: cargo build --locked --release --features full --bins
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-archive-${{ matrix.os }}
           path: nextest-archive.tar.zst
+          retention-days: 2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-bins-${{ matrix.os }}
+          path: target/release/execute*
           retention-days: 2
   run:
     name: Run ${{ matrix.os }} (${{ matrix.run }}/20)
@@ -63,6 +72,12 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: test-archive-${{ matrix.os }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: test-bins-${{ matrix.os }}
+          path: target/release
+      - name: Make the binaries executable
+        run: chmod +x target/release/execute* || true
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest

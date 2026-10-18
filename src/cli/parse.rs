@@ -10,14 +10,18 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
 /// Parse command line arguments. `None` means help or version was printed.
-pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
+pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     if arguments.is_empty() {
         print_help()?;
         bail!("a command is required");
     }
     let (command, first_argument) = match arguments.first().map(String::as_str) {
-        Some("check" | "explain" | "inspect" | "run" | "resume") => (arguments[0].clone(), 1),
-        Some(_) => ("run".to_owned(), 0),
+        Some("check") => ("check", 1),
+        Some("explain") => ("explain", 1),
+        Some("inspect") => ("inspect", 1),
+        Some("run") => ("run", 1),
+        Some("resume") => ("resume", 1),
+        Some(_) => ("run", 0),
         None => {
             print_help()?;
             bail!("a workflow file is required");
@@ -105,7 +109,7 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     bail!("--single-instance may be specified only once");
                 }
                 single_instance = Some(PathBuf::from(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--single-instance",
                     "a lock file path",
@@ -122,7 +126,7 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     bail!("--confirm may be specified only once");
                 }
                 confirm = Some(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--confirm",
                     "a plan fingerprint",
@@ -132,14 +136,14 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 #[cfg(feature = "agent-advisory")]
                 {
                     let category =
-                        take_option_value(&arguments, &mut index, "--allow", "a category")?;
+                        take_option_value(arguments, &mut index, "--allow", "a category")?;
                     allow.push(flow::agent::gate::parse_category(&category)?.to_owned());
                 }
                 #[cfg(not(feature = "agent-advisory"))]
                 bail!("explain --json effect gates require the agent-advisory feature; rebuild with --features agent-advisory");
             }
             "--format" if command == "check" => {
-                let format = take_option_value(&arguments, &mut index, "--format", "github|json")?;
+                let format = take_option_value(arguments, &mut index, "--format", "github|json")?;
                 match &*format {
                     "github" => github = true,
                     "json" => {}
@@ -148,7 +152,7 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 json = true;
             }
             "--input" => {
-                let pair = take_option_value(&arguments, &mut index, "--input", "NAME=VALUE")?;
+                let pair = take_option_value(arguments, &mut index, "--input", "NAME=VALUE")?;
                 let (name, value) = pair
                     .split_once('=')
                     .context("--input requires NAME=VALUE")?;
@@ -157,7 +161,7 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 }
             }
             "--answers" => {
-                let path = take_option_value(&arguments, &mut index, "--answers", "FILE")?;
+                let path = take_option_value(arguments, &mut index, "--answers", "FILE")?;
                 if answers.replace(PathBuf::from(path)).is_some() {
                     bail!("--answers may be specified only once");
                 }
@@ -178,7 +182,7 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
                 }
                 manifest_dir = Some(PathBuf::from(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--manifest-dir",
                     "a directory",
@@ -192,39 +196,33 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     bail!("--manifest-dir and --manifest-catalog are mutually exclusive");
                 }
                 manifest_catalog = Some(PathBuf::from(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--manifest-catalog",
                     "a packed manifest catalog file",
                 )?));
             }
             "--capability-policy"
-                if matches!(
-                    command.as_str(),
-                    "check" | "explain" | "inspect" | "run" | "resume"
-                ) =>
+                if matches!(command, "check" | "explain" | "inspect" | "run" | "resume") =>
             {
                 if capability_policy.is_some() {
                     bail!("--capability-policy may be specified only once");
                 }
                 capability_policy = Some(PathBuf::from(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--capability-policy",
                     "a policy file",
                 )?));
             }
             "--data-flow-policy"
-                if matches!(
-                    command.as_str(),
-                    "check" | "explain" | "inspect" | "run" | "resume"
-                ) =>
+                if matches!(command, "check" | "explain" | "inspect" | "run" | "resume") =>
             {
                 if data_flow_policy.is_some() {
                     bail!("--data-flow-policy may be specified only once");
                 }
                 data_flow_policy = Some(PathBuf::from(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--data-flow-policy",
                     "a policy file",
@@ -235,29 +233,29 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     bail!("--record may be specified only once");
                 }
                 record_dir = Some(PathBuf::from(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--record",
                     "a new or empty directory",
                 )?));
             }
-            "--cache-dir" if matches!(command.as_str(), "run" | "resume") => {
+            "--cache-dir" if matches!(command, "run" | "resume") => {
                 if cache_dir.is_some() {
                     bail!("--cache-dir may be specified only once");
                 }
                 cache_dir = Some(PathBuf::from(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--cache-dir",
                     "a directory",
                 )?));
             }
-            "--checkpoint" if matches!(command.as_str(), "run" | "resume") => {
+            "--checkpoint" if matches!(command, "run" | "resume") => {
                 if checkpoint_dir.is_some() {
                     bail!("--checkpoint may be specified only once");
                 }
                 checkpoint_dir = Some(PathBuf::from(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--checkpoint",
                     "a directory",
@@ -281,18 +279,18 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 }
                 headless = true;
             }
-            "--trace" if matches!(command.as_str(), "run" | "resume") => {
+            "--trace" if matches!(command, "run" | "resume") => {
                 if trace {
                     bail!("--trace may be specified only once");
                 }
                 trace = true;
             }
-            "--max-output-bytes" if matches!(command.as_str(), "run" | "resume") => {
+            "--max-output-bytes" if matches!(command, "run" | "resume") => {
                 if max_output_seen {
                     bail!("--max-output-bytes may be specified only once");
                 }
                 let value = take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--max-output-bytes",
                     "a non-negative integer",
@@ -302,11 +300,11 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     .map_err(|_| anyhow!("--max-output-bytes must be a non-negative integer"))?;
                 max_output_seen = true;
             }
-            "--command-timeout-ms" if matches!(command.as_str(), "run" | "resume") => {
+            "--command-timeout-ms" if matches!(command, "run" | "resume") => {
                 if command_timeout.is_some() {
                     bail!("--command-timeout-ms may be specified only once");
                 }
-                let value = parse_positive_usize(&arguments, &mut index, "--command-timeout-ms")?;
+                let value = parse_positive_usize(arguments, &mut index, "--command-timeout-ms")?;
                 let duration = std::time::Duration::from_millis(u64::try_from(value)?);
                 std::time::Instant::now()
                     .checked_add(duration)
@@ -317,15 +315,15 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                 if drain_timeout.is_some() {
                     bail!("--drain-timeout-ms may be specified only once");
                 }
-                let value = parse_positive_usize(&arguments, &mut index, "--drain-timeout-ms")?;
+                let value = parse_positive_usize(arguments, &mut index, "--drain-timeout-ms")?;
                 drain_timeout = Some(std::time::Duration::from_millis(u64::try_from(value)?));
             }
-            "--total-timeout-ms" if matches!(command.as_str(), "run" | "resume") => {
+            "--total-timeout-ms" if matches!(command, "run" | "resume") => {
                 if total_timeout.is_some() {
                     bail!("--total-timeout-ms may be specified only once");
                 }
                 let value = take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--total-timeout-ms",
                     "a positive integer",
@@ -342,50 +340,50 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
                     .context("total timeout is too large")?;
                 total_timeout = Some(duration);
             }
-            "--max-runs" if matches!(command.as_str(), "run" | "resume") => {
+            "--max-runs" if matches!(command, "run" | "resume") => {
                 if max_runs.is_some() {
                     bail!("--max-runs may be specified only once");
                 }
-                max_runs = Some(parse_positive_usize(&arguments, &mut index, "--max-runs")?);
+                max_runs = Some(parse_positive_usize(arguments, &mut index, "--max-runs")?);
             }
-            "--missed-ticks" if matches!(command.as_str(), "run" | "resume") => {
+            "--missed-ticks" if matches!(command, "run" | "resume") => {
                 if missed_ticks.is_some() {
                     bail!("--missed-ticks may be specified only once");
                 }
                 missed_ticks = Some(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--missed-ticks",
                     "skip, coalesce, or catch-up",
                 )?);
             }
-            "--max-catch-up" if matches!(command.as_str(), "run" | "resume") => {
+            "--max-catch-up" if matches!(command, "run" | "resume") => {
                 if max_catch_up.is_some() {
                     bail!("--max-catch-up may be specified only once");
                 }
-                let value = parse_positive_usize(&arguments, &mut index, "--max-catch-up")?;
+                let value = parse_positive_usize(arguments, &mut index, "--max-catch-up")?;
                 if value > 64 {
                     bail!("--max-catch-up must be between 1 and 64");
                 }
                 max_catch_up = Some(value);
             }
-            "--calendar-dedup" if matches!(command.as_str(), "run" | "resume") => {
+            "--calendar-dedup" if matches!(command, "run" | "resume") => {
                 if calendar_dedup.is_some() {
                     bail!("--calendar-dedup may be specified only once");
                 }
                 calendar_dedup = Some(take_option_value(
-                    &arguments,
+                    arguments,
                     &mut index,
                     "--calendar-dedup",
                     "instant or local",
                 )?);
             }
-            "--max-record-bytes" if matches!(command.as_str(), "run" | "resume") => {
+            "--max-record-bytes" if matches!(command, "run" | "resume") => {
                 if max_record_bytes_seen {
                     bail!("--max-record-bytes may be specified only once");
                 }
                 max_record_bytes =
-                    parse_positive_usize(&arguments, &mut index, "--max-record-bytes")?;
+                    parse_positive_usize(arguments, &mut index, "--max-record-bytes")?;
                 max_record_bytes_seen = true;
             }
             "--control" if command == "run" => {
@@ -397,7 +395,7 @@ pub(crate) fn parse_args(arguments: Vec<String>) -> Result<Option<Args>> {
             // Taken before parsing: see daemon_forward.
             "--daemon" if command == "run" => {}
             "--break-at" if command == "run" => {
-                let line = parse_positive_usize(&arguments, &mut index, "--break-at")?;
+                let line = parse_positive_usize(arguments, &mut index, "--break-at")?;
                 break_at.push(line);
             }
             value if value.starts_with('-') => bail!("unknown or unsupported option `{value}`"),
@@ -554,4 +552,24 @@ pub(crate) fn take_option_value(
         bail!("{option} requires {expected}, got `{value}`");
     }
     Ok(value.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args;
+
+    #[test]
+    fn parser_accepts_borrowed_arguments_and_preserves_literal_boundary() {
+        let arguments = vec![
+            "run".to_owned(),
+            "workflow.program".to_owned(),
+            "--".to_owned(),
+            "--help".to_owned(),
+        ];
+        let parsed = parse_args(&arguments)
+            .expect("arguments parse")
+            .expect("run arguments");
+        assert!(parsed.program_arguments_literal);
+        assert_eq!(parsed.program_arguments, ["--help"]);
+    }
 }

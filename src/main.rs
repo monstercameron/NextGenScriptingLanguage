@@ -225,7 +225,7 @@ fn daemon_forward(arguments: &[String]) -> Option<i32> {
 /// daemon's preloaded registry through the finite-check snapshot seam. Every other request
 /// takes the normal path, which loads its own registry.
 fn execute_forwarded(arguments: Vec<String>, registry: &Registry) -> Result<()> {
-    let Some(args) = parse_args(arguments.clone())? else {
+    let Some(args) = parse_args(&arguments)? else {
         return execute_arguments(arguments);
     };
     let plain_run = args.command == "run"
@@ -272,7 +272,7 @@ fn forwarded_run(arguments: &[String], context: &mut flow::agent::daemon::RunCon
 /// normalized, and conservative: a program whose source cannot be read is declined, and so
 /// is one that mentions a form even inside a string.
 fn program_takes_terminal(arguments: &[String]) -> bool {
-    let Ok(Some(args)) = parse_args(arguments.to_vec()) else {
+    let Ok(Some(args)) = parse_args(arguments) else {
         return true;
     };
     let Ok(source) = fs::read_to_string(&args.file) else {
@@ -290,15 +290,39 @@ fn program_takes_terminal(arguments: &[String]) -> bool {
 
 fn execute() -> Result<()> {
     let raw_arguments = env::args_os().skip(1).collect::<Vec<_>>();
-    let literal_boundary = raw_arguments.iter().position(|argument| argument == "--");
-    let arguments = match literal_boundary {
-        Some(boundary) => {
-            let mut parsed = flow::agent::errors::strip_flag(raw_arguments[..boundary].iter().cloned());
-            parsed.extend(raw_arguments[boundary..].iter().cloned());
-            parsed
-        }
-        None => flow::agent::errors::strip_flag(raw_arguments),
+    let arguments = parse_os_arguments(raw_arguments)?;
+    if let Some(status) = daemon_forward(&arguments) {
+        std::process::exit(status);
     }
+    execute_arguments(arguments)
+}
+
+fn parse_os_arguments(raw_arguments: Vec<std::ffi::OsString>) -> Result<Vec<String>> {
+    let mut json_errors = false;
+    let literal_boundary = raw_arguments.iter().position(|argument| {
+        if argument == "--" {
+            true
+        } else {
+            json_errors |= argument == flow::agent::errors::FLAG;
+            false
+        }
+    });
+    let parsed = if !json_errors {
+        // The common path already owns the argument vector. Reuse it directly rather than
+        // allocating another Vec<OsString> in `strip_flag` before collecting the strings.
+        raw_arguments
+    } else {
+        match literal_boundary {
+            Some(boundary) => {
+                let mut parsed =
+                    flow::agent::errors::strip_flag(raw_arguments[..boundary].iter().cloned());
+                parsed.extend(raw_arguments[boundary..].iter().cloned());
+                parsed
+            }
+            None => flow::agent::errors::strip_flag(raw_arguments),
+        }
+    };
+    parsed
         .into_iter()
         .enumerate()
         .map(|(index, argument)| {
@@ -306,11 +330,7 @@ fn execute() -> Result<()> {
                 anyhow!("argument {} is not valid UTF-8; use a percent-encoded file:// URI for non-UTF-8 workflow paths", index + 1)
             })
         })
-        .collect::<Result<Vec<_>>>()?;
-    if let Some(status) = daemon_forward(&arguments) {
-        std::process::exit(status);
-    }
-    execute_arguments(arguments)
+        .collect()
 }
 
 fn execute_arguments(arguments: Vec<String>) -> Result<()> {
@@ -482,7 +502,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             warm_forwarded_manifests,
         )?);
     }
-    let args = match parse_args(arguments)? {
+    let args = match parse_args(&arguments)? {
         Some(args) => args,
         None => return Ok(()),
     };
@@ -796,7 +816,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         let registry = load_workflow_registry(
             args.manifest_dir,
             args.manifest_catalog,
-            ManifestCheck::for_command(&args.command),
+            ManifestCheck::for_command(args.command),
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
@@ -815,7 +835,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         // Graph plans are not checked against an execute-policy header yet, so a graph
         // that declares one is refused rather than run unchecked.
-        if matches!(args.command.as_str(), "run" | "resume")
+        if matches!(args.command, "run" | "resume")
             && !args.what_if
             && declares_policy_header(&source)
         {
@@ -837,14 +857,13 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         let interface = flow::inputs::describe(graph.input_declarations(), &inputs)?;
         let graph = graph.with_input_values(&inputs, false)?;
         graph.validate_with_registry(&registry)?;
-        let cwd =
-            if capability_policy.is_some() || matches!(args.command.as_str(), "run" | "resume") {
-                Some(env::current_dir()?)
-            } else {
-                None
-            };
+        let cwd = if capability_policy.is_some() || matches!(args.command, "run" | "resume") {
+            Some(env::current_dir()?)
+        } else {
+            None
+        };
         let resolved_cwd = if capability_policy.is_some()
-            || (matches!(args.command.as_str(), "run" | "resume") && args.checkpoint_dir.is_some())
+            || (matches!(args.command, "run" | "resume") && args.checkpoint_dir.is_some())
         {
             Some(fs::canonicalize(
                 cwd.as_deref()
@@ -859,7 +878,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 .context("could not resolve current directory")?;
             flow::capabilities::preflight_invocations(graph.invocations(), &registry, cwd)?;
         }
-        return match args.command.as_str() {
+        return match args.command {
             "check" => Ok(()),
             "inspect" => write_json(&serde_json::json!({
                 "protocol": "execute.graph/1",
@@ -951,7 +970,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         let registry = load_workflow_registry(
             args.manifest_dir,
             args.manifest_catalog,
-            ManifestCheck::for_command(&args.command),
+            ManifestCheck::for_command(args.command),
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
@@ -986,7 +1005,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             total_timeout: args.total_timeout,
             ..RunOptions::new(cwd.clone())
         };
-        return match args.command.as_str() {
+        return match args.command {
             "check" => Ok(()),
             "inspect" => {
                 let mut description = flow::inputs::describe(&[], &BTreeMap::new())?;
@@ -1082,7 +1101,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         let registry = load_workflow_registry(
             args.manifest_dir,
             args.manifest_catalog,
-            ManifestCheck::for_command(&args.command),
+            ManifestCheck::for_command(args.command),
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
@@ -1093,7 +1112,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             flow::capabilities::preflight(&stream.pipeline, &registry, &cwd)?;
         }
 
-        return match args.command.as_str() {
+        return match args.command {
             "inspect" => {
                 flow::stream::validate(&stream, &registry)?;
                 runtime::validate_with_arguments(&stream.pipeline, &registry, &inputs)?;
@@ -1164,7 +1183,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         None => match load_workflow_registry(
             args.manifest_dir.clone(),
             args.manifest_catalog.clone(),
-            ManifestCheck::for_command(&args.command),
+            ManifestCheck::for_command(args.command),
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         ) {
@@ -1231,7 +1250,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         );
     }
     // Only a real run or resume is refused; explain, check and --what-if report the plan.
-    if matches!(args.command.as_str(), "run" | "resume") && !args.what_if {
+    if matches!(args.command, "run" | "resume") && !args.what_if {
         enforce_policy_header(&source, &program, &registry, &canonical_file)?;
     }
     // Supplied answers win over the answers file, which wins over a terminal prompt.
@@ -1332,7 +1351,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         bail!("--what-if and --confirm require the agent-advisory feature; rebuild with --features agent-advisory");
     }
 
-    match args.command.as_str() {
+    match args.command {
         "inspect" => {
             runtime::validate_with_arguments(&program, &registry, &inputs)?;
             let mut description = flow::inputs::describe(&program.inputs, &inputs)?;
@@ -2394,7 +2413,7 @@ fn cache_key(path: &Path) -> PathBuf {
 /// directory or catalog into the cache, so the forked run inherits the parsed registry. A
 /// failure is left for the run to report.
 fn warm_forwarded_manifests(arguments: &[String]) {
-    let Ok(Some(args)) = parse_args(arguments.to_vec()) else {
+    let Ok(Some(args)) = parse_args(arguments) else {
         return;
     };
     let _ = match (args.manifest_dir, args.manifest_catalog) {
@@ -2474,16 +2493,10 @@ fn default_manifest_dir() -> PathBuf {
         // macOS may report the launch symlink rather than its bundle target.
         #[cfg(target_os = "macos")]
         let executable = fs::canonicalize(&executable).unwrap_or(executable);
-        if let Some(parent) = executable.parent() {
-            let sibling = parent.join("..").join("manifests");
+        if let Some((sibling, system)) = manifest_candidates(&executable) {
             if sibling.is_dir() {
                 return sibling;
             }
-            let system = parent
-                .join("..")
-                .join("share")
-                .join("execute")
-                .join("manifests");
             if system.is_dir() {
                 return system;
             }
@@ -2491,6 +2504,14 @@ fn default_manifest_dir() -> PathBuf {
     }
 
     Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")
+}
+
+fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
+    let install_root = executable.parent()?.parent()?;
+    Some((
+        install_root.join("manifests"),
+        install_root.join("share").join("execute").join("manifests"),
+    ))
 }
 
 pub(crate) fn usage() -> &'static str {
@@ -2533,5 +2554,48 @@ fn signal_status(status: &std::process::ExitStatus) -> i32 {
     {
         let _ = status;
         1
+    }
+}
+
+#[cfg(test)]
+mod startup_path_tests {
+    use super::{manifest_candidates, parse_os_arguments};
+    use std::path::{Component, Path};
+
+    #[test]
+    fn executable_relative_manifest_candidates_are_lexically_normalized() {
+        let (sibling, system) = manifest_candidates(Path::new("/opt/execute/bin/execute"))
+            .expect("executable path has an install root");
+        assert_eq!(sibling, Path::new("/opt/execute/manifests"));
+        assert_eq!(system, Path::new("/opt/execute/share/execute/manifests"));
+        assert!(!sibling
+            .components()
+            .any(|part| part == Component::ParentDir));
+        assert!(!system.components().any(|part| part == Component::ParentDir));
+    }
+
+    #[test]
+    fn argument_conversion_keeps_json_errors_after_separator_literal() {
+        let arguments = ["run", "workflow.program", "--", "--json-errors"]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect();
+        assert_eq!(
+            parse_os_arguments(arguments).expect("UTF-8 arguments"),
+            ["run", "workflow.program", "--", "--json-errors"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn argument_conversion_keeps_the_non_utf8_error_wording() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let error = parse_os_arguments(vec![std::ffi::OsString::from_vec(vec![0xff])])
+            .expect_err("non-UTF-8 arguments are refused");
+        assert_eq!(
+            error.to_string(),
+            "argument 1 is not valid UTF-8; use a percent-encoded file:// URI for non-UTF-8 workflow paths"
+        );
     }
 }

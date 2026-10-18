@@ -1,0 +1,35 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": "cache: could not open index; rebuild required\n",
+    "instruction": "Summarize the supplied error in one sentence. Do not invent a cause or suggest an action as certain."
+  },
+  "response": {
+    "id": "resp-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "The cache index could not be opened; a rebuild is required according to the log.",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "total_tokens": 36
+    }
+  }
+}

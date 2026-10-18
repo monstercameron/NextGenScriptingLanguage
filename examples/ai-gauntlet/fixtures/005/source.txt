@@ -1,0 +1,1 @@
+Proposed editor setting: format_on_save false -> true; scope: this workspace only.

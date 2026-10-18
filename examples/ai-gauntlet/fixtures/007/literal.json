@@ -1,0 +1,35 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": "$ cp report.txt archive/\ncp: cannot create regular file 'archive/report.txt': Permission denied\n",
+    "instruction": "Explain this stderr in one paragraph and show one read-only diagnostic command. Label it as a suggestion, never an instruction to execute automatically."
+  },
+  "response": {
+    "id": "resp-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "total_tokens": 36
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "request": "show hidden entries too",
+      "snippets": {
+        "all": "ls -a: do not ignore entries starting with .",
+        "long": "ls -l: use a long listing format",
+        "unknown": "no match"
+      }
+    },
+    "question": "Return the supplied snippet ID that answers the request; unknown if none does.",
+    "labels": [
+      "all",
+      "long",
+      "unknown"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "unknown",
+        "confidence": 0.95,
+        "probabilities": {
+          "all": 0.025000000000000022,
+          "long": 0.025000000000000022,
+          "unknown": 0.95
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

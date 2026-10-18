@@ -1,0 +1,23 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": "Rename the draft called notes-final-final.txt to meeting-notes.txt, please.\n",
+    "question": "Does this request explicitly name an old and new basename, with no directory move?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "noul",
+        "noul": 0.05
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

@@ -1,0 +1,2 @@
+$ cp report.txt archive/
+cp: cannot create regular file 'archive/report.txt': Permission denied

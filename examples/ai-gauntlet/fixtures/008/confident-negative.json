@@ -1,0 +1,26 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": {
+      "A": "Saving an empty draft closes the editor unexpectedly",
+      "B": "App exits when I hit save on a blank draft"
+    },
+    "question": "Do these reports describe the same trigger and observed symptom, rather than merely the same component?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "noul",
+        "noul": 0.05
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "score",
+    "model": "jev-latest",
+    "state": "pwd",
+    "question": "Rate command danger: low is read-only pwd; medium changes files; high deletes data, expands a shell, or changes privileges.",
+    "levels": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

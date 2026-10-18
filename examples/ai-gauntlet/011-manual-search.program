@@ -1,0 +1,27 @@
+# Purpose: Find a man-page snippet from a natural-language request.
+# Inputs: source_path, fixture paths, live=false.
+# Outputs: out/011.json; candidate only; model text is never command code.
+# Bash would need: a synonym index to bridge user intent and man-page vocabulary.
+accept source_path as text with default "fixtures/011/source.json"
+accept fixture as text with default "fixtures/011/confident.json"
+accept live as boolean with default false
+try
+  read source_path
+  if live is true
+    then jev.classify with question "Return the supplied snippet ID that answers the request; unknown if none does." and labels ["all","long","unknown"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw
+  otherwise
+    then jev.classify with question "Return the supplied snippet ID that answers the request; unknown if none does." and labels ["all","long","unknown"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 and fixture fixture as raw
+  then parse json as verdict
+  take boolean at "/accepted" from verdict as accepted
+  take integer at "/confidence_percent" from verdict as confidence
+  take text at "/label" from verdict as label
+  if accepted is true
+    if label is "all"
+      run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"candidate-for-review"} and pointer "/result" and value "all"
+    otherwise
+      run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+  otherwise
+    run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+catch failure
+  run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+then save to "out/011.json"

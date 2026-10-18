@@ -1,0 +1,1 @@
+Exclude only project/target/ compiler outputs. Keep project/src/, manifests and user documents.

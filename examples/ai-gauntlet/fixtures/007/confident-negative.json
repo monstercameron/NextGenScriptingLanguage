@@ -1,0 +1,23 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": "$ cp report.txt archive/\ncp: cannot create regular file 'archive/report.txt': Permission denied\n",
+    "question": "Does this saved stderr give a concrete failing command and error to explain without guessing?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "noul",
+        "noul": 0.05
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

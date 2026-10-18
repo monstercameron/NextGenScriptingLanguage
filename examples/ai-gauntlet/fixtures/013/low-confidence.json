@@ -1,0 +1,48 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "ask",
+    "model": "jev-latest",
+    "state": "Your local build needs your approval before the demo in ten minutes.\n",
+    "questions": {
+      "route": {
+        "type": "choice",
+        "question": "When should the user review this notification?",
+        "labels": [
+          "now",
+          "later",
+          "never"
+        ],
+        "minimum": 80
+      },
+      "actionable": {
+        "type": "noul",
+        "question": "Does this notification ask the user for a concrete action?",
+        "minimum": 80
+      }
+    }
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "route": {
+        "type": "choice",
+        "choice": "now",
+        "confidence": 0.6,
+        "probabilities": {
+          "now": 0.6,
+          "later": 0.2,
+          "never": 0.2
+        }
+      },
+      "actionable": {
+        "type": "noul",
+        "noul": 0.95
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

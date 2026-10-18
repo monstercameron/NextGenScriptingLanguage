@@ -1,0 +1,70 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": "Please review docs/readme.md for about 15 minutes; do not edit it.\n",
+    "instruction": "Extract a review-only request. Route must be docs or code; action must be review; duration is integer minutes.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "route": {
+          "type": "string",
+          "enum": [
+            "docs",
+            "code"
+          ]
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "review"
+          ]
+        },
+        "minutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        }
+      },
+      "required": [
+        "path",
+        "route",
+        "action",
+        "minutes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"action\":\"review\",\"minutes\":15,\"path\":42,\"route\":\"docs\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "total_tokens": 36
+    }
+  }
+}

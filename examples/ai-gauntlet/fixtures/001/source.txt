@@ -1,0 +1,1 @@
+cache: could not open index; rebuild required

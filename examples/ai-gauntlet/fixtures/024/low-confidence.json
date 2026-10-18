@@ -1,0 +1,23 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": "tool --dry-run: print proposed file changes without writing them. --apply: write the proposed file changes.\n",
+    "question": "Does the supplied help explicitly distinguish preview from applying changes?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "noul",
+        "noul": 0.6
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

@@ -1,0 +1,1591 @@
+{
+  "version": 1,
+  "workflows": [
+    {
+      "id": 1,
+      "file": "001-log-errors.program",
+      "task": "Classify a log line and summarize errors only",
+      "advantage": "Explain free text after an evidence-sufficiency gate",
+      "bash_would_need": "regex rules miss paraphrased failures; a separate summarizer and confidence gate are needed",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"The cache index could not be opened; a rebuild is required according to the log.\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/001.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"The cache index could not be opened; a rebuild is required according to the log.\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/001/low-confidence.json",
+            "result_fixture": "fixtures/001/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/001.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/001/confident-negative.json",
+            "result_fixture": "fixtures/001/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/001.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/001/provider-error.json",
+            "result_fixture": "fixtures/001/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/001.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/001/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/001.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "shell-syntax-is-data",
+          "inputs": {
+            "result_fixture": "fixtures/001/literal.json"
+          },
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/001.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "empty-answer",
+          "inputs": {
+            "result_fixture": "fixtures/001/empty.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/001.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "file": "002-receipt-json.program",
+      "task": "Extract a receipt into integer money units",
+      "advantage": "Turn free text into a strict schema-validated record",
+      "bash_would_need": "merchant-specific regex plus jq and integer-cents validation",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"amount_cents\":2450,\"currency\":\"USD\",\"date\":\"2026-10-17\",\"name\":\"Ada Chen\"},\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/002.json": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"amount_cents\":2450,\"currency\":\"USD\",\"date\":\"2026-10-17\",\"name\":\"Ada Chen\"},\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/002/low-confidence.json",
+            "result_fixture": "fixtures/002/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/002.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/002/confident-negative.json",
+            "result_fixture": "fixtures/002/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/002.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/002/provider-error.json",
+            "result_fixture": "fixtures/002/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/002.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/002/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/002.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "schema-rejects-wrong-type",
+          "inputs": {
+            "result_fixture": "fixtures/002/invalid.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/002.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "file": "003-wifi-pick.program",
+      "task": "Map a fuzzy Wi-Fi description to a known network",
+      "advantage": "Map paraphrases to a closed set of source-owned IDs",
+      "bash_would_need": "hand-maintained synonym rules plus a closed ID allowlist",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"home\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/003.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"home\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/003/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/003.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/003/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/003.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/003/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/003.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "closed-label-set",
+          "inputs": {
+            "fixture": "fixtures/003/invalid-label.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/003.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "file": "004-audio-pick.program",
+      "task": "Choose an audio device from a fuzzy description",
+      "advantage": "Map paraphrases to a closed set of source-owned IDs",
+      "bash_would_need": "device-specific aliases, regex, and a manual review branch",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"headset\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/004.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"headset\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/004/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/004.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/004/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/004.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/004/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/004.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "closed-label-set",
+          "inputs": {
+            "fixture": "fixtures/004/invalid-label.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/004.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "file": "005-config-risk.program",
+      "task": "Review a configuration change before applying it",
+      "advantage": "Check contextual meaning with a confidence-gated boolean",
+      "bash_would_need": "a hand-written semantic policy over config keys and change context",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"workspace formatting change eligible for human review\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/005.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"workspace formatting change eligible for human review\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/005/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/005.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/005/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/005.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/005/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/005.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "file": "006-commit-message.program",
+      "task": "Draft a commit message with explicit confirmation",
+      "advantage": "Explain free text after an evidence-sufficiency gate",
+      "bash_would_need": "a generator client, JSON decoding, error handling and a separate confirmation gate",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"Fix spelling of Receive in update label\",\"status\":\"awaiting-confirmation\"}\n",
+          "outputs": {
+            "out/006.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"Fix spelling of Receive in update label\",\"status\":\"awaiting-confirmation\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/006/low-confidence.json",
+            "result_fixture": "fixtures/006/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/006.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/006/confident-negative.json",
+            "result_fixture": "fixtures/006/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/006.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/006/provider-error.json",
+            "result_fixture": "fixtures/006/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/006.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/006/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/006.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "shell-syntax-is-data",
+          "inputs": {
+            "result_fixture": "fixtures/006/literal.json"
+          },
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"awaiting-confirmation\"}\n",
+          "outputs": {
+            "out/006.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"awaiting-confirmation\"}\n"
+          }
+        },
+        {
+          "name": "empty-answer",
+          "inputs": {
+            "result_fixture": "fixtures/006/empty.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/006.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "human-confirmed",
+          "inputs": {
+            "confirmed": "true"
+          },
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"Fix spelling of Receive in update label\",\"status\":\"confirmed-draft\"}\n",
+          "outputs": {
+            "out/006.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"Fix spelling of Receive in update label\",\"status\":\"confirmed-draft\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "file": "007-stderr-explain.program",
+      "task": "Explain saved stderr and show a diagnostic",
+      "advantage": "Explain free text after an evidence-sufficiency gate",
+      "bash_would_need": "stderr pattern rules plus a model client and an explicit display-only command boundary",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"The copy could not create the destination file because access was denied. Suggested diagnostic (review only): ls -ld archive\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/007.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"The copy could not create the destination file because access was denied. Suggested diagnostic (review only): ls -ld archive\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/007/low-confidence.json",
+            "result_fixture": "fixtures/007/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/007.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/007/confident-negative.json",
+            "result_fixture": "fixtures/007/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/007.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/007/provider-error.json",
+            "result_fixture": "fixtures/007/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/007.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/007/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/007.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "shell-syntax-is-data",
+          "inputs": {
+            "result_fixture": "fixtures/007/literal.json"
+          },
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/007.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "empty-answer",
+          "inputs": {
+            "result_fixture": "fixtures/007/empty.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/007.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "file": "008-bug-duplicates.program",
+      "task": "Identify near-duplicate bug reports without merging",
+      "advantage": "Check contextual meaning with a confidence-gated boolean",
+      "bash_would_need": "fuzzy string metrics miss semantic paraphrases and need a review threshold",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"duplicate_candidates\":[\"A\",\"B\"],\"merge\":false},\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/008.json": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"duplicate_candidates\":[\"A\",\"B\"],\"merge\":false},\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/008/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/008.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/008/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/008.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/008/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/008.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "file": "009-todo-urgency.program",
+      "task": "Score one TODO against an explicit deadline",
+      "advantage": "Rank fuzzy urgency or danger with a numeric review threshold",
+      "bash_would_need": "deadline parsing, urgency heuristics and a calibrated review branch",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"review this TODO before routine cleanup\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/009.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"review this TODO before routine cleanup\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/009/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/009.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/009/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/009.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/009/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/009.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "score-at-review-boundary",
+          "inputs": {
+            "fixture": "fixtures/009/boundary.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/009.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "file": "010-download-tag.program",
+      "task": "Tag a downloaded document by its content",
+      "advantage": "Map paraphrases to a closed set of source-owned IDs",
+      "bash_would_need": "content regex per document type plus metadata and uncertainty handling",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"invoice\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/010.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"invoice\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/010/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/010.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/010/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/010.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/010/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/010.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "closed-label-set",
+          "inputs": {
+            "fixture": "fixtures/010/invalid-label.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/010.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "file": "011-manual-search.program",
+      "task": "Find a man-page snippet from a natural-language request",
+      "advantage": "Map paraphrases to a closed set of source-owned IDs",
+      "bash_would_need": "a synonym index to bridge user intent and man-page vocabulary",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"all\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/011.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"all\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/011/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/011.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/011/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/011.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/011/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/011.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "closed-label-set",
+          "inputs": {
+            "fixture": "fixtures/011/invalid-label.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/011.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "file": "012-command-danger.program",
+      "task": "Refuse dangerous commands and gate a literal safe command",
+      "advantage": "Rank fuzzy urgency or danger with a numeric review threshold",
+      "bash_would_need": "a command allowlist, a model client, score parsing, threshold and confirmation plumbing",
+      "unix_only": true,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"pwd\",\"status\":\"awaiting-confirmation\"}\n",
+          "outputs": {
+            "out/012.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"pwd\",\"status\":\"awaiting-confirmation\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/012/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/012.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/012/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/012.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/012/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/012.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "score-at-review-boundary",
+          "inputs": {
+            "fixture": "fixtures/012/boundary.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/012.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "destructive",
+          "inputs": {
+            "source_path": "fixtures/012/destructive.txt",
+            "fixture": "fixtures/012/destructive.json",
+            "confirmed": "true"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/012.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "outside-allowlist",
+          "inputs": {
+            "source_path": "fixtures/012/outside-allowlist.txt",
+            "fixture": "fixtures/012/outside-allowlist.json",
+            "confirmed": "true"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/012.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "human-confirmed",
+          "inputs": {
+            "confirmed": "true"
+          },
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"pwd\",\"status\":\"executed-allowlisted-command\"}\n",
+          "outputs": {
+            "out/012.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"pwd\",\"status\":\"executed-allowlisted-command\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "file": "013-notification-triage.program",
+      "task": "Triage a notification into now, later or never",
+      "advantage": "Combine independent typed judgements in one bounded request",
+      "bash_would_need": "priority keyword rules and two independently checked model answers",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"now\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/013.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"now\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/013/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/013.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/013/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/013.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/013/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/013.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "second-answer-low-confidence",
+          "inputs": {
+            "fixture": "fixtures/013/second-low.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/013.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "file": "014-journal-status.program",
+      "task": "Summarize saved desktop journal output",
+      "advantage": "Explain free text after an evidence-sufficiency gate",
+      "bash_would_need": "application-specific log parsing plus a separate summarization client",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"Music library scan complete: 120 tracks; player reported ready.\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/014.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"Music library scan complete: 120 tracks; player reported ready.\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/014/low-confidence.json",
+            "result_fixture": "fixtures/014/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/014.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/014/confident-negative.json",
+            "result_fixture": "fixtures/014/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/014.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/014/provider-error.json",
+            "result_fixture": "fixtures/014/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/014.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/014/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/014.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "shell-syntax-is-data",
+          "inputs": {
+            "result_fixture": "fixtures/014/literal.json"
+          },
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/014.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "empty-answer",
+          "inputs": {
+            "result_fixture": "fixtures/014/empty.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/014.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "file": "015-request-route.program",
+      "task": "Turn a free-form request into a typed routed record",
+      "advantage": "Turn free text into a strict schema-validated record",
+      "bash_would_need": "intent grammar, field regex, jq schema checks and explicit route validation",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"action\":\"review\",\"minutes\":15,\"path\":\"docs/readme.md\",\"route\":\"docs\"},\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/015.json": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"action\":\"review\",\"minutes\":15,\"path\":\"docs/readme.md\",\"route\":\"docs\"},\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/015/low-confidence.json",
+            "result_fixture": "fixtures/015/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/015.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/015/confident-negative.json",
+            "result_fixture": "fixtures/015/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/015.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/015/provider-error.json",
+            "result_fixture": "fixtures/015/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/015.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/015/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/015.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "schema-rejects-wrong-type",
+          "inputs": {
+            "result_fixture": "fixtures/015/invalid.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/015.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "file": "016-appointment-record.program",
+      "task": "Extract an appointment proposal without scheduling",
+      "advantage": "Turn free text into a strict schema-validated record",
+      "bash_would_need": "date/entity parsing, ambiguity checks and a calendar review boundary",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"date\":\"2026-10-22\",\"person\":\"Sam\",\"place\":\"library\",\"time\":\"14:30\",\"zone\":\"America/New_York\"},\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/016.json": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"date\":\"2026-10-22\",\"person\":\"Sam\",\"place\":\"library\",\"time\":\"14:30\",\"zone\":\"America/New_York\"},\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/016/low-confidence.json",
+            "result_fixture": "fixtures/016/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/016.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/016/confident-negative.json",
+            "result_fixture": "fixtures/016/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/016.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/016/provider-error.json",
+            "result_fixture": "fixtures/016/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/016.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/016/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/016.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "schema-rejects-wrong-type",
+          "inputs": {
+            "result_fixture": "fixtures/016/invalid.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/016.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "file": "017-change-category.program",
+      "task": "Classify a change description for a changelog",
+      "advantage": "Map paraphrases to a closed set of source-owned IDs",
+      "bash_would_need": "fragile commit-prefix or keyword rules for semantic change categories",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"fix\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/017.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"fix\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/017/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/017.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/017/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/017.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/017/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/017.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "closed-label-set",
+          "inputs": {
+            "fixture": "fixtures/017/invalid-label.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/017.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "file": "018-download-duplicates.program",
+      "task": "Review whether two download descriptions are duplicates",
+      "advantage": "Check contextual meaning with a confidence-gated boolean",
+      "bash_would_need": "normalization and fuzzy matching still need semantic edition checks",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"candidate_pair\":[\"a\",\"b\"],\"delete\":false},\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/018.json": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"candidate_pair\":[\"a\",\"b\"],\"delete\":false},\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/018/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/018.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/018/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/018.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/018/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/018.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "file": "019-backup-exclusions.program",
+      "task": "Review a proposed backup exclusion",
+      "advantage": "Check contextual meaning with a confidence-gated boolean",
+      "bash_would_need": "a directory-name policy misses contextual claims about what is regenerable",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"candidate exclusion: project/target/; verify with a dry run\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/019.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"candidate exclusion: project/target/; verify with a dry run\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/019/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/019.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/019/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/019.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/019/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/019.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "file": "020-keybinding-search.program",
+      "task": "Find a keyboard shortcut from a fuzzy request",
+      "advantage": "Map paraphrases to a closed set of source-owned IDs",
+      "bash_would_need": "a synonym dictionary for intent rather than exact help text matches",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"definition\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/020.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"definition\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/020/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/020.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/020/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/020.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/020/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/020.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "closed-label-set",
+          "inputs": {
+            "fixture": "fixtures/020/invalid-label.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/020.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "file": "021-rename-proposal.program",
+      "task": "Extract a file rename proposal without changing files",
+      "advantage": "Turn free text into a strict schema-validated record",
+      "bash_would_need": "phrase variants, filename extraction and JSON escaping before a review step",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"action\":\"propose\",\"new\":\"meeting-notes.txt\",\"old\":\"notes-final-final.txt\"},\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/021.json": "{\"action\":\"Review against the original input before acting.\",\"result\":{\"action\":\"propose\",\"new\":\"meeting-notes.txt\",\"old\":\"notes-final-final.txt\"},\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/021/low-confidence.json",
+            "result_fixture": "fixtures/021/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/021.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/021/confident-negative.json",
+            "result_fixture": "fixtures/021/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/021.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/021/provider-error.json",
+            "result_fixture": "fixtures/021/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/021.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/021/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/021.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "schema-rejects-wrong-type",
+          "inputs": {
+            "result_fixture": "fixtures/021/invalid.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/021.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "file": "022-regex-explain.program",
+      "task": "Explain a saved regular expression",
+      "advantage": "Explain free text after an evidence-sufficiency gate",
+      "bash_would_need": "a regex parser plus plain-language templates or a separate generation client",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"A ticket ID must be two uppercase ASCII letters, a hyphen, and four digits, with nothing before or after, for example AB-1234.\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/022.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"A ticket ID must be two uppercase ASCII letters, a hyphen, and four digits, with nothing before or after, for example AB-1234.\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/022/low-confidence.json",
+            "result_fixture": "fixtures/022/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/022.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/022/confident-negative.json",
+            "result_fixture": "fixtures/022/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/022.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/022/provider-error.json",
+            "result_fixture": "fixtures/022/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/022.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/022/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/022.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "shell-syntax-is-data",
+          "inputs": {
+            "result_fixture": "fixtures/022/literal.json"
+          },
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/022.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "empty-answer",
+          "inputs": {
+            "result_fixture": "fixtures/022/empty.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/022.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "file": "023-todo-route.program",
+      "task": "Route an actionable TODO with a batched judgement",
+      "advantage": "Combine independent typed judgements in one bounded request",
+      "bash_would_need": "a classifier client and an actionability client with separate acceptance checks",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"docs\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/023.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"docs\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/023/low-confidence.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/023.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/023/confident-negative.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/023.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/023/provider-error.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/023.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "second-answer-low-confidence",
+          "inputs": {
+            "fixture": "fixtures/023/second-low.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/023.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "file": "024-help-summary.program",
+      "task": "Explain a command option from saved help text",
+      "advantage": "Explain free text after an evidence-sufficiency gate",
+      "bash_would_need": "intent matching against help plus a generation client and display-only output handling",
+      "unix_only": false,
+      "cases": [
+        {
+          "name": "confident",
+          "inputs": {},
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"Use --dry-run to preview proposed file changes. The help says --apply writes them, so review the preview first.\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/024.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"Use --dry-run to preview proposed file changes. The help says --apply writes them, so review the preview first.\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "low-confidence",
+          "inputs": {
+            "fixture": "fixtures/024/low-confidence.json",
+            "result_fixture": "fixtures/024/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/024.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "confident-negative",
+          "inputs": {
+            "fixture": "fixtures/024/confident-negative.json",
+            "result_fixture": "fixtures/024/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/024.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "provider-error",
+          "inputs": {
+            "fixture": "fixtures/024/provider-error.json",
+            "result_fixture": "fixtures/024/DO-NOT-CALL.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/024.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "refusal",
+          "inputs": {
+            "result_fixture": "fixtures/024/refusal.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/024.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        },
+        {
+          "name": "shell-syntax-is-data",
+          "inputs": {
+            "result_fixture": "fixtures/024/literal.json"
+          },
+          "expected_stdout": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n",
+          "outputs": {
+            "out/024.json": "{\"action\":\"Review against the original input before acting.\",\"result\":\"$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command\",\"status\":\"candidate-for-review\"}\n"
+          }
+        },
+        {
+          "name": "empty-answer",
+          "inputs": {
+            "result_fixture": "fixtures/024/empty.json"
+          },
+          "expected_stdout": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n",
+          "outputs": {
+            "out/024.json": "{\"action\":\"Read the original input; no action is authorized.\",\"result\":null,\"status\":\"needs-human-review\"}\n"
+          }
+        }
+      ]
+    }
+  ]
+}

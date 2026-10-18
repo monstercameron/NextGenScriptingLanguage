@@ -1,0 +1,1 @@
+Pattern: ^[A-Z]{2}-[0-9]{4}$; purpose: validate local ticket IDs.

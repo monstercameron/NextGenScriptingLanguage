@@ -1,0 +1,1 @@
+download_826.txt: Amount due 72 USD; invoice number INV-19; payment terms net 30.

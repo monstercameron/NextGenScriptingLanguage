@@ -1,0 +1,14 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": "diff --git a/ui.txt b/ui.txt\n-Recieve updates\n+Receive updates\n",
+    "question": "Does this diff contain enough evidence for a small factual commit message?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

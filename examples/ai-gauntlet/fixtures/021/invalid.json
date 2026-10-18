@@ -1,0 +1,62 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": "Rename the draft called notes-final-final.txt to meeting-notes.txt, please.\n",
+    "instruction": "Extract the old and new basenames and action propose. Never perform a rename.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "old": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "new": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "propose"
+          ]
+        }
+      },
+      "required": [
+        "old",
+        "new",
+        "action"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"action\":\"propose\",\"new\":\"meeting-notes.txt\",\"old\":42}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "total_tokens": 36
+    }
+  }
+}

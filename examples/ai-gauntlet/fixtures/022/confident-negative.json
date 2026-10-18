@@ -1,0 +1,23 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": "Pattern: ^[A-Z]{2}-[0-9]{4}$; purpose: validate local ticket IDs.\n",
+    "question": "Is there a complete literal pattern and an explicit validation purpose to explain?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "noul",
+        "noul": 0.05
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

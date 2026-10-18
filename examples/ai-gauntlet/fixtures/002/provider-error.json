@@ -1,0 +1,14 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": "Thanks Ada Chen! Paid North Books 24.50 USD on 2026-10-17.\n",
+    "question": "Does this receipt explicitly provide a customer name, ISO date, USD amount and currency?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

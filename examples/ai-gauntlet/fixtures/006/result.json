@@ -1,0 +1,35 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": "diff --git a/ui.txt b/ui.txt\n-Recieve updates\n+Receive updates\n",
+    "instruction": "Write one short imperative commit subject describing only the supplied diff. No shell command."
+  },
+  "response": {
+    "id": "resp-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "Fix spelling of Receive in update label",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "total_tokens": 36
+    }
+  }
+}

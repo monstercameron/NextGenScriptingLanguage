@@ -1,0 +1,35 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "generate",
+    "model": "gpt-6-luna",
+    "state": "tool --dry-run: print proposed file changes without writing them. --apply: write the proposed file changes.\n",
+    "instruction": "Explain which supplied option previews changes. Mention the applying option only to distinguish it; never execute either."
+  },
+  "response": {
+    "id": "resp-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "$(touch MODEL_TEXT_EXECUTED); `touch MODEL_TEXT_EXECUTED`; & echo not-a-command",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "total_tokens": 36
+    }
+  }
+}

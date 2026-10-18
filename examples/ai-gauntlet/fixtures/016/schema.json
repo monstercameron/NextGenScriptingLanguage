@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "properties": {
+    "person": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "place": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "date": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "time": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "zone": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    }
+  },
+  "required": [
+    "person",
+    "place",
+    "date",
+    "time",
+    "zone"
+  ],
+  "additionalProperties": false
+}

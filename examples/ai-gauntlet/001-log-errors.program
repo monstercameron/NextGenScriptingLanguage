@@ -1,0 +1,38 @@
+# Purpose: Classify a log line and summarize errors only.
+# Inputs: source_path, fixture paths, live=false.
+# Outputs: out/001.json; candidate only; model text is never command code.
+# Bash would need: regex rules miss paraphrased failures; a separate summarizer and confidence gate are needed.
+accept source_path as text with default "fixtures/001/source.txt"
+accept fixture as text with default "fixtures/001/confident.json"
+accept live as boolean with default false
+accept result_fixture as text with default "fixtures/001/result.json"
+try
+  read source_path
+  if live is true
+    then jev.classify with question "Is this line an error that needs a short explanation, rather than a warning or routine noise?" and labels ["error","warn","noise"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw
+  otherwise
+    then jev.classify with question "Is this line an error that needs a short explanation, rather than a warning or routine noise?" and labels ["error","warn","noise"] and minimum 80 and timeout_ms 3000 and max_bytes 65536 and fixture fixture as raw
+  then parse json as verdict
+  take boolean at "/accepted" from verdict as accepted
+  take integer at "/confidence_percent" from verdict as confidence
+  take text at "/label" from verdict as label
+  if accepted is true
+    if label is "error"
+      read source_path
+      if live is true
+        then llm.ask with model "gpt-6-luna" and instruction "Summarize the supplied error in one sentence. Do not invent a cause or suggest an action as certain." and timeout_ms 3000 and max_bytes 65536 as result_raw
+      otherwise
+        then llm.ask with model "gpt-6-luna" and instruction "Summarize the supplied error in one sentence. Do not invent a cause or suggest an action as certain." and timeout_ms 3000 and max_bytes 65536 and fixture result_fixture as result_raw
+      then parse json as generated
+      take text at "/text" from generated as content
+      if content is ""
+        run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+      otherwise
+        run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"candidate-for-review"} and pointer "/result" and value content
+    otherwise
+      run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+  otherwise
+    run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+catch failure
+  run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+then save to "out/001.json"

@@ -1,0 +1,41 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "request": "the private one upstairs, not the visitor hotspot",
+      "networks": {
+        "home": "upstairs private WPA network",
+        "guest": "visitor hotspot",
+        "unknown": "no match"
+      }
+    },
+    "question": "Choose the matching supplied network ID; unknown if ambiguous. Never invent an SSID.",
+    "labels": [
+      "home",
+      "guest",
+      "unknown"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "unknown",
+        "confidence": 0.95,
+        "probabilities": {
+          "home": 0.025000000000000022,
+          "guest": 0.025000000000000022,
+          "unknown": 0.95
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

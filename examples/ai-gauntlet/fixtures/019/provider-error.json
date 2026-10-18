@@ -1,0 +1,14 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": "Exclude only project/target/ compiler outputs. Keep project/src/, manifests and user documents.\n",
+    "question": "Does this proposal exclude only regenerable build outputs while explicitly retaining source and user documents?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

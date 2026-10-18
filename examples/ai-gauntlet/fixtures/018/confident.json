@@ -1,0 +1,26 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": {
+      "a": "Rust shortcuts, edition 3, twelve pages",
+      "b": "Third-edition Rust keyboard quick reference, 12 pp"
+    },
+    "question": "Do these descriptions plausibly refer to the same edition and document? This is a review candidate, not proof of byte equality.",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "noul",
+        "noul": 0.95
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "ask",
+    "model": "jev-latest",
+    "state": "Before lunch, ask Morgan to review the typo fix in the getting-started guide.\n",
+    "questions": {
+      "route": {
+        "type": "choice",
+        "question": "Which local review queue fits this TODO?",
+        "labels": [
+          "docs",
+          "code",
+          "unknown"
+        ],
+        "minimum": 80
+      },
+      "actionable": {
+        "type": "noul",
+        "question": "Does this TODO name a concrete next action rather than a vague aspiration?",
+        "minimum": 80
+      }
+    }
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

@@ -1,0 +1,27 @@
+# Purpose: Review whether two download descriptions are duplicates.
+# Inputs: source_path, fixture paths, live=false.
+# Outputs: out/018.json; candidate only; model text is never command code.
+# Bash would need: normalization and fuzzy matching still need semantic edition checks.
+accept source_path as text with default "fixtures/018/source.json"
+accept fixture as text with default "fixtures/018/confident.json"
+accept live as boolean with default false
+try
+  read source_path
+  if live is true
+    then jev.judge with question "Do these descriptions plausibly refer to the same edition and document? This is a review candidate, not proof of byte equality." and minimum 80 and timeout_ms 3000 and max_bytes 65536 as raw
+  otherwise
+    then jev.judge with question "Do these descriptions plausibly refer to the same edition and document? This is a review candidate, not proof of byte equality." and minimum 80 and timeout_ms 3000 and max_bytes 65536 and fixture fixture as raw
+  then parse json as verdict
+  take boolean at "/accepted" from verdict as accepted
+  take integer at "/confidence_percent" from verdict as confidence
+  take boolean at "/decision" from verdict as decision
+  if accepted is true
+    if decision is true
+      run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"candidate-for-review"} and pointer "/result" and value {"candidate_pair":["a","b"],"delete":false}
+    otherwise
+      run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+  otherwise
+    run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+catch failure
+  run json.set with document {"action":"Read the original input; no action is authorized.","result":null,"status":"needs-human-review"} and pointer "/result" and value null
+then save to "out/018.json"

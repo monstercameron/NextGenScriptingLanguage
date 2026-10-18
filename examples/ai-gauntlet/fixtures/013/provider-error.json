@@ -1,0 +1,29 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "ask",
+    "model": "jev-latest",
+    "state": "Your local build needs your approval before the demo in ten minutes.\n",
+    "questions": {
+      "route": {
+        "type": "choice",
+        "question": "When should the user review this notification?",
+        "labels": [
+          "now",
+          "later",
+          "never"
+        ],
+        "minimum": 80
+      },
+      "actionable": {
+        "type": "noul",
+        "question": "Does this notification ask the user for a concrete action?",
+        "minimum": 80
+      }
+    }
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

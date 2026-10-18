@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "date": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "currency": {
+      "type": "string",
+      "enum": [
+        "USD"
+      ]
+    },
+    "amount_cents": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    }
+  },
+  "required": [
+    "name",
+    "date",
+    "currency",
+    "amount_cents"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,39 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "score",
+    "model": "jev-latest",
+    "state": "TODO: renew the signing certificate before tomorrow's demo; build signing expires tonight.\n",
+    "question": "Rate urgency: low means cosmetic, medium means this week, high means blocking work within 24 hours.",
+    "levels": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "score",
+        "score": 1,
+        "confidence": 0.95,
+        "legend": {
+          "0": "low",
+          "1": "medium",
+          "2": "high"
+        },
+        "probabilities": {
+          "0": 0.025,
+          "1": 0.95,
+          "2": 0.025
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

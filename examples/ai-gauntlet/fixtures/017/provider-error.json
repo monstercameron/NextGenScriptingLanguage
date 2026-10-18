@@ -1,0 +1,20 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "The search panel no longer crashes when the query contains an emoji.\n",
+    "question": "Classify this change as fix, feature, docs, or unknown using its user-visible effect.",
+    "labels": [
+      "fix",
+      "feature",
+      "docs",
+      "unknown"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

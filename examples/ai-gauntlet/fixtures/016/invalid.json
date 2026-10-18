@@ -1,0 +1,73 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": "Let's meet Sam at the library on 2026-10-22 at 14:30, America/New_York.\n",
+    "instruction": "Extract only the explicitly stated appointment fields; do not schedule or resolve ambiguous dates.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "person": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "place": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "date": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "time": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "zone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        }
+      },
+      "required": [
+        "person",
+        "place",
+        "date",
+        "time",
+        "zone"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"date\":\"2026-10-22\",\"person\":42,\"place\":\"library\",\"time\":\"14:30\",\"zone\":\"America/New_York\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "total_tokens": 36
+    }
+  }
+}

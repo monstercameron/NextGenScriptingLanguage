@@ -1,0 +1,3 @@
+10:00 music-player: library scan started
+10:01 music-player: scan complete, 120 tracks
+10:01 music-player: ready

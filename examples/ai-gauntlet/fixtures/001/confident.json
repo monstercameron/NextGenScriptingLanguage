@@ -1,0 +1,34 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "cache: could not open index; rebuild required\n",
+    "question": "Is this line an error that needs a short explanation, rather than a warning or routine noise?",
+    "labels": [
+      "error",
+      "warn",
+      "noise"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "error",
+        "confidence": 0.95,
+        "probabilities": {
+          "error": 0.95,
+          "warn": 0.025000000000000022,
+          "noise": 0.025000000000000022
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

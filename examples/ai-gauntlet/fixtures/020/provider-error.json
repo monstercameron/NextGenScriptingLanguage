@@ -1,0 +1,26 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "request": "jump to the thing that defines this symbol",
+      "bindings": {
+        "definition": "F12: Go to definition",
+        "references": "Shift-F12: Find references",
+        "unknown": "no match"
+      }
+    },
+    "question": "Which supplied binding ID best matches the request? Use unknown for ambiguity.",
+    "labels": [
+      "definition",
+      "references",
+      "unknown"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

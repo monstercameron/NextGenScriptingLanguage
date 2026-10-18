@@ -1,0 +1,14 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "judge",
+    "model": "jev-latest",
+    "state": "Proposed editor setting: format_on_save false -> true; scope: this workspace only.\n",
+    "question": "Is this change limited to reversible editor formatting, with no permissions, network or deletion changes?",
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

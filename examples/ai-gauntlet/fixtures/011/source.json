@@ -1,0 +1,1 @@
+{"request":"show hidden entries too","snippets":{"all":"ls -a: do not ignore entries starting with .","long":"ls -l: use a long listing format","unknown":"no match"}}

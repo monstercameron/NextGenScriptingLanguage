@@ -1,0 +1,36 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "download_826.txt: Amount due 72 USD; invoice number INV-19; payment terms net 30.\n",
+    "question": "Tag this file by content, using only invoice, notes, source, or unknown.",
+    "labels": [
+      "invoice",
+      "notes",
+      "source",
+      "unknown"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "unknown",
+        "confidence": 0.95,
+        "probabilities": {
+          "invoice": 0.01666666666666668,
+          "notes": 0.01666666666666668,
+          "source": 0.01666666666666668,
+          "unknown": 0.95
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

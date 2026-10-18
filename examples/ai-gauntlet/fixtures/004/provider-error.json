@@ -1,0 +1,26 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": {
+      "request": "use the cans with a microphone",
+      "devices": {
+        "headset": "USB headphones and microphone",
+        "speakers": "built-in speakers",
+        "unknown": "no match"
+      }
+    },
+    "question": "Choose the supplied audio device ID matching the request; unknown if unclear.",
+    "labels": [
+      "headset",
+      "speakers",
+      "unknown"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

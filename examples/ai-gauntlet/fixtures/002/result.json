@@ -1,0 +1,68 @@
+{
+  "expected_request": {
+    "provider": "openai",
+    "kind": "extract",
+    "model": "gpt-6-luna",
+    "state": "Thanks Ada Chen! Paid North Books 24.50 USD on 2026-10-17.\n",
+    "instruction": "Extract the customer name, date, currency and amount in integer cents, using only the receipt.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "date": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "currency": {
+          "type": "string",
+          "enum": [
+            "USD"
+          ]
+        },
+        "amount_cents": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "name",
+        "date",
+        "currency",
+        "amount_cents"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "response": {
+    "id": "resp-fixture",
+    "object": "response",
+    "status": "completed",
+    "model": "gpt-6-luna",
+    "output": [
+      {
+        "id": "msg-fixture",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "output_text",
+            "text": "{\"amount_cents\":2450,\"currency\":\"USD\",\"date\":\"2026-10-17\",\"name\":\"Ada Chen\"}",
+            "annotations": []
+          }
+        ]
+      }
+    ],
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 12,
+      "total_tokens": 36
+    }
+  }
+}

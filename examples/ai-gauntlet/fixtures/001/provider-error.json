@@ -1,0 +1,19 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "cache: could not open index; rebuild required\n",
+    "question": "Is this line an error that needs a short explanation, rather than a warning or routine noise?",
+    "labels": [
+      "error",
+      "warn",
+      "noise"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {}
+  }
+}

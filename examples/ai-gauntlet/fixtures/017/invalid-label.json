@@ -1,0 +1,34 @@
+{
+  "expected_request": {
+    "provider": "jev",
+    "kind": "classify",
+    "model": "jev-latest",
+    "state": "The search panel no longer crashes when the query contains an emoji.\n",
+    "question": "Classify this change as fix, feature, docs, or unknown using its user-visible effect.",
+    "labels": [
+      "fix",
+      "feature",
+      "docs",
+      "unknown"
+    ],
+    "minimum": 80
+  },
+  "response": {
+    "model": "jev-latest",
+    "answers": {
+      "decision": {
+        "type": "choice",
+        "choice": "invented",
+        "confidence": 0.95,
+        "probabilities": {
+          "invented": 0.95,
+          "other": 0.050000000000000044
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6
+    }
+  }
+}

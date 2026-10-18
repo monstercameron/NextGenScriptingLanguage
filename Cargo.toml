@@ -76,6 +76,41 @@ lto = "fat"
 codegen-units = 1
 strip = true
 
+# URL parsing is used by remote endpoint validation and capability checks, but
+# not by the interpreter's text/JSON hot paths.
+[profile.release.package.url]
+opt-level = "z"
+
+[profile.release.package.idna]
+opt-level = "z"
+
+[profile.release.package.idna_adapter]
+opt-level = "z"
+
+[profile.release.package.icu_normalizer]
+opt-level = "z"
+
+[profile.release.package.icu_properties]
+opt-level = "z"
+
+# These support cancellation, time-based services and bundled manifest
+# compression; their work is outside interpreter text and JSON execution. sha2 stays
+# at full speed because checkpoint digests run per element.
+[profile.release.package.chrono]
+opt-level = "z"
+
+[profile.release.package.signal-hook]
+opt-level = "z"
+
+[profile.release.package.getrandom]
+opt-level = "z"
+
+[profile.release.package.flate2]
+opt-level = "z"
+
+[profile.release.package.miniz_oxide]
+opt-level = "z"
+
 [profile.dist]
 inherits = "release"
 

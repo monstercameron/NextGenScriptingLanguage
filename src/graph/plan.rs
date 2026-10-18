@@ -540,7 +540,27 @@ impl GraphPlan {
 
     /// Validate node applet calls against their manifests after topology has
     /// supplied any required dynamic parameter ports.
+    ///
+    /// The default run limits are applied first, before any per-node work, so `check`
+    /// refuses a graph over `max_nodes` or `max_edges` the way `run` does (#167).
+    /// Embedders that build a plan in code and admit it with larger
+    /// `GraphRunOptions` validate it with [`GraphPlan::validate`] instead.
     pub fn validate_with_registry(&self, registry: &Registry) -> Result<()> {
+        let limits = super::transport::GraphRunOptions::default();
+        if self.nodes.len() > limits.max_nodes {
+            bail!(
+                "graph node count {} exceeds max_nodes {}",
+                self.nodes.len(),
+                limits.max_nodes
+            );
+        }
+        if self.edges.len() > limits.max_edges {
+            bail!(
+                "graph edge count {} exceeds max_edges {}",
+                self.edges.len(),
+                limits.max_edges
+            );
+        }
         self.validate()?;
         crate::inputs::validate(&self.inputs)?;
         let input_types = self
@@ -942,12 +962,18 @@ impl GraphPlan {
         &self,
         registry: &Registry,
     ) -> Result<BTreeMap<(String, String), SensitivitySet>> {
-        let mut indegree = self
+        let nodes = self
             .nodes
             .iter()
-            .map(|node| (node.id.clone(), 0usize))
+            .map(|node| (node.id.clone(), node))
+            .collect::<BTreeMap<_, _>>();
+        let mut indegree = nodes
+            .keys()
+            .cloned()
+            .map(|id| (id, 0usize))
             .collect::<BTreeMap<_, _>>();
         let mut adjacency = BTreeMap::<String, Vec<String>>::new();
+        let mut incoming_edges = BTreeMap::<String, Vec<&EdgeSpec>>::new();
         for edge in &self.edges {
             if indegree.contains_key(&edge.from.node) && indegree.contains_key(&edge.to.node) {
                 *indegree.entry(edge.to.node.clone()).or_default() += 1;
@@ -955,6 +981,10 @@ impl GraphPlan {
                     .entry(edge.from.node.clone())
                     .or_default()
                     .push(edge.to.node.clone());
+                incoming_edges
+                    .entry(edge.to.node.clone())
+                    .or_default()
+                    .push(edge);
             }
         }
         let mut ready = indegree
@@ -963,11 +993,11 @@ impl GraphPlan {
             .collect::<VecDeque<_>>();
         let mut labels = BTreeMap::new();
         while let Some(id) = ready.pop_front() {
-            let Some(node) = self.nodes.iter().find(|node| node.id == id) else {
+            let Some(node) = nodes.get(&id).copied() else {
                 continue;
             };
             let mut incoming = None;
-            for edge in self.edges.iter().filter(|edge| edge.to.node == id) {
+            for edge in incoming_edges.get(&id).into_iter().flatten() {
                 if let Some(source_labels) =
                     labels.get(&(edge.from.node.clone(), edge.from.port.clone()))
                 {
@@ -982,10 +1012,11 @@ impl GraphPlan {
             | GraphNodeKind::ProgramService { call } = &node.kind
             {
                 for name in call.parameters.keys() {
-                    if !self
-                        .edges
-                        .iter()
-                        .any(|edge| edge.to.node == id && edge.to.port == *name)
+                    if !incoming_edges
+                        .get(&id)
+                        .into_iter()
+                        .flatten()
+                        .any(|edge| edge.to.port == *name)
                     {
                         if let Some(port) = node.inputs.get(name) {
                             insert_sensitivity(&mut incoming, port.sensitivity);

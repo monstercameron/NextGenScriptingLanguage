@@ -10,7 +10,7 @@ use super::plan::{GraphNode, GraphPlan, PortValue};
 use super::transport::{EventEnvelope, GraphContext, GraphExecutor, NodeIo, RecordedEmit};
 use crate::manifest::Registry;
 use crate::security::SensitivitySet;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -273,11 +273,34 @@ pub fn open_checkpoint_directory(
 /// The identity a graph checkpoint is written with: the canonical plan (inputs
 /// included) and the working directory. A resume must present the same identity.
 pub fn checkpoint_identity(plan: &GraphPlan, cwd: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(b"execute-graph-checkpoint-identity/v5\n");
-    digest.update(plan.to_json()?.as_bytes());
-    digest.update(b"\n");
-    digest.update(cwd.to_string_lossy().as_bytes());
-    Ok(format!("{:x}", digest.finalize()))
+    let key = crate::agent::what_if_key::load_or_create()
+        .context("a graph checkpoint needs the per-user input key")?;
+    let mut canonical = serde_json::to_value(plan)?;
+    remove_source_lines(&mut canonical);
+    let mut message = b"execute-graph-checkpoint-identity/v6\n".to_vec();
+    message.extend_from_slice(&serde_json::to_vec(&canonical)?);
+    message.push(b'\n');
+    message.extend_from_slice(cwd.to_string_lossy().as_bytes());
+    Ok(crate::agent::what_if_key::hmac_sha256(&key, &message)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn remove_source_lines(value: &mut serde_json::Value) {
+    let Some(fields) = value.as_object_mut() else {
+        return;
+    };
+    for name in ["nodes", "edges"] {
+        if let Some(items) = fields
+            .get_mut(name)
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for item in items {
+                if let Some(fields) = item.as_object_mut() {
+                    fields.remove("line");
+                }
+            }
+        }
+    }
 }

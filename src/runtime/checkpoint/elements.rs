@@ -26,6 +26,16 @@ use std::collections::BTreeSet;
 
 const ELEMENT_LOG: &str = "elements.jsonl";
 
+/// The longest element-log line a run writes and resume reads back (#187). A commit
+/// holds its output and stderr inline as hex and a parallel element's value inline,
+/// so the bound scales with the output limit. Writing refuses a longer line, so a
+/// line the reader rejects was not written by a run with the same output limit.
+pub(crate) fn element_line_limit(max_output_bytes: usize) -> usize {
+    max_output_bytes
+        .saturating_mul(64)
+        .saturating_add(super::MAX_CHECKPOINT_LOG_LINE)
+}
+
 /// Where the element log stood at the last journal write. Element commits do not
 /// write the journal, so lines after the anchor are covered by the chain alone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,7 +153,7 @@ struct ElementCommit {
 pub(super) struct ElementStateCache {
     cwd: PathBuf,
     bindings: BTreeMap<String, Value>,
-    refs: BTreeMap<String, BlobRef>,
+    pub(super) refs: BTreeMap<String, BlobRef>,
 }
 
 struct PendingElement {
@@ -566,9 +576,13 @@ impl Journal {
             restrict_file(&file)?;
             let mut reader = io::BufReader::new(file);
             let mut line = Vec::new();
+            let element_limit = element_line_limit(self.max_output_bytes);
             loop {
                 line.clear();
-                let read = reader.read_until(b'\n', &mut line)?;
+                let read = super::read_bounded_line(&mut reader, &mut line, element_limit)
+                    .map_err(|error| {
+                        anyhow!("checkpoint element log line is too long or unreadable: {error}")
+                    })?;
                 if read == 0 || line.last() != Some(&b'\n') {
                     break;
                 }
@@ -701,6 +715,12 @@ impl Journal {
 
     fn write_element_line(&mut self, entry: &ElementLine, durable: bool) -> Result<()> {
         let line = serde_json::to_vec(entry).context("encoding checkpoint element")?;
+        let limit = element_line_limit(self.max_output_bytes);
+        if line.len() > limit {
+            // Resume reads lines up to this bound, so a longer one is never written.
+            self.persistence_failed = true;
+            bail!("checkpoint element record exceeds the {limit}-byte element log line limit");
+        }
         if let Err(error) = self.write_element_bytes(&line, durable) {
             // The element may have run; keep the durable in-flight record for resume.
             self.persistence_failed = true;

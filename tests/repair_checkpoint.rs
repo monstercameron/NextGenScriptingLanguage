@@ -112,6 +112,8 @@ fn a_repaired_suffix_resumes_and_the_journal_is_never_modified() {
     );
     assert!(fs::read_to_string(&program).unwrap().contains("\"two\""));
 
+    // The failed node is not retry-safe and may have had partial effects, so resuming
+    // past it is an explicit decision even after a repair replaced it (#150).
     let resumed = execute(
         work.path(),
         &[
@@ -121,6 +123,7 @@ fn a_repaired_suffix_resumes_and_the_journal_is_never_modified() {
             checkpoint.to_str().unwrap(),
             "--manifest-dir",
             manifests().to_str().unwrap(),
+            "--retry-uncertain",
         ],
     );
     assert_eq!(resumed.status.code(), Some(0), "{}", text(&resumed.stderr));

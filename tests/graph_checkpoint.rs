@@ -138,6 +138,32 @@ fn plan(source: &str, registry: &Registry) -> GraphPlan {
     graph::parse(source, registry).unwrap()
 }
 
+#[test]
+fn graph_checkpoint_identity_ignores_source_line_numbers() {
+    let fixture = fixture();
+    let registry = Registry::load(&fixture.manifests).unwrap();
+    let source = CHAIN;
+    let commented = format!("# harmless comment\n{source}");
+    let directory = tempfile::tempdir().unwrap();
+    let first = graph::checkpoint_identity(&plan(source, &registry), directory.path()).unwrap();
+    let second =
+        graph::checkpoint_identity(&plan(&commented, &registry), directory.path()).unwrap();
+    assert_eq!(first, second);
+}
+
+#[test]
+fn graph_node_limit_is_applied_during_static_check() {
+    let fixture = fixture();
+    let registry = Registry::load(&fixture.manifests).unwrap();
+    let mut source = String::from("graph oversized\n");
+    for index in 0..65 {
+        source.push_str(&format!("  run ctrl.count as node{index}\n"));
+    }
+    source.push_str("end graph\n");
+    let error = graph::parse(&source, &registry).unwrap_err();
+    assert!(format!("{error:#}").contains("max_nodes 64"), "{error:#}");
+}
+
 fn options(cwd: &Path) -> RunOptions {
     RunOptions {
         max_output_bytes: 1024 * 1024,

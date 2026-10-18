@@ -37,11 +37,18 @@ pub(crate) fn is_graph_body(body: &str) -> bool {
 }
 #[allow(dead_code)]
 mod leaf_cursor;
+// `checkpoint status` reads the element log with the runtime's line bound.
+#[cfg(all(feature = "agent-advisory", not(target_arch = "wasm32")))]
+pub(crate) use elements::element_line_limit;
 use elements::ElementReplay;
 
 const LEGACY_JOURNAL_VERSION: u32 = 1;
 /// Version 2 keeps completed nodes inline in the journal.
 const INLINE_JOURNAL_VERSION: u32 = 2;
+/// The longest completed-node or graph log line read back. Writers stay below it:
+/// a completed node line holds only ids and paths, and a graph record is capped at
+/// 16 MiB when it is written (#187).
+pub(super) const MAX_CHECKPOINT_LOG_LINE: usize = 16 * 1024 * 1024;
 /// Version 3 keeps completed nodes in the append-only `completed.jsonl` log and
 /// records only how many lines are committed, plus their chain digest.
 const SEGMENTED_JOURNAL_VERSION: u32 = 3;
@@ -411,6 +418,9 @@ impl Journal {
         let requested_directory: PathBuf = options.directory.components().collect();
         let checkpoint_dir_existed = fs::symlink_metadata(&requested_directory).is_ok();
         let original = real_directory(&requested_directory, "checkpoint", !options.resume)?;
+        if !options.resume && checkpoint_dir_existed {
+            refuse_nonempty_fresh_directory(&requested_directory)?;
+        }
         #[cfg(windows)]
         let original_identity = crate::platform::windows::directory_identity(&requested_directory)?;
         let directory = fs::canonicalize(&requested_directory).with_context(|| {
@@ -431,7 +441,12 @@ impl Journal {
                 bail!("checkpoint directory changed while resolving its path");
             }
         }
-        restrict_directory(&directory)?;
+        // A directory this run created, or an empty one named for a fresh run, is made
+        // private. A resumed checkpoint keeps the permissions it was created with, and a
+        // non-empty directory was refused above, so no unrelated directory is changed.
+        if !options.resume || !checkpoint_dir_existed {
+            restrict_directory(&directory)?;
+        }
         if !options.resume && !checkpoint_dir_existed {
             if let Some(parent) = directory.parent() {
                 sync_directory(parent)?;
@@ -627,12 +642,14 @@ impl Journal {
     }
 
     pub fn ensure_retry_allowed(&self) -> Result<()> {
-        let uncertain = matches!(self.data.status, Status::Interrupted | Status::Running)
-            && self
-                .data
-                .in_flight
-                .as_ref()
-                .is_some_and(|node| !node.retry_safe);
+        let uncertain = matches!(
+            self.data.status,
+            Status::Interrupted | Status::Running | Status::Failed
+        ) && self
+            .data
+            .in_flight
+            .as_ref()
+            .is_some_and(|node| !node.retry_safe);
         if uncertain && !self.retry_uncertain {
             bail!(
                 "checkpoint may contain an interrupted side effect; pass --retry-uncertain to retry"
@@ -1038,6 +1055,8 @@ impl Journal {
             self.data.listener_cursor = previous_listener_cursor;
             return Err(error);
         }
+        // A finite run's element log and completed nodes reference result and state
+        // blobs that resume reloads, so only other journal modes collect here (#206).
         if self.data.identity.mode != "finite" {
             self.collect_unreferenced_blobs();
         }
@@ -1049,6 +1068,11 @@ impl Journal {
         retained.insert(self.data.snapshot.output.sha256.as_str(), ());
         for blob in self.data.snapshot.bindings.values() {
             retained.insert(blob.sha256.as_str(), ());
+        }
+        if let Some(cache) = self.element_state_cache.as_ref() {
+            for blob in cache.refs.values() {
+                retained.insert(blob.sha256.as_str(), ());
+            }
         }
         let Ok(entries) = fs::read_dir(&self.blobs_directory) else {
             return;
@@ -1122,15 +1146,13 @@ impl Journal {
         if bytes.len() > 16 * 1024 * 1024 {
             bail!("checkpoint journal exceeds 16 MiB");
         }
-        match atomic_write(&self.directory, "journal", "json", &bytes)
+        if let Err(error) = atomic_write(&self.directory, "journal", "json", &bytes)
             .context("persisting checkpoint journal")
         {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                self.persistence_failed = true;
-                Err(error)
-            }
+            self.persistence_failed = true;
+            return Err(error);
         }
+        Ok(())
     }
 }
 
@@ -1488,7 +1510,11 @@ fn read_completed_log(
     let mut line = Vec::new();
     for _ in 0..count {
         line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 || line.last() != Some(&b'\n') {
+        if read_bounded_line(&mut reader, &mut line, MAX_CHECKPOINT_LOG_LINE).map_err(|error| {
+            anyhow!("checkpoint completed log line is too long or unreadable: {error}")
+        })? == 0
+            || line.last() != Some(&b'\n')
+        {
             bail!("checkpoint completed log is shorter than its journal records");
         }
         line.pop();
@@ -1505,6 +1531,61 @@ fn read_completed_log(
         bail!("checkpoint completed log checksum mismatch");
     }
     Ok((nodes, CompletedLog { chain, bytes }))
+}
+
+/// A fresh run may use an absent or empty directory only (#166). An existing
+/// checkpoint is named as such so the caller is pointed at resume; any other
+/// non-empty directory is refused before it is locked, written or made private.
+pub(super) fn refuse_nonempty_fresh_directory(directory: &Path) -> Result<()> {
+    if fs::symlink_metadata(directory.join("journal.json")).is_ok() {
+        bail!("checkpoint already exists; use resume explicitly");
+    }
+    let mut entries = fs::read_dir(directory).context("reading existing checkpoint directory")?;
+    if entries
+        .next()
+        .transpose()
+        .context("reading existing checkpoint directory")?
+        .is_some()
+    {
+        bail!("checkpoint directory exists and is not empty; choose an absent or empty directory");
+    }
+    Ok(())
+}
+
+/// Read one line into `line`, newline included, refusing a line longer than
+/// `max_bytes` before buffering more than one byte past it. Returns the bytes read;
+/// a final line without a newline is returned as is for the caller to treat as torn.
+pub(crate) fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    max_bytes: usize,
+) -> Result<usize> {
+    line.clear();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(line.len());
+        }
+        let end = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        if line.len().saturating_add(end) > max_bytes.saturating_add(1) {
+            bail!("checkpoint log line is too long");
+        }
+        line.extend_from_slice(&available[..end]);
+        let complete = available[end - 1] == b'\n';
+        reader.consume(end);
+        if complete {
+            if line.len().saturating_sub(1) > max_bytes {
+                bail!("checkpoint log line is too long");
+            }
+            return Ok(line.len());
+        }
+        if line.len() > max_bytes {
+            bail!("checkpoint log line is too long");
+        }
+    }
 }
 
 fn store_snapshot(
@@ -1580,6 +1661,29 @@ fn load_snapshot(
     })
 }
 
+/// Whether `key` is an execution record's `output` or `stderr` field that its
+/// `<field>_encoding` sibling declares as `u8_array` (#185).
+fn is_byte_array_field(record: &BTreeMap<String, Value>, key: &str) -> bool {
+    let encoding = match key {
+        "output" => "output_encoding",
+        "stderr" => "stderr_encoding",
+        _ => return false,
+    };
+    matches!(record.get(encoding), Some(Value::String(value)) if value == "u8_array")
+}
+
+/// A `u8_array` holds one byte per item, so each integer in 0..=255 counts as one
+/// byte. Any other item keeps its ordinary size, so a record that only claims the
+/// encoding cannot hide a larger value from the snapshot limit.
+fn byte_array_size(items: &[Value]) -> usize {
+    items.iter().fold(0usize, |size, item| {
+        size.saturating_add(match item {
+            Value::Integer(0..=255) => 1,
+            other => value_size(other),
+        })
+    })
+}
+
 fn value_size(value: &Value) -> usize {
     match value {
         Value::String(value) | Value::Reference(value) => value.len(),
@@ -1588,8 +1692,11 @@ fn value_size(value: &Value) -> usize {
         Value::Null => 0,
         Value::Number(value) => value.to_string().len(),
         Value::Record(values) => values.iter().fold(0usize, |size, (key, value)| {
-            size.saturating_add(key.len())
-                .saturating_add(value_size(value))
+            let field_size = match value {
+                Value::List(items) if is_byte_array_field(values, key) => byte_array_size(items),
+                _ => value_size(value),
+            };
+            size.saturating_add(key.len()).saturating_add(field_size)
         }),
         Value::List(values) => values
             .iter()
@@ -1778,6 +1885,41 @@ fn serialized_digest<T: Serialize>(value: &T) -> Result<String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn fresh_checkpoint_refuses_nonempty_existing_directory_without_chmod() {
+        let (_temp, options, cwd) = setup();
+        fs::create_dir(&options.directory).unwrap();
+        fs::write(options.directory.join("keep.txt"), b"keep").unwrap();
+        fs::set_permissions(&options.directory, fs::Permissions::from_mode(0o755)).unwrap();
+        let error = Journal::open(&options, &cwd, "finite", 1024)
+            .err()
+            .expect("a non-empty directory is refused for a fresh run");
+        assert!(format!("{error:#}").contains("not empty"));
+        assert_eq!(
+            fs::metadata(&options.directory)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert_eq!(
+            fs::read(options.directory.join("keep.txt")).unwrap(),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn failed_non_retry_safe_checkpoint_requires_uncertain_retry() {
+        let (_temp, options, cwd) = setup();
+        let mut journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        journal
+            .begin_node("fingerprint", 0, 1, 1, &cwd, false)
+            .unwrap();
+        journal.fail("failed command", false).unwrap();
+        assert!(journal.ensure_retry_allowed().is_err());
+    }
 
     fn setup() -> (tempfile::TempDir, CheckpointOptions, PathBuf) {
         let temp = tempdir().unwrap();
@@ -2556,11 +2698,67 @@ fn restrict_file(file: &File) -> Result<()> {
         crate::platform::windows::restrict_file(file)
     }
 }
+
 #[cfg(windows)]
 fn sync_directory(_directory: &Path) -> Result<()> {
     // Publication uses MOVEFILE_WRITE_THROUGH after flushing each file. Windows
     // does not provide the Unix directory-fsync contract through std::fs.
     Ok(())
+}
+
+#[cfg(test)]
+mod record_size_and_log_bound_tests {
+    use super::*;
+
+    #[test]
+    fn execution_record_u8_arrays_are_sized_in_bytes() {
+        let record = Value::Record(BTreeMap::from([
+            (
+                "output".to_owned(),
+                Value::List(vec![Value::Integer(0); 2_200_000]),
+            ),
+            (
+                "output_encoding".to_owned(),
+                Value::String("u8_array".to_owned()),
+            ),
+        ]));
+        assert!(value_size(&record) <= 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn a_claimed_u8_array_encoding_does_not_hide_larger_items() {
+        let record = Value::Record(BTreeMap::from([
+            (
+                "output".to_owned(),
+                Value::List(vec![Value::String("x".repeat(1024)), Value::Integer(7)]),
+            ),
+            (
+                "output_encoding".to_owned(),
+                Value::String("u8_array".to_owned()),
+            ),
+            (
+                "stderr".to_owned(),
+                Value::List(vec![Value::Integer(1), Value::Integer(2)]),
+            ),
+        ]));
+        let expected = "output".len()
+            + 1024
+            + 1
+            + "output_encoding".len()
+            + "u8_array".len()
+            + "stderr".len()
+            + 2 * std::mem::size_of::<i64>();
+        assert_eq!(value_size(&record), expected);
+    }
+
+    #[test]
+    fn bounded_log_reader_rejects_an_unterminated_oversized_line() {
+        let mut reader = io::BufReader::new(&b"abcdef"[..]);
+        let mut line = Vec::new();
+        let error = read_bounded_line(&mut reader, &mut line, 4).unwrap_err();
+        assert!(format!("{error:#}").contains("checkpoint log line is too long"));
+        assert!(line.len() <= 5);
+    }
 }
 
 #[cfg(test)]

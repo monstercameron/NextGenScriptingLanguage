@@ -1,7 +1,7 @@
 //! Resume compatibility is based on completed node semantics, not source lines.
 use super::*;
 use checkpoint::Journal;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
 mod bench;
@@ -619,7 +619,15 @@ pub(super) fn prepare_with_modules(
         .iter()
         .any(|node| node.step_id.is_some())
         .then(|| crate::ast::step_ids(&program.steps));
+    let recorded_ids = journal
+        .completed_nodes()
+        .iter()
+        .filter_map(|node| node.step_id.as_deref())
+        .collect::<HashSet<_>>();
     for node in journal.completed_nodes() {
+        // Set when the node's recorded id is gone but the step at its position may be
+        // the same statement with a label added, removed or renamed (#186).
+        let mut relabelled = None;
         if let (Some(id), Some(ids)) = (&node.step_id, &step_ids) {
             let old_line = node
                 .line
@@ -630,6 +638,16 @@ pub(super) fn prepare_with_modules(
                     "completed checkpoint node {id:?} moved from line {old_line} to line {new_line}: a statement was inserted or removed above completed node {id:?}; use a fresh checkpoint",
                     new_line = program.steps[index].line,
                 ),
+                // Labels are aliases for a node's id, so a relabelled statement keeps
+                // its place only when the step now at that place is not another
+                // completed node (which would mean a statement above it was removed)
+                // and its content digest still matches below.
+                None if ids
+                    .get(start)
+                    .is_some_and(|current| !recorded_ids.contains(current.as_str())) =>
+                {
+                    relabelled = Some((id, old_line));
+                }
                 None => bail!(
                     "completed checkpoint node {id:?} (line {old_line}) is no longer in the script: a statement was inserted or removed above completed node {id:?}, or its content changed; use a fresh checkpoint",
                 ),
@@ -654,6 +672,11 @@ pub(super) fn prepare_with_modules(
                     module_fingerprints,
                 )
         {
+            if let Some((id, old_line)) = relabelled {
+                bail!(
+                    "completed checkpoint node {id:?} (line {old_line}) is no longer in the script: a statement was inserted or removed above completed node {id:?}, or its content changed; use a fresh checkpoint",
+                );
+            }
             bail!(
                 "completed checkpoint node changed at line {}; use a fresh checkpoint",
                 program.steps[start].line

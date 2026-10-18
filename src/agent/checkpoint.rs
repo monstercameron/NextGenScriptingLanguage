@@ -8,7 +8,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::fs;
-use std::io::Read;
+use std::io::{self, Read, Write};
 use std::path::Path;
 
 /// Protocol identifier of the `--json` object.
@@ -42,9 +42,9 @@ fn status_cli(arguments: &[String]) -> Result<i32> {
     let directory = directory.ok_or_else(|| anyhow!("{USAGE}"))?;
     let summary = summarize(Path::new(directory))?;
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&summary)?);
+        writeln!(io::stdout(), "{}", serde_json::to_string_pretty(&summary)?)?;
     } else {
-        print!("{}", render_text(&summary));
+        io::stdout().write_all(render_text(&summary).as_bytes())?;
     }
     Ok(0)
 }
@@ -97,7 +97,16 @@ pub fn summarize(directory: &Path) -> Result<Value> {
             decode_path(&raw)
         });
     let (blob_count, blob_bytes) = blob_totals(&directory.join("blobs"))?;
-    let resume_action = resume_action(status, in_flight.as_ref());
+    // The element log belongs to the in-flight node. A pending `for each` element
+    // whose body may have started needs the same override as an uncertain node.
+    let resume_action = if !matches!(status, "completed" | "idle")
+        && in_flight.is_some()
+        && pending_element_is_uncertain(directory)?
+    {
+        "requires_retry_uncertain"
+    } else {
+        resume_action(status, in_flight.as_ref())
+    };
     let checksum = if journal.get("checksum").is_some() {
         "present"
     } else {
@@ -120,6 +129,57 @@ pub fn summarize(directory: &Path) -> Result<Value> {
         "lock_file_present": directory.join("lock").is_file(),
         "resume_action": resume_action,
     }))
+}
+
+fn pending_element_is_uncertain(directory: &Path) -> Result<bool> {
+    let path = directory.join("elements.jsonl");
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("reading checkpoint element log for status"),
+    };
+    // Status does not know the run's output limit, so it reads lines up to the bound
+    // a run with the default 1 MiB limit can write, and refuses a longer line.
+    let max_element_line = crate::runtime::checkpoint::element_line_limit(
+        crate::runtime::RunOptions::new(std::path::PathBuf::new()).max_output_bytes,
+    );
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = Vec::new();
+    let mut pending = std::collections::BTreeMap::<u64, bool>::new();
+    loop {
+        line.clear();
+        let read =
+            crate::runtime::checkpoint::read_bounded_line(&mut reader, &mut line, max_element_line)
+                .context("reading checkpoint element log for status")?;
+        if read == 0 {
+            break;
+        }
+        if line.last() != Some(&b'\n') {
+            break;
+        }
+        line.pop();
+        let value: Value = serde_json::from_slice(&line)
+            .context("checkpoint element log is malformed or corrupt")?;
+        let kind = value.get("kind").and_then(Value::as_str).unwrap_or("");
+        let index = value
+            .get("index")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("checkpoint element log has an invalid element index"))?;
+        match kind {
+            "begin" => {
+                let uncertain = value
+                    .get("uncertain")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| anyhow!("checkpoint element log has an invalid begin record"))?;
+                pending.insert(index, uncertain);
+            }
+            "commit" => {
+                pending.remove(&index);
+            }
+            _ => bail!("checkpoint element log has an unknown record kind"),
+        }
+    }
+    Ok(pending.values().any(|uncertain| *uncertain))
 }
 
 /// The status of a graph checkpoint (journal mode `graph`): committed nodes and the
@@ -184,7 +244,7 @@ fn resume_action(status: &str, in_flight: Option<&Value>) -> &'static str {
     match (status, in_flight, retry_safe) {
         ("completed", _, _) => "restores_completed_result",
         ("idle", _, _) => "idle_no_action",
-        (_, Some(_), Some(false)) => "requires_retry_uncertain",
+        ("failed" | "interrupted" | "running", Some(_), Some(false)) => "requires_retry_uncertain",
         (_, Some(_), _) => "retries_in_flight_node",
         ("running", None, _) => "may_be_active_or_crashed",
         _ => "continues_from_last_completed_node",
@@ -285,4 +345,38 @@ fn render_text(summary: &Value) -> String {
         summary["resume_action"].as_str().unwrap_or("")
     ));
     text
+}
+
+#[cfg(test)]
+mod resume_action_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn failed_uncertain_node_is_reported_as_requiring_override() {
+        let in_flight = json!({"retry_safe": false});
+        assert_eq!(
+            resume_action("failed", Some(&in_flight)),
+            "requires_retry_uncertain"
+        );
+    }
+
+    #[test]
+    fn status_reads_pending_element_uncertainty() {
+        let directory = tempfile::tempdir().unwrap();
+        let log = directory.path().join("elements.jsonl");
+        fs::write(
+            &log,
+            b"{\"kind\":\"begin\",\"index\":2,\"uncertain\":true}\n",
+        )
+        .unwrap();
+        assert!(pending_element_is_uncertain(directory.path()).unwrap());
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&log)
+            .unwrap()
+            .write_all(b"{\"kind\":\"commit\",\"index\":2}\n")
+            .unwrap();
+        assert!(!pending_element_is_uncertain(directory.path()).unwrap());
+    }
 }

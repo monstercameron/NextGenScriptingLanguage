@@ -14,6 +14,46 @@ fn fixture() -> (TempDir, PathBuf) {
     (directory, manifest_dir)
 }
 
+#[test]
+fn completed_statement_may_receive_a_renamed_step_label() {
+    let (directory, manifests) = fixture();
+    let source = directory.path().join("labels.program");
+    fs::write(
+        &source,
+        "fetch: run \"true\"\nrun \"sh\" with arguments [\"-c\", \"exit 2\"]\n",
+    )
+    .unwrap();
+    let first = invoke(
+        directory.path(),
+        &manifests,
+        &["run", "labels.program", "--checkpoint", "ck"],
+    );
+    assert_ne!(first.status.code(), Some(0));
+    fs::write(
+        &source,
+        "download: run \"true\"\nrun \"sh\" with arguments [\"-c\", \"exit 0\"]\n",
+    )
+    .unwrap();
+    let resumed = invoke(
+        directory.path(),
+        &manifests,
+        // The failed command is not retry-safe, so retrying it is explicit (#150).
+        &[
+            "resume",
+            "labels.program",
+            "--checkpoint",
+            "ck",
+            "--retry-uncertain",
+        ],
+    );
+    assert_eq!(
+        resumed.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+}
+
 fn invoke(directory: &Path, manifests: &Path, args: &[&str]) -> Output {
     let mut process = Command::new(env!("CARGO_BIN_EXE_execute"));
     process
@@ -632,6 +672,8 @@ fn failed_native_pipe_group_restarts_from_frozen_read_input() {
     fs::write(&input, "changed input\n").unwrap();
     fs::write(&applet, "#!/bin/sh\nexec /bin/cat\n").unwrap();
     fs::set_permissions(&applet, fs::Permissions::from_mode(0o755)).unwrap();
+    // `failer` is an external command that may have had partial effects before it
+    // reported failure, so retrying its node is explicit (#150).
     let resumed = invoke(
         directory.path(),
         &manifests,
@@ -640,6 +682,7 @@ fn failed_native_pipe_group_restarts_from_frozen_read_input() {
             workflow.to_str().unwrap(),
             "--checkpoint",
             checkpoint.to_str().unwrap(),
+            "--retry-uncertain",
         ],
     );
     assert!(

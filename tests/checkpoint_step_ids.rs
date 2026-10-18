@@ -144,6 +144,8 @@ fn checkpoint_after_labelled_node(fixture: &Fixture, checkpoint: &Path) {
     );
 }
 
+/// Resume after the failed `ctrl.fail` node. That node is not retry-safe and its
+/// failure may have had partial effects, so retrying it is an explicit decision (#150).
 fn resume(fixture: &Fixture, checkpoint: &Path, program: &str) -> Output {
     fs::write(fixture.root.join("p.program"), program).unwrap();
     execute(
@@ -155,6 +157,7 @@ fn resume(fixture: &Fixture, checkpoint: &Path, program: &str) -> Output {
             &fixture.manifests.to_string_lossy(),
             "--checkpoint",
             &checkpoint.to_string_lossy(),
+            "--retry-uncertain",
         ],
     )
 }
@@ -266,6 +269,54 @@ fn removing_a_completed_statement_above_a_labelled_node_is_refused() {
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(stderr.contains("no longer in the script"), "{stderr}");
     assert!(stderr.contains("(line 1)"), "{stderr}");
+    assert_eq!(
+        log_lines(&fixture.count_log),
+        1,
+        "the completed node must not run again"
+    );
+}
+
+#[test]
+fn renaming_the_label_of_a_completed_node_resumes_without_rerunning_it() {
+    let fixture = fixture();
+    let checkpoint = fixture.root.join("checkpoint");
+    checkpoint_after_labelled_node(&fixture, &checkpoint);
+
+    // A label is an alias for the node's id (#186): the statement keeps its place and
+    // its content, so the completed node is reused under its new name.
+    let resumed = resume(
+        &fixture,
+        &checkpoint,
+        "download: run ctrl.count with text \"a\"\nrun ctrl.echo with text \"after\"\n",
+    );
+    assert!(
+        resumed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&resumed.stdout).trim(), "after");
+    assert_eq!(
+        log_lines(&fixture.count_log),
+        1,
+        "the completed node must not run again"
+    );
+}
+
+#[test]
+fn a_relabelled_completed_node_with_changed_content_is_refused() {
+    let fixture = fixture();
+    let checkpoint = fixture.root.join("checkpoint");
+    checkpoint_after_labelled_node(&fixture, &checkpoint);
+
+    let refused = resume(
+        &fixture,
+        &checkpoint,
+        "download: run ctrl.count with text \"b\"\nrun ctrl.echo with text \"after\"\n",
+    );
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("\"fetch\""), "{stderr}");
+    assert!(stderr.contains("no longer in the script"), "{stderr}");
     assert_eq!(
         log_lines(&fixture.count_log),
         1,

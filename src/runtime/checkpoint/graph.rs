@@ -16,7 +16,7 @@ use crate::security::SensitivitySet;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
-use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -73,9 +73,16 @@ pub(crate) fn open_graph_journal(
     let requested: PathBuf = directory.components().collect();
     let existed = fs::symlink_metadata(&requested).is_ok();
     real_directory(&requested, "checkpoint", !resume)?;
+    if !resume && existed {
+        super::refuse_nonempty_fresh_directory(&requested)?;
+    }
     let directory = fs::canonicalize(&requested)
         .with_context(|| format!("resolving checkpoint directory {}", requested.display()))?;
-    restrict_directory(&directory)?;
+    // Same rule as program checkpoints: a created or empty fresh directory is made
+    // private; a resumed one keeps its permissions; a non-empty one was refused.
+    if !resume || !existed {
+        restrict_directory(&directory)?;
+    }
     if !resume && !existed {
         if let Some(parent) = directory.parent() {
             sync_directory(parent)?;
@@ -317,7 +324,13 @@ fn read_log(
     let mut line = Vec::new();
     for _ in 0..count {
         line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 || line.last() != Some(&b'\n') {
+        if super::read_bounded_line(&mut reader, &mut line, super::MAX_CHECKPOINT_LOG_LINE)
+            .map_err(|error| {
+                anyhow::anyhow!("graph completed log line is too long or unreadable: {error}")
+            })?
+            == 0
+            || line.last() != Some(&b'\n')
+        {
             bail!("graph completed log is shorter than its journal records");
         }
         line.pop();

@@ -43,8 +43,11 @@ pub(super) fn stringify(
     let value = args
         .get("value")
         .ok_or_else(|| invalid("args.value is required"))?;
-    check_size_and_depth(value, context)?;
-    let text = serde_json::to_string(value)
+    let encoded_len = check_size_and_depth(value, context)?;
+    let mut output = Vec::with_capacity(encoded_len);
+    serde_json::to_writer(&mut output, value)
+        .map_err(|error| invalid(format!("JSON value cannot be serialized: {error}")))?;
+    let text = String::from_utf8(output)
         .map_err(|error| invalid(format!("JSON value cannot be serialized: {error}")))?;
     Ok(Value::String(text))
 }
@@ -314,7 +317,10 @@ fn document_ref<'a>(
     Ok(Cow::Owned(value))
 }
 
-fn check_size_and_depth(value: &Value, context: &ExecutionContext<'_>) -> Result<(), AppletError> {
+fn check_size_and_depth(
+    value: &Value,
+    context: &ExecutionContext<'_>,
+) -> Result<usize, AppletError> {
     // One walk checks the depth and adds up the exact length of the compact JSON
     // encoding, so the size limit needs no serialization pass over the document.
     let mut pending = vec![(value, 0usize)];
@@ -362,7 +368,7 @@ fn check_size_and_depth(value: &Value, context: &ExecutionContext<'_>) -> Result
             "JSON value exceeds the {MAX_JSON_BYTES}-byte limit"
         )));
     }
-    Ok(())
+    Ok(bytes)
 }
 
 /// The length of `text` as a quoted JSON string in serde_json's compact encoding:
@@ -785,5 +791,23 @@ mod tests {
             }
             assert_eq!(walked, serde_json::to_vec(&value).unwrap().len(), "{value}");
         }
+    }
+
+    #[test]
+    fn stringify_reserves_the_checked_compact_length() {
+        let context = ExecutionContext::new(&|| Ok(()));
+        let value = serde_json::json!({
+            "quotes": "\"\\",
+            "control": "\u{1f}",
+            "items": [1, 2, 3],
+            "large": "x".repeat(10_000),
+        });
+        let args = Map::from_iter([("value".into(), value.clone())]);
+        let Value::String(text) = stringify(&args, &context).expect("stringify succeeds") else {
+            panic!("stringify returns text");
+        };
+        assert_eq!(text, serde_json::to_string(&value).unwrap());
+        assert_eq!(text.len(), check_size_and_depth(&value, &context).unwrap());
+        assert_eq!(text.capacity(), text.len());
     }
 }

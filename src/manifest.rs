@@ -192,9 +192,10 @@ enum Manifests {
     Bundled {
         index: &'static bundled_manifests::BundledIndex,
         root: PathBuf,
-        cells: Vec<OnceLock<Manifest>>,
-        /// Whether each entry's file still has its indexed content, checked on first use.
-        verified: Vec<OnceLock<bool>>,
+        /// Parsed value or fail-closed verification/parse error, checked on first use.
+        /// The cells live with this root so neither parsed origins nor verification
+        /// results can leak across registries for different manifest directories.
+        cells: Vec<OnceLock<std::result::Result<Manifest, String>>>,
     },
 }
 
@@ -229,14 +230,14 @@ impl Default for Manifests {
 
 /// Whether the file for a bundled entry is still a plain file with indexed content.
 fn entry_matches(root: &Path, entry: &bundled_manifests::BundledEntry) -> bool {
-    let Ok(metadata) = fs::metadata(root.join(entry.file())) else {
+    let path = root.join(entry.file());
+    let Ok(metadata) = fs::symlink_metadata(&path) else {
         return false;
     };
     if !metadata.is_file() || metadata.len() != entry.bytes() {
         return false;
     }
-    fs::read(root.join(entry.file()))
-        .is_ok_and(|contents| format!("{:x}", Sha256::digest(contents)) == entry.sha256())
+    fs::read(path).is_ok_and(|contents| format!("{:x}", Sha256::digest(contents)) == entry.sha256())
 }
 
 fn manifest_mismatch_message(root: &Path, entry: &bundled_manifests::BundledEntry) -> String {
@@ -261,29 +262,27 @@ impl Manifests {
             Self::Parsed(list) => list
                 .get(position)
                 .ok_or_else(|| anyhow!("manifest {position} is out of range")),
-            Self::Bundled {
-                index,
-                root,
-                cells,
-                verified,
-            } => {
+            Self::Bundled { index, root, cells } => {
                 let cell = cells
                     .get(position)
                     .ok_or_else(|| anyhow!("manifest {position} is out of range"))?;
-                if let Some(manifest) = cell.get() {
-                    return Ok(manifest);
-                }
                 let entry = &index.entries()[position];
-                if !verified[position].get_or_init(|| entry_matches(root, entry)) {
-                    bail!(manifest_mismatch_message(root, entry));
-                }
-                let mut manifest = parse_manifest(index.body(position)?)
-                    .with_context(|| format!("invalid bundled manifest {}", entry.file()))?;
-                manifest.origin = Some(root.join(entry.file()));
-                // A concurrent first use may have set the cell already; both values are equal.
-                let _ = cell.set(manifest);
-                cell.get()
-                    .ok_or_else(|| anyhow!("bundled manifest {} was not stored", entry.file()))
+                cell.get_or_init(|| {
+                    let load = || -> Result<Manifest> {
+                        if !entry_matches(root, entry) {
+                            bail!(manifest_mismatch_message(root, entry));
+                        }
+                        let mut manifest =
+                            parse_manifest(index.body(position)?).with_context(|| {
+                                format!("invalid bundled manifest {}", entry.file())
+                            })?;
+                        manifest.origin = Some(root.join(entry.file()));
+                        Ok(manifest)
+                    };
+                    load().map_err(|error| format!("{error:#}"))
+                })
+                .as_ref()
+                .map_err(|message| anyhow!("{message}"))
             }
         }
     }
@@ -573,10 +572,14 @@ impl Registry {
         let index = bundled_manifests::index()?;
         let root = fs::canonicalize(root)
             .with_context(|| format!("canonicalizing manifest root {}", root.display()))?;
+        Self::from_bundled_canonical(root, index)
+    }
+
+    fn from_bundled_canonical(
+        root: PathBuf,
+        index: &'static bundled_manifests::BundledIndex,
+    ) -> Result<Self> {
         let cells = (0..index.entries().len())
-            .map(|_| OnceLock::new())
-            .collect();
-        let verified = (0..index.entries().len())
             .map(|_| OnceLock::new())
             .collect();
         Ok(Self {
@@ -585,7 +588,6 @@ impl Registry {
                     index,
                     root: root.clone(),
                     cells,
-                    verified,
                 }),
                 names: Arc::new(BTreeMap::new()),
                 module_root: Some(root),
@@ -600,21 +602,7 @@ impl Registry {
     pub fn load_default(path: &Path, check: ManifestCheck) -> Result<Self> {
         match fs::metadata(path) {
             Ok(metadata) if metadata.is_dir() => {
-                let index = bundled_manifests::index()?;
-                if !matches!(bundled_manifests::directory_matches(path, index), Ok(true)) {
-                    return Self::load(path);
-                }
-                if check == ManifestCheck::Full {
-                    let canonical_root = fs::canonicalize(path).with_context(|| {
-                        format!("canonicalizing manifest root {}", path.display())
-                    })?;
-                    for entry in index.entries() {
-                        if !entry_matches(path, entry) {
-                            bail!(manifest_mismatch_message(&canonical_root, entry));
-                        }
-                    }
-                }
-                Self::from_bundled(path)
+                Self::load_default_directory(path, &metadata, check)
             }
             Ok(_) => Self::load(path),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
@@ -622,6 +610,53 @@ impl Registry {
                 Err(error).with_context(|| format!("reading manifest path {}", path.display()))
             }
         }
+    }
+
+    fn load_default_directory(
+        path: &Path,
+        metadata: &fs::Metadata,
+        check: ManifestCheck,
+    ) -> Result<Self> {
+        debug_assert!(metadata.is_dir());
+        let index = bundled_manifests::index()?;
+        if !matches!(bundled_manifests::directory_matches(path, index), Ok(true)) {
+            return Self::load(path);
+        }
+        let canonical_root = fs::canonicalize(path)
+            .with_context(|| format!("canonicalizing manifest root {}", path.display()))?;
+        if check == ManifestCheck::Full {
+            for entry in index.entries() {
+                if !entry_matches(&canonical_root, entry) {
+                    bail!(manifest_mismatch_message(&canonical_root, entry));
+                }
+            }
+        }
+        Self::from_bundled_canonical(canonical_root, index)
+    }
+
+    /// Select the first existing directory from ordered candidates and load it as
+    /// the default manifest root. Each candidate is probed once; the selected root
+    /// is canonicalized once and that identity is retained for authorization and
+    /// bundled manifest integrity checks. If no candidate is a directory, returns
+    /// an empty registry, matching default discovery's optional-directory behavior.
+    pub fn load_default_from_candidates(
+        candidates: &[PathBuf],
+        check: ManifestCheck,
+    ) -> Result<Self> {
+        // Earlier candidates are used only when they are directories; the last one keeps
+        // load_default's handling (a legacy JSON file, or an error other than not-found
+        // is reported rather than silently giving an empty registry).
+        let Some((last, earlier)) = candidates.split_last() else {
+            return Ok(Self::default());
+        };
+        for candidate in earlier {
+            if let Ok(metadata) = fs::metadata(candidate) {
+                if metadata.is_dir() {
+                    return Self::load_default_directory(candidate, &metadata, check);
+                }
+            }
+        }
+        Self::load_default(last, check)
     }
 
     fn insert_source(data: &mut RegistryData, raw: &str, origin: Option<PathBuf>) -> Result<()> {

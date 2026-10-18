@@ -4,8 +4,64 @@ use flow::runtime::{self, RunOptions};
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+struct CountingAllocator;
+
+static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
+static PEAK_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+fn record_allocation(size: usize) {
+    let live = LIVE_BYTES.fetch_add(size, Ordering::Relaxed) + size;
+    let mut peak = PEAK_BYTES.load(Ordering::Relaxed);
+    while live > peak {
+        match PEAK_BYTES.compare_exchange_weak(peak, live, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(current) => peak = current,
+        }
+    }
+}
+
+// SAFETY: Every allocation operation is forwarded to `System` with the original pointer/layout.
+unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        // SAFETY: This allocator forwards the unchanged layout to the system allocator.
+        let pointer = unsafe { std::alloc::System.alloc(layout) };
+        if !pointer.is_null() {
+            record_allocation(layout.size());
+        }
+        pointer
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: std::alloc::Layout) {
+        LIVE_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
+        // SAFETY: This pointer and layout came from the system allocator through this wrapper.
+        unsafe { std::alloc::System.dealloc(pointer, layout) };
+    }
+
+    unsafe fn realloc(
+        &self,
+        pointer: *mut u8,
+        layout: std::alloc::Layout,
+        new_size: usize,
+    ) -> *mut u8 {
+        // SAFETY: This pointer and layout came from the system allocator through this wrapper.
+        let new_pointer = unsafe { std::alloc::System.realloc(pointer, layout, new_size) };
+        if !new_pointer.is_null() {
+            if new_size >= layout.size() {
+                record_allocation(new_size - layout.size());
+            } else {
+                LIVE_BYTES.fetch_sub(layout.size() - new_size, Ordering::Relaxed);
+            }
+        }
+        new_pointer
+    }
+}
 
 fn median(mut samples: Vec<Duration>) -> Duration {
     samples.sort_unstable();
@@ -38,7 +94,10 @@ fn benchmark(
     let options = RunOptions::new(std::env::current_dir().expect("current directory"));
     let cancelled = Arc::new(AtomicBool::new(false));
     let mut samples = Vec::with_capacity(iterations);
+    let mut peak_extra = 0usize;
     for _ in 0..iterations {
+        let baseline = LIVE_BYTES.load(Ordering::Relaxed);
+        PEAK_BYTES.store(baseline, Ordering::Relaxed);
         let started = Instant::now();
         let result = runtime::run_with_context(
             &program,
@@ -51,10 +110,11 @@ fn benchmark(
         .expect("benchmark run succeeds");
         black_box(result.output);
         samples.push(started.elapsed());
+        peak_extra = peak_extra.max(PEAK_BYTES.load(Ordering::Relaxed).saturating_sub(baseline));
     }
     eprintln!(
-        "{label}: median {:?} over {iterations} runs",
-        median(samples)
+        "{label}: median {:?} over {iterations} runs; peak additional heap {peak_extra} bytes",
+        median(samples),
     );
 }
 

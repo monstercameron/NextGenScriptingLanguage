@@ -21,7 +21,7 @@ memchr = "2.8.3"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
-url = "2.5.8"
+url = { version = "2.5.8", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.4"
@@ -62,7 +62,7 @@ live = ["screens"]
 lsp = []
 # The model helper and the remote backend share the HTTP client, so each enables it.
 model = ["dep:ureq"]
-remote = ["dep:ureq", "dep:mio"]
+remote = ["dep:ureq", "dep:mio", "dep:url"]
 # Quickshell desktop renderer nodes and the DAP adapter. Lean builds refuse both with a clear error.
 desktop = ["screens", "graph"]
 dap = []
@@ -74,6 +74,8 @@ fuzzing = ["dap", "graph", "records"]
 [dev-dependencies]
 tempfile = "3"
 proptest = "1"
+# Tests build file URIs; the binary only links url with the remote feature.
+url = "2.5.8"
 
 # Fat LTO and one codegen unit: measured on Windows, 9.87 MB -> 9.10 MB stripped, and an
 # interpreter-bound loop ran about 4% faster. Build time is about 2 minutes (was 1.5).
@@ -81,6 +83,8 @@ proptest = "1"
 lto = "fat"
 codegen-units = 1
 strip = true
+# Release panics are bugs: abort after the standard panic diagnostic instead of carrying unwind tables.
+panic = "abort"
 
 # URL parsing is used by remote endpoint validation and capability checks, but
 # not by the interpreter's text/JSON hot paths.

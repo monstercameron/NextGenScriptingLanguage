@@ -18,7 +18,6 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use url::Url;
 
 /// The distinct sensitivity labels known to contribute to a value.
 ///
@@ -999,25 +998,14 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for UniqueMap<T> {
     }
 }
 
+// Data-flow policies and capability policies canonicalize origins with the same parser,
+// so an origin one accepts can never be spelled differently in the other.
 fn canonical_origin(value: &str) -> Result<String, ()> {
-    let url = Url::parse(value).map_err(|_| ())?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(());
-    }
-    Ok(url.origin().ascii_serialization())
+    crate::capabilities::canonical_http_origin(value).map_err(|_| ())
 }
 
 fn canonical_policy_origin(value: &str) -> Result<String, ()> {
-    let url = Url::parse(value).map_err(|_| ())?;
-    if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
-        return Err(());
-    }
-    canonical_origin(value)
+    crate::capabilities::canonical_http_policy_origin(value).map_err(|_| ())
 }
 
 fn sensitivity_rank(sensitivity: Sensitivity) -> u8 {

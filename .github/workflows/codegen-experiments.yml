@@ -1,0 +1,170 @@
+name: Linux codegen experiments
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  static-pie:
+    name: Dynamic, static PIE and musl comparison
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: sudo apt-get install -y --no-install-recommends musl-tools time strace
+      - name: Build and compare each linking mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --bin execute
+          cp target/release/execute target/execute-dynamic
+          RUSTFLAGS='-C target-feature=+crt-static -C relocation-model=pie' cargo build --locked --release --bin execute
+          cp target/release/execute target/execute-static-pie
+          cargo build --locked --release --bin execute --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/execute target/execute-musl
+          for bin in target/execute-dynamic target/execute-static-pie target/execute-musl; do
+            echo "## $bin"
+            ls -l "$bin"
+            size -A "$bin" | sort -k2 -n | tail -n 12
+            readelf -r "$bin" | tail -n 5
+            ldd "$bin" || true
+            strace -f -c -o "${bin}.strace" "$bin" run <(printf 'use value ""\n')
+            cat "${bin}.strace"
+            perf stat -e page-faults "$bin" run <(printf 'use value ""\n') || true
+            python3 tools/bash_compare.py "$bin" --runs 7 --warmup 1 --only startup --only one_external --only pipeline_5 --only json_get --json-out "${bin}.json"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: codegen-static-pie-${{ github.sha }}
+          path: target/execute-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  cpu-tiers:
+    name: CPU tier measurement (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86-64-v3
+            runner: ubuntu-24.04
+            rustflags: -C target-cpu=x86-64-v3
+          - name: armv8.2-a
+            runner: ubuntu-24.04-arm
+            rustflags: -C target-cpu=generic -C target-feature=+v8.2a
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Benchmark portable baseline
+        run: |
+          cargo build --locked --release --bin execute
+          python3 tools/bash_compare.py target/release/execute --runs 7 --warmup 1 --only startup --only builtin_loop --only text_upper --only json_get --json-out target/cpu-baseline.json
+      - name: Benchmark CPU tier build
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: |
+          cargo build --locked --release --bin execute
+          cp target/release/execute target/execute-${{ matrix.name }}
+          size -A target/execute-${{ matrix.name }}
+          python3 tools/bash_compare.py target/execute-${{ matrix.name }} --runs 7 --warmup 1 --only startup --only builtin_loop --only text_upper --only json_get --json-out target/cpu-${{ matrix.name }}.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: codegen-cpu-${{ matrix.name }}-${{ github.sha }}
+          path: target/cpu-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  pgo:
+    name: PGO workload measurement
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install LLVM profile tools
+        run: sudo apt-get install -y --no-install-recommends llvm
+      - name: Train and compare release PGO
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/pgo-data
+          cargo build --locked --release --bin execute
+          cp target/release/execute target/execute-pgo-baseline
+          python3 tools/bash_compare.py target/execute-pgo-baseline --runs 7 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/pgo-baseline.json
+          RUSTFLAGS="-Cprofile-generate=$PWD/target/pgo-data" cargo build --locked --release --bin execute
+          python3 tools/bash_compare.py target/release/execute --runs 5 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/pgo-training.json
+          for program in examples/*.program; do target/release/execute check "$program"; done
+          printf '{"sample":{"name":"profile","items":[1,2,3]}}\n' | target/release/execute run examples/json-compact.program >/dev/null
+          llvm-profdata merge -o target/execute.profdata target/pgo-data
+          cp target/release/execute target/execute-pgo-instrumented
+          RUSTFLAGS="-Cprofile-use=$PWD/target/execute.profdata -Cllvm-args=-pgo-warn-missing-function" cargo build --locked --release --bin execute
+          cp target/release/execute target/execute-pgo
+          size -A target/execute-pgo
+          python3 tools/bash_compare.py target/execute-pgo --runs 7 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/pgo-trained.json
+          for program in examples/*.program; do target/execute-pgo check "$program"; done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: codegen-pgo-${{ github.sha }}
+          path: target/pgo-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  bolt:
+    name: BOLT layout measurement
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install BOLT and perf tools
+        run: sudo apt-get install -y --no-install-recommends bolt linux-tools-common linux-tools-generic
+      - name: Collect workload profile and compare layouts
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUSTFLAGS='-C link-arg=-Wl,--emit-relocs' CARGO_PROFILE_RELEASE_DEBUG=true cargo build --locked --release --bin execute
+          cp target/release/execute target/execute-unmodified
+          cat > target/profile-execute <<'SH'
+          #!/bin/sh
+          exec perf record --append -o target/execute.perf.data -- "$PWD/target/execute-unmodified" "$@"
+          SH
+          chmod +x target/profile-execute
+          python3 tools/bash_compare.py target/profile-execute --runs 5 --warmup 1 --only startup --only builtin_loop --only spawn_loop --only text_upper --only json_get --only pipeline_5 --json-out target/bolt-training.json
+          perf2bolt target/execute-unmodified -p target/execute.perf.data -o target/execute.fdata
+          llvm-bolt target/execute-unmodified -o target/execute-bolt -data=target/execute.fdata -reorder-blocks=cache+ -reorder-functions=hfsort+ -split-functions -split-all-cold
+          chmod +x target/execute-bolt
+          for bin in target/execute-unmodified target/execute-bolt; do
+            size -A "$bin"
+            python3 tools/bash_compare.py "$bin" --runs 7 --warmup 1 --only startup --only builtin_loop --only text_upper --only json_get --json-out "$bin.json"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: codegen-bolt-${{ github.sha }}
+          path: target/*.json
+          if-no-files-found: warn
+          retention-days: 30

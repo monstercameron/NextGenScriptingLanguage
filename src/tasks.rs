@@ -8,6 +8,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use std::any::Any;
+#[cfg(debug_assertions)]
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -210,8 +211,11 @@ impl TaskScope {
                     cancelled,
                     deadline,
                 };
+                #[cfg(debug_assertions)]
                 let result = catch_unwind(AssertUnwindSafe(|| work(token)))
                     .unwrap_or_else(|payload| Err(task_panic(payload)));
+                #[cfg(not(debug_assertions))]
+                let result = work(token);
                 let _ = sender.send(result);
                 worker_finished.store(true, Ordering::Release);
                 worker_active.fetch_sub(1, Ordering::AcqRel);

@@ -23,7 +23,6 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::process::Command;
-use url::Url;
 
 pub const CAPABILITY_POLICY_VERSION: u8 = 1;
 const MAX_CAPABILITY_POLICY_BYTES: usize = 64 * 1024;
@@ -1508,7 +1507,7 @@ pub fn authorize_network_endpoint(
         );
         bail!("capability policy denies network access for applet {applet_name:?}");
     }
-    let endpoint = match parse_http_url(endpoint, "remote endpoint") {
+    let parsed_endpoint = match parse_http_url(endpoint, "remote endpoint") {
         Ok(endpoint) => endpoint,
         Err(error) => {
             record_policy_decision(
@@ -1523,7 +1522,7 @@ pub fn authorize_network_endpoint(
             return Err(error);
         }
     };
-    if endpoint.fragment().is_some() {
+    if parsed_endpoint.fragment {
         record_policy_decision(
             registry,
             applet_name,
@@ -1535,7 +1534,7 @@ pub fn authorize_network_endpoint(
         );
         bail!("remote endpoint must not contain a fragment");
     }
-    let origin = endpoint.origin().ascii_serialization();
+    let origin = canonical_http_origin(endpoint)?;
     let allowed = grant.network_origins.is_empty() || grant.network_origins.contains(&origin);
     record_policy_decision(
         registry,
@@ -1967,31 +1966,137 @@ fn validate_digest(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_http_url(value: &str, context: &str) -> Result<Url> {
-    let url = Url::parse(value).with_context(|| format!("invalid {context}"))?;
-    let has_userinfo = url
-        .as_str()
-        .split_once("://")
-        .and_then(|(_, remainder)| remainder.split(['/', '?', '#']).next())
-        .is_some_and(|authority| authority.contains('@'));
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host().is_none()
-        || has_userinfo
-        || !url.username().is_empty()
-        || url.password().is_some()
+struct ParsedHttpUrl {
+    origin: String,
+    path: String,
+    query: bool,
+    fragment: bool,
+}
+
+pub(crate) fn canonical_http_origin(value: &str) -> Result<String> {
+    let parsed = parse_http_url(value, "HTTP(S) URL")?;
+    if parsed.fragment {
+        bail!("HTTP(S) URL must not contain a fragment");
+    }
+    Ok(parsed.origin)
+}
+
+pub(crate) fn canonical_http_policy_origin(value: &str) -> Result<String> {
+    let parsed = parse_http_url(value, "HTTP(S) origin")?;
+    if parsed.path != "/" || parsed.query || parsed.fragment {
+        bail!("HTTP(S) origin must not contain a path, query, or fragment");
+    }
+    Ok(parsed.origin)
+}
+
+fn parse_http_url(value: &str, context: &str) -> Result<ParsedHttpUrl> {
+    let invalid = || anyhow!("invalid {context}");
+    if value
+        .bytes()
+        .any(|byte| byte.is_ascii_control() || byte == b'\\')
     {
+        return Err(invalid());
+    }
+    let (scheme, remainder) = value.split_once("://").ok_or_else(invalid)?;
+    let scheme = scheme.to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https") {
         bail!("{context} must be an HTTP(S) URL without embedded credentials");
     }
-    Ok(url)
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    if !authority.is_ascii() {
+        bail!("{context} host must use ASCII spelling");
+    }
+    if authority.is_empty() || authority.contains('@') {
+        bail!("{context} must be an HTTP(S) URL without embedded credentials");
+    }
+    let (host, port, is_ipv6) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let (address, tail) = bracketed.split_once(']').ok_or_else(invalid)?;
+        let address = address
+            .parse::<std::net::Ipv6Addr>()
+            .map_err(|_| invalid())?;
+        let port = if tail.is_empty() {
+            None
+        } else {
+            Some(parse_url_port(tail.strip_prefix(':').ok_or_else(invalid)?)?)
+        };
+        (address.to_string(), port, true)
+    } else {
+        if authority.matches(':').count() > 1 {
+            return Err(invalid());
+        }
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((host, port)) => (host, Some(parse_url_port(port)?)),
+            None => (authority, None),
+        };
+        let labels = host.split('.').collect::<Vec<_>>();
+        let has_trailing_dot = host.ends_with('.');
+        if host.is_empty()
+            || !host
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+            || labels.iter().enumerate().any(|(index, label)| {
+                (label.is_empty() && !(has_trailing_dot && index + 1 == labels.len()))
+                    || label.starts_with('-')
+                    || label.ends_with('-')
+                    || label.len() > 63
+            })
+        {
+            return Err(invalid());
+        }
+        let final_label = labels.last().copied().unwrap_or_default();
+        let looks_like_ipv4 = !final_label.is_empty()
+            && (final_label.bytes().all(|byte| byte.is_ascii_digit())
+                || final_label
+                    .get(..2)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
+                    && final_label[2..]
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit()));
+        if looks_like_ipv4
+            && host
+                .parse::<std::net::Ipv4Addr>()
+                .is_ok_and(|address| address.to_string() != host)
+        {
+            return Err(invalid());
+        }
+        if looks_like_ipv4 && host.parse::<std::net::Ipv4Addr>().is_err() {
+            return Err(invalid());
+        }
+        (host.to_ascii_lowercase(), port, false)
+    };
+    let default_port = if scheme == "https" { 443 } else { 80 };
+    let rendered_host = if is_ipv6 { format!("[{host}]") } else { host };
+    let origin = match port {
+        Some(port) if port != default_port => format!("{scheme}://{rendered_host}:{port}"),
+        _ => format!("{scheme}://{rendered_host}"),
+    };
+    let tail = &remainder[authority_end..];
+    let fragment = tail.contains('#');
+    let before_fragment = tail.split('#').next().unwrap_or_default();
+    let query = before_fragment.contains('?');
+    let path = before_fragment.split('?').next().unwrap_or_default();
+    Ok(ParsedHttpUrl {
+        origin,
+        path: if path.is_empty() {
+            "/".to_owned()
+        } else {
+            path.to_owned()
+        },
+        query,
+        fragment,
+    })
+}
+
+fn parse_url_port(value: &str) -> Result<u16> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        bail!("invalid URL port");
+    }
+    value.parse::<u16>().context("invalid URL port")
 }
 
 fn validate_network_origin(value: &str) -> Result<()> {
-    let url = parse_http_url(value, "network origin")?;
-    if url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
-        bail!("network origin must not contain a path, query, or fragment");
-    }
-    let canonical = url.origin().ascii_serialization();
-    if canonical != value {
+    if canonical_http_policy_origin(value)? != value {
         bail!("network origin must use canonical scheme, host, and port spelling");
     }
     Ok(())

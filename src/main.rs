@@ -367,6 +367,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             {
                 match load_registry(args.manifest_dir.clone(), args.manifest_catalog.clone()) {
                     Ok(registry) => {
+                        registry.verify_all()?;
                         // The policy must be installed here too: static analysis reads
                         // the files that the program calls, and those reads are authorized.
                         let policies = args
@@ -594,6 +595,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
+        if args.command == "check" {
+            registry.verify_all()?;
+        }
         let graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
         let supplied_inputs = flow::inputs::parse_cli_arguments(
             graph.input_declarations(),
@@ -608,9 +612,27 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         let interface = flow::inputs::describe(graph.input_declarations(), &inputs)?;
         let graph = graph.with_input_values(&inputs, false)?;
         graph.validate_with_registry(&registry)?;
+        let cwd =
+            if capability_policy.is_some() || matches!(args.command.as_str(), "run" | "resume") {
+                Some(env::current_dir()?)
+            } else {
+                None
+            };
+        let resolved_cwd = if capability_policy.is_some()
+            || (matches!(args.command.as_str(), "run" | "resume") && args.checkpoint_dir.is_some())
+        {
+            Some(fs::canonicalize(
+                cwd.as_deref()
+                    .context("could not determine current directory")?,
+            )?)
+        } else {
+            None
+        };
         if capability_policy.is_some() {
-            let cwd = fs::canonicalize(env::current_dir()?)?;
-            flow::capabilities::preflight_invocations(graph.invocations(), &registry, &cwd)?;
+            let cwd = resolved_cwd
+                .as_deref()
+                .context("could not resolve current directory")?;
+            flow::capabilities::preflight_invocations(graph.invocations(), &registry, cwd)?;
         }
         return match args.command.as_str() {
             "check" => Ok(()),
@@ -629,15 +651,20 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     max_output_bytes: args.max_output_bytes,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
-                    ..RunOptions::new(env::current_dir()?)
+                    ..RunOptions::new(
+                        cwd.clone()
+                            .context("could not determine current directory")?,
+                    )
                 };
                 let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let _signal_registration =
                     register_cancellation_signal(std::sync::Arc::clone(&cancelled))?;
                 let result = match args.checkpoint_dir.as_deref() {
                     Some(directory) => {
-                        let cwd = fs::canonicalize(&options.working_directory)?;
-                        let identity = flow::graph::checkpoint_identity(&graph, &cwd)?;
+                        let cwd = resolved_cwd
+                            .as_deref()
+                            .context("could not resolve current directory")?;
+                        let identity = flow::graph::checkpoint_identity(&graph, cwd)?;
                         let resume = args.command == "resume";
                         let store = flow::graph::open_checkpoint_directory(
                             directory, resume, &identity, &registry,
@@ -697,6 +724,10 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
+        if args.command == "check" {
+            registry.verify_all()?;
+        }
+        let cwd = env::current_dir()?;
         flow::ui::syntax::validate(&screen, &registry)?;
         if capability_policy.is_some() {
             let policy_program = flow::ast::Program {
@@ -714,7 +745,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     .collect(),
                 trigger: None,
             };
-            flow::capabilities::preflight(&policy_program, &registry, &env::current_dir()?)?;
+            flow::capabilities::preflight(&policy_program, &registry, &cwd)?;
         }
         if args.command == "resume" || args.checkpoint_dir.is_some() || args.max_record_bytes_set {
             bail!("UI programs do not support resume, checkpoints, or listener record limits");
@@ -725,7 +756,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             max_output_bytes: args.max_output_bytes,
             command_timeout: args.command_timeout,
             total_timeout: args.total_timeout,
-            ..RunOptions::new(env::current_dir()?)
+            ..RunOptions::new(cwd.clone())
         };
         return match args.command.as_str() {
             "check" => Ok(()),
@@ -826,10 +857,14 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
+        if args.command == "check" {
+            registry.verify_all()?;
+        }
+        let cwd = env::current_dir()?;
         if capability_policy.is_some() {
             flow::stream::validate(&stream, &registry)?;
             runtime::validate_with_arguments(&stream.pipeline, &registry, &inputs)?;
-            flow::capabilities::preflight(&stream.pipeline, &registry, &env::current_dir()?)?;
+            flow::capabilities::preflight(&stream.pipeline, &registry, &cwd)?;
         }
 
         return match args.command.as_str() {
@@ -871,7 +906,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     max_output_bytes: args.max_output_bytes,
                     command_timeout: args.command_timeout,
                     total_timeout: args.total_timeout,
-                    ..RunOptions::new(env::current_dir()?)
+                    ..RunOptions::new(cwd.clone())
                 };
                 let mut emit =
                     |bytes: &[u8],
@@ -924,11 +959,16 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             }
         },
     };
+    if args.command == "check" {
+        registry.verify_all()?;
+    }
     // The registry carries the capability policy, which authorizes the reads of any
     // program file the program calls, so it is loaded before the program is parsed.
     let cwd = env::current_dir()?;
-    let program = flow::program_files::parse_source(
-        &args.file,
+    let canonical_file = fs::canonicalize(&args.file)
+        .with_context(|| format!("resolving {}", args.file.display()))?;
+    let program = flow::program_files::parse_source_resolved(
+        &canonical_file,
         &source,
         Some(flow::program_files::Access {
             registry: &registry,
@@ -1020,7 +1060,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     }
     if capability_policy.is_some() {
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
-        flow::capabilities::preflight(&program, &registry, &env::current_dir()?)?;
+        flow::capabilities::preflight(&program, &registry, &cwd)?;
     }
 
     if args.what_if || args.confirm.is_some() {
@@ -1030,7 +1070,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
         let path = args.file.to_string_lossy().into_owned();
         let plan = flow::agent::explain::explain_json(&program, &registry, &path)?;
-        let run_directory = env::current_dir()?;
+        let run_directory = cwd.clone();
         let context = flow::agent::what_if::RunSettings {
             declarations: &program.inputs,
             inputs: &inputs,
@@ -1151,9 +1191,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 max_output_bytes: args.max_output_bytes,
                 command_timeout: args.command_timeout,
                 total_timeout: args.total_timeout,
-                ..RunOptions::new(
-                    env::current_dir().context("could not determine current directory")?,
-                )
+                ..RunOptions::new(cwd.clone())
             };
             if args.once {
                 if args.checkpoint_dir.is_some() {
@@ -1187,9 +1225,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 .map(|directory| -> Result<CheckpointOptions> {
                     Ok(CheckpointOptions {
                         directory,
-                        program_path: fs::canonicalize(&args.file).with_context(|| {
-                            format!("could not resolve workflow path {}", args.file.display())
-                        })?,
+                        program_path: canonical_file.clone(),
                         resume: args.command == "resume",
                         retry_uncertain: args.retry_uncertain,
                     })
@@ -2039,6 +2075,7 @@ fn default_manifest_dir() -> PathBuf {
     // --manifest-catalog to select other manifests explicitly.
     if let Ok(executable) = env::current_exe() {
         // macOS may report the launch symlink rather than its bundle target.
+        #[cfg(target_os = "macos")]
         let executable = fs::canonicalize(&executable).unwrap_or(executable);
         if let Some(parent) = executable.parent() {
             let sibling = parent.join("..").join("manifests");

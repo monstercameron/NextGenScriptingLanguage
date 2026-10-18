@@ -8,9 +8,10 @@
 //! each manifest is parsed on first use.
 //!
 //! A registry uses the index only when the directory it was asked for holds exactly
-//! the indexed files, with the same names and byte sizes. Any other directory takes
-//! the full load, so errors for changed or broken manifests are reported as before.
-//! The check is by name and size only: an edit that keeps a file's size is not seen.
+//! the indexed file names and plain files. Names and types are checked at startup;
+//! a file's size is checked when its manifest is first resolved. Any directory
+//! mismatch or changed file takes the full load, so errors for broken manifests are
+//! reported as before. The check is by name and size: equal-size edits are not seen.
 //!
 //! `generate` rebuilds both artifacts from a manifest directory after a full load has
 //! validated every file. A test fails when the checked-in artifacts no longer match
@@ -48,6 +49,10 @@ impl BundledEntry {
 
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
     }
 
     pub fn phrases(&self) -> &[&'static str] {
@@ -161,31 +166,75 @@ fn parse_index(text: &'static str) -> Result<BundledIndex> {
     })
 }
 
-/// Whether `root` holds exactly the indexed files, by name and byte size. An
+/// Whether `root` holds exactly the indexed files by name and plain-file type.
+/// File sizes are checked lazily when an indexed manifest is resolved. An
 /// unreadable directory, a subdirectory or symlink among the JSON files, or any
-/// difference is a mismatch, and the caller falls back to the full load.
+/// name difference is a mismatch, and the caller falls back to the full load.
 pub fn directory_matches(root: &Path, index: &BundledIndex) -> io::Result<bool> {
+    directory_matches_with(root, index, &mut FsManifestDirectory)
+}
+
+trait ManifestDirectoryProbe {
+    type Entry;
+
+    fn entries(&mut self, root: &Path) -> io::Result<Vec<Self::Entry>>;
+    fn name(&self, entry: &Self::Entry) -> std::ffi::OsString;
+    fn is_file(&mut self, entry: &Self::Entry) -> io::Result<bool>;
+    #[cfg(test)]
+    fn metadata_len(&mut self, entry: &Self::Entry) -> io::Result<u64>;
+}
+
+struct FsManifestDirectory;
+
+impl ManifestDirectoryProbe for FsManifestDirectory {
+    type Entry = fs::DirEntry;
+
+    fn entries(&mut self, root: &Path) -> io::Result<Vec<Self::Entry>> {
+        fs::read_dir(root)?.collect()
+    }
+
+    fn name(&self, entry: &Self::Entry) -> std::ffi::OsString {
+        entry.file_name()
+    }
+
+    fn is_file(&mut self, entry: &Self::Entry) -> io::Result<bool> {
+        entry.file_type().map(|kind| kind.is_file())
+    }
+
+    #[cfg(test)]
+    fn metadata_len(&mut self, entry: &Self::Entry) -> io::Result<u64> {
+        entry.metadata().map(|metadata| metadata.len())
+    }
+}
+
+fn directory_matches_with<P: ManifestDirectoryProbe>(
+    root: &Path,
+    index: &BundledIndex,
+    probe: &mut P,
+) -> io::Result<bool> {
     let mut found = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().is_none_or(|extension| extension != "json") {
+    for entry in probe.entries(root)? {
+        let name = probe.name(&entry);
+        if Path::new(&name)
+            .extension()
+            .is_none_or(|extension| extension != "json")
+        {
             continue;
         }
-        if !entry.file_type()?.is_file() {
+        if !probe.is_file(&entry)? {
             return Ok(false);
         }
-        let Ok(name) = entry.file_name().into_string() else {
+        let Ok(name) = name.into_string() else {
             return Ok(false);
         };
-        found.push((name, entry.metadata()?.len()));
+        found.push(name);
     }
     found.sort();
     Ok(found.len() == index.entries.len()
         && found
             .iter()
             .zip(&index.entries)
-            .all(|((name, bytes), entry)| name == entry.file && *bytes == entry.bytes))
+            .all(|(name, entry)| name == entry.file))
 }
 
 /// Both artifacts generated from one manifest directory.
@@ -335,5 +384,54 @@ mod tests {
         assert!(directory_matches(dir.path(), index).expect("check"));
         fs::write(dir.path().join("extra.json"), "{}").expect("extra");
         assert!(!directory_matches(dir.path(), index).expect("check"));
+        assert!(Registry::load_default(dir.path()).is_err());
+        fs::remove_file(dir.path().join("extra.json")).expect("remove extra");
+        fs::remove_file(dir.path().join(index.entries()[0].file())).expect("remove indexed file");
+        assert!(!directory_matches(dir.path(), index).expect("check missing"));
+        assert!(Registry::load_default(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn startup_directory_check_does_not_query_file_metadata() {
+        struct CountingDirectory {
+            names: Vec<std::ffi::OsString>,
+            metadata_calls: usize,
+        }
+
+        impl ManifestDirectoryProbe for CountingDirectory {
+            type Entry = std::ffi::OsString;
+
+            fn entries(&mut self, _root: &Path) -> io::Result<Vec<Self::Entry>> {
+                Ok(self.names.clone())
+            }
+
+            fn name(&self, entry: &Self::Entry) -> std::ffi::OsString {
+                entry.clone()
+            }
+
+            fn is_file(&mut self, _entry: &Self::Entry) -> io::Result<bool> {
+                Ok(true)
+            }
+
+            fn metadata_len(&mut self, _entry: &Self::Entry) -> io::Result<u64> {
+                self.metadata_calls += 1;
+                Ok(0)
+            }
+        }
+
+        let index = index().expect("index");
+        let mut probe = CountingDirectory {
+            names: index
+                .entries()
+                .iter()
+                .map(|entry| entry.file().into())
+                .collect(),
+            metadata_calls: 0,
+        };
+        assert!(directory_matches_with(Path::new("."), index, &mut probe).expect("check"));
+        assert_eq!(probe.metadata_calls, 0);
+        let entry = probe.names[0].clone();
+        let _ = probe.metadata_len(&entry).expect("count metadata call");
+        assert_eq!(probe.metadata_calls, 1);
     }
 }

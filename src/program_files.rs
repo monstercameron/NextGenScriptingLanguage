@@ -46,14 +46,24 @@ pub fn parse_file(path: &Path, access: Option<Access<'_>>) -> Result<Program> {
 pub fn parse_source(path: &Path, source: &str, access: Option<Access<'_>>) -> Result<Program> {
     let canonical =
         fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))?;
+    parse_source_resolved(&canonical, source, access)
+}
+
+/// Resolve a program source after its canonical path has already been computed.
+/// The caller may retain that path for checkpoints or other startup work.
+pub fn parse_source_resolved(
+    canonical: &Path,
+    source: &str,
+    access: Option<Access<'_>>,
+) -> Result<Program> {
     let mut loader = Loader {
         access,
         called: BTreeMap::new(),
         stack: Vec::new(),
     };
     let mut raw = parser::parse_raw(source)?;
-    loader.stack.push(canonical.clone());
-    loader.resolve(&mut raw, &canonical)?;
+    loader.stack.push(canonical.to_path_buf());
+    loader.resolve(&mut raw, canonical)?;
     loader.stack.pop();
     // File keys start with `file:`, which no program name can be, so the maps merge.
     raw.definitions.extend(loader.called);

@@ -95,6 +95,9 @@ fn a_native_command_loop_writes_a_begin_record_per_element() {
         if begin_records(&log) >= 3 {
             break;
         }
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     fs::remove_file(&hold).unwrap();

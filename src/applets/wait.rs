@@ -121,7 +121,14 @@ fn probe(
                 .ok_or_else(|| invalid("args.port must be an integer from 0 through 65535"))?;
             let ip = host
                 .parse::<IpAddr>()
-                .map_err(|_| invalid("tcp_port_open host must be an IP address"))?;
+                .map_err(|_| invalid("tcp_port_open host must be an IP address"))?
+                .to_canonical();
+            // The manifest grants network.loopback only, so other hosts are refused.
+            if !ip.is_loopback() {
+                return Err(invalid(
+                    "tcp_port_open host must be a loopback address (127.0.0.0/8 or ::1)",
+                ));
+            }
             let addr = SocketAddr::new(ip, port as u16);
             if max_duration.is_zero() {
                 return Ok(false);
@@ -176,5 +183,34 @@ mod tests {
             ("timeout_ms".into(), Value::from(10)),
         ]);
         assert!(wait(&args, Path::new("."), &ExecutionContext::unrestricted()).is_err());
+    }
+    #[test]
+    fn tcp_probe_refuses_non_loopback_hosts() {
+        for host in [
+            "10.0.0.1",
+            "169.254.169.254",
+            "::ffff:10.0.0.1",
+            "2001:db8::1",
+        ] {
+            let args = Map::from_iter([
+                ("probe".into(), Value::String("tcp_port_open".into())),
+                ("host".into(), Value::String(host.into())),
+                ("port".into(), Value::from(80)),
+                ("timeout_ms".into(), Value::from(10)),
+            ]);
+            let error = wait(&args, Path::new("."), &ExecutionContext::unrestricted()).unwrap_err();
+            assert!(
+                error.message.contains("loopback"),
+                "{host}: {}",
+                error.message
+            );
+        }
+        let mapped = Map::from_iter([
+            ("probe".into(), Value::String("tcp_port_open".into())),
+            ("host".into(), Value::String("::ffff:127.0.0.1".into())),
+            ("port".into(), Value::from(1)),
+            ("timeout_ms".into(), Value::from(0)),
+        ]);
+        assert!(wait(&mapped, Path::new("."), &ExecutionContext::unrestricted()).is_ok());
     }
 }

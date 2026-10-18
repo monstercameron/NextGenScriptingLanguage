@@ -1,30 +1,49 @@
 use super::{failed, invalid, required_string, AppletError};
 use serde_json::{Map, Value};
-use std::path::Path;
 
 pub(super) fn dirname(args: &Map<String, Value>) -> Result<Value, AppletError> {
     let value = required_string(args, "path")?;
-    let path = Path::new(value);
-    let parent = path
-        .parent()
-        .and_then(Path::to_str)
-        .filter(|parent| !parent.is_empty())
-        .unwrap_or(".");
-    Ok(Value::String(parent.to_owned()))
+    Ok(Value::String(posix_dirname(value).to_owned()))
+}
+
+fn posix_dirname(value: &str) -> &str {
+    let trimmed = value.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "/";
+    }
+    match trimmed.rfind('/') {
+        None => ".",
+        Some(0) => "/",
+        Some(index) => trimmed[..index].trim_end_matches('/'),
+    }
 }
 
 pub(super) fn basename(args: &Map<String, Value>) -> Result<Value, AppletError> {
     let value = required_string(args, "path")?;
-    let suffixless = match args.get("suffix") {
-        None => value,
-        Some(Value::String(suffix)) => value.strip_suffix(suffix).unwrap_or(value),
+    let suffix = match args.get("suffix") {
+        None => None,
+        Some(Value::String(suffix)) => Some(suffix.as_str()),
         Some(_) => return Err(invalid("args.suffix must be a string")),
     };
-    let name = Path::new(suffixless)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("");
-    Ok(Value::String(name.to_owned()))
+    Ok(Value::String(posix_basename(value, suffix).to_owned()))
+}
+
+fn posix_basename<'a>(value: &'a str, suffix: Option<&str>) -> &'a str {
+    let trimmed = value.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "/";
+    }
+    let name = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    if name == "." || name == ".." {
+        return name;
+    }
+    match suffix
+        .filter(|suffix| !suffix.is_empty())
+        .and_then(|suffix| name.strip_suffix(suffix))
+    {
+        Some(remaining) if !remaining.is_empty() => remaining,
+        _ => name,
+    }
 }
 
 const MAX_PATH_BYTES: usize = 16 * 1024 * 1024;

@@ -30,6 +30,7 @@ use super::{
 };
 use serde_json::{Map, Value};
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
@@ -121,6 +122,7 @@ pub(super) fn glob(
         results: Vec::new(),
         examined: 0,
         names: Vec::new(),
+        any_depth_visits: HashSet::new(),
     };
     if segments.is_empty() {
         // A bare root or home directory has no component to read: answer with
@@ -191,7 +193,10 @@ fn parse_pattern(expanded: &str) -> Result<(PathBuf, Vec<Segment>), AppletError>
                 let text = name
                     .to_str()
                     .ok_or_else(|| invalid("args.pattern must be valid UTF-8"))?;
-                segments.push(parse_segment(text)?);
+                let segment = parse_segment(text)?;
+                if segment != Segment::AnyDepth || segments.last() != Some(&Segment::AnyDepth) {
+                    segments.push(segment);
+                }
             }
         }
     }
@@ -351,6 +356,7 @@ struct Walk<'segments, 'context, 'cancel> {
     results: Vec<String>,
     examined: usize,
     names: Vec<char>,
+    any_depth_visits: HashSet<(PathBuf, usize)>,
 }
 
 impl Walk<'_, '_, '_> {
@@ -417,6 +423,9 @@ impl Walk<'_, '_, '_> {
                 }
             }
             Segment::AnyDepth => {
+                if !self.any_depth_visits.insert((fs_dir.to_path_buf(), index)) {
+                    return Ok(());
+                }
                 // Zero directory levels: continue with the next component here.
                 self.walk(display, fs_dir, index + 1, depth)?;
                 // One or more levels: descend into real subdirectories (symbolic

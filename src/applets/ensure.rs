@@ -96,7 +96,7 @@ pub(super) fn ensure_line(args: &Map<String, Value>, cwd: &Path) -> Result<Value
                     out.push('\n');
                 }
                 out.push_str(line);
-                out.push('\n');
+                out.push_str(line_ending(content));
                 Some(out)
             }
         }
@@ -104,7 +104,13 @@ pub(super) fn ensure_line(args: &Map<String, Value>, cwd: &Path) -> Result<Value
         (false, Some(content)) => {
             let kept: String = content
                 .split_inclusive('\n')
-                .filter(|piece| !line_matches(piece, line))
+                .filter_map(|piece| {
+                    if line_matches(piece, line) {
+                        piece.starts_with('\u{feff}').then_some("\u{feff}")
+                    } else {
+                        Some(piece)
+                    }
+                })
                 .collect();
             (kept.len() != content.len()).then_some(kept)
         }
@@ -304,7 +310,18 @@ fn write_locked(
 fn line_matches(piece: &str, line: &str) -> bool {
     let body = piece.strip_suffix('\n').unwrap_or(piece);
     let body = body.strip_suffix('\r').unwrap_or(body);
-    body == line
+    if piece.starts_with('\u{feff}') {
+        body.strip_prefix('\u{feff}').unwrap_or(body) == line
+    } else {
+        body == line
+    }
+}
+
+fn line_ending(content: &str) -> &'static str {
+    match content.find('\n') {
+        Some(index) if index > 0 && content.as_bytes()[index - 1] == b'\r' => "\r\n",
+        _ => "\n",
+    }
 }
 
 #[cfg(unix)]
@@ -332,14 +349,9 @@ fn set_mode(_path: &Path, _mode: u32) -> Result<(), AppletError> {
 
 fn temporary_link_path(link: &Path) -> PathBuf {
     let sequence = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-    let name = link
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    link.with_file_name(format!(
-        ".{name}.execute-applet.{}.{sequence}.tmp",
-        std::process::id()
-    ))
+    let mut name = super::filesystem::sibling_prefix(link.file_name().unwrap_or_default());
+    name.push(format!(".{}.{sequence}.tmp", std::process::id()));
+    link.with_file_name(name)
 }
 
 /// Create a symbolic link at `at`. `link` locates the link for relative target

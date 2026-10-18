@@ -34,8 +34,15 @@ fn ensure_file_creates_then_is_a_no_op() {
     );
 
     // An unchanged ensure takes no lock, so it creates no lock file.
-    let lock = dir.path().join(".conf.txt.execute-applet.lock");
-    let _ = fs::remove_file(&lock);
+    for entry in fs::read_dir(dir.path()).unwrap().filter_map(Result::ok) {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .contains("execute-applet")
+        {
+            fs::remove_file(entry.path()).unwrap();
+        }
+    }
     let second = run(
         "fs.ensure_file",
         json!({"path": "conf.txt", "content": "alpha\n"}),
@@ -43,7 +50,13 @@ fn ensure_file_creates_then_is_a_no_op() {
     )
     .unwrap();
     assert!(!changed(&second));
-    assert!(!lock.exists());
+    assert!(!fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry
+            .file_name()
+            .to_string_lossy()
+            .contains("execute-applet")));
 
     let third = run(
         "fs.ensure_file",

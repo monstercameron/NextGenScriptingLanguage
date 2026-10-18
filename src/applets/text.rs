@@ -88,11 +88,16 @@ pub(super) fn split(
     if text.is_empty() {
         return Ok(Value::Array(Vec::new()));
     }
-    let content = text.strip_suffix(separator).unwrap_or(text);
     let mut items = Vec::new();
-    for (index, item) in content.split(separator).enumerate() {
+    let mut split = text.split(separator).peekable();
+    let mut index = 0;
+    while let Some(item) = split.next() {
+        if item.is_empty() && split.peek().is_none() {
+            continue;
+        }
         checkpoint_work(context, index)?;
         push_list_item(&mut items, item, "text.split")?;
+        index += 1;
     }
     Ok(Value::Array(items))
 }

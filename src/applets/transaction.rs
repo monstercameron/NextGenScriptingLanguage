@@ -429,6 +429,24 @@ pub(super) fn recover(args: &Map<String, Value>, cwd: &Path) -> Result<Value, Ap
         }
     };
     validate_journal_directory(&journal)?;
+    let journal_file = journal.join("journal.json");
+    match fs::symlink_metadata(&journal_file) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(failed(
+                "journal_corrupt",
+                format!("transaction journal is missing: {}", journal_file.display()),
+            ));
+        }
+        Err(error) => {
+            return Err(super::io_error(
+                error,
+                format!("checking transaction journal {}", journal_file.display()),
+            ));
+        }
+    }
+    // Validate the journal before creating a lock file in the supplied path.
+    let _ = read_journal(&journal)?;
     let _journal_lock = filesystem::acquire_path_lock(&journal.join("transaction.lock"), timeout)?;
     let mut data = read_journal(&journal)?;
     let loaded = load_entries(&journal, &data)?;
@@ -1431,13 +1449,6 @@ fn validate_journal_directory(path: &Path) -> Result<(), AppletError> {
         ));
     }
     check_private_metadata(&metadata, "transaction journal directory")?;
-    #[cfg(windows)]
-    crate::platform::windows::restrict_directory(path).map_err(|error| {
-        failed(
-            "io_error",
-            format!("protecting transaction journal directory: {error:#}"),
-        )
-    })?;
     Ok(())
 }
 

@@ -339,6 +339,17 @@ fn write_atomic_locked(
         (Some(_), _) => {}
     }
 
+    if matches!(permission_policy, PermissionPolicy::Preserve) {
+        if let Some(unchanged) = initial.as_ref().filter(|state| state.content == content) {
+            return Ok(serde_json::json!({
+                "path": path.to_string_lossy(),
+                "content_hash": unchanged.content_hash,
+                "snapshot": unchanged.snapshot,
+                "changed": false,
+            }));
+        }
+    }
+
     let target = if symlink_policy == SymlinkPolicy::Preserve {
         initial
             .as_ref()
@@ -650,13 +661,27 @@ fn lock_path(args: &Map<String, Value>, target: &Path, cwd: &Path) -> Result<Pat
 }
 
 pub(crate) fn default_lock_path(target: &Path) -> Result<PathBuf, AppletError> {
-    let file_name = target
+    target
         .file_name()
         .ok_or_else(|| invalid(format!("path has no file name: {}", target.display())))?;
-    let mut lock_name = OsString::from(".");
-    lock_name.push(file_name);
-    lock_name.push(".execute-applet.lock");
+    let mut lock_name = sibling_prefix(target.file_name().unwrap_or_default());
+    lock_name.push(".lock");
     Ok(target.with_file_name(lock_name))
+}
+
+/// The prefix of the lock and temporary files kept next to `file_name`:
+/// `.NAME.execute-applet` while that leaves room for a suffix within the 255-byte
+/// name limit of common file systems, otherwise a stable digest of the name.
+pub(crate) fn sibling_prefix(file_name: &std::ffi::OsStr) -> OsString {
+    const MAX_READABLE_NAME_BYTES: usize = 180;
+    if file_name.len() <= MAX_READABLE_NAME_BYTES {
+        let mut prefix = OsString::from(".");
+        prefix.push(file_name);
+        prefix.push(".execute-applet");
+        return prefix;
+    }
+    let digest = Sha256::digest(file_name.as_encoded_bytes());
+    OsString::from(format!(".execute-applet.{}", to_hex(&digest[..8])))
 }
 
 fn lock_timeout(args: &Map<String, Value>) -> Result<Duration, AppletError> {
@@ -886,15 +911,11 @@ fn to_hex(bytes: &[u8]) -> String {
 }
 
 fn create_temp(parent: &Path, file_name: &std::ffi::OsStr) -> Result<(PathBuf, File), AppletError> {
+    let prefix = sibling_prefix(file_name);
     for _ in 0..100 {
         let sequence = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let mut temp_name = OsString::from(".");
-        temp_name.push(file_name);
-        temp_name.push(format!(
-            ".execute-applet.{}.{}.tmp",
-            std::process::id(),
-            sequence
-        ));
+        let mut temp_name = prefix.clone();
+        temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
         let temp_path = parent.join(temp_name);
         let mut options = OpenOptions::new();
         options.write(true).read(true).create_new(true);

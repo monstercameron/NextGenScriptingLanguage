@@ -54,7 +54,9 @@ pub fn compile(
     script.push_str("#!/bin/sh\n");
     // A directive right after the shebang covers the whole script. SC2217 objects to
     // feeding stdin to commands that do not read it; stdin is closed on purpose.
-    script.push_str("# shellcheck disable=SC2217\n");
+    // SC2320 misreads `else echo "$?"` in the stage wrappers, where `$?` is the
+    // status of the `if` condition, which is exactly what is recorded.
+    script.push_str("# shellcheck disable=SC2217,SC2320\n");
     script
         .push_str("# Commands run with stdin closed (< /dev/null) on purpose, to match execute.\n");
     let _ = writeln!(

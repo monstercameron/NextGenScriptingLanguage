@@ -411,7 +411,7 @@ fn closed_stdin_is_exempted_from_shellcheck_for_the_whole_script() {
     // A directive right after the shebang applies to the whole script.
     assert!(fs::read_to_string(script)
         .unwrap()
-        .starts_with("#!/bin/sh\n# shellcheck disable=SC2217\n"));
+        .starts_with("#!/bin/sh\n# shellcheck disable=SC2217,SC2320\n"));
 }
 
 /// A POSIX sh to run compiled scripts: dash where it is installed (Debian, Ubuntu,

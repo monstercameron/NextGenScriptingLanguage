@@ -100,7 +100,11 @@ fn posix_replace(source: &Path, target: &Path) -> std::io::Result<bool> {
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .open(source)?;
     let name_offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-    let size = (name_offset + name_bytes).max(std::mem::size_of::<FILE_RENAME_INFO>());
+    // The kernel reads FileName as a NUL-terminated path, not only FileNameLength bytes,
+    // so the zeroed buffer must hold a terminator after the name; without it the new
+    // name runs on into whatever follows the buffer.
+    let size = (name_offset + name_bytes + std::mem::size_of::<u16>())
+        .max(std::mem::size_of::<FILE_RENAME_INFO>());
     let (Ok(name_length), Ok(buffer_size)) = (u32::try_from(name_bytes), u32::try_from(size))
     else {
         return Ok(false);
@@ -109,7 +113,8 @@ fn posix_replace(source: &Path, target: &Path) -> std::io::Result<bool> {
     let mut buffer = vec![0_u64; size.div_ceil(8)];
     let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFO>();
     // SAFETY: `buffer` holds at least `size` zeroed bytes, aligned to 8, which covers the
-    // FILE_RENAME_INFO header and `name_bytes` of file name starting at FileName. The
+    // FILE_RENAME_INFO header, `name_bytes` of file name starting at FileName and a zero
+    // terminator after it. The
     // writes stay inside that allocation, and the handle stays open for the call.
     let renamed = unsafe {
         (*info).Anonymous.Flags =

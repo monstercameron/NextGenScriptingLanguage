@@ -18,7 +18,8 @@ jobs:
         # release: the default build a distro would ship. opt-s: the same with
         # opt-level "s". musl: a static release binary. musl-min: static, built
         # with the size-first min profile (opt-level "z", panic abort).
-        variant: [release, opt-s, musl, musl-min]
+        # core: --no-default-features (no graph, screens, records or tooling).
+        variant: [release, opt-s, musl, musl-min, core, core-musl-min]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,6 +42,8 @@ jobs:
             opt-s) CARGO_PROFILE_RELEASE_OPT_LEVEL=s cargo build --locked --release --bin execute; bin=target/release/execute ;;
             musl) rustup target add "$musl"; cargo build --locked --release --bin execute --target "$musl"; bin="target/$musl/release/execute" ;;
             musl-min) rustup target add "$musl"; cargo build --locked --profile min --bin execute --target "$musl"; bin="target/$musl/min/execute" ;;
+            core) cargo build --locked --release --bin execute --no-default-features; bin=target/release/execute ;;
+            core-musl-min) rustup target add "$musl"; cargo build --locked --profile min --bin execute --no-default-features --target "$musl"; bin="target/$musl/min/execute" ;;
           esac
           echo "EXECUTE_BIN=$bin" >> "$GITHUB_ENV"
       - run: bash --version | head -1 && jq --version && ls -l /usr/bin/dash "$EXECUTE_BIN"

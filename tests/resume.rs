@@ -188,6 +188,7 @@ fn checkpointed_failure_resumes_suffix_without_repeating_saved_effect() {
             workflow.to_str().unwrap(),
             "--checkpoint",
             checkpoint.to_str().unwrap(),
+            "--retry-uncertain",
             "--trace",
         ],
     );
@@ -240,6 +241,7 @@ fn resume_restores_working_directory_and_named_binding() {
             workflow.to_str().unwrap(),
             "--checkpoint",
             checkpoint.to_str().unwrap(),
+            "--retry-uncertain",
         ],
     );
     assert!(
@@ -340,6 +342,7 @@ fn comments_and_line_number_changes_do_not_invalidate_completed_nodes() {
             workflow.to_str().unwrap(),
             "--checkpoint",
             checkpoint.to_str().unwrap(),
+            "--retry-uncertain",
         ],
     );
     assert!(
@@ -726,10 +729,13 @@ fn active_checkpoint_is_exclusively_locked() {
         "service never opened checkpoint"
     );
 
+    // A fresh run would stop at "checkpoint already exists" before taking the lock,
+    // so the second invocation resumes and reaches the lock.
     let second = invoke(
         directory.path(),
         &manifests,
         &[
+            "resume",
             workflow.to_str().unwrap(),
             "--checkpoint",
             checkpoint.to_str().unwrap(),
@@ -1017,6 +1023,7 @@ fn checkpointed_listener_replays_failed_record_before_reopening_stdin() {
             workflow.to_str().unwrap(),
             "--checkpoint",
             checkpoint.to_str().unwrap(),
+            "--retry-uncertain",
             "--max-runs",
             "1",
         ],
@@ -1120,8 +1127,17 @@ fn checkpoint_blob_directory_symlinks_are_rejected_for_fresh_and_resume() {
         let result = invoke(directory.path(), &manifests, &args);
         assert!(!result.status.success());
         assert!(result.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&result.stderr)
-            .contains("checkpoint blob path must be a real directory"));
+        // A fresh run refuses the non-empty directory before looking at its blobs.
+        let expected = if resume {
+            "checkpoint blob path must be a real directory"
+        } else {
+            "checkpoint directory exists and is not empty"
+        };
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(expected),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,
             0o755

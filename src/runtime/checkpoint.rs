@@ -394,12 +394,32 @@ impl Journal {
         Self::open_with_inputs(options, initial_cwd, mode, max_output_bytes, None)
     }
 
+    #[cfg(any(test, feature = "fuzzing"))]
     pub fn open_with_inputs(
         options: &CheckpointOptions,
         initial_cwd: &Path,
         mode: &str,
         max_output_bytes: usize,
         input_signature: Option<super::InputSignatures>,
+    ) -> Result<Self> {
+        let signature = std::cell::RefCell::new(Some(input_signature));
+        Self::open_with_input_key(options, initial_cwd, mode, max_output_bytes, &|_| {
+            signature
+                .borrow_mut()
+                .take()
+                .context("input signature requested twice")
+        })
+    }
+
+    /// Open a journal, computing the input signature with the key policy the stored
+    /// journal allows: a resume of a journal that records keyed inputs never creates
+    /// a new per-user key.
+    pub fn open_with_input_key(
+        options: &CheckpointOptions,
+        initial_cwd: &Path,
+        mode: &str,
+        max_output_bytes: usize,
+        input_signature: &dyn Fn(super::InputKey) -> Result<Option<super::InputSignatures>>,
     ) -> Result<Self> {
         validate_mode(mode)?;
         let program_path = fs::canonicalize(&options.program_path)
@@ -459,6 +479,15 @@ impl Journal {
         let blobs_directory = directory.join("blobs");
         if options.resume {
             let (mut data, log) = read_journal_parts(&journal_path)?;
+            // Only a legacy journal with an unkeyed digest may need a key created to
+            // upgrade it; any other resume reads the existing key or fails naming it.
+            let legacy_unkeyed =
+                !data.identity.keyed_inputs && data.identity.input_signature.is_some();
+            let input_signature = input_signature(if legacy_unkeyed {
+                super::InputKey::CreateIfMissing
+            } else {
+                super::InputKey::Existing
+            })?;
             let expected = Identity {
                 program_path: EncodedPath::from_path(&program_path),
                 initial_cwd: EncodedPath::from_path(&initial_cwd),
@@ -482,8 +511,33 @@ impl Journal {
                 && stored.keyed_inputs == expected.keyed_inputs)
                 || legacy_match;
             if !same_place || !inputs_match {
+                let mut differs = Vec::new();
+                if stored.program_path != expected.program_path {
+                    differs.push("program path".to_owned());
+                }
+                if stored.initial_cwd != expected.initial_cwd {
+                    differs.push("working directory".to_owned());
+                }
+                if stored.mode != expected.mode {
+                    differs.push("execution mode".to_owned());
+                }
+                if !inputs_match {
+                    differs.push(if stored.keyed_inputs && expected.keyed_inputs {
+                        match crate::agent::what_if_key::key_path() {
+                            Ok(path) => format!(
+                                "program inputs (or the per-user input key at {} changed since the checkpoint was written)",
+                                path.display()
+                            ),
+                            Err(_) => "program inputs (or the per-user input key changed)"
+                                .to_owned(),
+                        }
+                    } else {
+                        "program inputs".to_owned()
+                    });
+                }
                 bail!(
-                    "checkpoint belongs to a different program, directory, execution mode, or program inputs"
+                    "checkpoint belongs to a different program, directory, execution mode, or program inputs: the {} differ",
+                    differs.join(", ")
                 );
             }
             if legacy_match {
@@ -545,6 +599,7 @@ impl Journal {
             if fs::symlink_metadata(&journal_path).is_ok() {
                 bail!("checkpoint already exists; use resume explicitly");
             }
+            let input_signature = input_signature(super::InputKey::CreateIfMissing)?;
             real_directory(&blobs_directory, "checkpoint blob", true)?;
             restrict_directory(&blobs_directory)?;
             sync_directory(&directory)?;
@@ -2542,7 +2597,7 @@ mod tests {
     }
 
     #[test]
-    fn known_failure_allows_explicit_resume_without_uncertain_override() {
+    fn known_failure_without_retry_safety_needs_the_uncertain_override() {
         let (_temp, mut options, cwd) = setup();
         let mut journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
         journal.begin_node("effect", 0, 1, 1, &cwd, false).unwrap();
@@ -2550,6 +2605,11 @@ mod tests {
         drop(journal);
 
         options.resume = true;
+        let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
+        assert!(journal.ensure_retry_allowed().is_err());
+        drop(journal);
+
+        options.retry_uncertain = true;
         let journal = Journal::open(&options, &cwd, "finite", 1024).unwrap();
         assert!(journal.ensure_retry_allowed().is_ok());
     }

@@ -6,6 +6,25 @@ use std::time::{Duration, Instant};
 const CLEANUP_STEP_BUDGET: usize = 16_384;
 const CLEANUP_TIME_BUDGET: Duration = Duration::from_secs(5);
 
+/// Cleanup ran out of its step budget. `after_success` is set when nothing was
+/// pending as it ran: the cleanup followed statements that all completed, so the
+/// run's output is still worth delivering with the failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CleanupBudgetExceeded {
+    pub(crate) after_success: bool,
+}
+
+impl std::fmt::Display for CleanupBudgetExceeded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "cleanup step budget of {CLEANUP_STEP_BUDGET} exceeded in a finally, on exit or on interrupt block"
+        )
+    }
+}
+
+impl std::error::Error for CleanupBudgetExceeded {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransferKind {
     Break,
@@ -591,7 +610,10 @@ impl RuntimeState {
             bail!("cleanup budget of {:?} exceeded", CLEANUP_TIME_BUDGET);
         }
         if self.cleanup_steps >= CLEANUP_STEP_BUDGET {
-            bail!("cleanup step budget of {CLEANUP_STEP_BUDGET} exceeded");
+            return Err(CleanupBudgetExceeded {
+                after_success: self.tries.iter().all(|frame| frame.pending.is_none()),
+            }
+            .into());
         }
         self.cleanup_steps += 1;
         Ok(())
@@ -760,6 +782,30 @@ mod tests {
         for _ in 0..(64 * 3) {
             state.charge_cleanup_step().unwrap();
         }
+    }
+
+    #[test]
+    fn cleanup_budget_overrun_says_whether_anything_was_pending() {
+        let mut state = RuntimeState::default();
+        state.enter_try(0, None, Some(2), 4).unwrap();
+        // Ordinary completion reaches finally with nothing pending.
+        state.finally_marker(2).unwrap();
+        for _ in 0..CLEANUP_STEP_BUDGET {
+            state.charge_cleanup_step().unwrap();
+        }
+        let error = state.charge_cleanup_step().unwrap_err();
+        let overrun = error.downcast_ref::<CleanupBudgetExceeded>().unwrap();
+        assert!(overrun.after_success);
+
+        let mut state = RuntimeState::default();
+        state.enter_try(0, None, Some(2), 4).unwrap();
+        state.fail(anyhow!("body failed"), false).unwrap();
+        for _ in 0..CLEANUP_STEP_BUDGET {
+            state.charge_cleanup_step().unwrap();
+        }
+        let error = state.charge_cleanup_step().unwrap_err();
+        let overrun = error.downcast_ref::<CleanupBudgetExceeded>().unwrap();
+        assert!(!overrun.after_success);
     }
 
     #[test]

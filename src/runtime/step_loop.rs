@@ -24,6 +24,43 @@ fn sync_destination_parent(destination: &Path, cwd: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Add the program's declared inputs to `bindings`: supplied values where no binding
+/// exists yet, then every declaration resolved (defaults included).
+fn merge_declared_inputs(
+    program: &Program,
+    options: &RunOptions,
+    bindings: &mut BTreeMap<String, Value>,
+) -> Result<()> {
+    if program.inputs.is_empty() {
+        return Ok(());
+    }
+    for (name, value) in &options.inputs {
+        bindings
+            .entry(name.clone())
+            .or_insert_with(|| value.clone());
+    }
+    let resolved = crate::inputs::resolve(&program.inputs, bindings, true)?;
+    bindings.extend(resolved);
+    Ok(())
+}
+
+/// The exit for a run whose cleanup overran its step budget after its statements all
+/// completed, or `None` when the error is anything else.
+fn cleanup_overrun_exit(error: &anyhow::Error) -> Option<ProgramExit> {
+    let overrun = error
+        .root_cause()
+        .downcast_ref::<control_flow::CleanupBudgetExceeded>()?;
+    overrun.after_success.then(|| ProgramExit {
+        status: 1,
+        message: Some(format!(
+            "execute: {}",
+            crate::terminal_text::escape_controls(&format!(
+                "{error:#}; the statements before the cleanup completed, so their output was kept"
+            ))
+        )),
+    })
+}
+
 /// What a finite run reads from its caller: the program, its registry and options, and the
 /// signals that can cancel it. Nested runs receive a copy, so it is `Copy`.
 #[derive(Clone, Copy)]
@@ -193,6 +230,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     if let Some(journal) = journal.as_deref_mut() {
         if state_source == FiniteStateSource::Restore {
             let mut state = journal.take_restored_state()?;
+            // The declared inputs join the restored bindings before anything reads
+            // them: with no completed node yet, the restored state is the initial
+            // one, and a first loop over an input resolves its list from it.
+            merge_declared_inputs(program, options, &mut state.bindings)?;
             index = journal.completed_nodes().last().map_or(0, |node| node.end);
             // A top-level for each with committed elements continues after them.
             if let Some(resumed) =
@@ -228,6 +269,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             if index == program.steps.len() {
                 journal.discard_removed_tail()?;
             }
+            // A resume inside a try body without a catch (an `on exit` program is
+            // one) enters its frame again, so its cleanup runs when the body ends.
+            for (header, finally, end) in resume::frame_tries_at(program, index)? {
+                control_state.enter_try(header, None, finally, end)?;
+            }
         } else {
             // The service just committed this exact path with the event snapshot.
             cwd = crate::working_dir::WorkingDirectory::plain(options.working_directory.clone());
@@ -241,19 +287,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             || serde_json::json!({"event":"checkpoint_resume","restored_nodes":journal.completed_nodes().len(),"next_step":index}),
         )?;
     }
-    if !program.inputs.is_empty() {
-        for (name, value) in &options.inputs {
-            bindings
-                .entry(name.clone())
-                .or_insert_with(|| value.clone());
-        }
-        bindings.extend(crate::inputs::resolve(&program.inputs, &bindings, true)?);
-    }
+    merge_declared_inputs(program, options, &mut bindings)?;
     if preflight_context {
         preflight_inputs(program, registry, &bindings)?;
     }
     let mut journal_end = None;
+    let mut journal_start = 0;
     let mut journal_uncertain = false;
+    // Set once a failure or cancellation leaves its node for cleanup outside it. The
+    // failed node stays in flight and nothing after it is recorded: the run ends
+    // failed, and a resume retries that node and runs the cleanup again.
+    let mut journal_suspended = false;
     macro_rules! control_context {
         () => {
             ControlContext {
@@ -286,6 +330,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             match apply_control_action(action, control_context!())? {
                 AppliedControl::Continue => {}
                 AppliedControl::Jump(target) => {
+                    journal_suspended = true;
                     index = target;
                     continue;
                 }
@@ -336,6 +381,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             match apply_control_action(action, control_context!())? {
                 AppliedControl::Continue => {}
                 AppliedControl::Jump(target) => {
+                    journal_suspended = true;
                     index = target;
                     continue;
                 }
@@ -358,9 +404,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         {
             statement_hook::before_statement(step.line, &bindings)?;
         }
-        if let Some(journal) = journal.as_deref_mut().filter(|_| journal_end.is_none()) {
+        if let Some(journal) = journal
+            .as_deref_mut()
+            .filter(|_| journal_end.is_none() && !journal_suspended)
+        {
             let end = resume::node_end(program, index);
             journal_end = Some(end);
+            journal_start = index;
             // Element nodes record uncertainty per element in their element log, so one
             // uncertain element does not make the whole node uncertain.
             let tracks_elements = checkpoint::elements::tracks_new_node(journal, program, index);
@@ -371,6 +421,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         | StepKind::IfCommand { .. }
                         | StepKind::CallProgram { .. }
                         | StepKind::Loop { .. }
+                        | StepKind::Try { catch: Some(_), .. }
+                        | StepKind::Finally
                 ) || resume::uncertain_on_failure(program, index, end, registry)?);
             let module_session = current_module_session(signals)?;
             let fingerprint = resume::node_fingerprint_with_modules(
@@ -1231,11 +1283,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         }
                         None => (None, None),
                     };
-                    pending_redirect = Some(PendingRedirect {
-                        target: *target,
-                        file,
-                        destination,
-                    });
+                    pending_redirect = Some(PendingRedirect::new(*target, destination, file));
                 }
                 StepKind::Save { path, .. } => {
                     let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
@@ -1607,12 +1655,28 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             );
                             let _env = crate::capabilities::CommandEnvScope::enter(env);
                             let _handoff = terminal::Scope::enter(handoff);
-                            let _stderr = ForceStderrCapture::enter(
-                                redirect
-                                    .as_ref()
-                                    .is_some_and(PendingRedirect::captures_stderr),
-                            );
-                            let completed = match execute_call_group(GroupRequest {
+                            // One native command receives a file or stdout redirect as
+                            // its own stream, so the bytes land as they are written.
+                            let stream = match redirect.as_ref() {
+                                Some(pending)
+                                    if calls.len() == 1
+                                        && manifest.execution_backend()
+                                            == AppletBackend::Command =>
+                                {
+                                    pending.stream()?
+                                }
+                                _ => None,
+                            };
+                            let _stderr = ForceStderrCapture::enter(redirect.as_ref().is_some_and(
+                                |pending| {
+                                    pending.captures_stderr()
+                                        || (stream.is_none()
+                                            && pending.target
+                                                != crate::ast::RedirectTarget::StdoutToStderr)
+                                },
+                            ));
+                            let stream_scope = StreamScope::enter(stream);
+                            let completed = execute_call_group(GroupRequest {
                                 calls: &calls,
                                 input,
                                 prepared_first_call: None,
@@ -1622,18 +1686,29 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 launched: &mut result.launched_processes,
                                 signals,
                                 registry,
-                            }) {
+                            });
+                            if let Some(redirect) = redirect.as_mut() {
+                                redirect.streamed = stream_scope.used();
+                            }
+                            drop(stream_scope);
+                            let completed = match completed {
                                 Ok(completed) => completed,
                                 Err(error) => {
                                     // A failed command's stderr still goes to its
-                                    // file target before the failure propagates.
-                                    if let (Some(redirect), Some(failure)) =
-                                        (redirect.as_mut(), error.downcast_ref::<CommandFailed>())
-                                    {
-                                        let stderr = failure.stderr.clone().unwrap_or_else(|| {
-                                            failure.diagnostic.clone().into_bytes()
-                                        });
-                                        redirect.write_stderr(&stderr)?;
+                                    // file target before the failure propagates; a
+                                    // streamed file already holds it and is synced.
+                                    if let Some(redirect) = redirect.as_mut() {
+                                        if redirect.streamed {
+                                            redirect.finish_stream()?;
+                                        } else if let Some(failure) =
+                                            error.downcast_ref::<CommandFailed>()
+                                        {
+                                            let stderr =
+                                                failure.stderr.clone().unwrap_or_else(|| {
+                                                    failure.diagnostic.clone().into_bytes()
+                                                });
+                                            redirect.write_stderr(&stderr)?;
+                                        }
                                         if journal.is_some() {
                                             if let Some(destination) = redirect.destination.as_ref()
                                             {
@@ -1883,7 +1958,27 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             let action = control_state.fail(error, cancellation)?;
             match apply_control_action(action, control_context!())? {
                 AppliedControl::Continue => {}
-                AppliedControl::Jump(target) => jump_to = Some(target),
+                AppliedControl::Jump(target) => {
+                    // A handler outside the in-flight node (a finally or `on exit`
+                    // body) runs with the failure pending: that node did not complete.
+                    if journal_end.is_some_and(|end| target < journal_start || target >= end) {
+                        journal_suspended = true;
+                    }
+                    jump_to = Some(target);
+                }
+                AppliedControl::Rethrow(error) if depth == 0 && journal.is_none() => {
+                    // Cleanup that overran its budget after every statement completed
+                    // fails the run but keeps its output: it ends like `fail`, with the
+                    // budget error as the message. A checkpointed run keeps the error.
+                    match cleanup_overrun_exit(&error) {
+                        Some(exit) => {
+                            control_state.set_exit(exit);
+                            index = program.steps.len();
+                            continue;
+                        }
+                        None => return Err(error),
+                    }
+                }
                 AppliedControl::Rethrow(error) => {
                     if let Some(journal) = journal.as_deref_mut() {
                         if !journal.persistence_failed() {
@@ -1905,10 +2000,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         // exit step itself and completes here as the terminal node.
         let exited = control_state.exit_pending();
         index = jump_to.unwrap_or(index + 1);
-        if let Some(journal) = journal
-            .as_deref_mut()
-            .filter(|_| journal_end == Some(index) || (exited && journal_end.is_some()))
-        {
+        if let Some(journal) = journal.as_deref_mut().filter(|_| {
+            !journal_suspended && (journal_end == Some(index) || (exited && journal_end.is_some()))
+        }) {
             journal_end = None;
             journal_uncertain = false;
             authorize_checkpoint_persistence(registry, &signals.sensitivity_floor())?;

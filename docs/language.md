@@ -229,7 +229,8 @@ truncation flags.
 
 This finite feature has no detach/disown, `fg`/`bg`, stopped or continued
 states, controlling-terminal handoff, or durable service lifetime. Job
-operations are rejected inside loops and `try`/`catch`/`finally`, in services,
+operations are rejected inside loops, inside a `try` that has a `catch`, in
+`finally` bodies and in `on exit` and `on interrupt` handler bodies, in services,
 live programs, TUI handlers and browser execution. A finite module called by one
 of those contexts cannot introduce job operations indirectly; the enclosing
 preflight rejects the imported source before effects. Those contexts do not yet
@@ -473,8 +474,11 @@ also becomes the pipeline value.
 
 Interpreter cancellation, the total timeout or exceeding `--max-output-bytes`
 stops new elements, cancels and reaps running ones and fails the group; running
-elements are marked `cancelled` and the rest `not_started`. Each element's
-captured output shares the byte limit evenly. Lists hold at most 10,000
+elements are marked `cancelled` and the rest `not_started`. The elements in
+flight share the byte limit evenly, and all retained element output counts
+against one group-wide limit: a native element's stdout is charged as it
+arrives, so the element that crosses the limit is stopped at that point rather
+than when it finishes. Lists hold at most 10,000
 elements. Without `--checkpoint` the group is one unit. Under `--checkpoint`, a
 top-level group records each element, so resume skips the committed elements; see
 [per-element checkpoints](#per-element-checkpoints). A nested group is one
@@ -506,19 +510,27 @@ output must be retained.
 nonempty body. A caught error is a JSON record. Its fields include `kind`,
 `outcome`, observed `status` and `signal`, captured stdout/stderr/value with
 separate capture flags, per-stage results, `message`, and `effect_certainty`.
+For a failed native command whose stdout is captured, `stdout` holds what it
+printed before it failed, up to `--max-output-bytes`, as with `keep result`;
+stderr is included when it is captured.
 Missing status is `null`, not a fabricated exit code. `then encode failure as
 json` makes the record available as pipeline bytes.
 
 Ordinary failures in the try or catch body enter the catch when present, then
 run finally. Cancellation bypasses catch but still attempts finally. Cleanup is
-best-effort: nested finalizers share one budget of 128 VM steps and five seconds,
+best-effort: nested finalizers share one budget of VM steps and five seconds,
 and the parent workflow deadline remains a hard upper bound. If that deadline
 has expired, cleanup can be skipped or stopped. A cleanup failure cannot replace
 the original cancellation; with an ordinary pending failure, a finally failure
 becomes the reported error and retains the earlier failure as context. A transfer
 inside finally overrides a pending ordinary failure or transfer. Nested cleanup
 has a 16,384 VM-step budget as well as a five-second budget and the parent
-workflow deadline. These rules do
+workflow deadline; the step budget also covers `on exit` and `on interrupt`
+bodies. A cleanup that exceeds the step budget after every statement before it
+completed fails the run with status 1 and a message naming the budget, but the
+run's output at that point is still delivered, as with `fail`. With a failure
+already pending, the overrun is reported with that failure as context. These
+rules do
 not make external effects reversible or exactly once.
 
 ### Explicit exit and failure
@@ -558,7 +570,7 @@ Checkpointed programs (`--checkpoint`) accept an exit or fail only as a
 top-level statement. A completed exit is a terminal checkpoint node: `resume`
 does not run any later step and reports the same status, re-derived from the
 restored bindings. Validation rejects nested exits in a checkpointed program
-before any effect.
+before any effect; the statements of a program with `on exit` count as nested.
 
 ### Step labels and step ids
 
@@ -608,9 +620,21 @@ Both blocks are unindented headers with indented bodies, appear at most once
 each, and are allowed only in one-shot programs: a triggered program
 (`every`, `on schedule`, `listen`) rejects them. A program with a handler needs
 at least one statement to wrap. `on interrupt` is rejected with `--checkpoint`
-and in live programs; `try` and `on exit` are also rejected with checkpoints
-because resume cannot safely rebuild their handler frames yet. Explain shows the
-interrupt body as an `on_interrupt` row.
+and in live programs. Explain shows the interrupt body as an `on_interrupt` row.
+
+The program's statements may spawn, await and cancel named jobs as they would
+without a handler; the handler bodies may not. When a failure or `exit` ends the
+statements, the `on exit` body runs first, and the jobs the run still owns are
+cancelled and reaped as the run ends.
+
+Checkpointed runs accept `try` and `on exit`. A `try` with a `catch` is one
+checkpoint node, like `if` and loops: a resume runs the whole block again. A
+`try` without a `catch`, and an `on exit` program, keep one node per statement
+in the body, and the cleanup body is one node. A resume inside the body enters
+the block again, so the cleanup runs once at its end. When a statement fails or
+the run is cancelled, the cleanup runs at once but neither the failed statement
+nor the cleanup is recorded as complete: a resume retries that statement, then
+runs the rest of the body and the cleanup again.
 
 ### Structured JSON
 
@@ -905,9 +929,14 @@ then append to "run.log"
 `and stderr to <path>` replaces the file with the command's stderr. `appended to`
 adds it to the file, and `merged` appends stderr after stdout in the pipeline
 value. `and stdout to stderr` writes stdout to this process's stderr and leaves
-the pipeline empty. Stderr is captured under the normal capture limit, so a very
-large stderr is truncated as before. A failing command still writes its captured
-stderr to a file target. Only one stderr or stdout redirection applies per
+the pipeline empty. A native command writes a stderr file target directly, as
+`2>file` does: bytes land as they are written, with no size cap, and survive a
+failure, a timeout or a cancellation. A replaced file is truncated when the
+command starts, so a command that never starts leaves it unchanged. `stdout to
+stderr` likewise gives the command this process's stderr as its stdout, so its
+output appears as it is written, in order with the command's own stderr unless
+that stderr is captured, and survives a failure or timeout. A merged stderr is
+captured in memory, up to 64 MiB. Only one stderr or stdout redirection applies per
 command, and it cannot be combined with `discard stderr`, `cache`, `keep result`,
 or a pipe stage. `and stdin from <path>` reads the file as the command's stdin; it
 applies to a command that starts a statement, and it is a `read` followed by the

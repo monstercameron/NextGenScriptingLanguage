@@ -773,12 +773,12 @@ fn run_service_with_signals(
         )?;
         stopped(&signals)?;
         authorize_service_checkpoint(registry, &signals.sensitivity_floor())?;
-        let journal = Journal::open_with_inputs(
+        let journal = Journal::open_with_input_key(
             &checkpoint,
             &options.working_directory,
             &format!("service:{fingerprint}"),
             options.max_output_bytes,
-            input_signature(program, &options.inputs)?,
+            &|key| input_signature(program, &options.inputs, key),
         )?;
         stopped(&signals)?;
         Some(journal)

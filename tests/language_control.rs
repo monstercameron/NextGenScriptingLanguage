@@ -121,7 +121,7 @@ fn finally_runs_across_break_and_catch_receives_a_structured_error() -> Result<(
     let record: serde_json::Value = serde_json::from_slice(&caught)?;
     assert_eq!(record["kind"], "failure");
     assert!(record.get("effect_certainty").is_some());
-    assert_eq!(record["stdout_captured"], false);
+    assert_eq!(record["stdout_captured"], true);
     Ok(())
 }
 

@@ -63,7 +63,7 @@ use crate::working_dir::enter_directory;
 use observe::execute_call_group;
 use redirect::{
     append_to_open_file, open_output_file, open_redirect_target, verify_opened_identity,
-    ForceStderrCapture, PendingRedirect,
+    ForceStderrCapture, PendingRedirect, StreamScope,
 };
 mod program_backend;
 pub(crate) mod resume;
@@ -359,17 +359,32 @@ struct InputSignatures {
     legacy: String,
 }
 
+/// Where the per-user input key comes from when a checkpoint's input signature is
+/// computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InputKey {
+    /// A fresh checkpoint, or a legacy journal being upgraded: create the key if needed.
+    CreateIfMissing,
+    /// A journal that already records keyed inputs: only the key that wrote it can
+    /// match, so a missing key is an error naming its path, never a new key.
+    Existing,
+}
+
 fn input_signature(
     program: &Program,
     values: &BTreeMap<String, Value>,
+    key: InputKey,
 ) -> Result<Option<InputSignatures>> {
     if program.inputs.is_empty() {
         return Ok(None);
     }
     // The digest is keyed with the per-user key. An unkeyed hash of input values could be
     // guessed offline from the checkpoint's own journal, so every input is covered by the key.
-    let key = crate::agent::what_if_key::load_or_create()
-        .context("a checkpoint with inputs needs the per-user key")?;
+    let key = match key {
+        InputKey::CreateIfMissing => crate::agent::what_if_key::load_or_create(),
+        InputKey::Existing => crate::agent::what_if_key::load_existing(),
+    }
+    .context("a checkpoint with inputs needs the per-user key")?;
     let signature = program
         .inputs
         .iter()
@@ -522,6 +537,9 @@ pub(crate) struct AppletInvocationContext {
     pub(crate) process_observer: Option<ProcessObserver>,
     pub(crate) job_run_context: Arc<Mutex<Option<JobRunFrame>>>,
     pub(crate) background_jobs_allowed: bool,
+    /// A task group's shared stdout budget and its limit: native output is charged
+    /// against it as it arrives, so the group stops at its aggregate limit.
+    pub(crate) group_output_budget: Option<(Arc<AtomicUsize>, usize)>,
 }
 
 impl AppletInvocationContext {
@@ -536,6 +554,7 @@ impl AppletInvocationContext {
             process_observer: None,
             job_run_context: Arc::new(Mutex::new(None)),
             background_jobs_allowed: true,
+            group_output_budget: None,
         }
     }
 
@@ -547,6 +566,7 @@ impl AppletInvocationContext {
             process_observer: signals.process_observer.get().cloned(),
             job_run_context: Arc::clone(&signals.job_run_context),
             background_jobs_allowed: signals.background_jobs_allowed,
+            group_output_budget: None,
         })
     }
 }
@@ -698,6 +718,12 @@ impl Signals {
         self.worker_pool = context.worker_pool.clone();
         self.job_run_context = Arc::clone(&context.job_run_context);
         self.background_jobs_allowed = context.background_jobs_allowed;
+        if let Some((budget, limit)) = &context.group_output_budget {
+            if self.job_output_budget.is_none() {
+                self.job_output_budget = Some(Arc::clone(budget));
+                self.job_output_limit = Some(*limit);
+            }
+        }
         if let Some(observer) = context.process_observer.clone() {
             self.set_process_observer(observer)?;
         }
@@ -1428,8 +1454,9 @@ pub struct CommandFailed {
     /// Raw captured stderr bytes from the failed stage, when stderr capture
     /// was enabled. The text diagnostic remains for legacy CLI formatting.
     pub stderr: Option<Vec<u8>>,
-    /// Captured terminal stdout, when available at the point the failure was
-    /// observed. Native fail-fast behavior can make this unavailable.
+    /// Captured terminal stdout: what a native group read before and while its
+    /// command failed, bounded by the output limit. `None` when the group does not
+    /// capture stdout (streamed, inherited or discarded output).
     pub stdout: Option<Vec<u8>>,
     pub stages: Vec<execution_result::StageResult>,
 }
@@ -1498,9 +1525,11 @@ pub(crate) fn current_step_id() -> Option<std::sync::Arc<str>> {
     })
 }
 
-/// Stderr kept for a command whose stderr is redirected or merged: it is the
-/// redirected output itself, not a diagnostic tail, so it is kept far past the
-/// diagnostic cap, but still bounded so a runaway command cannot exhaust memory.
+/// Stderr kept for a command whose stderr is merged (or redirected without a native
+/// process to hand the file to): it is the redirected output itself, not a
+/// diagnostic tail, so it is kept far past the diagnostic cap, but still bounded so
+/// a runaway command cannot exhaust memory. A native command with `stderr to FILE`
+/// writes the file directly and is not bounded by this.
 pub(crate) const FORCED_STDERR_CAPTURE_LIMIT: usize = 64 * 1024 * 1024;
 
 thread_local! {
@@ -1510,7 +1539,8 @@ thread_local! {
     static FINITE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Set only while one native command whose stdout has no consumer runs.
     static INHERIT_TERMINAL_STDOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Set only while a redirected native command runs; its stderr is captured.
+    /// Set only while a native command with merged stderr runs (or a stderr file
+    /// redirect that is not handed to a native process); its stderr is captured.
     static FORCE_STDERR_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -1552,7 +1582,9 @@ pub(crate) fn output_limit_message(run_wide: bool, limit: usize) -> String {
         OutputScope::BackgroundJob => "background job",
         OutputScope::TaskGroup => "task group",
     };
-    let scope = if run_wide {
+    let scope = if run_wide && kind == "task group" {
+        format!("task group output exceeds the shared group limit of {limit} bytes")
+    } else if run_wide {
         format!("retained {kind} output exceeds the run-wide limit of {limit} bytes")
     } else {
         format!("{kind} output exceeds the limit of {limit} bytes")
@@ -4894,7 +4926,7 @@ mod output_limit_message_tests {
             let _task = OutputScopeGuard::enter(OutputScope::TaskGroup);
             let task = output_limit_message(true, 32);
             assert!(
-                task.starts_with("retained task group output exceeds the run-wide limit of 32"),
+                task.starts_with("task group output exceeds the shared group limit of 32"),
                 "{task}"
             );
         }

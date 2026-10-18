@@ -20,21 +20,38 @@ fn run(directory: &Path, workflow: &Path, checkpoint: &Path) -> std::process::Ou
 }
 
 #[test]
-fn checkpointed_try_and_on_exit_are_rejected_before_effects() {
+fn checkpointed_try_and_on_exit_run_their_handlers() {
     let directory = tempfile::tempdir().unwrap();
     let workflow = directory.path().join("workflow.program");
-    for source in [
-        "try\n  then fail\ncatch error\n  run printf with message \"caught\"\nfinally\n  run printf with message \"finally\"\n",
-        "run printf with message \"before\"\non exit\n  run printf with message \"cleanup\"\n",
-        "run printf with message \"before\"\nthen fail\non exit\n  run printf with message \"cleanup\"\n",
+    for (source, success, stdout) in [
+        (
+            "try\n  then fail\ncatch error\n  run printf with message \"caught\"\nfinally\n  run printf with message \"finally\"\n",
+            true,
+            "finally\n",
+        ),
+        (
+            "run printf with message \"before\"\non exit\n  run printf with message \"cleanup\"\n",
+            true,
+            "cleanup\n",
+        ),
+        (
+            "run printf with message \"before\"\nthen fail\non exit\n  run printf with message \"cleanup\"\n",
+            false,
+            "",
+        ),
     ] {
         let checkpoint = directory.path().join("checkpoint");
+        let _ = fs::remove_dir_all(&checkpoint);
         fs::write(&workflow, source).unwrap();
         let output = run(directory.path(), &workflow, &checkpoint);
-        assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr)
-            .contains("try and on exit blocks are not supported"));
-        assert!(!checkpoint.exists(), "validation must precede checkpoint effects");
+        assert_eq!(
+            output.status.success(),
+            success,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), stdout);
+        assert!(checkpoint.join("journal.json").exists());
     }
 }
 

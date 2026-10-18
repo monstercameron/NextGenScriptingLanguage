@@ -326,6 +326,48 @@ fn parser_rejects_malformed_utf8_quotes_duplicate_headers_and_ragged_rows() {
 }
 
 #[test]
+fn unquoted_span_scan_preserves_punctuation_and_control_byte_offsets() {
+    let prefix = "é".repeat(257);
+    let input = format!("{prefix},\"a,b\"\r\nplain,\"quote\"\"end\"\n");
+    assert_eq!(
+        run("csv.parse", json!({"has_headers": false}), input.as_bytes()).unwrap(),
+        json!({"headers": [], "rows": [[prefix, "a,b"], ["plain", "quote\"end"]]})
+    );
+    for control in [0, 1, 0x1f, 0x7f] {
+        let mut input = format!("first,{prefix}").into_bytes();
+        let offset = input.len();
+        input.push(control);
+        let error = run("csv.parse", json!({"has_headers": false}), &input).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!("unsupported control byte in CSV field at byte {offset}")
+        );
+    }
+}
+
+#[test]
+#[ignore = "relative CSV scaling gate; run on an otherwise idle machine"]
+fn unquoted_single_column_scan_does_not_rescan_remaining_records() {
+    fn measure(rows: usize) -> Duration {
+        let input = "x\n".repeat(rows);
+        let args = Map::from_iter([("has_headers".to_owned(), Value::Bool(false))]);
+        let mut samples = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            std::hint::black_box(applets::execute("csv.parse", &args, input.as_bytes()).unwrap());
+            samples.push(started.elapsed());
+        }
+        samples.sort_unstable();
+        samples[2]
+    }
+    let small = measure(1_000);
+    let large = measure(20_000);
+    eprintln!("CSV scan scaling: 1000 rows {small:?}, 20000 rows {large:?}");
+    // Twenty times the data permits thirty times the time, not a quadratic rescan.
+    assert!(large <= small.mul_f64(30.0) + Duration::from_millis(5));
+}
+
+#[test]
 fn stringify_is_deterministic_and_roundtrips_the_declared_table_shape() {
     let table = json!({
         "headers": ["name", "note", "amount", "empty"],

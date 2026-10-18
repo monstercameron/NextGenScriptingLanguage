@@ -69,6 +69,24 @@ pub(super) fn node_end(program: &Program, start: usize) -> usize {
     {
         return start + end;
     }
+    // A try with a catch is one node, like a conditional: a resume runs it again from
+    // its start, so a caught failure and its handler are never split across a resume.
+    if let StepKind::Try {
+        catch: Some(_),
+        end,
+        ..
+    } = program.steps[start].kind
+    {
+        return start + end;
+    }
+    // A try without a catch (an `on exit` block is one) keeps a node per statement in
+    // its body: its opener is a node of its own, and its finally body through the end
+    // marker is one node, the cleanup. Resume rebuilds the open frame (frame_tries_at).
+    if matches!(program.steps[start].kind, StepKind::Finally) {
+        if let Some(end) = cleanup_end(program, start) {
+            return end;
+        }
+    }
     // A job handle is never serialized, so a spawn's node runs through the statement
     // that awaits or cancels the job. Validation refuses a spawn with no such statement.
     if let StepKind::SpawnJob { name, .. } = &program.steps[start].kind {
@@ -83,6 +101,50 @@ pub(super) fn node_end(program: &Program, start: usize) -> usize {
         }
     }
     end
+}
+
+/// The end of the try block whose finally marker is at `finally`: one past its end
+/// marker.
+fn cleanup_end(program: &Program, finally: usize) -> Option<usize> {
+    (0..finally)
+        .rev()
+        .find_map(|header| match program.steps[header].kind {
+            StepKind::Try {
+                finally: Some(offset),
+                end,
+                ..
+            } if header + offset == finally => Some(header + end),
+            _ => None,
+        })
+}
+
+/// The try blocks without a catch whose body contains the top-level node that starts
+/// at `index`, outermost first, as (opener, finally marker, end). A resume enters
+/// them again before continuing, so their cleanup runs as it would have. Fails when
+/// `index` is not where a top-level node starts.
+pub(super) fn frame_tries_at(
+    program: &Program,
+    index: usize,
+) -> Result<Vec<(usize, Option<usize>, usize)>> {
+    let mut frames = Vec::new();
+    let mut at = 0;
+    while at < index {
+        if let StepKind::Try {
+            catch: None,
+            finally,
+            end,
+        } = program.steps[at].kind
+        {
+            if at + end > index {
+                frames.push((at, finally.map(|offset| at + offset), at + end));
+            }
+        }
+        at = node_end(program, at);
+    }
+    if at != index {
+        bail!("checkpoint resumes inside a statement; use a fresh checkpoint");
+    }
+    Ok(frames)
 }
 
 /// The index just past the top-level statement that awaits or cancels the job
@@ -368,6 +430,7 @@ fn node_fingerprint_with_digests(
                         | StepKind::IfCommand { .. }
                         | StepKind::CallProgram { .. }
                         | StepKind::Loop { .. }
+                        | StepKind::Try { catch: Some(_), .. }
                 ),
             )?;
         }
@@ -513,16 +576,6 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
             step.line
         );
     }
-    if let Some(step) = program
-        .steps
-        .iter()
-        .find(|step| matches!(step.kind, StepKind::Try { .. } | StepKind::Finally))
-    {
-        bail!(
-            "line {}: try and on exit blocks are not supported with checkpointed runs yet",
-            step.line
-        );
-    }
     // Byte captures live outside the journal and would be lost on resume.
     if let Some(step) = program.steps.iter().find(|step| {
         matches!(
@@ -570,6 +623,8 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
         }
     }
     let mut depth = 0;
+    // Whether each open try is one compound node (it has a catch).
+    let mut tries = Vec::new();
     for step in &program.steps {
         match &step.kind {
             StepKind::If { .. }
@@ -577,6 +632,17 @@ pub(super) fn validate_checkpoint_controls(program: &Program, registry: &Registr
             | StepKind::CallProgram { .. }
             | StepKind::Loop { .. } => depth += 1,
             StepKind::EndIf | StepKind::EndCall | StepKind::EndLoop { .. } => depth -= 1,
+            StepKind::Try { catch, .. } => {
+                tries.push(catch.is_some());
+                if catch.is_some() {
+                    depth += 1;
+                }
+            }
+            StepKind::EndTry => {
+                if tries.pop() == Some(true) {
+                    depth -= 1;
+                }
+            }
             StepKind::UseFolder { .. } if depth > 0 => {
                 bail!(
                     "line {}: checkpointed conditionals cannot change directory; loops and reusable calls also require directory setup outside their bodies",
@@ -771,12 +837,12 @@ pub fn run_checkpointed(
         crate::capabilities::HostAccess::Write,
         &cwd,
     )?;
-    let mut journal = Journal::open_with_inputs(
+    let mut journal = Journal::open_with_input_key(
         &checkpoint,
         &cwd,
         "finite",
         options.max_output_bytes,
-        input_signature(program, &options.inputs)?,
+        &|key| input_signature(program, &options.inputs, key),
     )?;
     prepare_with_modules(program, registry, &journal, module_session.fingerprints())?;
     let already_finished = journal.is_finished();

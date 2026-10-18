@@ -842,16 +842,25 @@ fn validate_range(
         } = &step.kind
         {
             let finish = index + end;
-            if steps[index + 1..finish - 1].iter().any(|step| {
-                matches!(
-                    step.kind,
-                    StepKind::SpawnJob { .. }
-                        | StepKind::InspectJob { .. }
-                        | StepKind::AwaitJob { .. }
-                        | StepKind::CancelJob { .. }
-                )
-            }) {
-                bail!("line {}: background job operations are unsupported inside try/catch/finally blocks", step.line);
+            // A catch could resume normal flow while a job spawned in the body still
+            // runs unobserved, so a try with a catch admits no job operations. Without a
+            // catch (as for `on exit`), an error in the body always ends the run after
+            // cleanup, and the run's end cancels and reaps every job it still owns.
+            if catch.is_some()
+                && steps[index + 1..finish - 1].iter().any(|step| {
+                    matches!(
+                        step.kind,
+                        StepKind::SpawnJob { .. }
+                            | StepKind::InspectJob { .. }
+                            | StepKind::AwaitJob { .. }
+                            | StepKind::CancelJob { .. }
+                    )
+                })
+            {
+                bail!(
+                    "line {}: background job operations are unsupported inside try blocks that have a catch",
+                    step.line
+                );
             }
             let catch_at = catch.map(|offset| index + offset);
             let finally_at = finally.map(|offset| index + offset);
@@ -914,7 +923,7 @@ fn validate_range(
                     )
                 }) {
                     bail!(
-                        "line {}: background job operations are unsupported in finally blocks",
+                        "line {}: background job operations are unsupported in finally blocks and in on exit or on interrupt handlers",
                         steps[finally_index].line
                     );
                 }

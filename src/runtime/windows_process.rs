@@ -65,6 +65,24 @@ fn drain_diagnostic(child: &mut ManagedChild) -> Result<()> {
     }
     Ok(())
 }
+/// Reads only what a pipe already holds, so draining a failed command's stdout never
+/// waits for a writer that is still alive.
+struct AvailableStdout<'a>(&'a mut std::process::ChildStdout);
+
+impl Read for AvailableStdout<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let available = available(self.0.as_handle())
+            .map_err(|error| std::io::Error::other(format!("{error:#}")))?;
+        match available {
+            None | Some(0) => Ok(0),
+            Some(count) => {
+                let length = buffer.len().min(count);
+                self.0.read(&mut buffer[..length])
+            }
+        }
+    }
+}
+
 fn windows_statuses(
     children: &mut Children,
     calls: &[(&Invocation, &Manifest, usize)],
@@ -315,6 +333,15 @@ fn execute_group_with_sink(
                 .current_dir(cwd)
                 .stdout(invocation_io::process_stdio(stdout_disposition))
                 .stderr(invocation_io::process_stdio(resolved_io.stderr));
+            if index + 1 == calls.len() {
+                let (stdout, stderr) = redirect::take_redirected_stdio()?;
+                if let Some(stdout) = stdout {
+                    command.stdout(stdout);
+                }
+                if let Some(stderr) = stderr {
+                    command.stderr(stderr);
+                }
+            }
             let mut bytes = None;
             let stdin = if index > 0 {
                 Stdio::from(previous.take().expect("prior native stdout"))
@@ -400,6 +427,9 @@ fn execute_group_with_sink(
         let mut chunk = [0u8; 32768];
         let mut eof = stdout.is_none();
         let mut status = None;
+        // A failed command's captured stdout travels with its failure, so a caught
+        // failure record shows what it printed, as `keep result` would.
+        let attach_stdout = sink.is_none() && terminal_io.captures_terminal_stdout();
         loop {
             check_native_abort(calls, &children, &observed_stages, signals)?;
             windows_statuses(
@@ -410,7 +440,20 @@ fn execute_group_with_sink(
                 signals,
                 &mut status,
                 started,
-            )?;
+            )
+            .map_err(|error| {
+                let mut pipe = stdout.as_mut().filter(|_| !eof).map(AvailableStdout);
+                spawn::attach_failed_stdout(
+                    error,
+                    spawn::FailedStdout {
+                        attach: attach_stdout,
+                        pipe: pipe.as_mut(),
+                        output: &mut output,
+                        limit: options.max_output_bytes,
+                        signals,
+                    },
+                )
+            })?;
             if !eof {
                 match available(stdout.as_ref().expect("captured stdout pipe").as_handle())? {
                     None => eof = true,

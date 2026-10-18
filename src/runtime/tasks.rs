@@ -785,6 +785,9 @@ pub(super) fn run_each(
             uncertain: outcome.uncertain,
         };
     }
+    // Native element output is charged against one shared budget as it arrives, so
+    // an element that would cross the aggregate limit stops then, not at completion.
+    let group_budget = Arc::new(std::sync::atomic::AtomicUsize::new(total_output_bytes));
     let mut next = 0usize;
     let mut active = 0usize;
     let mut stopped: Option<(usize, String)> = None;
@@ -814,7 +817,8 @@ pub(super) fn run_each(
             }
             let task = prepared[index].clone();
             let registry = registry.clone();
-            let context = context.clone();
+            let mut context = context.clone();
+            context.group_output_budget = Some((Arc::clone(&group_budget), max_output_bytes));
             let parent_cancelled = Arc::clone(&cancelled);
             let mut task_options = options.clone();
             task_options.max_output_bytes =
@@ -911,6 +915,15 @@ pub(super) fn run_each(
             &mut total_output_bytes,
         );
         if records[index]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("exceeds the shared group limit of"))
+        {
+            stopped = Some((
+                index,
+                format!("parallel for each output exceeded {max_output_bytes} bytes"),
+            ));
+        } else if records[index]
             .error
             .as_deref()
             .is_some_and(|error| error.contains("output exceeds the limit of"))

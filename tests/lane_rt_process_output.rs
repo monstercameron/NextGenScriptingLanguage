@@ -30,8 +30,8 @@ fn run_script_with_args(script: &str, extra: &[&str]) -> Output {
 #[test]
 fn parallel_each_output_limit_fails_the_group() {
     let output = run_script_with_args(
-        "parallel for each x in [\"a\", \"b\"] at most 1 as results\
-           run \"head\" with arguments [\"-c\", \"700000\", \"/dev/zero\"]\n",
+        "parallel for each x in [\"a\", \"b\"] at most 1 as results\n\
+         \x20 run \"head\" with arguments [\"-c\", \"700000\", \"/dev/zero\"]\n",
         &["--max-output-bytes", "1000000"],
     );
     assert!(
@@ -61,8 +61,8 @@ fn missing_use_folder_error_includes_line_and_path() {
 #[test]
 fn early_successful_pipe_consumer_keeps_its_output() {
     let output = run_script(
-        "run \"seq\" with arguments [\"1\", \"200000\"]\
-         pipe to \"head\" with arguments [\"-n\", \"1\"] as first\
+        "run \"seq\" with arguments [\"1\", \"200000\"]\n\
+         pipe to \"head\" with arguments [\"-n\", \"1\"] as first\n\
          run \"printf\" with arguments [\"first=%s\\n\", first]\n",
     );
     assert!(output.status.success(), "{:?}", output.stderr);
@@ -73,8 +73,8 @@ fn early_successful_pipe_consumer_keeps_its_output() {
 #[test]
 fn command_condition_drops_stderr() {
     let output = run_script(
-        "if run \"sh\" with arguments [\"-c\", \"echo out-secret; echo err-secret >&2\"] succeeds\
-           run \"printf\" with message \"ok\\n\"\n",
+        "if run \"sh\" with arguments [\"-c\", \"echo out-secret; echo err-secret >&2\"] succeeds\n\
+         \x20 run \"printf\" with arguments [\"ok\\n\"]\n",
     );
     assert!(output.status.success(), "{:?}", output.stderr);
     assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
@@ -85,7 +85,7 @@ fn command_condition_drops_stderr() {
 #[test]
 fn merged_stderr_binding_matches_the_pipeline_value() {
     let output = run_script(
-        "run \"sh\" with arguments [\"-c\", \"echo o; echo e >&2\"] and stderr merged as out\
+        "run \"sh\" with arguments [\"-c\", \"echo o; echo e >&2\"] and stderr merged as out\n\
          use value out\n",
     );
     assert!(output.status.success(), "{:?}", output.stderr);

@@ -46,7 +46,7 @@ pub(super) fn resolved_call_stdio(
     }
     let inherit = INHERIT_TERMINAL_STDOUT.with(|flag| flag.get())
         && manifest.execution_backend() == AppletBackend::Command;
-    invocation_io::ResolvedStdio::resolve(
+    let mut resolved = invocation_io::ResolvedStdio::resolve(
         manifest.stdio(),
         if inherit {
             invocation_io::StdioDisposition::Inherit
@@ -59,7 +59,16 @@ pub(super) fn resolved_call_stdio(
             invocation_io::StdioDisposition::Inherit
         },
     )
-    .discard_stderr(call.discard_stderr)
+    .discard_stderr(call.discard_stderr);
+    // A stream redirected straight to its target is attached at spawn, not captured.
+    let (stream_stdout, stream_stderr) = super::redirect::streamed_redirect();
+    if stream_stdout {
+        resolved.stdout = invocation_io::StdioDisposition::Inherit;
+    }
+    if stream_stderr {
+        resolved.stderr = invocation_io::StdioDisposition::Inherit;
+    }
+    resolved
 }
 
 pub(super) fn captured_stage_stderr(
@@ -207,6 +216,57 @@ pub(super) fn native_spawn_failure(
         signals,
     )
     .into()
+}
+
+/// The terminal stdout of a group whose command just failed.
+pub(super) struct FailedStdout<'a, R> {
+    /// Whether the group captures its terminal stdout for the pipeline at all.
+    pub(super) attach: bool,
+    /// The still-open terminal pipe, read without blocking for what it already holds.
+    pub(super) pipe: Option<&'a mut R>,
+    pub(super) output: &'a mut Vec<u8>,
+    pub(super) limit: usize,
+    pub(super) signals: &'a Signals,
+}
+
+/// Attach a failed command's captured stdout to its `CommandFailed`, bounded by the
+/// output limit: the bytes read so far plus whatever its pipe already holds. Other
+/// errors pass through unchanged.
+pub(super) fn attach_failed_stdout<R: std::io::Read>(
+    mut error: anyhow::Error,
+    stdout: FailedStdout<'_, R>,
+) -> anyhow::Error {
+    if !stdout.attach {
+        return error;
+    }
+    let Some(failure) = error.downcast_mut::<CommandFailed>() else {
+        return error;
+    };
+    if failure.stdout.is_some() {
+        return error;
+    }
+    if let Some(pipe) = stdout.pipe {
+        let mut chunk = [0u8; 32768];
+        loop {
+            // The Unix terminal pipe is nonblocking; Windows passes only a reader of
+            // bytes the pipe reported as available.
+            match pipe.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => {
+                    let wanted = count.min(stdout.limit.saturating_sub(stdout.output.len()));
+                    let kept = stdout.signals.reserve_job_output(wanted);
+                    stdout.output.extend_from_slice(&chunk[..kept]);
+                    if kept < count {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+    }
+    failure.stdout = Some(std::mem::take(stdout.output));
+    error
 }
 
 /// One native group to run: its calls and the input its first command reads, the first
@@ -403,6 +463,15 @@ pub(super) fn execute_group_with_sink(
         command
             .stdout(invocation_io::process_stdio(stdout_disposition))
             .stderr(invocation_io::process_stdio(resolved_io.stderr));
+        if index + 1 == calls.len() {
+            let (stdout, stderr) = super::redirect::take_redirected_stdio()?;
+            if let Some(stdout) = stdout {
+                command.stdout(stdout);
+            }
+            if let Some(stderr) = stderr {
+                command.stderr(stderr);
+            }
+        }
         terminal_foreground = terminal::requested()
             .then(|| TerminalForeground::begin(&mut command))
             .flatten();
@@ -565,6 +634,9 @@ pub(super) fn execute_group_with_sink(
     }
     let mut output = Vec::new();
     let mut chunk = [0u8; 32768];
+    // A failed command's captured stdout travels with its failure, so a caught
+    // failure record shows what it printed, as `keep result` would.
+    let attach_stdout = sink.is_none() && terminal_io.captures_terminal_stdout();
     loop {
         check_native_abort(calls, &children, &observed_stages, signals)?;
         scan_child_statuses(
@@ -578,7 +650,19 @@ pub(super) fn execute_group_with_sink(
             &mut observed_stages,
             &mut child_observer,
             &mut observer_ready,
-        )?;
+        )
+        .map_err(|error| {
+            attach_failed_stdout(
+                error,
+                FailedStdout {
+                    attach: attach_stdout,
+                    pipe: stdout.as_mut().filter(|_| !eof),
+                    output: &mut output,
+                    limit: options.max_output_bytes,
+                    signals,
+                },
+            )
+        })?;
         let mut reached_eof = false;
         if !eof {
             loop {
@@ -683,7 +767,19 @@ pub(super) fn execute_group_with_sink(
                 &mut observed_stages,
                 &mut child_observer,
                 &mut observer_ready,
-            )?;
+            )
+            .map_err(|error| {
+                attach_failed_stdout(
+                    error,
+                    FailedStdout {
+                        attach: attach_stdout,
+                        pipe: None::<&mut std::process::ChildStdout>,
+                        output: &mut output,
+                        limit: options.max_output_bytes,
+                        signals,
+                    },
+                )
+            })?;
         }
         if eof && children.0.iter().all(|child| child.reaped) {
             break;

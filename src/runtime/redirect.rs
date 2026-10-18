@@ -25,24 +25,81 @@ pub(super) struct PendingRedirect {
     pub(super) target: crate::ast::RedirectTarget,
     pub(super) destination: Option<PathBuf>,
     /// Opened, authorized and re-checked when the redirect step runs, before the
-    /// command starts. Writes go through this handle, not a later path lookup.
+    /// command starts. Writes go through this handle, not a later path lookup. A
+    /// replaced (not appended) file is truncated only when its command starts.
     pub(super) file: Option<File>,
+    /// The native command received the stream itself, so its bytes already reached
+    /// their destination as they were written and nothing is replayed afterwards.
+    pub(super) streamed: bool,
 }
 
 impl PendingRedirect {
-    pub(super) fn captures_stderr(&self) -> bool {
-        !matches!(self.target, crate::ast::RedirectTarget::StdoutToStderr)
+    pub(super) fn new(
+        target: crate::ast::RedirectTarget,
+        destination: Option<PathBuf>,
+        file: Option<File>,
+    ) -> Self {
+        Self {
+            target,
+            destination,
+            file,
+            streamed: false,
+        }
     }
 
-    /// Write the command's stderr through the handle opened before it ran. A
-    /// merged or stdout target leaves the file alone.
+    /// Only a merged redirect captures stderr in memory. File targets and `stdout
+    /// to stderr` are handed to a native command directly; the captured fallback
+    /// serves backends that do not start a native process.
+    pub(super) fn captures_stderr(&self) -> bool {
+        matches!(self.target, crate::ast::RedirectTarget::StderrMerged)
+    }
+
+    /// The stream to hand to the one native command this redirect applies to: a
+    /// duplicate of the opened stderr file, or this process's stderr as stdout.
+    pub(super) fn stream(&self) -> Result<Option<RedirectedStream>> {
+        use crate::ast::RedirectTarget;
+        Ok(match (self.target, self.file.as_ref()) {
+            (RedirectTarget::StderrFile | RedirectTarget::StderrAppend, Some(file)) => {
+                Some(RedirectedStream::StderrFile {
+                    file: file
+                        .try_clone()
+                        .context("could not share the redirected stderr file")?,
+                    truncate: self.target == RedirectTarget::StderrFile,
+                })
+            }
+            (RedirectTarget::StdoutToStderr, _) => Some(RedirectedStream::StdoutToStderr),
+            _ => None,
+        })
+    }
+
+    /// Make a streamed stderr file durable once its command has ended.
+    pub(super) fn finish_stream(&mut self) -> Result<()> {
+        match (self.streamed, self.file.as_mut()) {
+            (true, Some(file)) => file
+                .sync_all()
+                .context("could not sync redirected stderr file"),
+            _ => Ok(()),
+        }
+    }
+
+    /// Write the command's captured stderr through the handle opened before it ran,
+    /// when the command did not receive the file itself. A merged or stdout target
+    /// leaves the file alone.
     pub(super) fn write_stderr(&mut self, stderr: &[u8]) -> Result<()> {
         use std::io::Write as _;
+        if self.streamed {
+            return self.finish_stream();
+        }
         match (self.target, self.file.as_mut()) {
             (
-                crate::ast::RedirectTarget::StderrFile | crate::ast::RedirectTarget::StderrAppend,
+                target @ (crate::ast::RedirectTarget::StderrFile
+                | crate::ast::RedirectTarget::StderrAppend),
                 Some(file),
             ) => {
+                if target == crate::ast::RedirectTarget::StderrFile {
+                    file.set_len(0)
+                        .context("could not truncate redirected stderr file")?;
+                }
                 file.write_all(stderr)
                     .context("could not write redirected stderr")?;
                 file.sync_all()
@@ -67,14 +124,115 @@ impl PendingRedirect {
                 Ok(merged)
             }
             crate::ast::RedirectTarget::StdoutToStderr => {
-                write_with_deadline(2, &stdout, &signals.cancelled, signals.deadline)
-                    .context("could not write redirected stdout to stderr")?;
+                if !self.streamed {
+                    write_with_deadline(2, &stdout, &signals.cancelled, signals.deadline)
+                        .context("could not write redirected stdout to stderr")?;
+                }
                 Ok(Vec::new())
             }
             _ => {
                 self.write_stderr(stderr)?;
                 Ok(stdout)
             }
+        }
+    }
+}
+
+/// A stream redirect handed to a native command, so its bytes reach the target as
+/// they are written: on a timeout, a cancellation or a failure nothing is lost, and
+/// `stdout to stderr` keeps its order with the command's own stderr.
+pub(super) enum RedirectedStream {
+    /// The command's stderr is the redirect file; `truncate` replaces its contents
+    /// when the command starts.
+    StderrFile { file: File, truncate: bool },
+    /// The command's stdout is a duplicate of this process's stderr.
+    StdoutToStderr,
+}
+
+struct ActiveStream {
+    stream: Option<RedirectedStream>,
+    stdout: bool,
+    used: bool,
+}
+
+thread_local! {
+    /// The stream redirect of the one native command running on this thread.
+    static ACTIVE_STREAM: std::cell::RefCell<Option<ActiveStream>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Offers a stream redirect to the native command started on this thread while it
+/// is alive. Dropping it withdraws an unused offer.
+pub(super) struct StreamScope(Option<ActiveStream>);
+
+impl StreamScope {
+    pub(super) fn enter(stream: Option<RedirectedStream>) -> Self {
+        let active = stream.map(|stream| ActiveStream {
+            stdout: matches!(stream, RedirectedStream::StdoutToStderr),
+            stream: Some(stream),
+            used: false,
+        });
+        Self(ACTIVE_STREAM.with(|cell| cell.replace(active)))
+    }
+
+    /// Whether a native command took the stream.
+    pub(super) fn used(&self) -> bool {
+        ACTIVE_STREAM.with(|cell| cell.borrow().as_ref().is_some_and(|active| active.used))
+    }
+}
+
+impl Drop for StreamScope {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        ACTIVE_STREAM.with(|cell| *cell.borrow_mut() = previous);
+    }
+}
+
+/// Which stream of the native command on this thread is redirected straight to its
+/// target: `(stdout, stderr)`. Such a stream is not captured.
+pub(super) fn streamed_redirect() -> (bool, bool) {
+    ACTIVE_STREAM.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map_or((false, false), |active| (active.stdout, !active.stdout))
+    })
+}
+
+/// Take the redirected stream for the native command about to start: its stdout
+/// and stderr replacements. A replaced stderr file is truncated here, when the
+/// command starts, so a command that never starts leaves the file as it was.
+pub(super) fn take_redirected_stdio(
+) -> Result<(Option<std::process::Stdio>, Option<std::process::Stdio>)> {
+    let Some(stream) = ACTIVE_STREAM.with(|cell| {
+        cell.borrow_mut().as_mut().and_then(|active| {
+            let stream = active.stream.take();
+            active.used |= stream.is_some();
+            stream
+        })
+    }) else {
+        return Ok((None, None));
+    };
+    match stream {
+        RedirectedStream::StderrFile { file, truncate } => {
+            if truncate {
+                file.set_len(0)
+                    .context("could not truncate redirected stderr file")?;
+            }
+            Ok((None, Some(std::process::Stdio::from(file))))
+        }
+        RedirectedStream::StdoutToStderr => {
+            #[cfg(unix)]
+            let stderr = {
+                use std::os::fd::AsFd as _;
+                std::io::stderr().as_fd().try_clone_to_owned()
+            };
+            #[cfg(windows)]
+            let stderr = {
+                use std::os::windows::io::AsHandle as _;
+                std::io::stderr().as_handle().try_clone_to_owned()
+            };
+            let stderr = stderr.context("could not attach the command's stdout to stderr")?;
+            Ok((Some(std::process::Stdio::from(stderr)), None))
         }
     }
 }
@@ -151,8 +309,9 @@ pub(super) fn open_redirect_target(
 
 /// Open a redirect or append target before any command runs, and keep the handle
 /// that later writes use. The final component must not be a link, and the file
-/// the handle now refers to must lie inside the write grant. A stderr target is
-/// truncated only after that check, so a refused path keeps its old contents.
+/// the handle now refers to must lie inside the write grant. The file is never
+/// truncated here: a caller that replaces it truncates through the handle after
+/// these checks, so a refused path keeps its old contents.
 pub(super) fn open_output_file(
     destination: &Path,
     append: bool,
@@ -271,10 +430,6 @@ pub(super) fn open_output_file(
                 destination.display()
             );
         }
-    }
-    if !append {
-        file.set_len(0)
-            .with_context(|| format!("truncating {}", destination.display()))?;
     }
     Ok(file)
 }

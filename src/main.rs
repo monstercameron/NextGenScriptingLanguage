@@ -707,6 +707,18 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             data_flow_policy.as_ref(),
         )?;
         let graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
+        if args.checkpoint_dir.is_some()
+            && graph.input_declarations().iter().any(|input| {
+                matches!(
+                    input.source,
+                    Some(flow::ast::InputSource::Prompt { secret: true, .. })
+                )
+            })
+        {
+            bail!(
+                "--checkpoint cannot be used with a secret prompt input: a journal would keep the answer or data computed from it"
+            );
+        }
         let supplied_inputs = flow::inputs::parse_cli_arguments(
             graph.input_declarations(),
             &args.inputs,
@@ -1375,6 +1387,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     if checkpoint.is_some() {
                         bail!("--record cannot be combined with checkpoints");
                     }
+                    flow::record::register_sensitive_inputs(
+                        &registry,
+                        &program.inputs,
+                        &options.inputs,
+                    )?;
                     record_cli::run_recorded(directory, &args.file, &program, &registry, &options)?
                 } else {
                     // Uncaptured stdout streams to this terminal as it is produced.

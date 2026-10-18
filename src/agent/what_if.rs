@@ -15,7 +15,7 @@ use crate::ast::{InputDeclaration, InputSource, Value as ProgramValue};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -59,6 +59,7 @@ fn file_digest(path: Option<&Path>) -> Result<Value> {
 /// reads them, or one file or catalog.
 fn manifest_digests(context: &RunSettings<'_>) -> Result<Value> {
     let mut files: Vec<Value> = Vec::new();
+    let mut module_paths = BTreeSet::new();
     if let Some(dir) = context.manifest_dir {
         if dir.is_dir() {
             let mut paths: Vec<PathBuf> = fs::read_dir(dir)
@@ -70,19 +71,83 @@ fn manifest_digests(context: &RunSettings<'_>) -> Result<Value> {
             for path in paths {
                 let bytes = fs::read(&path)
                     .with_context(|| format!("reading manifest {}", path.display()))?;
+                collect_module_paths(&path, &bytes, &mut module_paths)?;
                 files.push(json!({
                     "file": path.file_name().map(|name| name.to_string_lossy().into_owned()),
                     "sha256": digest(&bytes),
                 }));
             }
         } else {
+            let bytes =
+                fs::read(dir).with_context(|| format!("reading manifest {}", dir.display()))?;
+            collect_module_paths(dir, &bytes, &mut module_paths)?;
             files.push(file_digest(Some(dir))?);
         }
     }
     if let Some(catalog) = context.manifest_catalog {
+        let bytes = fs::read(catalog)
+            .with_context(|| format!("reading manifest catalog {}", catalog.display()))?;
+        collect_module_paths(catalog, &bytes, &mut module_paths)?;
         files.push(json!({ "catalog": file_digest(Some(catalog))? }));
     }
+    for path in module_paths {
+        files.push(file_digest(Some(&path))?);
+    }
     Ok(Value::Array(files))
+}
+
+fn collect_module_paths(
+    manifest_path: &Path,
+    bytes: &[u8],
+    paths: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    let value: Value = serde_json::from_slice(bytes)
+        .with_context(|| format!("parsing manifest {}", manifest_path.display()))?;
+    let manifests = value
+        .get("manifests")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(std::slice::from_ref(&value));
+    for manifest in manifests {
+        let Some(program) = manifest
+            .pointer("/contract/program")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        let parent = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+        for key in ["source", "package_manifest", "package_lock"] {
+            if let Some(path) = program.get(key).and_then(Value::as_str) {
+                paths.insert(parent.join(path));
+                if key == "package_manifest" {
+                    collect_package_paths(&parent.join(path), paths)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_package_paths(path: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<()> {
+    if !paths.insert(path.to_path_buf()) {
+        return Ok(());
+    }
+    let bytes =
+        fs::read(path).with_context(|| format!("reading package manifest {}", path.display()))?;
+    let package: Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing package manifest {}", path.display()))?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if let Some(source) = package.get("source").and_then(Value::as_str) {
+        paths.insert(parent.join(source));
+    }
+    if let Some(dependencies) = package.get("dependencies").and_then(Value::as_object) {
+        for dependency in dependencies.values() {
+            if let Some(manifest) = dependency.get("manifest").and_then(Value::as_str) {
+                collect_package_paths(&parent.join(manifest), paths)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The resolved input values. A sensitive input (an environment value or a secret
@@ -163,4 +228,37 @@ pub fn report(program_path: &str, fingerprint: &str, plan: Value, settings: Valu
         "plan": plan,
         "settings": settings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn module_source_changes_the_review_fingerprint() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifests = directory.path().join("manifests");
+        fs::create_dir(&manifests).unwrap();
+        let module_manifest =
+            json!({"contract":{"backend":"program_module","program":{"source":"body.program"}}});
+        fs::write(manifests.join("module.json"), module_manifest.to_string()).unwrap();
+        let source = manifests.join("body.program");
+        fs::write(&source, "reviewed body").unwrap();
+        let declarations = [];
+        let inputs = BTreeMap::new();
+        let context = RunSettings {
+            declarations: &declarations,
+            inputs: &inputs,
+            cwd: directory.path(),
+            capability_policy: None,
+            data_flow_policy: None,
+            manifest_dir: Some(&manifests),
+            manifest_catalog: None,
+        };
+        let plan = json!({"steps": []});
+        let before = fingerprint(&plan, &context).unwrap().0;
+        fs::write(&source, "changed body").unwrap();
+        let after = fingerprint(&plan, &context).unwrap().0;
+        assert_ne!(before, after);
+    }
 }

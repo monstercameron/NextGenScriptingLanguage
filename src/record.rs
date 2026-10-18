@@ -265,6 +265,50 @@ impl Recorder {
     }
 }
 
+/// Register sensitive input values before the recorder computes or writes the plan.
+pub fn register_sensitive_inputs(
+    registry: &Registry,
+    declarations: &[crate::ast::InputDeclaration],
+    inputs: &BTreeMap<String, crate::ast::Value>,
+) -> Result<()> {
+    // Text and numbers are registered. Booleans, null and binding names are not
+    // secret material, and registering "true" or "null" would blank unrelated text.
+    fn register_value(redactor: &SecretRedactor, value: &crate::ast::Value) -> Result<()> {
+        let text = match value {
+            crate::ast::Value::String(value) => value.clone(),
+            crate::ast::Value::Integer(value) => value.to_string(),
+            crate::ast::Value::Number(value) => value.to_string(),
+            crate::ast::Value::List(values) => {
+                return values
+                    .iter()
+                    .try_for_each(|value| register_value(redactor, value));
+            }
+            crate::ast::Value::Record(values) => {
+                return values
+                    .values()
+                    .try_for_each(|value| register_value(redactor, value));
+            }
+            crate::ast::Value::Bool(_)
+            | crate::ast::Value::Null
+            | crate::ast::Value::Reference(_) => return Ok(()),
+        };
+        redactor
+            .register(text.as_bytes())
+            .map_err(|error| anyhow!("registering sensitive input: {error}"))
+    }
+    let redactor = security::secret_redactor(registry);
+    let resolved = crate::inputs::resolve(declarations, inputs, false)?;
+    for declaration in declarations
+        .iter()
+        .filter(|input| crate::ast::is_sensitive(input))
+    {
+        if let Some(value) = resolved.get(&declaration.name) {
+            register_value(&redactor, value)?;
+        }
+    }
+    Ok(())
+}
+
 impl Observer for Recorder {
     fn replay(&self, _request: &StepRequest) -> Result<Option<StepResult>> {
         Ok(None)

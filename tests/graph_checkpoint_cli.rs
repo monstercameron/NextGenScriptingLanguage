@@ -119,6 +119,33 @@ fn fixture() -> Fixture {
     }
 }
 
+#[test]
+fn graph_checkpoint_refuses_secret_prompt_inputs() {
+    let work = tempfile::tempdir().unwrap();
+    let program = work.path().join("secret.program");
+    let checkpoint = work.path().join("checkpoint");
+    fs::write(
+        &program,
+        "accept token as text from secret prompt \"Token?\"\ngraph g\n  run text.concat with parts [token, \"x\"] and separator \" \" as joined\nend graph\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("run")
+        .arg(&program)
+        .arg("--input")
+        .arg("token=SuperSecret123")
+        .arg("--checkpoint")
+        .arg(&checkpoint)
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(
+        "--checkpoint cannot be used with a secret prompt input: a journal would keep the answer or data computed from it"
+    ));
+    assert!(!checkpoint.join("graph.jsonl").exists());
+}
+
 /// `first` and `third` are counted runs, and `second` is the slow node in between.
 const CHAIN: &str = "graph chain\n\
     \x20 run ctrl.count with text \"a\" as first\n\

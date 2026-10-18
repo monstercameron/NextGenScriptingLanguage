@@ -176,6 +176,14 @@ pub fn explain_json(program: &Program, registry: &Registry, program_path: &str) 
             program_path,
         )),
     };
+    if let Some(crate::ast::Trigger::Listen {
+        source: crate::ast::ListenSource::Applet(call),
+        line,
+        ..
+    }) = &program.trigger
+    {
+        walker.invocation(*line, "listen_source", call, None, true);
+    }
     walker.steps(&program.steps, None);
     let mut plan = summary_object(program_path, &walker.rows);
     plan["inputs"] = program.inputs.iter().map(input_summary).collect();
@@ -592,6 +600,49 @@ impl Walker<'_> {
             None => row.undeclared = true,
         }
         self.rows.push(row);
+        if manifest.execution_backend() == crate::manifest::AppletBackend::ProgramModule {
+            // A module whose body calls itself, directly or through another module, is
+            // shown once and marked unresolved, so the gate refuses it by default.
+            let key = format!("module:{}", call.operation);
+            let module = (!self.stack.contains(&key))
+                .then_some(manifest)
+                .and_then(|manifest| {
+                    manifest
+                        .execution_contract()
+                        .and_then(|contract| contract.program.as_ref())
+                        .zip(manifest.origin())
+                        .and_then(|(reference, origin)| {
+                            let root = origin.parent()?;
+                            crate::modules::load_program_module(reference, origin, root).ok()
+                        })
+                });
+            let Some(module) = module else {
+                if let Some(row) = self.rows.last_mut() {
+                    row.resolved = Some(false);
+                    row.undeclared = true;
+                    row.effects = None;
+                    row.capabilities = None;
+                }
+                return;
+            };
+            self.stack.push(key);
+            self.depth += 1;
+            if let Some(definition) = module.finite_definition() {
+                self.steps(&definition.steps, Some(&call.operation));
+            } else {
+                if let Some(crate::ast::Trigger::Listen {
+                    source: crate::ast::ListenSource::Applet(source),
+                    line,
+                    ..
+                }) = &module.program.trigger
+                {
+                    self.invocation(*line, "listen_source", source, Some(&call.operation), true);
+                }
+                self.steps(&module.program.steps, Some(&call.operation));
+            }
+            self.depth = self.depth.saturating_sub(1);
+            self.stack.pop();
+        }
     }
 
     /// A reusable program call. Its steps are walked in place, so their effects

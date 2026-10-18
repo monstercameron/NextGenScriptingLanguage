@@ -273,6 +273,47 @@ fn scripted_session_pauses_inspects_steps_continues_and_terminates() {
     assert!(status.success());
 }
 
+#[test]
+fn secret_prompt_bindings_are_withheld_from_dap_variables() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("secret.program");
+    std::fs::write(
+        &program,
+        "accept token as text from secret prompt \"Token?\"\nrun printf with message token\n",
+    )
+    .unwrap();
+    let mut client = Client::start();
+    client.request("initialize", json!({"adapterID": "execute"}));
+    client.event("initialized");
+    let launched = client.request(
+        "launch",
+        json!({"program": program, "cwd": directory.path(), "inputs": {"token": "CANARY-DAP-TOKEN"}}),
+    );
+    assert_eq!(launched["success"], true, "{launched}");
+    client.request(
+        "setBreakpoints",
+        json!({"source": {"path": program}, "breakpoints": [{"line": 2}]}),
+    );
+    client.request("configurationDone", json!({}));
+    let stopped = client
+        .wait(|message| message["type"] == "event" && message["event"] == "stopped")
+        .unwrap_or_else(|| panic!("no stopped event; queued messages: {:?}", client.pending));
+    assert_eq!(stopped["body"]["reason"], "breakpoint");
+    let scopes = client.request("scopes", json!({"frameId": 1}));
+    let reference = scopes["body"]["scopes"][0]["variablesReference"].clone();
+    let variables = client.request("variables", json!({"variablesReference": reference}));
+    assert_eq!(variables["body"]["variables"][0]["name"], "token");
+    assert_eq!(
+        variables["body"]["variables"][0]["value"],
+        "{\"withheld\":\"secret\"}"
+    );
+    assert!(!variables.to_string().contains("CANARY-DAP-TOKEN"));
+    client.request("continue", json!({"threadId": 1}));
+    client.event("exited");
+    client.request("disconnect", json!({}));
+    assert!(wait_for_exit(&mut client.child, Duration::from_secs(10)).success());
+}
+
 fn wait_for_exit(child: &mut Child, limit: Duration) -> std::process::ExitStatus {
     let deadline = Instant::now() + limit;
     loop {

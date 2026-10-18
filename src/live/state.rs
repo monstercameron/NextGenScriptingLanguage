@@ -564,7 +564,7 @@ impl State {
     }
     /// The names of the program's secret prompt inputs. Their answers are withheld from
     /// every read, as records withhold them.
-    fn secret_names(&self) -> Vec<String> {
+    pub(crate) fn secret_names(&self) -> Vec<String> {
         self.plan
             .program
             .inputs

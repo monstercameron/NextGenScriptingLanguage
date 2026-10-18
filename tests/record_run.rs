@@ -160,6 +160,64 @@ fn a_successful_run_records_each_step_output_by_hash() {
 }
 
 #[test]
+fn sensitive_prompt_values_are_redacted_everywhere_in_the_record() {
+    let work = tempfile::tempdir().unwrap();
+    let canary = "CANARY-SECRET-12345";
+    fs::write(
+        work.path().join("secret.program"),
+        "accept token as text from secret prompt \"Access token?\"\nrun printf with message token\n",
+    )
+    .unwrap();
+    let answers = work.path().join("answers.json");
+    fs::write(&answers, serde_json::json!({"token": canary}).to_string()).unwrap();
+    let record = work.path().join("record");
+    let _run = execute(
+        work.path(),
+        &[
+            "run",
+            "secret.program",
+            "--answers",
+            answers.to_str().unwrap(),
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+        ],
+    );
+    assert!(record.join("trace.jsonl").is_file());
+    for (_, bytes) in files_under(&record) {
+        assert!(!String::from_utf8_lossy(&bytes).contains(canary));
+    }
+}
+
+#[test]
+fn sensitive_environment_values_are_redacted_everywhere_in_the_record() {
+    let work = tempfile::tempdir().unwrap();
+    let canary = "CANARY-ENV-777";
+    fs::write(
+        work.path().join("environment.program"),
+        "accept key as text from environment \"API_KEY\"\nrun printf with message key\n",
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let _run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(work.path())
+        .arg("run")
+        .arg("environment.program")
+        .arg("--record")
+        .arg(&record)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .env("API_KEY", canary)
+        .output()
+        .unwrap();
+    assert!(record.join("trace.jsonl").is_file());
+    for (_, bytes) in files_under(&record) {
+        assert!(!String::from_utf8_lossy(&bytes).contains(canary));
+    }
+}
+
+#[test]
 fn an_existing_non_empty_record_directory_is_not_reused() {
     let work = tempfile::tempdir().unwrap();
     fs::write(

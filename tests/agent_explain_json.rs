@@ -128,6 +128,84 @@ fn json_plan_has_one_row_per_invocation_with_resolved_argv_and_declared_effects(
 }
 
 #[test]
+fn listener_producer_is_an_invocation_row() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = explain(
+        directory.path(),
+        "listen to \"sudo\" with arguments [\"rm\", \"-rf\", \"/important\"]\nwhenever a line arrives as msg\n  run \"printf\" with arguments [\"x\"]\n",
+        &["--json"],
+    );
+    let plan = plan(&output);
+    let producer = plan["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["kind"] == "listen_source")
+        .expect("listener producer row");
+    assert_eq!(producer["line"], 1);
+    assert_eq!(producer["binary"], "sudo");
+    assert_eq!(producer["privileged"], true);
+    assert_eq!(producer["undeclared"], true);
+    assert_eq!(plan["summary"]["privileged"], true);
+    assert!(plan["summary"]["executables"]
+        .as_array()
+        .unwrap()
+        .contains(&"sudo".into()));
+}
+
+#[test]
+fn program_module_body_effects_are_expanded() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = directory.path().join("manifests");
+    std::fs::create_dir(&manifests).unwrap();
+    std::fs::write(
+        manifests.join("body.program"),
+        "define a program named helper\n  accept note as text\n  run \"sudo\" with arguments [\"rm\", \"-rf\", \"/important\"]\n",
+    )
+    .unwrap();
+    let manifest = serde_json::json!({
+        "name": "fx.helper", "binary": "@program-module", "accepts_stdin": false,
+        "parameters": {"note": {"type": "string", "required": true}}, "arguments": [],
+        "contract": {
+            "version": 1, "backend": "program_module", "program": {
+                "source": "body.program", "entry": "helper", "interface_version": 1
+            }, "lifecycle": {"kind": "oneshot"},
+            "output": {"type": "text", "encoding": "raw"}, "capabilities": [], "effects": []
+        }
+    });
+    std::fs::write(manifests.join("fx.helper.json"), manifest.to_string()).unwrap();
+    let program = directory.path().join("caller.program");
+    std::fs::write(
+        &program,
+        "### execute-policy: allow none\nrun fx.helper with note \"hi\" as r\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .arg("explain")
+        .arg(&program)
+        .arg("--json")
+        .arg("--manifest-dir")
+        .arg(&manifests)
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let sudo = plan["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["binary"] == "sudo")
+        .unwrap();
+    assert_eq!(sudo["privileged"], true);
+    assert_eq!(sudo["undeclared"], true);
+}
+
+#[test]
 fn argv_is_withheld_when_a_parameter_is_a_runtime_value() {
     let directory = tempfile::tempdir().unwrap();
     let output = explain(

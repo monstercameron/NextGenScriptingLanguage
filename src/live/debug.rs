@@ -2,7 +2,7 @@
 //! [`LiveHook`] before each top-level statement; the hook blocks while the run is
 //! paused and returns once a `continue` or `step` control releases it.
 
-use super::state::{plain, Shared};
+use super::state::{plain, withhold_secret_bindings, Shared};
 use crate::ast::Value;
 use crate::runtime::statement_hook::StatementHook;
 use anyhow::{bail, Result};
@@ -101,13 +101,15 @@ impl StatementHook for LiveHook {
         state.debug.stepping = false;
         state.debug.release = false;
         state.debug.pauses += 1;
+        let bindings = bindings
+            .iter()
+            .map(|(name, value)| (name.clone(), plain(value.clone())))
+            .collect();
+        let bindings = withhold_secret_bindings(&bindings, &state.secret_names());
         state.debug.paused = Some(Paused {
             id: state.debug.pauses,
             line,
-            bindings: bindings
-                .iter()
-                .map(|(name, value)| (name.clone(), plain(value.clone())))
-                .collect(),
+            bindings,
         });
         state.status = "breakpoint".into();
         state.changed("breakpoint");
@@ -133,5 +135,114 @@ impl StatementHook for LiveHook {
         state.changed("breakpoint_released");
         self.shared.wake.notify_all();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::live::state::{Data, Document, Plan, State};
+    use std::collections::{BTreeMap, VecDeque};
+    use std::path::PathBuf;
+    use std::sync::{mpsc, Condvar, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn paused_bindings_withhold_secret_prompt_values() {
+        let source = "accept token as text from secret prompt \"Token?\"\n";
+        let program = crate::parser::parse(source).unwrap();
+        let state = State {
+            doc: Document {
+                source: source.to_owned(),
+                cwd: PathBuf::new(),
+                bindings: BTreeMap::from([("token".to_owned(), json!("CANARY-LIVE-TOKEN"))]),
+                input: Data::default(),
+                cursor: 0,
+                inbox: VecDeque::new(),
+                user: Default::default(),
+                ui: Json::Null,
+            },
+            exit: None,
+            debug: Control {
+                breakpoints: BTreeSet::from([1]),
+                ..Control::default()
+            },
+            plan: Plan {
+                program,
+                stream: None,
+                body_start: 0,
+                screen: None,
+            },
+            revision: 0,
+            running: true,
+            in_flight: false,
+            status: "running".into(),
+            uncertain: false,
+            error: None,
+            active: None,
+            step_budget: None,
+            cycle: false,
+            runs: 0,
+            nodes: 0,
+            launches: 0,
+            cache_hits: 0,
+            last_output: Data::default(),
+            active_cancel: Arc::new(AtomicBool::new(false)),
+            producer_cancel: Arc::new(AtomicBool::new(false)),
+            producer_done: false,
+            producer_error: None,
+            producer_epoch: 0,
+            events: VecDeque::new(),
+            ui_epoch: 0,
+            ui_dirty: true,
+            ui_frame: String::new(),
+            ui_applied_revision: 0,
+            ui_errors: Json::Null,
+        };
+        let shared = Arc::new(Shared {
+            state: Mutex::new(state),
+            wake: Condvar::new(),
+            stop: Arc::new(AtomicBool::new(false)),
+            registry: Default::default(),
+            max_bytes: 1024,
+            initial_cwd: PathBuf::new(),
+            initial_bindings: BTreeMap::new(),
+            initial_input: Data::default(),
+            headless: true,
+            run_mode: false,
+        });
+        let (sender, receiver) = mpsc::channel();
+        let release = Arc::clone(&shared);
+        let observer = thread::spawn(move || loop {
+            let mut state = release.state.lock().unwrap();
+            if state.debug.paused.is_some() {
+                sender.send(state.debug.json()).unwrap();
+                state.debug.release = true;
+                release.wake.notify_all();
+                return;
+            }
+            drop(state);
+            thread::sleep(Duration::from_millis(1));
+        });
+        let hook = LiveHook {
+            shared: Arc::clone(&shared),
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        hook.before_statement(
+            1,
+            &BTreeMap::from([(
+                "token".to_owned(),
+                Value::String("CANARY-LIVE-TOKEN".to_owned()),
+            )]),
+        )
+        .unwrap();
+        observer.join().unwrap();
+        let debug = receiver.recv().unwrap();
+        assert_eq!(
+            debug["paused"]["bindings"]["token"],
+            json!({"withheld":"secret"})
+        );
+        assert!(!debug.to_string().contains("CANARY-LIVE-TOKEN"));
     }
 }

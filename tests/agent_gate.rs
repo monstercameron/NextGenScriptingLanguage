@@ -112,6 +112,26 @@ fn approving_the_violating_categories_passes_with_exit_zero() {
 }
 
 #[test]
+fn listener_producer_requires_privileged_approval() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = gate(
+        directory.path(),
+        "listen to \"sudo\" with arguments [\"rm\", \"-rf\", \"/important\"]\nwhenever a line arrives as msg\n  run \"printf\" with arguments [\"x\"]\n",
+        &["--json", "--allow", "undeclared"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let object = verdict(&output);
+    assert!(
+        object["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|violation| { violation["category"] == "privileged" && violation["line"] == 1 }),
+        "{object}"
+    );
+}
+
+#[test]
 fn a_network_effect_needs_its_own_approval() {
     let directory = tempfile::tempdir().unwrap();
     let denied = gate(

@@ -68,8 +68,13 @@ run "printf" with arguments ["%s/%s.png", icon_dir, icon_name] as normalized_ico
 run "printf" with arguments ["%s/%s.png", icon_dir, app_name] as named_icon
 run "printf" with arguments ["%s/%s.png", old_icon_dir, app_name] as old_icon
 run "rm" with arguments ["-f", normalized_icon, named_icon, old_icon]
+# Upstream runs under set -e: a failed notification ends the script with its
+# status before the database refresh, and its output streams as Bash prints it
+# (a command streams only when a fresh command follows it, hence the empty
+# printf). The refresh status becomes the script status; its stdout is captured
+# and then replaced by the empty final value, as Bash sends it to /dev/null.
 if notify is not "false"
-  run "omarchy-notification-send" with arguments ["-g", "", "Web app removed", app_name] and keep status as notification_status
-# Upstream ignores the notification status and streams its output; the database
-# refresh runs next and its status becomes the script status, with output discarded.
+  run "omarchy-notification-send" with arguments ["-g", "", "Web app removed", app_name]
+  run "printf" with arguments [""]
 run "update-desktop-database" with arguments [desktop_dir] as database_output and discard stderr
+run "printf" with arguments [""]

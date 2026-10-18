@@ -62,9 +62,15 @@ if valid_id is true
   run "printf" with arguments ["Workspace layout set to %s", new_layout] as notification
   if eval_status is 0
     run "omarchy-notification-send" with arguments ["-g", "󱂬", notification]
+    run "printf" with arguments [""]
   otherwise
     run "printf" with arguments ["%s, layout:%s", workspace_id, new_layout] as keyword_rule
-    run "hyprctl" with arguments ["keyword", "workspace", keyword_rule] and keep status as keyword_status
+    # Bash prints the keyword output, also when it fails, and still notifies.
+    # `keep status` captures, so the output is named and written back out; the
+    # fresh notification command that follows lets that write stream.
+    run "hyprctl" with arguments ["keyword", "workspace", keyword_rule] as keyword_output and keep status as keyword_status
+    run "printf" with arguments ["%s", keyword_output]
     run "omarchy-notification-send" with arguments ["-g", "󱂬", notification]
+    run "printf" with arguments [""]
 otherwise
   run "false"

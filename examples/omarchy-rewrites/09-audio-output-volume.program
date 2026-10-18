@@ -31,7 +31,10 @@ define a program named osd
       run "printf" with arguments ["volume-muted"] as icon
     otherwise
       run "printf" with arguments ["volume-high"] as icon
+  # A command streams only when a fresh command follows it, so the empty printf
+  # lets the OSD output reach stdout as it runs and survive an OSD failure.
   run "omarchy-osd" with arguments ["-i", icon, "-p", display_volume]
+  run "printf" with arguments [""]
 
 define a program named report_file_failure
   accept path as text
@@ -115,8 +118,13 @@ define a program named apply_adjustment
     otherwise
       run "printf" with arguments ["%s", calculated] as next
   run "printf" with arguments ["%s%%", next] as volume_argument
-  run "pactl" with arguments ["set-sink-mute", sink, "0"] and keep status as unmute_status
-  run "pactl" with arguments ["set-sink-volume", sink, volume_argument] and keep status as set_status
+  # Bash prints each pactl output, also on failure, and still shows the OSD.
+  # `keep status` captures, so each output is named and written back out; the
+  # fresh command after each write lets it stream.
+  run "pactl" with arguments ["set-sink-mute", sink, "0"] as unmute_output and keep status as unmute_status
+  run "printf" with arguments ["%s", unmute_output]
+  run "pactl" with arguments ["set-sink-volume", sink, volume_argument] as volume_set_output and keep status as set_status
+  run "printf" with arguments ["%s", volume_set_output]
   run program osd with sink sink
 
 if action is ""
@@ -166,7 +174,8 @@ otherwise
             run program save_debounce_timestamp with path debounce_file and content timestamp_content and expected_hash "missing"
           otherwise
             run program report_file_failure with path debounce_file and operation "mute debounce snapshot" and status snapshot_status
-        run "pactl" with arguments ["set-sink-mute", sink, "toggle"] and keep status as toggle_status
+        run "pactl" with arguments ["set-sink-mute", sink, "toggle"] as toggle_output and keep status as toggle_status
+        run "printf" with arguments ["%s", toggle_output]
         run program osd with sink sink
     otherwise
       if action is "raise"

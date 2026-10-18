@@ -19,6 +19,53 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+/// Install once at a CLI host boundary, before starting its threads. Abort builds
+/// cannot recover a panicking worker: the supervisor must restart the process.
+/// Panic payloads are deliberately withheld because they may contain secrets.
+/// Embedded hosts choose their own hook instead of being changed at library load.
+pub fn install_panic_hook(host: &'static str, steps: Option<&[crate::ast::Step]>) {
+    let lines: BTreeMap<String, usize> = steps
+        .map(|steps| {
+            crate::ast::step_ids(steps)
+                .into_iter()
+                .zip(steps.iter().map(|step| step.line))
+                .collect()
+        })
+        .unwrap_or_default();
+    #[cfg(feature = "failpoints")]
+    let force_abort = std::env::var_os("EXECUTE_TEST_PANIC_ABORT").is_some();
+    #[cfg(not(feature = "failpoints"))]
+    let force_abort = false;
+    std::panic::set_hook(Box::new(move |information| {
+        use std::io::Write;
+        let step = crate::runtime::current_step_id();
+        let line = step.as_deref().and_then(|id| lines.get(id)).copied();
+        let abort = cfg!(panic = "abort") || force_abort;
+        let diagnostic = serde_json::json!({
+            "protocol": "execute.panic/1",
+            "host": host,
+            "thread": std::thread::current().name(),
+            "action": if abort { "abort" } else { "unwind" },
+            "step": step.as_deref(),
+            "line": line,
+            "rust_location": information.location().map(|location| serde_json::json!({
+                "file": location.file(), "line": location.line(), "column": location.column()
+            })),
+            "message": "internal interpreter panic; payload withheld"
+        });
+        // Write directly: a panic may have occurred while a runtime diagnostic,
+        // record, or redactor lock was held. Never invoke the previous hook too.
+        let _ = writeln!(std::io::stderr().lock(), "{diagnostic}");
+        if force_abort {
+            std::process::abort();
+        }
+    }));
+    #[cfg(feature = "failpoints")]
+    if std::env::var("EXECUTE_TEST_PANIC_HOST").is_ok_and(|name| name == host) {
+        panic!("injected host-boundary panic");
+    }
+}
+
 /// The distinct sensitivity labels known to contribute to a value.
 ///
 /// Keeping a set matters because `Unknown` must not hide a known `Secret` (or

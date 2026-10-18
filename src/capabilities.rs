@@ -3,8 +3,9 @@
 //! Without a configured policy Execute retains its historical trusted-process
 //! behavior. Once a policy is installed, every invoked applet must have an
 //! explicit canonical-name grant and a supported version-1 manifest contract.
-//! These declaration checks do not isolate a process. OS isolation is applied
-//! only to grants with `sandbox_required: true` by `platform::sandbox`.
+//! A policy defaults native children to untrusted execution: an unavailable or
+//! insufficient OS sandbox is a hard refusal. Trusted hosts can explicitly
+//! select the historical declaration-only mode.
 
 use crate::ast::{Program, Step, StepKind, Trigger, Value};
 use crate::contracts::AppletBackend;
@@ -26,6 +27,240 @@ use std::process::Command;
 
 pub const CAPABILITY_POLICY_VERSION: u8 = 1;
 const MAX_CAPABILITY_POLICY_BYTES: usize = 64 * 1024;
+
+/// Host-selected execution mode. Policies select `Untrusted` by default;
+/// an explicit `Trusted` selection never overrides `sandbox_required` grants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecutionMode {
+    Trusted,
+    Untrusted,
+}
+
+impl ExecutionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Trusted => "trusted",
+            Self::Untrusted => "untrusted",
+        }
+    }
+}
+
+pub fn execution_mode(registry: &Registry) -> ExecutionMode {
+    registry
+        .host_state::<Option<ExecutionMode>>()
+        .unwrap_or_else(|| {
+            if registry.host_state::<Option<CapabilityPolicy>>().is_some() {
+                ExecutionMode::Untrusted
+            } else {
+                ExecutionMode::Trusted
+            }
+        })
+}
+
+/// Prospective enforcement for graph, screen and stream advisory renderers.
+pub fn invocation_enforcement(
+    registry: &Registry,
+    call: &crate::ast::Invocation,
+) -> Result<&'static str> {
+    let manifest = registry.resolve_call(call)?;
+    if manifest.builtin.is_some()
+        || !matches!(
+            manifest.execution_backend(),
+            AppletBackend::Command | AppletBackend::JsonLinesWorker
+        )
+    {
+        return Ok("host_managed");
+    }
+    let policy = registry.host_state::<Option<CapabilityPolicy>>();
+    let grant = policy
+        .as_ref()
+        .as_ref()
+        .and_then(|policy| policy.applets.get(&manifest.name));
+    let required = execution_mode(registry) == ExecutionMode::Untrusted
+        || grant.is_some_and(|grant| grant.sandbox_required);
+    if !required {
+        return Ok("declared_only");
+    }
+    if !cfg!(any(target_os = "linux", target_os = "macos"))
+        || grant.is_none_or(|grant| {
+            manifest.execution_contract().is_none_or(|contract| {
+                validate_native_enforcement(grant, &contract.effects).is_err()
+            })
+        })
+    {
+        Ok("refused")
+    } else {
+        Ok("os_sandbox_required")
+    }
+}
+
+/// A launch was withheld because OS confinement could not be guaranteed.
+#[derive(Debug)]
+pub struct SandboxRefused(pub String);
+
+impl std::fmt::Display for SandboxRefused {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "required OS sandbox refused execution: {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for SandboxRefused {}
+
+fn sandbox_required(registry: &Registry, grant: &AppletGrant) -> bool {
+    grant.sandbox_required || execution_mode(registry) == ExecutionMode::Untrusted
+}
+
+fn require_execution_policy(registry: &Registry) -> Result<()> {
+    if registry.host_state::<Option<CapabilityPolicy>>().is_none()
+        && execution_mode(registry) == ExecutionMode::Untrusted
+    {
+        return Err(
+            SandboxRefused("untrusted execution requires a capability policy".into()).into(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_native_enforcement(grant: &AppletGrant, effects: &[String]) -> Result<()> {
+    if !grant.network_origins.is_empty() {
+        return Err(SandboxRefused(
+            "cannot enforce network origin restrictions for native children".into(),
+        )
+        .into());
+    }
+    for effect in effects {
+        if !matches!(
+            effect.as_str(),
+            "filesystem.read" | "filesystem.write" | "network.connect" | "process.exec"
+        ) {
+            return Err(SandboxRefused(format!(
+                "cannot enforce declared native effect {effect:?}"
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn preflight_native_sandbox(grant: &AppletGrant, binary: &Path, cwd: &Path) -> Result<()> {
+    crate::platform::sandbox::preflight(grant, binary, cwd)
+        .map_err(|error| SandboxRefused(format!("{error:#}")).into())
+}
+
+fn declared_sandbox_grant(grant: &AppletGrant, effects: &[String]) -> AppletGrant {
+    let mut enforced = grant.clone();
+    if !effects.iter().any(|effect| effect == "filesystem.read") {
+        enforced.filesystem.read.clear();
+    }
+    if !effects.iter().any(|effect| effect == "filesystem.write") {
+        enforced.filesystem.write.clear();
+    }
+    enforced.network &= effects.iter().any(|effect| effect == "network.connect");
+    enforced
+}
+
+#[cfg(test)]
+mod execution_tests {
+    use super::*;
+
+    fn grant() -> AppletGrant {
+        AppletGrant {
+            capabilities: BTreeSet::from([
+                "process.exec".into(),
+                "filesystem.read".into(),
+                "filesystem.write".into(),
+                "network.connect".into(),
+            ]),
+            binary_sha256: None,
+            environment: BTreeSet::new(),
+            filesystem: FilesystemGrant {
+                read: vec!["read".into()],
+                write: vec!["write".into()],
+            },
+            network: true,
+            network_origins: BTreeSet::new(),
+            sandbox_required: false,
+        }
+    }
+
+    #[test]
+    fn sandbox_authority_is_intersection_of_policy_and_declared_effects() {
+        let original = grant();
+        let enforced = declared_sandbox_grant(&original, &[]);
+        assert!(enforced.filesystem.read.is_empty());
+        assert!(enforced.filesystem.write.is_empty());
+        assert!(!enforced.network);
+        let enforced = declared_sandbox_grant(&original, &["filesystem.read".into()]);
+        assert_eq!(enforced.filesystem.read, original.filesystem.read);
+        assert!(enforced.filesystem.write.is_empty());
+        assert!(!enforced.network);
+        assert!(original.network, "the policy itself must not be changed");
+    }
+
+    #[test]
+    fn native_effects_without_an_enforcement_mechanism_are_typed_refusals() {
+        let error = validate_native_enforcement(&grant(), &["account.delete".into()]).unwrap_err();
+        assert!(error.downcast_ref::<SandboxRefused>().is_some());
+        assert!(error.to_string().contains("account.delete"));
+    }
+
+    #[test]
+    fn native_origin_restrictions_are_typed_refusals_even_with_broad_network_access() {
+        let mut restricted = grant();
+        restricted
+            .network_origins
+            .insert("https://example.test".into());
+        let error =
+            validate_native_enforcement(&restricted, &["network.connect".into()]).unwrap_err();
+        assert!(error.downcast_ref::<SandboxRefused>().is_some());
+        assert!(error.to_string().contains("network origin"));
+    }
+}
+
+/// Add truthful prospective enforcement to a static plan, without probing or
+/// launching a child. `os_sandbox_required` is a requirement, not a claim that
+/// an OS facility has already been installed by explain/what-if.
+pub fn annotate_enforcement(plan: &mut serde_json::Value, registry: &Registry) {
+    plan["execution_mode"] = execution_mode(registry).as_str().into();
+    let Some(steps) = plan["steps"].as_array_mut() else {
+        return;
+    };
+    let policy = registry.host_state::<Option<CapabilityPolicy>>();
+    for step in steps {
+        let native = step["process"] == true;
+        let grant = step["applet"]
+            .as_str()
+            .and_then(|name| policy.as_ref().as_ref()?.applets.get(name));
+        let effects: Vec<String> = step["effects"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|effect| effect.as_str().map(str::to_owned))
+            .collect();
+        let required = native
+            && (execution_mode(registry) == ExecutionMode::Untrusted
+                || grant.is_some_and(|grant| grant.sandbox_required));
+        step["enforcement"] = if required {
+            if !cfg!(any(target_os = "linux", target_os = "macos"))
+                || grant.is_none_or(|grant| validate_native_enforcement(grant, &effects).is_err())
+            {
+                "refused"
+            } else {
+                "os_sandbox_required"
+            }
+        } else if native {
+            "declared_only"
+        } else {
+            "host_managed"
+        }
+        .into();
+    }
+}
 
 /// Strict opt-in allowlist. A missing policy is represented by
 /// `Registry::host_state::<Option<CapabilityPolicy>>() == None`.
@@ -117,8 +352,9 @@ pub fn check_privileged_launch(
     Ok(())
 }
 
-/// Per-applet permissions. Child filesystem/network access is OS-enforced only
-/// when `sandbox_required` is true. Path grants also gate host-managed file
+/// Per-applet permissions. Native filesystem/network access requires OS
+/// confinement in untrusted mode or when `sandbox_required` is true.
+/// Path grants also gate host-managed file
 /// operations and remote-origin grants are checked by remote dispatch.
 /// Environment filtering is applied whenever a policy is active.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -697,6 +933,23 @@ pub fn preflight_with_cache_directory(
     cwd: &Path,
     cache_directory: Option<&Path>,
 ) -> Result<()> {
+    preflight_program(program, registry, cwd, cache_directory, true)
+}
+
+/// Perform all declaration and host-path authorization for advisory output,
+/// without starting an OS facility probe. A real run always uses `preflight`.
+pub fn preflight_plan(program: &Program, registry: &Registry, cwd: &Path) -> Result<()> {
+    preflight_program(program, registry, cwd, None, false)
+}
+
+fn preflight_program(
+    program: &Program,
+    registry: &Registry,
+    cwd: &Path,
+    cache_directory: Option<&Path>,
+    probe_sandbox: bool,
+) -> Result<()> {
+    require_execution_policy(registry)?;
     let cwd_mode = if contains_cwd_change(program, registry)? {
         CwdMode::Dynamic
     } else {
@@ -756,7 +1009,14 @@ pub fn preflight_with_cache_directory(
         }
     }
 
-    preflight_invocations_with_policy(calls.iter().copied(), registry, cwd, cwd_mode, policy)?;
+    preflight_invocations_with_policy(
+        calls.iter().copied(),
+        registry,
+        cwd,
+        cwd_mode,
+        policy,
+        probe_sandbox,
+    )?;
 
     preflight_host_paths(program, registry, policy, cwd, cwd_mode)?;
     preflight_cache_paths(&calls, registry, cwd, cache_directory)
@@ -789,6 +1049,24 @@ pub fn preflight_invocations<'a>(
     registry: &Registry,
     cwd: &Path,
 ) -> Result<()> {
+    preflight_invocation_plan(calls, registry, cwd, true)
+}
+
+pub fn preflight_invocations_plan<'a>(
+    calls: impl IntoIterator<Item = &'a crate::ast::Invocation>,
+    registry: &Registry,
+    cwd: &Path,
+) -> Result<()> {
+    preflight_invocation_plan(calls, registry, cwd, false)
+}
+
+fn preflight_invocation_plan<'a>(
+    calls: impl IntoIterator<Item = &'a crate::ast::Invocation>,
+    registry: &Registry,
+    cwd: &Path,
+    probe_sandbox: bool,
+) -> Result<()> {
+    require_execution_policy(registry)?;
     let calls = calls.into_iter().collect::<Vec<_>>();
     for call in &calls {
         validate_environment_backend(registry.resolve_call(call)?)?;
@@ -805,6 +1083,7 @@ pub fn preflight_invocations<'a>(
         cwd,
         CwdMode::Fixed,
         policy,
+        probe_sandbox,
     )?;
     preflight_cache_paths(&calls, registry, cwd, None)
 }
@@ -864,10 +1143,12 @@ fn preflight_invocations_with_policy<'a>(
     cwd: &Path,
     cwd_mode: CwdMode,
     policy: &CapabilityPolicy,
+    probe_sandbox: bool,
 ) -> Result<()> {
     // Privilege is checked for every call before any grant is, so a privileged step is
     // reported as such wherever it sits in the program.
     let calls: Vec<&crate::ast::Invocation> = calls.into_iter().collect();
+    let mut sandboxes = Vec::new();
     for call in &calls {
         let manifest = registry.resolve_call(call)?;
         let binary = manifest.binary_for(call);
@@ -927,6 +1208,13 @@ fn preflight_invocations_with_policy<'a>(
             }
         }
         let backend = manifest.execution_backend();
+        let native_sandbox = matches!(
+            backend,
+            AppletBackend::Command | AppletBackend::JsonLinesWorker
+        ) && sandbox_required(registry, grant);
+        if native_sandbox {
+            validate_native_enforcement(grant, &contract.effects)?;
+        }
         match backend {
             AppletBackend::InProcess => {
                 if grant.sandbox_required {
@@ -988,7 +1276,7 @@ fn preflight_invocations_with_policy<'a>(
             }
         }
         let binary = if backend != AppletBackend::InProcess
-            && (grant.binary_sha256.is_some() || grant.sandbox_required)
+            && (grant.binary_sha256.is_some() || native_sandbox)
         {
             let requested = manifest.binary_for(call);
             if cwd_mode.is_dynamic()
@@ -1016,7 +1304,7 @@ fn preflight_invocations_with_policy<'a>(
             }),
             Some(registry),
         )?;
-        if grant.sandbox_required {
+        if native_sandbox {
             if cwd_mode.is_dynamic() {
                 bail!(
                     "required sandbox cannot preflight a program with dynamic working-directory changes"
@@ -1025,7 +1313,18 @@ fn preflight_invocations_with_policy<'a>(
             let binary = binary
                 .as_deref()
                 .expect("sandbox preflight resolved binary");
-            crate::platform::sandbox::preflight(grant, binary, cwd)
+            sandboxes.push((
+                declared_sandbox_grant(grant, &contract.effects),
+                binary.to_path_buf(),
+                name,
+            ));
+        }
+    }
+    // Complete declaration authorization for the whole program before probing
+    // any sandbox facility, even for an earlier, otherwise authorized applet.
+    for (grant, binary, name) in sandboxes {
+        if probe_sandbox {
+            preflight_native_sandbox(&grant, &binary, cwd)
                 .with_context(|| format!("preflighting required sandbox for applet {name:?}"))?;
         }
     }
@@ -1045,6 +1344,11 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    require_execution_policy(registry)?;
+    #[cfg(feature = "failpoints")]
+    if std::env::var("EXECUTE_TEST_PANIC_APPLET").is_ok_and(|name| name == applet_name) {
+        panic!("injected native launch panic");
+    }
     // The one check every spawn path reaches before a Command exists. It classifies the
     // manifest binary name, when the applet is registered, and the resolved path.
     let manifest_binary = registry
@@ -1124,17 +1428,22 @@ where
         }),
         Some(registry),
     )?;
-    if grant.sandbox_required {
-        if !grant.network_origins.is_empty() {
-            bail!(
-                "required OS sandbox cannot enforce network origin restrictions for applet {applet_name:?}"
-            );
-        }
-        crate::platform::sandbox::preflight(grant, binary, cwd)
+    let native_sandbox = sandbox_required(registry, grant);
+    let enforced;
+    let grant = if native_sandbox {
+        enforced = declared_sandbox_grant(grant, &contract.effects);
+        &enforced
+    } else {
+        grant
+    };
+    if native_sandbox {
+        validate_native_enforcement(grant, &contract.effects)?;
+        preflight_native_sandbox(grant, binary, cwd)
             .with_context(|| format!("preflighting required sandbox for applet {applet_name:?}"))?;
     }
-    let mut command = if grant.sandbox_required {
-        crate::platform::sandbox::command(binary, arguments, grant, cwd)?
+    let mut command = if native_sandbox {
+        crate::platform::sandbox::command(binary, arguments, grant, cwd)
+            .map_err(|error| SandboxRefused(format!("{error:#}")))?
     } else {
         let mut command = Command::new(binary);
         command.args(arguments);

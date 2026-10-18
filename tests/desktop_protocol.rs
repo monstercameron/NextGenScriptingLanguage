@@ -436,6 +436,8 @@ fn renderer_launch_policy_uses_the_dedicated_manifest_identity() {
         host_environment: Default::default(),
         applets: BTreeMap::from([("desktop.quickshell".to_owned(), grant)]),
     }));
+    // This test checks the renderer's manifest identity, not OS confinement.
+    registry.set_host_state(Some(flow::capabilities::ExecutionMode::Trusted));
     let cwd = std::env::current_dir().unwrap();
     let binary = std::path::Path::new(if cfg!(target_os = "macos") {
         "/usr/bin/true"

@@ -60,6 +60,9 @@ fn stderr_redirect_without_a_write_grant_is_refused_before_effects() {
         host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.echo".into(), grant(&["process.exec"], Vec::new()))]),
     }));
+    // Trusted mode, so the filesystem grant check is what refuses (untrusted mode
+    // refuses earlier on platforms without an OS sandbox).
+    registry.set_host_state(Some(flow::capabilities::ExecutionMode::Trusted));
     let program = parser::parse("run fixture.echo and stderr to \"x\"\n").unwrap();
     let error = preflight(&program, &registry, directory.path()).unwrap_err();
     assert!(format!("{error:#}").contains("filesystem"), "{error:#}");

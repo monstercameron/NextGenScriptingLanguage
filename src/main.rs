@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use flow::ast::Trigger;
-use flow::capabilities::CapabilityPolicy;
+use flow::capabilities::{CapabilityPolicy, ExecutionMode};
 use flow::manifest::{ManifestCheck, Registry};
 use flow::runtime::{self, CheckpointOptions, RunOptions, ServiceLimits};
 use std::collections::BTreeMap;
@@ -225,6 +225,7 @@ fn daemon_forward(arguments: &[String]) -> Option<i32> {
 /// daemon's preloaded registry through the finite-check snapshot seam. Every other request
 /// takes the normal path, which loads its own registry.
 fn execute_forwarded(arguments: Vec<String>, registry: &Registry) -> Result<()> {
+    flow::security::install_panic_hook("daemon-run", None);
     let Some(args) = parse_args(&arguments)? else {
         return execute_arguments(arguments);
     };
@@ -374,6 +375,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     }
     #[cfg(feature = "live")]
     if arguments.first().is_some_and(|a| a == "live") {
+        flow::security::install_panic_hook("live", None);
         return flow::live::cli(&arguments[1..], default_manifest_dir(), workflow_path);
     }
     #[cfg(not(feature = "live"))]
@@ -414,6 +416,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         bail!("`replay` requires the records feature; rebuild with --features records");
     }
     if arguments.first().is_some_and(|a| a == "repl") {
+        flow::security::install_panic_hook("repl", None);
         #[cfg(feature = "records")]
         return repl_cli::repl(&arguments[1..]);
         #[cfg(not(feature = "records"))]
@@ -427,6 +430,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     }
     #[cfg(feature = "lsp")]
     if arguments.first().is_some_and(|a| a == "lsp") {
+        flow::security::install_panic_hook("lsp", None);
         if arguments.len() != 1 && !(arguments.len() == 2 && arguments[1] == "--stdio") {
             bail!("execute lsp accepts no arguments other than optional --stdio");
         }
@@ -488,6 +492,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     }
     #[cfg(feature = "dap")]
     if arguments.first().is_some_and(|a| a == "dap") {
+        flow::security::install_panic_hook("dap", None);
         std::process::exit(flow::agent::dap::cli(&arguments[1..])?);
     }
     #[cfg(not(feature = "dap"))]
@@ -495,6 +500,7 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         bail!("`dap` requires the dap feature; rebuild with --features dap (or --features full)");
     }
     if arguments.first().is_some_and(|a| a == "daemon") {
+        flow::security::install_panic_hook("daemon", None);
         std::process::exit(flow::agent::daemon::cli(
             &arguments[1..],
             forwarded_run,
@@ -767,6 +773,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         .as_deref()
         .map(load_capability_policy)
         .transpose()?;
+    if args.execution_mode == Some(ExecutionMode::Untrusted) && capability_policy.is_none() {
+        bail!("untrusted execution requires a capability policy");
+    }
     let data_flow_policy = args
         .data_flow_policy
         .as_deref()
@@ -801,6 +810,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     }
     #[cfg(feature = "graph")]
     if flow::graph::is_graph(&source) {
+        flow::security::install_panic_hook("graph", None);
         reject_finite_only_options(&args, "graph")?;
         // `run` and `resume` accept `--checkpoint`; the trigger and UI options are not
         // supported for graphs.
@@ -822,6 +832,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             capability_policy.as_ref(),
             data_flow_policy.as_ref(),
         )?;
+        if args.execution_mode.is_some() {
+            registry.set_host_state(args.execution_mode);
+        }
         let graph = flow::graph::parse(&source, &registry).context("parsing graph")?;
         if args.checkpoint_dir.is_some()
             && graph.input_declarations().iter().any(|input| {
@@ -878,7 +891,15 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             let cwd = resolved_cwd
                 .as_deref()
                 .context("could not resolve current directory")?;
-            flow::capabilities::preflight_invocations(graph.invocations(), &registry, cwd)?;
+            if args.command == "explain" {
+                flow::capabilities::preflight_invocations_plan(
+                    graph.invocations(),
+                    &registry,
+                    cwd,
+                )?;
+            } else {
+                flow::capabilities::preflight_invocations(graph.invocations(), &registry, cwd)?;
+            }
         }
         return match args.command {
             "check" => Ok(()),
@@ -888,7 +909,24 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 "interface": interface,
                 "graph": serde_json::to_value(&graph)?
             })),
-            "explain" => writeln!(io::stdout(), "{}", graph.to_dot()).map_err(Into::into),
+            "explain" => {
+                writeln!(
+                    io::stdout(),
+                    "// Execution mode: {}",
+                    flow::capabilities::execution_mode(&registry).as_str()
+                )?;
+                for node in graph.nodes() {
+                    for call in node.invocations() {
+                        writeln!(
+                            io::stdout(),
+                            "// node {:?}: {}",
+                            node.id,
+                            flow::capabilities::invocation_enforcement(&registry, call)?
+                        )?;
+                    }
+                }
+                writeln!(io::stdout(), "{}", graph.to_dot()).map_err(Into::into)
+            }
             "run" | "resume" => {
                 let options = RunOptions {
                     inputs,
@@ -954,6 +992,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     }
     #[cfg(not(feature = "screens"))]
     if is_screen_source(&source) {
+        flow::security::install_panic_hook("screen", None);
         bail!("screen programs require the screens feature; rebuild with --features screens");
     }
     #[cfg(feature = "screens")]
@@ -977,6 +1016,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             data_flow_policy.as_ref(),
         )?;
         let cwd = env::current_dir()?;
+        if args.execution_mode.is_some() {
+            registry.set_host_state(args.execution_mode);
+        }
         flow::ui::syntax::validate(&screen, &registry)?;
         if capability_policy.is_some() {
             let policy_program = flow::ast::Program {
@@ -994,7 +1036,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     .collect(),
                 trigger: None,
             };
-            flow::capabilities::preflight(&policy_program, &registry, &cwd)?;
+            if args.command == "explain" {
+                flow::capabilities::preflight_plan(&policy_program, &registry, &cwd)?;
+            } else {
+                flow::capabilities::preflight(&policy_program, &registry, &cwd)?;
+            }
         }
         if args.command == "resume" || args.checkpoint_dir.is_some() || args.max_record_bytes_set {
             bail!("UI programs do not support resume, checkpoints, or listener record limits");
@@ -1027,6 +1073,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             "explain" => {
                 writeln!(
                     io::stdout(),
+                    "Execution mode: {}",
+                    flow::capabilities::execution_mode(&registry).as_str()
+                )?;
+                writeln!(
+                    io::stdout(),
                     "screen {:?}; components {:?}; connections {}",
                     screen.title,
                     screen.placements,
@@ -1050,10 +1101,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                                 let manifest = registry.resolve_call(&call)?;
                                 writeln!(
                                     io::stdout(),
-                                    "line {}: {:?} parameters {:?}",
+                                    "line {}: {:?} parameters {:?}; enforcement {}",
                                     step.line,
                                     manifest.binary_for(&call),
-                                    call.parameters.keys().collect::<Vec<_>>()
+                                    call.parameters.keys().collect::<Vec<_>>(),
+                                    flow::capabilities::invocation_enforcement(&registry, &call)?
                                 )?;
                             }
                         }
@@ -1081,6 +1133,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         };
     }
     if flow::stream::is_stream(&source) {
+        flow::security::install_panic_hook("stream", None);
         reject_finite_only_options(&args, "stream")?;
         let stream = flow::stream::parse(&source).context("parsing stream")?;
         let inputs = flow::inputs::parse_cli_arguments(
@@ -1109,9 +1162,16 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         )?;
         let cwd = env::current_dir()?;
         if capability_policy.is_some() {
+            if args.execution_mode.is_some() {
+                registry.set_host_state(args.execution_mode);
+            }
             flow::stream::validate(&stream, &registry)?;
             runtime::validate_with_arguments(&stream.pipeline, &registry, &inputs)?;
-            flow::capabilities::preflight(&stream.pipeline, &registry, &cwd)?;
+            if args.command == "explain" {
+                flow::capabilities::preflight_plan(&stream.pipeline, &registry, &cwd)?;
+            } else {
+                flow::capabilities::preflight(&stream.pipeline, &registry, &cwd)?;
+            }
         }
 
         return match args.command {
@@ -1130,6 +1190,27 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             }
             "explain" => {
                 flow::stream::validate(&stream, &registry)?;
+                writeln!(
+                    io::stdout(),
+                    "Execution mode: {}",
+                    flow::capabilities::execution_mode(&registry).as_str()
+                )?;
+                let mut plan = flow::agent::explain::explain_json(
+                    &stream.pipeline,
+                    &registry,
+                    &args.file.to_string_lossy(),
+                )?;
+                flow::capabilities::annotate_enforcement(&mut plan, &registry);
+                if let Some(steps) = plan["steps"].as_array() {
+                    for step in steps.iter().filter(|step| step["process"] == true) {
+                        writeln!(
+                            io::stdout(),
+                            "  line {}: {}",
+                            step["line"],
+                            step["enforcement"].as_str().unwrap_or("refused")
+                        )?;
+                    }
+                }
                 let pipeline = runtime::explain_with_inputs(&stream.pipeline, &registry, &inputs)?;
                 match stream.line_limit {
                     Some(limit) => writeln!(
@@ -1207,6 +1288,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             }
         },
     };
+    if args.execution_mode.is_some() {
+        registry.set_host_state(args.execution_mode);
+    }
     // The registry carries the capability policy, which authorizes the reads of any
     // program file the program calls, so it is loaded before the program is parsed.
     let cwd = env::current_dir()?;
@@ -1221,6 +1305,16 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }),
     )
     .with_context(|| format!("could not parse workflow {}", args.file.display()))?;
+    if args.checkpoint_dir.is_some() {
+        flow::security::install_panic_hook("checkpoint", Some(&program.steps));
+    } else if program.trigger.is_some() {
+        let host = if matches!(program.trigger, Some(Trigger::Listen { .. })) {
+            "listener"
+        } else {
+            "service"
+        };
+        flow::security::install_panic_hook(host, Some(&program.steps));
+    }
     // A script's own `--help` (from a shebang line) shows its accept declarations.
     // Literal arguments keep `--help` as a value for positional programs; a program with
     // flags or options always answers `--help` with its generated help.
@@ -1309,7 +1403,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     }
     if capability_policy.is_some() {
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
-        flow::capabilities::preflight(&program, &registry, &cwd)?;
+        if args.command == "explain" || args.what_if {
+            flow::capabilities::preflight_plan(&program, &registry, &cwd)?;
+        } else {
+            flow::capabilities::preflight(&program, &registry, &cwd)?;
+        }
     }
 
     #[cfg(feature = "agent-advisory")]
@@ -1319,7 +1417,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         }
         runtime::validate_with_arguments(&program, &registry, &inputs)?;
         let path = args.file.to_string_lossy().into_owned();
-        let plan = flow::agent::explain::explain_json(&program, &registry, &path)?;
+        let mut plan = flow::agent::explain::explain_json(&program, &registry, &path)?;
+        flow::capabilities::annotate_enforcement(&mut plan, &registry);
         let run_directory = cwd.clone();
         let context = flow::agent::what_if::RunSettings {
             declarations: &program.inputs,
@@ -1397,7 +1496,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             // Validate with the same inputs as `check` before describing effects.
             runtime::validate_with_arguments(&program, &registry, &inputs)?;
             let path = args.file.to_string_lossy().into_owned();
-            let plan = flow::agent::explain::explain_json(&program, &registry, &path)?;
+            let mut plan = flow::agent::explain::explain_json(&program, &registry, &path)?;
+            flow::capabilities::annotate_enforcement(&mut plan, &registry);
             if args.allow.is_empty() && !args.policy_header {
                 write_json(&plan)
             } else {
@@ -1435,6 +1535,27 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             }
             if args.policy_header {
                 bail!("--policy-header requires --json");
+            }
+            writeln!(
+                io::stdout(),
+                "Execution mode: {}",
+                flow::capabilities::execution_mode(&registry).as_str()
+            )?;
+            let mut plan = flow::agent::explain::explain_json(
+                &program,
+                &registry,
+                &args.file.to_string_lossy(),
+            )?;
+            flow::capabilities::annotate_enforcement(&mut plan, &registry);
+            if let Some(steps) = plan["steps"].as_array() {
+                for step in steps.iter().filter(|step| step["process"] == true) {
+                    writeln!(
+                        io::stdout(),
+                        "  line {}: {}",
+                        step["line"],
+                        step["enforcement"].as_str().unwrap_or("refused")
+                    )?;
+                }
             }
             writeln!(
                 io::stdout(),
@@ -1637,7 +1758,9 @@ fn reject_finite_only_options(args: &Args, program_kind: &str) -> Result<()> {
 /// the live host cannot honour are refused by name, not ignored.
 #[cfg(feature = "live")]
 fn run_with_control(args: &Args, triggered: bool) -> Result<()> {
+    flow::security::install_panic_hook("live", None);
     let refused = [
+        (args.execution_mode.is_some(), "--execution-mode"),
         (args.checkpoint_dir.is_some(), "--checkpoint"),
         (args.once, "--once"),
         (args.trace, "--trace"),
@@ -2537,7 +2660,7 @@ fn manifest_candidates(executable: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --json                  Structured result for check or explain\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
+    "Usage: execute FILE_OR_FILE_URI [options] [-- ARG...]\n       execute <check|explain|inspect|run> FILE [options]\n       execute resume FILE --checkpoint DIR [options]\n       execute test | run-parts | show-run | replay | repl | repair | compile | checkpoint | help | attach | dap | daemon ...\n       execute applets <list|inspect|discover|match> [options]\n       execute modules <inspect|verify|lock> MANIFEST [options]\n       execute service generate <systemd|launchd> FILE [options]\n       execute lsp [--stdio]\n       execute live <serve|read|create|update|delete|patch|control|send|event|wait|schema> ...\n       execute model <classify|judge|score|generate|extract> [options]\n       execute --help, -h\n\nOptions (values are separate arguments):\n  --json                  Structured result for check or explain\n  --input NAME=VALUE      Supply a declared program input (repeat for different names)\n  -- ARG...               Literal program arguments for declared positional inputs\n  --manifest-dir DIR      Applet manifest directory or legacy JSON file\n  --manifest-catalog FILE Packed manifest catalog (exclusive with --manifest-dir)\n  --execution-mode MODE   trusted or untrusted (default with policy)\n  --capability-policy FILE Strict applet capability policy\n  --data-flow-policy FILE Origin and persistence grants\n  --cache-dir DIR         Cache directory (run/resume)\n  --checkpoint DIR        Durable checkpoint directory (run/resume)\n  --retry-uncertain       Retry an invocation with an uncertain outcome\n  --answers FILE          Test answers\n  --record FILE           Record a run\n  --what-if               Print plan and fingerprint without running\n  --confirm FINGERPRINT   Run only when the reviewed plan matches\n  --allow CAPABILITY      Grant a capability\n  --policy-header         Include the capability policy header in explain output\n  --format FORMAT         Output format: github or json\n  --single-instance FILE  Prevent concurrent runs with a lock\n  --control               Enable the live control socket for a run\n  --break-at LINE         Pause at a source line\n  --daemon                Forward run through daemon\n  --json-errors           Emit structured errors on stderr (before --)\n  --version, -V           Print version\n  --headless              Run a UI once and print JSON state\n  --once                  Run one calendar activation and exit\n  --init                  Supervise worker as PID 1 (Unix)\n  --trace                 Print execution details to stderr\n  --max-output-bytes N    Maximum captured output bytes\n  --max-runs N            Maximum trigger runs or interactive UI jobs\n  --missed-ticks POLICY   Trigger backlog policy\n  --max-catch-up N        Bound catch-up runs to 1..64\n  --calendar-dedup MODE   Calendar fold policy\n  --command-timeout-ms N  Maximum native pipeline lifetime\n  --total-timeout-ms N    Maximum workflow lifetime (run/resume)\n  --drain-timeout-ms N    Interrupt drain budget for run\n  --max-record-bytes N    Maximum listener/stream record size"
 }
 
 fn write_json(value: &serde_json::Value) -> Result<()> {

@@ -46,6 +46,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     let mut manifest_dir = None;
     let mut manifest_catalog = None;
     let mut capability_policy = None;
+    let mut execution_mode = None;
     let mut data_flow_policy = None;
     let mut cache_dir = None;
     let mut checkpoint_dir = None;
@@ -201,6 +202,22 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     "--manifest-catalog",
                     "a packed manifest catalog file",
                 )?));
+            }
+            "--execution-mode" => {
+                if execution_mode.is_some() {
+                    bail!("--execution-mode may be specified only once");
+                }
+                let value = take_option_value(
+                    arguments,
+                    &mut index,
+                    "--execution-mode",
+                    "trusted or untrusted",
+                )?;
+                execution_mode = Some(match value.as_str() {
+                    "trusted" => flow::capabilities::ExecutionMode::Trusted,
+                    "untrusted" => flow::capabilities::ExecutionMode::Untrusted,
+                    _ => bail!("--execution-mode must be trusted or untrusted"),
+                });
             }
             "--capability-policy"
                 if matches!(command, "check" | "explain" | "inspect" | "run" | "resume") =>
@@ -432,6 +449,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
         manifest_dir,
         manifest_catalog,
         capability_policy,
+        execution_mode,
         data_flow_policy,
         cache_dir,
         checkpoint_dir,

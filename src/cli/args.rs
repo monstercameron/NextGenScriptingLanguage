@@ -30,6 +30,7 @@ pub(crate) struct Args {
     pub(crate) manifest_dir: Option<PathBuf>,
     pub(crate) manifest_catalog: Option<PathBuf>,
     pub(crate) capability_policy: Option<PathBuf>,
+    pub(crate) execution_mode: Option<flow::capabilities::ExecutionMode>,
     pub(crate) data_flow_policy: Option<PathBuf>,
     pub(crate) cache_dir: Option<PathBuf>,
     pub(crate) checkpoint_dir: Option<PathBuf>,

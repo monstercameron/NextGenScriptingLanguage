@@ -1,4 +1,4 @@
-//! OS-backed sandbox launch support for opt-in applet grants.
+//! OS-backed native launch confinement for untrusted mode and required grants.
 //!
 //! The supported paths are intentionally narrow: macOS uses the system
 //! `sandbox-exec` profile runner, Linux uses bubblewrap, and other platforms
@@ -762,7 +762,7 @@ fn linux_prefix(grant: &AppletGrant, binary: &Path, cwd: &Path) -> Result<Vec<Os
             &mut args,
             &binary_real,
             binary,
-            false,
+            true,
             &mut created,
             &mut covered_roots,
         )?;
@@ -932,6 +932,21 @@ mod tests {
         assert!(error
             .to_string()
             .contains("owned test sandbox facility is unavailable"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn executable_mount_is_read_only_without_a_write_grant() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("fixture");
+        std::fs::write(&binary, b"fixture").unwrap();
+        let grant = grant_for(root.path());
+        let args = linux_prefix(&grant, &binary, root.path()).unwrap();
+        let mount = args
+            .windows(3)
+            .find(|args| args[1] == binary.as_os_str() && args[2] == binary.as_os_str())
+            .unwrap();
+        assert_eq!(mount[0], "--ro-bind");
     }
 
     #[cfg(target_os = "linux")]

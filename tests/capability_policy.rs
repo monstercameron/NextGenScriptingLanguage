@@ -220,6 +220,8 @@ fn process_backends_require_a_separate_process_exec_grant() {
         host_environment: Default::default(),
         applets: BTreeMap::from([("fixture.command".into(), grant(&["process.exec"]))]),
     }));
+    // This test checks declaration authorization, independently of OS support.
+    registry.set_host_state(Some(flow::capabilities::ExecutionMode::Trusted));
     preflight(&program, &registry, directory.path()).unwrap();
 }
 
@@ -371,6 +373,8 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
         .iter()
         .any(|(name, _)| name == std::ffi::OsStr::new("PATH")));
     assert_eq!(std::env::var_os(canary), before, "host env must not change");
+    // Exercise environment and argv construction in explicitly trusted mode.
+    registry.set_host_state(Some(flow::capabilities::ExecutionMode::Trusted));
     let command = flow::capabilities::command_for(
         Path::new("unused-executable"),
         ["argument with spaces", "semi;colon"],
@@ -574,6 +578,8 @@ fn cache_directory_requires_applet_scoped_read_and_write_grants() {
     let directory = tempfile::tempdir().unwrap();
     let binary = Path::new("/usr/bin/true");
     let registry = registry_with_applet("fixture.cache", binary);
+    // This fixture checks host cache authorization without launching a child.
+    registry.set_host_state(Some(flow::capabilities::ExecutionMode::Trusted));
     let program = parser::parse("run fixture.cache and cache\n").unwrap();
     let cache_directory = directory.path().join("cache");
     let mut allowed = grant(&["filesystem.read", "filesystem.write", "process.exec"]);

@@ -36,9 +36,10 @@ sandbox add the checks described in SECURITY.md; they are not on by default.
 
 ## Trust boundaries
 
-Trusted, by design: the program author, applet manifests, the scripts and the
+In trusted mode, trusted by design: the program author, applet manifests, the scripts and the
 selected executables and their dependencies (*from SECURITY.md*: "remain trusted
-inputs"). A program that runs untrusted code is outside this model.
+inputs"). Untrusted mode adds a native-child filesystem/network boundary under
+an operator-controlled policy; the interpreter, manifests and host remain trusted.
 
 Untrusted data, by design: values that flow into a run from outside the script:
 
@@ -91,6 +92,51 @@ ancestor directories remain open (below).
 | Review, record and replay | Review fingerprints cover module source and packages. `--record` redacts secret and environment inputs. Replay refuses detached launches and handovers. | `src/agent/what_if.rs`, `src/record.rs`, `tests/security_redaction.rs` |
 
 ## Known holes
+
+### Native confinement and panic boundaries (issues #369 and #368)
+
+Capability policies now default command and persistent-worker launches to
+untrusted mode. The native command builder requires the existing platform
+sandbox and refuses setup failures, unsupported native effects, and
+origin-specific native grants. Explicit `--execution-mode trusted` retains
+the declaration-only trust model unless an individual grant requires a
+sandbox. Untrusted execution needs a policy; there is no implicit ambient
+filesystem grant. System runtime reads remain part of the sandbox profile.
+The platform/mode guarantee table is in [SECURITY.md](../SECURITY.md).
+
+Windows native execution is refused in untrusted mode. Job-object lifetime
+management is not an access-control sandbox. Linux uses bubblewrap, not
+Landlock/seccomp; macOS uses the existing deprecated sandbox-exec facility.
+These mechanisms do not isolate the interpreter itself or protect against
+kernel vulnerabilities, unlimited resource use, executable replacement races,
+or unrelated same-user processes. Native origins cannot be filtered by these
+backends: exact-origin access belongs to host-managed remote applets.
+
+Release panics terminate the containing process. Long-lived CLI hosts install
+a single structured stderr diagnostic, with payload withheld and unknown
+step/line represented as null. Daemon-forwarded runs have a process boundary;
+graph/task workers and listener handlers share their host's fate. Use an
+external supervisor; generated systemd services use Restart=on-failure.
+Checkpoint commits survive process termination, while an unfinished effect
+retains the ordinary uncertain-outcome retry gate. Standalone finite task
+hook installation and worker-local source context remain integration work in
+the task runtime. See the per-host table in SECURITY.md.
+
+Unix CI must execute the bubblewrap/macOS denial tests with a working sandbox
+(a skipped availability probe is not acceptance), verify writes outside grants
+and network connections without a grant are denied, and run failpoint panic
+tests with an abort-built binary. It must also verify daemon-parent survival,
+generated-service restart after an abort, and checkpoint resume. Cross-target
+compilation on Windows cannot establish any of these runtime properties.
+The panic command is `cargo test --offline --release --features full,failpoints
+--test lane_v8_panic`; Linux must run both the checkpoint and forwarded-daemon
+tests rather than merely compiling their Unix-only bodies. Run Linux/macOS
+`platform::sandbox::tests` with a usable sandbox, including the Linux
+`executable_mount_is_read_only_without_a_write_grant` regression. Run
+`lane_v8_untrusted` and `lane_v8_hosts` on each native CI platform. The generated
+service test checks restart configuration; CI with a real systemd/launchd
+manager must additionally observe an injected abort followed by a restarted
+host, without retrying an uncertain external effect silently.
 
 Severity scale: **High** breaks a documented guarantee for a supported configuration.
 **Medium** breaks a guarantee under a realistic same-user or policy-enabled attack.

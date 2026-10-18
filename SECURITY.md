@@ -1,6 +1,8 @@
 # Security boundaries
 
-Execute runs trusted local Unix-style programs with the caller's permissions.
+Without a capability policy, Execute runs trusted local Unix-style programs
+with the caller's permissions. Policies default native children to OS-confined
+untrusted mode as described below.
 Literal argument passing prevents implicit shell expansion; it does not make an
 arbitrary command safe. An explicit shell invocation can still interpret shell
 code. Scripts, applet manifests, selected executables and their dependencies
@@ -129,10 +131,37 @@ Remote endpoint authorization runs before discovery or invocation; redirects
 and environment proxies are disabled. A remote applet's bearer-file path is
 checked against that applet's own filesystem read grant.
 
+`--execution-mode trusted|untrusted` selects native-child confinement. With no
+policy the default is `trusted`; a capability policy defaults to `untrusted`.
+Agent runners should always supply a policy and select `untrusted` explicitly.
+Untrusted mode without a policy is refused. In trusted mode,
 `sandbox_required: false` enforces policy declarations, environment filtering
-and host path checks, but does not isolate applet processes from the caller's
-filesystem or network. `sandbox_required: true` requests a separate OS sandbox
-for command and worker backends. macOS uses a generated deny-default
+and host path checks, while native children retain the caller's filesystem and
+network authority. `sandbox_required: true` still requires confinement even in
+trusted mode. In untrusted mode every command and persistent worker requires a
+separate OS sandbox, regardless of that per-applet boolean. Filesystem and
+network grants are intersected with the contract's declared effects. An unknown
+native effect or native origin restriction is refused with `SandboxRefused`.
+
+| Mode | Linux | macOS | Windows / other platforms |
+| --- | --- | --- | --- |
+| Trusted, no required sandbox | Native children have the caller's authority. | Native children have the caller's authority. | Native children have the caller's authority. |
+| Untrusted, or required sandbox | Trusted system bubblewrap, isolated namespaces, read-only runtime and executable mounts, explicit filesystem mounts; network namespace unless declared and broadly granted. Missing facility or failed setup refuses execution. | Deny-default sandbox profile, runtime reads and explicit path grants; network denied unless declared and broadly granted. Missing facility or failed setup refuses execution. | Native children are refused. Job objects control lifetime, not filesystem or origin access; no AppContainer backend is implemented. |
+
+Linux currently uses the existing bubblewrap backend; it does not install
+Landlock or seccomp filters. Read access to system runtime files and execution
+of tools within that runtime remain available. This is filesystem/network
+confinement, not a hostile-kernel-code or resource-exhaustion boundary.
+`explain` and `--what-if` report `execution_mode` and each step's `enforcement`.
+`os_sandbox_required` is prospective: a real run must still pass OS preflight;
+`refused` means the current platform cannot provide the required confinement.
+`declared_only` means no OS sandbox is required; `host_managed` identifies
+interpreter operations rather than confined native children. Review
+fingerprints include these fields, so changing modes changes the fingerprint.
+`--control` refuses an explicit mode override until the live host protocol can
+carry it; its capability policies still default to untrusted mode.
+
+macOS uses a generated deny-default
 `sandbox-exec` profile with system runtime reads and explicit path grants;
 network is denied unless granted, and child execution is restricted unless
 `process.exec` is granted. Linux uses bubblewrap namespaces, an isolated network
@@ -151,6 +180,38 @@ Windows does not currently support required applet sandboxes.
 The host probes the applet-specific generated profile or mount arguments with
 a fixed system no-op executable and a bounded timeout; preflight never runs
 the untrusted applet.
+
+## Panics and long-lived hosts
+
+Release builds use `panic=abort`. A panic is an interpreter bug and terminates
+the containing process; it cannot become an ordinary recoverable task error.
+The CLI installs an `execute.panic/1` JSON stderr hook at live, daemon, graph,
+screen, stream, REPL, LSP, DAP, triggered-service/listener, and checkpoint host
+boundaries. It emits one
+diagnostic with host kind, thread, available step/line, Rust location and the
+action (`abort` or `unwind`). The panic payload is withheld to avoid disclosing
+secrets. A missing step/line is represented as `null`, never guessed. The hook
+does not call the default hook or write into a possibly locked record/journal.
+The supervisor must capture stderr. Library embedders must install their own
+hook or explicitly call `security::install_panic_hook` before starting workers.
+
+| Host | Decision under panic=abort |
+| --- | --- |
+| `live serve`, `run --control`, interactive screens | Terminate the host process; deploy behind an external supervisor and retain stderr. In-flight requests are interrupted. |
+| Listener, interval/calendar service | Terminate the service process. Generated systemd services specify `Restart=on-failure`; generated launchd jobs use `KeepAlive` with `SuccessfulExit=false`. The service manager supplies restart supervision. |
+| Graph workers and bounded/parallel task workers | A worker panic terminates its containing process. `catch_unwind` cannot contain an abort; no per-thread recovery guarantee is made. |
+| Daemon forwarded run | The run is already a forked child on Unix; aborting it preserves the daemon parent. The client receives a failed run. |
+| Daemon parent | Terminate; an external supervisor must restart the daemon. |
+| Stream, REPL, LSP and DAP | Terminate the host process; its launcher or an external supervisor must restart it. |
+| Checkpointed run | Preserve committed progress. Resume treats the unfinished invocation as interrupted/uncertain; retry requires the normal retry-safety decision or explicit `--retry-uncertain`. |
+
+`src/tasks.rs` has one debug-only `catch_unwind`; `src/runtime/tasks.rs`
+has two task/element wrappers. They are recovery mechanisms only in builds
+that unwind. Debug containment does not establish release containment.
+Hook installation and task-local step/line propagation for standalone finite
+task hosts still require integration in the task runtime; graph/task threads
+without a finite-step scope report null step/line. Actual supervisor restart
+and daemon-parent survival after an aborted forwarded run require Unix CI.
 
 The executable hash check narrows replacement risk but does not pin an inode
 through `exec`; a replacement race can remain between hashing and launch. The

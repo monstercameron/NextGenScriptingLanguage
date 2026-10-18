@@ -41,7 +41,8 @@ pub(super) fn lines(
     let content = text.strip_suffix('\n').unwrap_or(text);
     let line_count =
         crate::bytes::count_newlines(text.as_bytes()) + usize::from(!text.ends_with('\n'));
-    let mut items = Vec::with_capacity(line_count);
+    // Reserve at most the item limit: the count comes from untrusted input.
+    let mut items = Vec::with_capacity(line_count.min(MAX_LIST_ITEMS));
     for (index, line) in content.split('\n').enumerate() {
         checkpoint_work(context, index)?;
         push_list_item(

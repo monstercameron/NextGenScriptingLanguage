@@ -258,6 +258,201 @@ fn text_output(value: String) -> Result<Value, AppletError> {
     Ok(Value::String(value))
 }
 
+pub(super) fn shape(
+    operation: &str,
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let text = text_input(args, input)?;
+    check_text_size(text.len())?;
+    let unit = match args.get("unit") {
+        None => "chars",
+        Some(Value::String(unit)) => unit.as_str(),
+        Some(_) => return Err(invalid("args.unit must be a string")),
+    };
+    let units = match unit {
+        "chars" => text.chars().count(),
+        "bytes" => text.len(),
+        _ => {
+            return Err(invalid(
+                "unit must be chars or bytes (graphemes are unavailable)",
+            ))
+        }
+    };
+    match operation {
+        "text.trim" => {
+            let mode = match args.get("mode") {
+                None => "both",
+                Some(Value::String(mode)) => mode.as_str(),
+                Some(_) => return Err(invalid("args.mode must be a string")),
+            };
+            if args.get("chars").is_some_and(|value| !value.is_string()) {
+                return Err(invalid("args.chars must be a string"));
+            }
+            let chars = args.get("chars").and_then(Value::as_str);
+            let trimmed = |c: char| chars.map_or(c.is_whitespace(), |set| set.contains(c));
+            let value = match mode {
+                "both" => text.trim_matches(trimmed),
+                "start" => text.trim_start_matches(trimmed),
+                "end" => text.trim_end_matches(trimmed),
+                _ => return Err(invalid("mode must be both, start, or end")),
+            };
+            Ok(Value::String(value.to_owned()))
+        }
+        "text.length" => Ok(Value::from(units)),
+        "text.starts_with" | "text.ends_with" => {
+            let field = if operation == "text.starts_with" {
+                "prefix"
+            } else {
+                "suffix"
+            };
+            let part = required_text(args, field)?;
+            Ok(Value::Bool(if operation == "text.starts_with" {
+                text.starts_with(part)
+            } else {
+                text.ends_with(part)
+            }))
+        }
+        "text.contains_any" => {
+            let needles = args
+                .get("needles")
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid("args.needles must be a list of strings"))?;
+            if needles.len() > MAX_LIST_ITEMS {
+                return Err(invalid("args.needles exceeds the item limit"));
+            }
+            for (index, needle) in needles.iter().enumerate() {
+                checkpoint_work(context, index)?;
+                let needle = needle
+                    .as_str()
+                    .ok_or_else(|| invalid(format!("args.needles[{index}] must be a string")))?;
+                if text.contains(needle) {
+                    return Ok(Value::Bool(true));
+                }
+            }
+            Ok(Value::Bool(false))
+        }
+        "text.truncate" => {
+            let width = args
+                .get("width")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| invalid("args.width must be a nonnegative integer"))?
+                as usize;
+            let ellipsis = args.get("ellipsis").and_then(Value::as_str).unwrap_or("…");
+            let chars = text.chars().collect::<Vec<_>>();
+            if chars.len() <= width {
+                return Ok(Value::String(text.to_owned()));
+            }
+            let ending = ellipsis.chars().count();
+            if ending > width {
+                return Err(invalid("ellipsis is wider than args.width"));
+            }
+            let mut output = chars[..width - ending].iter().collect::<String>();
+            output.push_str(ellipsis);
+            text_output(output)
+        }
+        "text.substring" => {
+            let start = args
+                .get("start")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| invalid("args.start must be an integer"))?;
+            let length = args
+                .get("length")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| invalid("args.length must be a nonnegative integer"))?
+                as usize;
+            if args.get("unit").and_then(Value::as_str) == Some("bytes") {
+                let start = if start < 0 {
+                    text.len().checked_sub(start.unsigned_abs() as usize)
+                } else {
+                    Some(start as usize)
+                }
+                .ok_or_else(|| invalid("substring start is out of range"))?;
+                let end = start
+                    .checked_add(length)
+                    .filter(|end| *end <= text.len())
+                    .ok_or_else(|| invalid("substring length is out of range"))?;
+                return text
+                    .get(start..end)
+                    .map(|slice| Value::String(slice.to_owned()))
+                    .ok_or_else(|| {
+                        invalid("substring byte indexes must be UTF-8 character boundaries")
+                    });
+            }
+            let chars = text.chars().collect::<Vec<_>>();
+            let start = if start < 0 {
+                chars.len().checked_sub(start.unsigned_abs() as usize)
+            } else {
+                Some(start as usize)
+            }
+            .ok_or_else(|| invalid("substring start is out of range"))?;
+            if start > chars.len() {
+                return Err(invalid("substring start is out of range"));
+            }
+            let end = start
+                .checked_add(length)
+                .filter(|end| *end <= chars.len())
+                .ok_or_else(|| invalid("substring length is out of range"))?;
+            Ok(Value::String(chars[start..end].iter().collect()))
+        }
+        "text.pad" => {
+            if args
+                .get("display_width")
+                .is_some_and(|value| !value.is_boolean())
+            {
+                return Err(invalid("args.display_width must be a boolean"));
+            }
+            if args.get("display_width").and_then(Value::as_bool) == Some(true) {
+                return Err(invalid(
+                    "display-width padding is not available in this build",
+                ));
+            }
+            let width = args
+                .get("width")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| invalid("args.width must be a nonnegative integer"))?
+                as usize;
+            let side = args.get("side").and_then(Value::as_str).unwrap_or("right");
+            let fill = args.get("fill").and_then(Value::as_str).unwrap_or(" ");
+            let fill_chars = fill.chars().collect::<Vec<_>>();
+            if fill_chars.is_empty() {
+                return Err(invalid("args.fill cannot be empty"));
+            }
+            let count = width.saturating_sub(text.chars().count());
+            if count > MAX_TEXT_BYTES {
+                return Err(invalid("text.pad output exceeds the text limit"));
+            }
+            let padding = std::iter::repeat_n(fill_chars.as_slice(), count)
+                .flatten()
+                .take(count)
+                .collect::<String>();
+            let value = match side {
+                "left" => format!("{padding}{text}"),
+                "right" => format!("{text}{padding}"),
+                _ => return Err(invalid("side must be left or right")),
+            };
+            text_output(value)
+        }
+        "text.repeat" => {
+            let count = args
+                .get("count")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| invalid("args.count must be a nonnegative integer"))?
+                as usize;
+            if text
+                .len()
+                .checked_mul(count)
+                .is_none_or(|size| size > MAX_TEXT_BYTES)
+            {
+                return Err(invalid("text.repeat output exceeds the text limit"));
+            }
+            text_output(text.repeat(count))
+        }
+        _ => Err(invalid("unknown text shaping operation")),
+    }
+}
+
 /// Return `text`, or `default` when `text` is empty. Empty means zero bytes:
 /// a value of only spaces is not empty.
 pub(super) fn default_if_empty(
@@ -302,6 +497,8 @@ pub(super) fn replace(
 pub(super) fn strip_prefix(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
     let text = text_input(args, input)?;
     let prefix = required_text(args, "prefix")?;
+    check_text_size(text.len())?;
+    check_text_size(prefix.len())?;
     text_output(text.strip_prefix(prefix).unwrap_or(text).to_owned())
 }
 
@@ -309,6 +506,8 @@ pub(super) fn strip_prefix(args: &Map<String, Value>, input: &[u8]) -> Result<Va
 pub(super) fn strip_suffix(args: &Map<String, Value>, input: &[u8]) -> Result<Value, AppletError> {
     let text = text_input(args, input)?;
     let suffix = required_text(args, "suffix")?;
+    check_text_size(text.len())?;
+    check_text_size(suffix.len())?;
     text_output(text.strip_suffix(suffix).unwrap_or(text).to_owned())
 }
 
@@ -333,12 +532,7 @@ fn tick(context: &ExecutionContext<'_>, work: &mut usize) -> Result<(), AppletEr
 }
 
 pub(super) fn check_text_size(length: usize) -> Result<(), AppletError> {
-    if length > MAX_TEXT_BYTES {
-        return Err(invalid(format!(
-            "text exceeds the {MAX_TEXT_BYTES}-byte limit"
-        )));
-    }
-    Ok(())
+    super::aggregation::check_bytes(length)
 }
 
 #[cfg(test)]

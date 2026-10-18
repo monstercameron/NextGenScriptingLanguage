@@ -13,6 +13,7 @@ const MAX_POINTER_BYTES: usize = 4096;
 const MAX_POINTER_SEGMENTS: usize = 256;
 const MAX_FILTER_CLAUSES: usize = 32;
 const MAX_DEPTH: usize = 128;
+const MAX_JSON_ITEMS: usize = 100_000;
 
 pub(super) fn parse(
     args: &Map<String, Value>,
@@ -58,10 +59,15 @@ pub(super) fn get(
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
     let document = document_ref(args, input, context)?;
-    let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
-    lookup(document.as_ref(), &pointer)?
-        .cloned()
-        .ok_or_else(|| absence("not_found", "JSON Pointer does not identify a value"))
+    let selected = get_from_pointers(document.as_ref(), args)?;
+    match selected {
+        Some(Value::Null) => Ok(args.get("default").cloned().unwrap_or(Value::Null)),
+        Some(value) => Ok(value),
+        None => args
+            .get("default")
+            .cloned()
+            .ok_or_else(|| absence("not_found", "no JSON Pointer identifies a value")),
+    }
 }
 
 /// `json.get` fast path for a parsed runtime binding. It still checks the complete
@@ -72,11 +78,60 @@ pub(super) fn get_typed(
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
     check_typed_size_and_depth(document, context)?;
-    let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
-    let selected = lookup_typed(document, &pointer)?
-        .ok_or_else(|| absence("not_found", "JSON Pointer does not identify a value"))?;
-    crate::structured::to_json(selected)
-        .map_err(|error| invalid(format!("JSON value cannot be converted: {error}")))
+    let pointers = get_pointers(args)?;
+    let mut saw_null = false;
+    for pointer in pointers {
+        let selected = lookup_typed(document, &pointer)?;
+        if let Some(selected) = selected {
+            if matches!(selected, TypedValue::Null) {
+                saw_null = true;
+                continue;
+            }
+            return crate::structured::to_json(selected)
+                .map_err(|error| invalid(format!("JSON value cannot be converted: {error}")));
+        }
+    }
+    args.get("default")
+        .cloned()
+        .or_else(|| saw_null.then_some(Value::Null))
+        .ok_or_else(|| absence("not_found", "no JSON Pointer identifies a value"))
+}
+
+fn get_from_pointers(
+    document: &Value,
+    args: &Map<String, Value>,
+) -> Result<Option<Value>, AppletError> {
+    let mut saw_null = false;
+    for pointer in get_pointers(args)? {
+        if let Some(value) = lookup(document, &pointer)? {
+            if value.is_null() {
+                saw_null = true;
+                continue;
+            }
+            return Ok(Some(value.clone()));
+        }
+    }
+    Ok(saw_null.then_some(Value::Null))
+}
+
+fn get_pointers(args: &Map<String, Value>) -> Result<Vec<Vec<String>>, AppletError> {
+    if let Some(value) = args.get("pointers") {
+        if args.contains_key("pointer") {
+            return Err(invalid("provide pointer or pointers, not both"));
+        }
+        let values = value
+            .as_array()
+            .ok_or_else(|| invalid("args.pointers must be an array of JSON Pointer strings"))?;
+        let mut pointers = Vec::with_capacity(values.len());
+        for value in values {
+            let pointer = value
+                .as_str()
+                .ok_or_else(|| invalid("args.pointers entries must be strings"))?;
+            pointers.push(parse_pointer(pointer)?);
+        }
+        return Ok(pointers);
+    }
+    Ok(vec![parse_pointer(optional_pointer(args, "pointer")?)?])
 }
 
 fn check_typed_size_and_depth(
@@ -145,7 +200,7 @@ fn lookup_typed<'a>(
                 None => return Ok(None),
             },
             TypedValue::List(items) => match parse_array_index(segment) {
-                Err(_) => return Ok(None),
+                Err(error) => return Err(error),
                 Ok(Some(index)) => match items.get(index) {
                     Some(value) => value,
                     None => return Ok(None),
@@ -188,14 +243,18 @@ pub(super) fn map(
     let mut output_bytes = 2usize;
     for (index, item) in array.iter().enumerate() {
         checkpoint_work(context, index)?;
-        let value = lookup(item, &selection_pointer)?.ok_or_else(|| {
-            absence(
-                "not_found",
-                format!("select pointer is absent from array item {index}"),
-            )
-        })?;
-        output_bytes = add_output_item_size(output_bytes, value)?;
-        mapped.push(value.clone());
+        let value = match lookup(item, &selection_pointer)? {
+            Some(Value::Null) => args.get("default").cloned().unwrap_or(Value::Null),
+            Some(value) => value.clone(),
+            None => args.get("default").cloned().ok_or_else(|| {
+                absence(
+                    "not_found",
+                    format!("select pointer is absent from array item {index}"),
+                )
+            })?,
+        };
+        output_bytes = add_output_item_size(output_bytes, &value)?;
+        mapped.push(value);
     }
     let result = Value::Array(mapped);
     check_size_and_depth(&result, context)?;
@@ -249,6 +308,435 @@ pub(super) fn filter(
     let result = Value::Array(selected);
     check_size_and_depth(&result, context)?;
     Ok(result)
+}
+
+pub(super) fn keys(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let object = lookup(
+        &document,
+        &parse_pointer(optional_pointer(args, "pointer")?)?,
+    )?
+    .and_then(Value::as_object)
+    .ok_or_else(|| invalid("the selected JSON value must be an object"))?;
+    if object.len() > MAX_JSON_ITEMS {
+        return Err(invalid("JSON object exceeds the 100000 item limit"));
+    }
+    let mut keys = Vec::with_capacity(object.len());
+    for (index, key) in object.keys().enumerate() {
+        checkpoint_work(context, index)?;
+        keys.push(Value::String(key.clone()));
+    }
+    Ok(Value::Array(keys))
+}
+
+pub(super) fn entries(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let object = lookup(
+        &document,
+        &parse_pointer(optional_pointer(args, "pointer")?)?,
+    )?
+    .and_then(Value::as_object)
+    .ok_or_else(|| invalid("the selected JSON value must be an object"))?;
+    if object.len() > MAX_JSON_ITEMS {
+        return Err(invalid("JSON object exceeds the 100000 item limit"));
+    }
+    let mut entries = Vec::with_capacity(object.len());
+    for (index, (key, value)) in object.iter().enumerate() {
+        checkpoint_work(context, index)?;
+        entries.push(serde_json::json!({"key":key,"value":value}));
+    }
+    Ok(Value::Array(entries))
+}
+
+pub(super) fn has(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let pointer = parse_pointer(required_string(args, "path")?)?;
+    Ok(Value::Bool(lookup(&document, &pointer)?.is_some()))
+}
+
+pub(super) fn delete(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let mut document = document(args, input, context)?;
+    let pointer = parse_pointer(required_string(args, "path")?)?;
+    if pointer.is_empty() {
+        return Err(invalid("json.delete cannot remove the document root"));
+    }
+    let parent = lookup_mut(&mut document, &pointer[..pointer.len() - 1])?
+        .ok_or_else(|| absence("not_found", "JSON Pointer parent does not exist"))?;
+    let key = pointer.last().expect("non-empty pointer");
+    match parent {
+        Value::Object(fields) => {
+            fields
+                .remove(key)
+                .ok_or_else(|| absence("not_found", "JSON Pointer does not identify a value"))?;
+        }
+        Value::Array(items) => {
+            let index =
+                parse_array_index(key)?.ok_or_else(|| invalid("invalid array index for delete"))?;
+            if index >= items.len() {
+                return Err(absence(
+                    "not_found",
+                    "JSON Pointer does not identify a value",
+                ));
+            }
+            items.remove(index);
+        }
+        _ => return Err(invalid("JSON Pointer parent is not an object or array")),
+    }
+    check_size_and_depth(&document, context)?;
+    Ok(document)
+}
+
+fn lookup_mut<'a>(
+    root: &'a mut Value,
+    pointer: &[String],
+) -> Result<Option<&'a mut Value>, AppletError> {
+    let mut current = root;
+    for segment in pointer {
+        current = match current {
+            Value::Object(fields) => match fields.get_mut(segment) {
+                Some(value) => value,
+                None => return Ok(None),
+            },
+            Value::Array(items) => match parse_array_index(segment)? {
+                Some(i) => match items.get_mut(i) {
+                    Some(value) => value,
+                    None => return Ok(None),
+                },
+                None => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+    }
+    Ok(Some(current))
+}
+
+pub(super) fn merge(
+    args: &Map<String, Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let left = args
+        .get("left")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("args.left must be an object"))?;
+    let right = args
+        .get("right")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("args.right must be an object"))?;
+    let mut merged = left.clone();
+    for (key, value) in right {
+        context.checkpoint()?;
+        merged.insert(key.clone(), value.clone());
+    }
+    let result = Value::Object(merged);
+    check_size_and_depth(&result, context)?;
+    Ok(result)
+}
+
+pub(super) fn length(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let value = lookup(
+        &document,
+        &parse_pointer(optional_pointer(args, "pointer")?)?,
+    )?
+    .ok_or_else(|| absence("not_found", "JSON Pointer does not identify a value"))?;
+    let length = match value {
+        Value::Array(items) => items.len(),
+        Value::Object(fields) => fields.len(),
+        Value::String(text) => text.chars().count(),
+        _ => return Err(invalid("json.length requires an array, object, or string")),
+    };
+    Ok(Value::Number(length.into()))
+}
+
+pub(super) fn pick(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| invalid("document must be an object"))?;
+    let names = args
+        .get("keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("args.keys must be an array of strings"))?;
+    let mut selected = Map::new();
+    for (index, name) in names.iter().enumerate() {
+        checkpoint_work(context, index)?;
+        let key = name
+            .as_str()
+            .ok_or_else(|| invalid("args.keys entries must be strings"))?;
+        if let Some(value) = object.get(key) {
+            selected.insert(key.to_owned(), value.clone());
+        }
+    }
+    let result = Value::Object(selected);
+    check_size_and_depth(&result, context)?;
+    Ok(result)
+}
+
+pub(super) fn values(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let object = lookup(
+        &document,
+        &parse_pointer(optional_pointer(args, "pointer")?)?,
+    )?
+    .and_then(Value::as_object)
+    .ok_or_else(|| invalid("the selected JSON value must be an object"))?;
+    if object.len() > MAX_JSON_ITEMS {
+        return Err(invalid("JSON object exceeds the 100000 item limit"));
+    }
+    let mut values = Vec::with_capacity(object.len());
+    for (index, value) in object.values().enumerate() {
+        checkpoint_work(context, index)?;
+        values.push(value.clone());
+    }
+    Ok(Value::Array(values))
+}
+
+pub(super) fn omit(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| invalid("document must be an object"))?;
+    let names = args
+        .get("keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("args.keys must be an array of strings"))?;
+    let mut omitted = std::collections::BTreeSet::new();
+    for name in names {
+        omitted.insert(
+            name.as_str()
+                .ok_or_else(|| invalid("args.keys entries must be strings"))?,
+        );
+    }
+    let mut selected = Map::new();
+    for (index, (key, value)) in object.iter().enumerate() {
+        checkpoint_work(context, index)?;
+        if !omitted.contains(key.as_str()) {
+            selected.insert(key.clone(), value.clone());
+        }
+    }
+    let result = Value::Object(selected);
+    check_size_and_depth(&result, context)?;
+    Ok(result)
+}
+
+pub(super) fn rename_keys(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| invalid("document must be an object"))?;
+    let renames = args
+        .get("renames")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("args.renames must map old key names to new string names"))?;
+    let mut result = Map::new();
+    for (index, (key, value)) in object.iter().enumerate() {
+        checkpoint_work(context, index)?;
+        let target = match renames.get(key) {
+            Some(Value::String(name)) => name,
+            Some(_) => return Err(invalid("args.renames values must be strings")),
+            None => key,
+        };
+        if result.insert(target.clone(), value.clone()).is_some() {
+            return Err(invalid("renaming keys would create a duplicate key"));
+        }
+    }
+    let result = Value::Object(result);
+    check_size_and_depth(&result, context)?;
+    Ok(result)
+}
+
+pub(super) fn concat(
+    args: &Map<String, Value>,
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let left = args
+        .get("left")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("args.left must be an array"))?;
+    let right = args
+        .get("right")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("args.right must be an array"))?;
+    if left.len().saturating_add(right.len()) > 100_000 {
+        return Err(invalid("concatenated array exceeds the 100000 item limit"));
+    }
+    let mut combined = Vec::with_capacity(left.len() + right.len());
+    for (index, value) in left.iter().chain(right).enumerate() {
+        checkpoint_work(context, index)?;
+        combined.push(value.clone());
+    }
+    let result = Value::Array(combined);
+    check_size_and_depth(&result, context)?;
+    Ok(result)
+}
+
+pub(super) fn edge(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+    last: bool,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let value = lookup(
+        &document,
+        &parse_pointer(optional_pointer(args, "pointer")?)?,
+    )?
+    .ok_or_else(|| absence("not_found", "JSON Pointer does not identify a value"))?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| invalid("json.first and json.last require an array"))?;
+    (if last { items.last() } else { items.first() })
+        .cloned()
+        .ok_or_else(|| absence("not_found", "cannot select from an empty array"))
+}
+
+pub(super) fn group_by(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let array = document
+        .as_array()
+        .ok_or_else(|| invalid("document must be an array"))?;
+    if array.len() > MAX_JSON_ITEMS {
+        return Err(invalid("JSON array exceeds the 100000 item limit"));
+    }
+    let pointer = parse_pointer(required_string(args, "pointer")?)?;
+    let mut groups: std::collections::BTreeMap<String, Vec<Value>> =
+        std::collections::BTreeMap::new();
+    for (index, item) in array.iter().enumerate() {
+        checkpoint_work(context, index)?;
+        let key = lookup(item, &pointer)?
+            .ok_or_else(|| absence("not_found", "group_by pointer is absent from an item"))?;
+        let encoded = serde_json::to_string(key)
+            .map_err(|e| invalid(format!("group key cannot be serialized: {e}")))?;
+        groups.entry(encoded).or_default().push(item.clone());
+    }
+    let result = Value::Array(groups.into_values().map(Value::Array).collect());
+    check_size_and_depth(&result, context)?;
+    Ok(result)
+}
+
+pub(super) fn unique_by(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let array = document
+        .as_array()
+        .ok_or_else(|| invalid("document must be an array"))?;
+    if array.len() > MAX_JSON_ITEMS {
+        return Err(invalid("JSON array exceeds the 100000 item limit"));
+    }
+    let pointer = parse_pointer(required_string(args, "pointer")?)?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut output = Vec::new();
+    for (index, item) in array.iter().enumerate() {
+        checkpoint_work(context, index)?;
+        let key = lookup(item, &pointer)?
+            .ok_or_else(|| absence("not_found", "unique_by pointer is absent from an item"))?;
+        let encoded = serde_json::to_string(key)
+            .map_err(|e| invalid(format!("unique key cannot be serialized: {e}")))?;
+        if seen.insert(encoded) {
+            output.push(item.clone());
+        }
+    }
+    Ok(Value::Array(output))
+}
+
+pub(super) fn sum(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let array = document
+        .as_array()
+        .ok_or_else(|| invalid("document must be an array"))?;
+    let mut sum_args = Map::new();
+    sum_args.insert("items".into(), Value::Array(array.clone()));
+    super::aggregation::run("list.sum", &sum_args, &[], context)
+}
+
+pub(super) fn sort_by(
+    args: &Map<String, Value>,
+    input: &[u8],
+    context: &ExecutionContext<'_>,
+) -> Result<Value, AppletError> {
+    let document = document(args, input, context)?;
+    let array = document
+        .as_array()
+        .ok_or_else(|| invalid("document must be an array"))?;
+    if array.len() > MAX_JSON_ITEMS {
+        return Err(invalid("JSON array exceeds the 100000 item limit"));
+    }
+    let pointer = parse_pointer(required_string(args, "pointer")?)?;
+    let numeric = args
+        .get("numeric")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut items = array.clone();
+    for item in &items {
+        let key = lookup(item, &pointer)?
+            .ok_or_else(|| absence("not_found", "sort_by pointer is absent from an item"))?;
+        if (numeric && !key.is_number()) || (!numeric && !key.is_string()) {
+            return Err(invalid(
+                "sort_by keys must all be numbers with numeric=true or strings otherwise",
+            ));
+        }
+    }
+    items.sort_by(|a, b| {
+        let av = lookup(a, &pointer).ok().flatten();
+        let bv = lookup(b, &pointer).ok().flatten();
+        match (av, bv, numeric) {
+            (Some(Value::Number(a)), Some(Value::Number(b)), true) => a
+                .as_f64()
+                .partial_cmp(&b.as_f64())
+                .unwrap_or(std::cmp::Ordering::Equal),
+            (Some(Value::String(a)), Some(Value::String(b)), false) => a.cmp(b),
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+    context.checkpoint()?;
+    Ok(Value::Array(items))
 }
 
 fn add_output_item_size(current: usize, value: &Value) -> Result<usize, AppletError> {
@@ -456,7 +944,13 @@ fn lookup<'a>(root: &'a Value, pointer: &[String]) -> Result<Option<&'a Value>, 
                 Some(value) => value,
                 None => return Ok(None),
             },
+            // A name on an array is absent; a malformed number (`01`) is an error.
             Value::Array(items) => match parse_array_index(segment) {
+                Err(error)
+                    if !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()) =>
+                {
+                    return Err(error)
+                }
                 Err(_) => return Ok(None),
                 Ok(Some(index)) => match items.get(index) {
                     Some(value) => value,

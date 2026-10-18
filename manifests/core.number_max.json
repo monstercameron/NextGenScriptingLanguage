@@ -1,0 +1,59 @@
+{
+  "name": "number.max",
+  "description": "Provides number.max for controlled scripts.",
+  "phrases": [
+    "number max",
+    "values max"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "values": {
+      "type": "json"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "number.max"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "number"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "values": {
+          "delivery": "single",
+          "schema": {
+            "type": "json"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "number.compute"
+    ]
+  }
+}

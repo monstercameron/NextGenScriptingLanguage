@@ -28,18 +28,228 @@ fn from_float(value: f64) -> Result<Value, AppletError> {
 }
 
 pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, AppletError> {
+    if operation == "number.format" {
+        let value = number(args, "value")?;
+        let precision = args.get("precision").and_then(Value::as_u64).unwrap_or(0);
+        if precision > 15 {
+            return Err(invalid("args.precision must be from 0 through 15"));
+        }
+        let precision = precision as usize;
+        let mut text = if let Some(integer) = as_integer(value) {
+            let negative = integer < 0;
+            let digits = integer.unsigned_abs().to_string();
+            let grouped = match args
+                .get("grouping")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                true => group_digits(&digits),
+                false => digits,
+            };
+            let sign = if negative { "-" } else { "" };
+            if precision == 0 {
+                format!("{sign}{grouped}")
+            } else {
+                format!("{sign}{grouped}.{}", "0".repeat(precision))
+            }
+        } else {
+            let value = value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| invalid("args.value must be finite"))?;
+            let formatted = format!("{value:.precision$}");
+            if args
+                .get("grouping")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                group_formatted(&formatted)
+            } else {
+                formatted
+            }
+        };
+        if args
+            .get("percent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            text.push('%');
+        }
+        return Ok(Value::String(text));
+    }
+    if operation == "number.format_size" {
+        let value = number(args, "value")?
+            .as_f64()
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or_else(|| invalid("args.value must be a nonnegative finite number"))?;
+        let system = args.get("system").and_then(Value::as_str).unwrap_or("iec");
+        let (base, units): (f64, &[&str]) = match system {
+            "iec" => (1024.0, &["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"]),
+            "si" => (1000.0, &["B", "kB", "MB", "GB", "TB", "PB", "EB"]),
+            _ => return Err(invalid("args.system must be si or iec")),
+        };
+        let precision = args.get("precision").and_then(Value::as_u64).unwrap_or(1);
+        if precision > 6 {
+            return Err(invalid("args.precision must be from 0 through 6"));
+        }
+        let precision = precision as usize;
+        let mut scaled = value;
+        let mut unit = 0;
+        while scaled >= base && unit + 1 < units.len() {
+            scaled /= base;
+            unit += 1;
+        }
+        return Ok(Value::String(format!(
+            "{scaled:.precision$} {}",
+            units[unit]
+        )));
+    }
+    if operation == "number.divmod" {
+        let left = as_integer(number(args, "left")?)
+            .ok_or_else(|| invalid("args.left must be an integer"))?;
+        let right = as_integer(number(args, "right")?)
+            .ok_or_else(|| invalid("args.right must be an integer"))?;
+        if right == 0 {
+            return Err(invalid("division by zero"));
+        }
+        let quotient = left
+            .checked_div(right)
+            .ok_or_else(|| failed("overflow", "integer arithmetic overflowed"))?;
+        let remainder = left
+            .checked_rem(right)
+            .ok_or_else(|| failed("overflow", "integer arithmetic overflowed"))?;
+        return Ok(serde_json::json!({"quotient":quotient,"remainder":remainder}));
+    }
+    if matches!(operation, "number.min" | "number.max") {
+        let values = args
+            .get("values")
+            .and_then(Value::as_array)
+            .filter(|items| !items.is_empty())
+            .ok_or_else(|| invalid("args.values must be a nonempty numeric list"))?;
+        let mut best = values[0]
+            .as_number()
+            .ok_or_else(|| invalid("args.values must contain numbers"))?;
+        for value in &values[1..] {
+            let candidate = value
+                .as_number()
+                .ok_or_else(|| invalid("args.values must contain numbers"))?;
+            let ordering = super::aggregation::numeric_order(candidate, best)?;
+            if (operation == "number.min" && ordering.is_lt())
+                || (operation == "number.max" && ordering.is_gt())
+            {
+                best = candidate;
+            }
+        }
+        return Ok(Value::Number(best.clone()));
+    }
+    if matches!(
+        operation,
+        "number.floor"
+            | "number.ceil"
+            | "number.trunc"
+            | "number.round"
+            | "number.abs"
+            | "number.sign"
+    ) {
+        let value = number(args, "value")?;
+        if let Some(integer) = as_integer(value) {
+            let out = match operation {
+                "number.abs" => integer
+                    .checked_abs()
+                    .ok_or_else(|| failed("overflow", "absolute value overflowed"))?,
+                "number.sign" => integer.signum(),
+                "number.round" => {
+                    let digits = args.get("digits").and_then(Value::as_i64).unwrap_or(0);
+                    if !(-38..=38).contains(&digits) {
+                        return Err(invalid(
+                            "integer rounding digits must be between -38 and 38",
+                        ));
+                    }
+                    if digits >= 0 {
+                        integer
+                    } else {
+                        let divisor = 10i128
+                            .checked_pow((-digits) as u32)
+                            .ok_or_else(|| failed("overflow", "rounding scale overflowed"))?;
+                        let quotient = integer / divisor;
+                        let remainder = integer % divisor;
+                        let rounded = if remainder.unsigned_abs() * 2 >= divisor as u128 {
+                            quotient + integer.signum()
+                        } else {
+                            quotient
+                        };
+                        rounded
+                            .checked_mul(divisor)
+                            .ok_or_else(|| failed("overflow", "rounded integer overflowed"))?
+                    }
+                }
+                _ => integer,
+            };
+            return from_integer(out);
+        }
+        let value = value
+            .as_f64()
+            .ok_or_else(|| invalid("args.value must be finite"))?;
+        let out = match operation {
+            "number.floor" => value.floor(),
+            "number.ceil" => value.ceil(),
+            "number.trunc" => value.trunc(),
+            "number.round" => {
+                let digits = args.get("digits").and_then(Value::as_i64).unwrap_or(0);
+                if !(-308..=308).contains(&digits) {
+                    return Err(invalid("args.digits must be between -308 and 308"));
+                }
+                let scale = 10f64.powi(digits as i32);
+                if digits >= 0 {
+                    (value * scale).round() / scale
+                } else {
+                    (value / scale).round() * scale
+                }
+            }
+            "number.abs" => value.abs(),
+            "number.sign" => value.signum(),
+            _ => value,
+        };
+        return from_float(out);
+    }
+    if operation == "number.clamp" {
+        let value = number(args, "value")?;
+        let min = number(args, "min")?;
+        let max = number(args, "max")?;
+        if super::aggregation::numeric_order(min, max)?.is_gt() {
+            return Err(invalid("args.min must not exceed args.max"));
+        }
+        return Ok(Value::Number(
+            if super::aggregation::numeric_order(value, min)?.is_lt() {
+                min.clone()
+            } else if super::aggregation::numeric_order(value, max)?.is_gt() {
+                max.clone()
+            } else {
+                value.clone()
+            },
+        ));
+    }
+    if matches!(operation, "number.int_divide" | "number.modulo") {
+        let left = as_integer(number(args, "left")?)
+            .ok_or_else(|| invalid("args.left must be an integer"))?;
+        let right = as_integer(number(args, "right")?)
+            .ok_or_else(|| invalid("args.right must be an integer"))?;
+        if right == 0 {
+            return Err(invalid("division by zero"));
+        }
+        let result = if operation == "number.int_divide" {
+            left.checked_div(right)
+        } else {
+            left.checked_rem(right)
+        }
+        .ok_or_else(|| failed("overflow", "integer arithmetic overflowed"))?;
+        return from_integer(result);
+    }
     let left = number(args, "left")?;
     let right = number(args, "right")?;
 
     if operation == "number.compare" {
-        let ordering = match (as_integer(left), as_integer(right)) {
-            (Some(left), Some(right)) => left.cmp(&right),
-            _ => left
-                .as_f64()
-                .zip(right.as_f64())
-                .and_then(|(left, right)| left.partial_cmp(&right))
-                .ok_or_else(|| invalid("number.compare requires finite numeric operands"))?,
-        };
+        let ordering = super::aggregation::numeric_order(left, right)?;
         return Ok(Value::from(match ordering {
             Ordering::Less => -1,
             Ordering::Equal => 0,
@@ -79,6 +289,30 @@ pub(super) fn run(operation: &str, args: &Map<String, Value>) -> Result<Value, A
         _ => unreachable!("operation dispatch is closed"),
     };
     from_float(result)
+}
+
+fn group_digits(digits: &str) -> String {
+    let mut output = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            output.push(',');
+        }
+        output.push(digit);
+    }
+    output
+}
+
+fn group_formatted(value: &str) -> String {
+    let (sign, rest) = value
+        .strip_prefix('-')
+        .map_or(("", value), |rest| ("-", rest));
+    let (whole, fraction) = rest.split_once('.').unwrap_or((rest, ""));
+    let mut output = format!("{sign}{}", group_digits(whole));
+    if !fraction.is_empty() {
+        output.push('.');
+        output.push_str(fraction);
+    }
+    output
 }
 
 pub(super) fn to_text(args: &Map<String, Value>) -> Result<Value, AppletError> {

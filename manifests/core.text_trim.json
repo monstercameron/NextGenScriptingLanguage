@@ -1,0 +1,78 @@
+{
+  "name": "text.trim",
+  "description": "Provides text.trim for controlled scripts.",
+  "phrases": [
+    "text trim",
+    "trim whitespace",
+    "trim surrounding whitespace"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "text": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string"
+    },
+    "chars": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "text.trim"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "text"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        },
+        "mode": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        },
+        "chars": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "text.transform"
+    ]
+  }
+}

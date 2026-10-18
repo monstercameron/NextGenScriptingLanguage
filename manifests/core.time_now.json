@@ -1,0 +1,61 @@
+{
+  "name": "time.now",
+  "description": "Provides the time.now operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "epoch_s": {
+      "type": "integer",
+      "required": false
+    }
+  },
+  "arguments": [
+    {
+      "literal": "time.now"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "json"
+    },
+    "capabilities": [
+      "clock.read"
+    ],
+    "effects": [
+      "clock.read"
+    ],
+    "ports": {
+      "inputs": {
+        "epoch_s": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "json"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "time now"
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "name": "encode.base64",
+  "description": "Encodes or decodes RFC 4648 base64 text, with optional URL-safe alphabet and padding control.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": false
+    },
+    "url_safe": {
+      "type": "boolean"
+    },
+    "padding": {
+      "type": "boolean"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "encode.base64"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "text"
+    },
+    "capabilities": [
+      "text.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "url_safe": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        },
+        "padding": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "encode base64"
+  ]
+}

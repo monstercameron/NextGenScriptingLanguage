@@ -1,0 +1,81 @@
+{
+  "name": "time.format",
+  "description": "Provides the time.format operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "format": {
+      "type": "string",
+      "required": false
+    },
+    "zone": {
+      "type": "string",
+      "required": false
+    },
+    "epoch": {
+      "type": "integer",
+      "required": false
+    }
+  },
+  "arguments": [
+    {
+      "literal": "time.format"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "text"
+    },
+    "capabilities": [
+      "clock.read"
+    ],
+    "effects": [
+      "clock.read"
+    ],
+    "ports": {
+      "inputs": {
+        "format": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "zone": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "epoch": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "time format"
+  ]
+}

@@ -13,14 +13,18 @@ mod env_file;
 mod file_test;
 mod filesystem;
 mod glob;
+mod hash;
 mod ini;
 mod jsonc;
+mod list;
 mod path;
 mod structured;
 mod template;
 mod text;
+mod time;
 mod toml;
 mod transaction;
+mod wait;
 mod yaml;
 
 use serde_json::{Map, Value};
@@ -216,11 +220,18 @@ pub fn execute_with_context(
         | "list.sort"
         | "list.top"
         | "list.group"
-        | "text.count_lines_by" => aggregation::run(operation, args, input),
+        | "text.count_lines_by" => aggregation::run(operation, args, input, context),
+        "list.range" | "list.enumerate" | "list.slice" | "list.first" | "list.last"
+        | "list.rest" | "list.reverse" | "list.concat" | "list.flatten" | "list.zip"
+        | "list.chunk" => list::run(operation, args, context),
         "path.dirname" => path::dirname(args),
         "path.basename" => path::basename(args),
         "path.remove_suffix" => path::remove_suffix(args),
         "text.trim_final_lf" | "text.normalize" => text::trim_final_lf(args, input),
+        "text.trim" | "text.length" | "text.substring" | "text.pad" | "text.repeat"
+        | "text.starts_with" | "text.ends_with" | "text.contains_any" | "text.truncate" => {
+            text::shape(operation, args, input, context)
+        }
         "text.concat" => text::concat(args, context),
         "text.matches" => text::matches(args, input, context),
         "text.default_if_empty" => text::default_if_empty(args, input),
@@ -249,7 +260,10 @@ pub fn execute_with_context(
         "fs.test" => file_test::test(args, cwd),
         "fs.glob" => glob::glob(args, cwd, context),
         "number.add" | "number.subtract" | "number.multiply" | "number.divide"
-        | "number.compare" => arithmetic::run(operation, args),
+        | "number.compare" | "number.int_divide" | "number.modulo" | "number.divmod"
+        | "number.min" | "number.max" | "number.clamp" | "number.abs" | "number.sign"
+        | "number.round" | "number.floor" | "number.ceil" | "number.trunc" | "number.format"
+        | "number.format_size" => arithmetic::run(operation, args),
         "number.parse_integer" | "number.parse_integer.result" => {
             arithmetic::parse_integer(args, input)
         }
@@ -265,6 +279,31 @@ pub fn execute_with_context(
         "json.set" => structured::set(args, input, context),
         "json.map" => structured::map(args, input, context),
         "json.filter" => structured::filter(args, input, context),
+        "json.keys" => structured::keys(args, input, context),
+        "json.entries" => structured::entries(args, input, context),
+        "json.values" => structured::values(args, input, context),
+        "json.has" => structured::has(args, input, context),
+        "json.delete" => structured::delete(args, input, context),
+        "json.merge" => structured::merge(args, context),
+        "json.length" => structured::length(args, input, context),
+        "json.pick" => structured::pick(args, input, context),
+        "json.omit" => structured::omit(args, input, context),
+        "json.rename_keys" => structured::rename_keys(args, input, context),
+        "json.concat" => structured::concat(args, context),
+        "json.first" => structured::edge(args, input, context, false),
+        "json.last" => structured::edge(args, input, context, true),
+        "json.group_by" => structured::group_by(args, input, context),
+        "json.unique_by" => structured::unique_by(args, input, context),
+        "json.sum" => structured::sum(args, input, context),
+        "json.sort_by" => structured::sort_by(args, input, context),
+        "hash.sha256" | "hash.sha512" | "encode.base64" | "decode.base64" | "encode.hex"
+        | "decode.hex" | "encode.url" | "decode.url" | "encode.form" => {
+            hash::run(operation, args, input)
+        }
+        "time.now" | "time.format" | "time.parse" | "time.add" | "time.diff" => {
+            time::run(operation, args, context)
+        }
+        "time.sleep" | "wait.until" => wait::run(operation, args, cwd, context),
         "jsonc.edit_content" => jsonc::edit_content(args, input, context),
         "fs.transaction" => transaction::apply(args, cwd),
         "fs.transaction.recover" => transaction::recover(args, cwd),

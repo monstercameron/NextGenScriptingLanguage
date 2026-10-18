@@ -1,0 +1,86 @@
+{
+  "name": "number.format",
+  "description": "Provides number.format for controlled scripts.",
+  "phrases": [
+    "number format",
+    "value format"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "value": {
+      "type": "json"
+    },
+    "precision": {
+      "type": "integer"
+    },
+    "grouping": {
+      "type": "boolean"
+    },
+    "percent": {
+      "type": "boolean"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "number.format"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "text"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "number"
+          }
+        },
+        "precision": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        "grouping": {
+          "delivery": "single",
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        "percent": {
+          "delivery": "single",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "number.compute"
+    ]
+  }
+}

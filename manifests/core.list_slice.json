@@ -1,0 +1,86 @@
+{
+  "name": "list.slice",
+  "description": "Provides list.slice for controlled scripts.",
+  "phrases": [
+    "list slice",
+    "items slice"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "items": {
+      "type": "json"
+    },
+    "offset": {
+      "type": "integer"
+    },
+    "length": {
+      "type": "integer"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "list.slice"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "list",
+      "items": {
+        "type": "json"
+      }
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "items": {
+          "delivery": "single",
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          }
+        },
+        "offset": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        "length": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "items": {
+              "type": "json"
+            },
+            "type": "list"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "data.transform"
+    ]
+  }
+}

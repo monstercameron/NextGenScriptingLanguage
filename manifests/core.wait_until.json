@@ -1,0 +1,112 @@
+{
+  "name": "wait.until",
+  "description": "Provides the wait.until operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "probe": {
+      "type": "string",
+      "required": false
+    },
+    "host": {
+      "type": "string",
+      "required": false
+    },
+    "path": {
+      "type": "string",
+      "required": false
+    },
+    "interval_ms": {
+      "type": "integer",
+      "required": false
+    },
+    "port": {
+      "type": "integer",
+      "required": false
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "required": false
+    }
+  },
+  "arguments": [
+    {
+      "literal": "wait.until"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "json"
+    },
+    "capabilities": [
+      "filesystem.read",
+      "network.loopback"
+    ],
+    "effects": [
+      "network.loopback"
+    ],
+    "ports": {
+      "inputs": {
+        "probe": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "host": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "path": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "interval_ms": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "port": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "timeout_ms": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "json"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "wait until"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "time.sleep",
+  "description": "Provides the time.sleep operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "milliseconds": {
+      "type": "integer",
+      "required": false
+    },
+    "seconds": {
+      "type": "json",
+      "required": false
+    }
+  },
+  "arguments": [
+    {
+      "literal": "time.sleep"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "boolean"
+    },
+    "capabilities": [
+      "clock.read"
+    ],
+    "effects": [
+      "clock.read"
+    ],
+    "ports": {
+      "inputs": {
+        "milliseconds": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "seconds": {
+          "schema": {
+            "type": "number"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "time sleep"
+  ]
+}

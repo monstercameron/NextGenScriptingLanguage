@@ -206,14 +206,25 @@ fn help() -> &'static str {
     "execute-applet OPERATION --args JSON_OBJECT\n\
      Reads optional raw bytes from stdin and writes one JSON value plus LF.\n\
      Operations: path.dirname, path.basename, path.remove_suffix, text.trim_final_lf,\n\
-     text.normalize, text.concat, text.matches, number.add, number.subtract,\n\
+     text.normalize, text.trim, text.length, text.substring, text.pad, text.repeat,\n\
+     text.starts_with, text.ends_with, text.contains_any, text.truncate, text.concat,\n\
+     text.matches, number.abs, number.ceil, number.clamp, number.divmod, number.floor,\n\
+     number.format, number.format_size, number.int_divide, number.max, number.min,\n\
+     number.modulo, number.round, number.sign, number.trunc, number.add, number.subtract,\n\
      number.multiply, number.divide, number.compare, number.parse_integer,\n\
      number.parse_integer.result, number.to_text, color.rgb_to_hex, color.parse_rgb,\n\
      color.parse_rgb.result, json.parse, json.stringify, json.get, json.set,\n\
-     json.map, json.filter, csv.parse, csv.stringify, jsonc.edit_content,\n\
+     json.map, json.filter, json.concat, json.delete, json.entries, json.first,\n\
+     json.group_by, json.has, json.keys, json.last, json.length, json.merge,\n\
+     json.omit, json.pick, json.rename_keys, json.sort_by, json.sum, json.unique_by,\n\
+     json.values, csv.parse, csv.stringify, jsonc.edit_content,\n\
      text.lines, text.split, text.default_if_empty, text.replace,\n\
      text.strip_prefix, text.strip_suffix, text.lower, text.upper, text.join,\n\
-     path.join, text.render, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
+     path.join, text.render, list.chunk, list.concat, list.enumerate, list.first,\n\
+     list.flatten, list.last, list.range, list.rest, list.reverse, list.slice, list.zip,\n\
+     hash.sha256, hash.sha512, encode.base64, encode.form, encode.hex, encode.url,\n\
+     decode.base64, decode.hex, decode.url, time.add, time.diff, time.format, time.now,\n\
+     time.parse, time.sleep, wait.until, yaml.parse, yaml.stringify, toml.parse, toml.stringify,\n\
      ini.parse, ini.stringify, env.load, fs.test, fs.glob, fs.ensure_file, fs.ensure_line,\n\
      fs.ensure_symlink, fs.ensure_dir,\n\
      fs.read, fs.snapshot,\n\

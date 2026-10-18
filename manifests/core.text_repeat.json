@@ -1,0 +1,67 @@
+{
+  "name": "text.repeat",
+  "description": "Provides text.repeat for controlled scripts.",
+  "phrases": [
+    "repeat text"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "text": {
+      "type": "string"
+    },
+    "count": {
+      "type": "integer"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "text.repeat"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "text"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        },
+        "count": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "text.transform"
+    ]
+  }
+}

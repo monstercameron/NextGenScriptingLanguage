@@ -1,0 +1,67 @@
+{
+  "name": "json.rename_keys",
+  "description": "Provides the json.rename_keys operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "document": {
+      "type": "json"
+    },
+    "renames": {
+      "type": "json"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "json.rename_keys"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "json"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "document": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "renames": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "json"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "json rename_keys"
+  ]
+}

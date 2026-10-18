@@ -1,0 +1,59 @@
+{
+  "name": "number.floor",
+  "description": "Provides number.floor for controlled scripts.",
+  "phrases": [
+    "number floor",
+    "value floor"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "value": {
+      "type": "json"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "number.floor"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "number"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "number"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "number.compute"
+    ]
+  }
+}

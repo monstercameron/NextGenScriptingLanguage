@@ -1,0 +1,69 @@
+{
+  "name": "json.length",
+  "description": "Provides the json.length operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "document": {
+      "type": "json",
+      "required": false
+    },
+    "pointer": {
+      "type": "string",
+      "required": false
+    }
+  },
+  "arguments": [
+    {
+      "literal": "json.length"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "integer"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "document": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "pointer": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "json length"
+  ]
+}

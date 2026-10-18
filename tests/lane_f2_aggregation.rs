@@ -14,7 +14,7 @@ fn aggregate_lists_and_pipeline_lines_with_typed_values() {
     assert_eq!(run("list.count", json!({}), b"a\nb\n").unwrap(), json!(2));
     assert_eq!(
         run("list.sum", json!({"items":[1,2,3]}), &[]).unwrap(),
-        json!(6.0)
+        json!(6)
     );
     assert_eq!(
         run("list.min", json!({"items":[3,1,2]}), &[]).unwrap(),

@@ -1,0 +1,58 @@
+{
+  "name": "json.sum",
+  "description": "Provides the json.sum operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "document": {
+      "type": "json"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "json.sum"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "number"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "document": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "number"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "json sum"
+  ]
+}

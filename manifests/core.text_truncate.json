@@ -1,0 +1,76 @@
+{
+  "name": "text.truncate",
+  "description": "Provides text.truncate for controlled scripts.",
+  "phrases": [
+    "shorten text"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "text": {
+      "type": "string"
+    },
+    "width": {
+      "type": "integer"
+    },
+    "ellipsis": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "text.truncate"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "text"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        },
+        "width": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        "ellipsis": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "text.transform"
+    ]
+  }
+}

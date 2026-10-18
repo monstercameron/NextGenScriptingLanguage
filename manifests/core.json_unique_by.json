@@ -1,0 +1,73 @@
+{
+  "name": "json.unique_by",
+  "description": "Keeps the first array element for each distinct JSON Pointer value.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "document": {
+      "type": "json"
+    },
+    "pointer": {
+      "type": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "json.unique_by"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "items": {
+        "type": "json"
+      },
+      "type": "list"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "document": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "pointer": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "json unique_by"
+  ]
+}

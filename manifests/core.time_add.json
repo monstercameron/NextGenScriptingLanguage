@@ -1,0 +1,81 @@
+{
+  "name": "time.add",
+  "description": "Provides the time.add operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "amount": {
+      "type": "integer",
+      "required": false
+    },
+    "unit": {
+      "type": "string",
+      "required": false
+    },
+    "epoch": {
+      "type": "integer",
+      "required": false
+    }
+  },
+  "arguments": [
+    {
+      "literal": "time.add"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "integer"
+    },
+    "capabilities": [
+      "clock.read"
+    ],
+    "effects": [
+      "clock.read"
+    ],
+    "ports": {
+      "inputs": {
+        "amount": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "unit": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "epoch": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "time add"
+  ]
+}

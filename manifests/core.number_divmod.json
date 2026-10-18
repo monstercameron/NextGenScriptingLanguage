@@ -1,0 +1,68 @@
+{
+  "name": "number.divmod",
+  "description": "Provides number.divmod for controlled scripts.",
+  "phrases": [
+    "number divmod",
+    "left divmod"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "left": {
+      "type": "json"
+    },
+    "right": {
+      "type": "json"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "number.divmod"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "json"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "left": {
+          "delivery": "single",
+          "schema": {
+            "type": "number"
+          }
+        },
+        "right": {
+          "delivery": "single",
+          "schema": {
+            "type": "number"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "json"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "number.compute"
+    ]
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "name": "time.diff",
+  "description": "Provides the time.diff operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "left": {
+      "type": "integer",
+      "required": false
+    },
+    "right": {
+      "type": "integer",
+      "required": false
+    },
+    "unit": {
+      "type": "string",
+      "required": false
+    }
+  },
+  "arguments": [
+    {
+      "literal": "time.diff"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "number"
+    },
+    "capabilities": [
+      "clock.read"
+    ],
+    "effects": [
+      "clock.read"
+    ],
+    "ports": {
+      "inputs": {
+        "left": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "right": {
+          "schema": {
+            "type": "integer"
+          },
+          "delivery": "single"
+        },
+        "unit": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "number"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "time diff"
+  ]
+}

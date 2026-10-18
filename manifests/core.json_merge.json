@@ -1,0 +1,69 @@
+{
+  "name": "json.merge",
+  "description": "Shallow merges two JSON objects; right-hand values replace conflicts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "left": {
+      "type": "json",
+      "required": false
+    },
+    "right": {
+      "type": "json",
+      "required": false
+    }
+  },
+  "arguments": [
+    {
+      "literal": "json.merge"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "json"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "left": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "right": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "json"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "json merge"
+  ]
+}

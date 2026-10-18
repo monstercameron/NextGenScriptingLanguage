@@ -1,0 +1,71 @@
+{
+  "name": "text.contains_any",
+  "description": "Provides text.contains_any for controlled scripts.",
+  "phrases": [
+    "find any text"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "text": {
+      "type": "string"
+    },
+    "needles": {
+      "type": "list",
+      "items": "string"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "text.contains_any"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "boolean"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        },
+        "needles": {
+          "delivery": "single",
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "text"
+            }
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "text.transform"
+    ]
+  }
+}

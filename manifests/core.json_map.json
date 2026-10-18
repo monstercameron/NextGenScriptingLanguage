@@ -1,6 +1,6 @@
 {
   "name": "json.map",
-  "description": "Provides the json map operation for controlled scripts.",
+  "description": "Provides the json map operation for controlled scripts. An optional default is returned when a lookup is absent or null.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
@@ -13,6 +13,9 @@
     "select": {
       "type": "string",
       "required": true
+    },
+    "default": {
+      "type": "json"
     }
   },
   "arguments": [
@@ -69,6 +72,12 @@
           },
           "delivery": "single",
           "encoding": "json"
+        },
+        "default": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
         }
       },
       "outputs": {
@@ -85,8 +94,7 @@
     }
   },
   "phrases": [
-    "json map",
-    "select fields",
-    "map json values"
+    "map JSON values",
+    "select JSON fields"
   ]
 }

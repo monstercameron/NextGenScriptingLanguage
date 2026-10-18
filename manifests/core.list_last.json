@@ -1,0 +1,62 @@
+{
+  "name": "list.last",
+  "description": "Provides list.last for controlled scripts.",
+  "phrases": [
+    "list last",
+    "items last"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "items": {
+      "type": "json"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "list.last"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "json"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "items": {
+          "delivery": "single",
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "json"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "data.transform"
+    ]
+  }
+}

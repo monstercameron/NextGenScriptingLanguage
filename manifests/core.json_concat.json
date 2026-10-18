@@ -1,0 +1,79 @@
+{
+  "name": "json.concat",
+  "description": "Provides the json.concat operation for controlled scripts.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "left": {
+      "type": "json"
+    },
+    "right": {
+      "type": "json"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "json.concat"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "items": {
+        "type": "json"
+      },
+      "type": "list"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "left": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          },
+          "delivery": "single"
+        },
+        "right": {
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "json concat"
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "name": "json.sort_by",
+  "description": "Sorts array elements by a string or numeric JSON Pointer key.",
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "pointer": {
+      "type": "string",
+      "required": false
+    },
+    "document": {
+      "type": "json",
+      "required": false
+    },
+    "numeric": {
+      "type": "boolean",
+      "required": false
+    }
+  },
+  "arguments": [
+    {
+      "literal": "json.sort_by"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "version": 1,
+    "backend": "in_process",
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "output": {
+      "encoding": "json",
+      "type": "json"
+    },
+    "capabilities": [
+      "json.transform"
+    ],
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "pointer": {
+          "schema": {
+            "type": "text"
+          },
+          "delivery": "single"
+        },
+        "document": {
+          "schema": {
+            "type": "json"
+          },
+          "delivery": "single"
+        },
+        "numeric": {
+          "schema": {
+            "type": "boolean"
+          },
+          "delivery": "single"
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "json"
+          }
+        }
+      }
+    }
+  },
+  "phrases": [
+    "json sort_by"
+  ]
+}

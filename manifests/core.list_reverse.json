@@ -1,0 +1,68 @@
+{
+  "name": "list.reverse",
+  "description": "Provides list.reverse for controlled scripts.",
+  "phrases": [
+    "list reverse",
+    "items reverse"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "items": {
+      "type": "json"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "list.reverse"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "list",
+      "items": {
+        "type": "json"
+      }
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "items": {
+          "delivery": "single",
+          "schema": {
+            "type": "list",
+            "items": {
+              "type": "json"
+            }
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "items": {
+              "type": "json"
+            },
+            "type": "list"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "data.transform"
+    ]
+  }
+}

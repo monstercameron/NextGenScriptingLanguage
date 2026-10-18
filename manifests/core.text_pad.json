@@ -1,0 +1,94 @@
+{
+  "name": "text.pad",
+  "description": "Provides text.pad for controlled scripts.",
+  "phrases": [
+    "pad text to width"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": true,
+  "parameters": {
+    "text": {
+      "type": "string"
+    },
+    "width": {
+      "type": "integer"
+    },
+    "side": {
+      "type": "string"
+    },
+    "fill": {
+      "type": "string"
+    },
+    "display_width": {
+      "type": "boolean"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "text.pad"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "text"
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "text": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        },
+        "width": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        "side": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        },
+        "fill": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        },
+        "display_width": {
+          "delivery": "single",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "type": "text"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "text.transform"
+    ]
+  }
+}

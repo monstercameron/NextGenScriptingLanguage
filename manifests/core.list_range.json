@@ -1,0 +1,83 @@
+{
+  "name": "list.range",
+  "description": "Provides list.range for controlled scripts.",
+  "phrases": [
+    "list range",
+    "start range"
+  ],
+  "binary": "@execute-applet",
+  "accepts_stdin": false,
+  "parameters": {
+    "start": {
+      "type": "integer"
+    },
+    "stop": {
+      "type": "integer"
+    },
+    "step": {
+      "type": "integer"
+    }
+  },
+  "arguments": [
+    {
+      "literal": "list.range"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
+    }
+  ],
+  "contract": {
+    "backend": "in_process",
+    "version": 1,
+    "output": {
+      "encoding": "json",
+      "type": "list",
+      "items": {
+        "type": "json"
+      }
+    },
+    "lifecycle": {
+      "kind": "oneshot"
+    },
+    "effects": [],
+    "ports": {
+      "inputs": {
+        "start": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        "stop": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        "step": {
+          "delivery": "single",
+          "schema": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputs": {
+        "value": {
+          "delivery": "single",
+          "schema": {
+            "items": {
+              "type": "json"
+            },
+            "type": "list"
+          }
+        }
+      }
+    },
+    "capabilities": [
+      "data.transform"
+    ]
+  }
+}

@@ -10,11 +10,15 @@ concurrency:
   cancel-in-progress: false
 jobs:
   compare:
-    name: Compare with bash and dash (${{ matrix.os }})
+    name: Compare with bash and dash (${{ matrix.os }}, ${{ matrix.variant }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
+        # release: the default build a distro would ship. opt-s: the same with
+        # opt-level "s". musl: a static release binary. musl-min: static, built
+        # with the size-first min profile (opt-level "z", panic abort).
+        variant: [release, opt-s, musl, musl-min]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -24,20 +28,33 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # The default build is what a distro would ship as a shell replacement.
-      - run: cargo build --locked --release --bin execute
-      - run: sudo apt-get install -y --no-install-recommends time strace
-      - run: bash --version | head -1 && jq --version && ls -l /usr/bin/dash
+        with:
+          key: ${{ matrix.variant }}
+      - run: sudo apt-get install -y --no-install-recommends time strace musl-tools
+      - name: Build
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          musl="$(uname -m)-unknown-linux-musl"
+          case "$VARIANT" in
+            release) cargo build --locked --release --bin execute; bin=target/release/execute ;;
+            opt-s) CARGO_PROFILE_RELEASE_OPT_LEVEL=s cargo build --locked --release --bin execute; bin=target/release/execute ;;
+            musl) rustup target add "$musl"; cargo build --locked --release --bin execute --target "$musl"; bin="target/$musl/release/execute" ;;
+            musl-min) rustup target add "$musl"; cargo build --locked --profile min --bin execute --target "$musl"; bin="target/$musl/min/execute" ;;
+          esac
+          echo "EXECUTE_BIN=$bin" >> "$GITHUB_ENV"
+      - run: bash --version | head -1 && jq --version && ls -l /usr/bin/dash "$EXECUTE_BIN"
       - name: Compare
-        run: python3 tools/bash_compare.py target/release/execute --json-out target/bash-compare.json
+        run: python3 tools/bash_compare.py "$EXECUTE_BIN" --json-out target/bash-compare.json
       # Where the startup time goes, for the optimisation lanes: syscalls, the
       # dynamic loader's own cost, and the binary's sections.
       - name: Profile startup
+        if: matrix.variant == 'release'
         run: |
           echo 'use value ""' > "$RUNNER_TEMP/startup.program"
-          program=(target/release/execute run "$RUNNER_TEMP/startup.program")
-          ldd target/release/execute
-          size -A target/release/execute | sort -k2 -n | tail -n 12
+          program=("$EXECUTE_BIN" run "$RUNNER_TEMP/startup.program")
+          ldd "$EXECUTE_BIN"
+          size -A "$EXECUTE_BIN" | sort -k2 -n | tail -n 12
           strace -f -c -o "$RUNNER_TEMP/strace-count.txt" "${program[@]}"
           cat "$RUNNER_TEMP/strace-count.txt"
           strace -f -r -o "$RUNNER_TEMP/strace-timeline.txt" "${program[@]}"
@@ -48,7 +65,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: bash-compare-${{ matrix.os }}
+          name: bash-compare-${{ matrix.os }}-${{ matrix.variant }}
           path: target/bash-compare.json
           if-no-files-found: warn
           retention-days: 30

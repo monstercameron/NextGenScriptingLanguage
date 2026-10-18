@@ -139,7 +139,7 @@ class DefaultBrowserTests(unittest.TestCase):
     def test_invalid_selection_and_empty_positional_known_stdout_limit(self):
         for selection in ("invalid", "", "$(touch unsafe); *", "--help", "firefox\n"):
             with self.subTest(selection=selection):
-                original, _ = self.compare(args=(selection,), stdout_difference=True, failure_diagnostic=True)
+                original, _ = self.compare(args=(selection,), failure_diagnostic=True)
                 self.assertEqual(original["stdout"], USAGE)
                 self.assertEqual(original["status"], 1)
                 self.assertEqual(original["commands"], [])

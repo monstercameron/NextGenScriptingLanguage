@@ -69,6 +69,6 @@ if notify is not "false"
   run "omarchy-notification-send" with arguments ["-g", "", "Web app removed", app_name] as notification_output
 otherwise
   run "printf" with arguments [""] as notification_output
-run "update-desktop-database" with arguments [desktop_dir]
+run "update-desktop-database" with arguments [desktop_dir] as database_output and discard stderr and keep status as database_status
 # Upstream suppresses database output while retaining notification stdout.
 run "printf" with arguments ["%s", notification_output]

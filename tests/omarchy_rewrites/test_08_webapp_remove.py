@@ -38,7 +38,7 @@ class WebappRemoveTests(unittest.TestCase):
     def case(self, *, arguments=(), selection="", entries=None, notify="true",
              menu_status=0, notify_status=0, database_status=0, expected_status=0,
              expected_removed=(), expected_name=None, expected_menu=None,
-             expected_launcher=None, source_stdout=b"", stdout_gap=False,
+             expected_launcher=None, source_stdout=b"",
              missing_directory=False, notify_output=""):
         with tempfile.TemporaryDirectory(prefix="webapp-remove-") as temporary:
             owned = Path(temporary).resolve()
@@ -101,7 +101,7 @@ class WebappRemoveTests(unittest.TestCase):
             self.assertEqual(original.returncode, expected_status, original.stderr)
             self.assertEqual(candidate.returncode, expected_status, candidate.stderr)
             self.assertEqual(original.stdout, source_stdout)
-            self.assertEqual(candidate.stdout, b"" if stdout_gap else original.stdout)
+            self.assertEqual(candidate.stdout, original.stdout)
             if expected_status == 0:
                 self.assertEqual(candidate.stderr, original.stderr)
             else:
@@ -189,15 +189,15 @@ class WebappRemoveTests(unittest.TestCase):
         for missing in (False, True):
             with self.subTest(missing=missing):
                 self.case(entries={}, missing_directory=missing, expected_status=1,
-                          source_stdout=b"No web apps to remove.\n", stdout_gap=True)
+                          source_stdout=b"No web apps to remove.\n")
 
     def test_cancel_empty_selection(self):
         self.case(selection="\n", expected_menu=["Alpha", "Space App"], expected_status=1,
-                  source_stdout=b"You must select a web app to remove.\n", stdout_gap=True)
+                  source_stdout=b"You must select a web app to remove.\n")
 
     def test_empty_explicit_argument(self):
         self.case(arguments=("",), expected_status=1,
-                  source_stdout=b"You must select a web app to remove.\n", stdout_gap=True)
+                  source_stdout=b"You must select a web app to remove.\n")
 
     def test_menu_failure_stops_without_removal(self):
         self.case(menu_status=7, expected_status=7, expected_menu=["Alpha", "Space App"])

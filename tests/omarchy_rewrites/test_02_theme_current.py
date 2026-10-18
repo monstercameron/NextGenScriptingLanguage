@@ -132,7 +132,9 @@ class ThemeCurrentTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         inputs = {item["name"]: item for item in json.loads(result.stdout)["inputs"]}
         self.assertEqual(inputs["home"]["source"], {"kind": "environment", "name": "HOME"})
-        self.assertEqual(inputs["home"]["value"], "")
+        # Environment-sourced inputs are sensitive, so the value is withheld from inspect.
+        self.assertNotIn("value", inputs["home"])
+        self.assertTrue(inputs["home"]["value_withheld"])
         self.assertEqual(inputs["arguments"]["source"], {"kind": "arguments"})
         self.assertEqual(inputs["arguments"]["value"], [])
 

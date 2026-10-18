@@ -173,17 +173,17 @@ class AudioVolumeTests(unittest.TestCase):
         original, _ = self.compare(overrides={"sink": {"status": 7}}, diagnostic=True)
         self.assertEqual(len(original["commands"]), 1)
 
-    def test_no_argument_failure_stdout_gap(self):
-        original, _ = self.compare((), diagnostic=True, stdout_gap=True)
+    def test_no_argument_failure_stdout_matches_bash(self):
+        original, _ = self.compare((), diagnostic=True)
         self.assertEqual(original["commands"], [])
 
-    def test_explicit_empty_argument_failure_stdout_gap(self):
-        self.compare(("", "raise"), diagnostic=True, stdout_gap=True)
+    def test_explicit_empty_argument_failure_stdout_matches_bash(self):
+        self.compare(("", "raise"), diagnostic=True)
 
-    def test_unknown_action_failure_stdout_gap(self):
+    def test_unknown_action_failure_stdout_matches_bash(self):
         for action in ("+", "--5", "5", "+1.5", "Raise", "$(touch unsafe)", "-2\n"):
             with self.subTest(action=action):
-                self.compare((action,), diagnostic=True, stdout_gap=True)
+                self.compare((action,), diagnostic=True)
 
     def test_mute_toggle_writes_timestamp_before_effect(self):
         original, rewrite = self.compare(("mute-toggle",), current="50")

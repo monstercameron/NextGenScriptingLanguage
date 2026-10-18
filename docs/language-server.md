@@ -67,6 +67,10 @@ meaning gets a new code. The family names the stage that finds the problem.
 | `parse.syntax` | parse | a statement does not match the grammar |
 | `parse.indentation` | parse | a line is indented with tabs, or its indentation does not nest |
 | `parse.control` | parse | a control construct is unsupported or nested beyond the supported depth |
+| `source.invisible_format` | validate | source contains a Unicode format control that can change how it is displayed |
+| `check.undefined_name` | validate | a referenced result or input name is not defined at this point |
+| `check.type_mismatch` | type | statically known value types are incompatible at a use site |
+| `check.diagnostics.truncated` | validate | more diagnostics were found than the response limit permits |
 | `applet.unknown` | resolve | the operation names no declared applet and is not a quoted executable |
 | `applet.parameter.unknown` | resolve | the applet declares no parameter with this name |
 | `applet.parameter.type` | type | a literal value does not match the parameter's declared type |

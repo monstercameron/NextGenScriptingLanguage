@@ -49,7 +49,7 @@ fn schema_errors_precede_supplied_errors_for_single_and_indexed_interfaces() {
     schema[0].default = Some(Value::Bool(false));
     assert_eq!(
         inputs::validate(&schema).unwrap_err().to_string(),
-        "line 1: input \"p_0000\" expects integer without NUL bytes"
+        "line 1: input \"p_0000\" expects integer, got boolean"
     );
 }
 
@@ -73,7 +73,7 @@ fn supplied_error_order_and_allow_extra_policy_remain_distinct() {
         ] {
             assert_eq!(
                 error.to_string(),
-                "line 1: input \"p_0000\" expects integer without NUL bytes"
+                "line 1: input \"p_0000\" expects integer, got text"
             );
         }
         let text = BTreeMap::from([

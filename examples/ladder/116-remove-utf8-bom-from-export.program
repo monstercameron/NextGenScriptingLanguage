@@ -3,4 +3,4 @@
 # Outputs: stdout: The same file text with leading BOM characters removed.
 accept export_path as text with default "export.csv"
 run cat with path export_path
-then sed with program "s/^﻿//"
+then sed with program "s/^\uFEFF//"

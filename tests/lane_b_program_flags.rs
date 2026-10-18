@@ -107,7 +107,17 @@ fn generated_help_lists_flags_options_and_descriptions() {
     let output = run(directory.path(), "run", TOOL, &["--", "--help"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.contains("[OPTIONS]"), "{text}");
+    assert_eq!(
+        text.lines().next(),
+        Some(
+            format!(
+                "execute {} [--input NAME=VALUE ...] [-- OPTIONS]",
+                directory.path().join("tool.program").display()
+            )
+            .as_str()
+        ),
+        "{text}"
+    );
     assert!(text.contains("--verbose, -v"), "{text}");
     assert!(text.contains("Print progress"), "{text}");
     assert!(text.contains("--output VALUE, -o VALUE"), "{text}");

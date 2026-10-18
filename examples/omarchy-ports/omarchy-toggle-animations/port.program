@@ -12,6 +12,8 @@ otherwise if mode is "on"
 otherwise if mode is "off"
   run "omarchy-hyprland-toggle" with arguments ["no-animations", "on"] and keep status as set_status
 otherwise
+  # Usage goes to stderr; the internal mode must not become final stdout.
+  run text.concat with parts [""]
   fail with message "Usage: omarchy-toggle-animations [toggle|on|off]" and status 1
 if run "omarchy-hyprland-toggle-enabled" with arguments ["no-animations"] succeeds
   run "omarchy-i18n" with arguments ["animations.disabled"] as label and keep status as label_status

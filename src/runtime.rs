@@ -1262,17 +1262,29 @@ fn lazy_event(
 }
 
 #[cfg(unix)]
-#[allow(clippy::too_many_arguments)]
+/// The per-call inputs a native child status scan needs.
+#[derive(Clone, Copy)]
+struct StatusScan<'a> {
+    calls: &'a [(&'a Invocation, &'a Manifest, usize)],
+    trace: bool,
+    signals: &'a Signals,
+    started: Instant,
+}
+
+#[cfg(unix)]
 fn scan_child_statuses(
     children: &mut Children,
-    calls: &[(&Invocation, &Manifest, usize)],
+    scan: StatusScan<'_>,
     observed_stages: &mut [Option<execution_result::StageResult>],
-    trace: bool,
-    signals: &Signals,
     observer: &mut Option<ChildObserver>,
     observer_ready: &mut bool,
-    started: Instant,
 ) -> Result<()> {
+    let StatusScan {
+        calls,
+        trace,
+        signals,
+        started,
+    } = scan;
     let drain_failed = *observer_ready
         && observer
             .as_ref()
@@ -1916,30 +1928,25 @@ fn resolved_json_arguments(
     manifest.parameters_json(&values)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn bind_call_output(
-    name: &str,
-    manifest: &Manifest,
+/// One applet call's captured output, as the decoder reads it.
+struct CallOutput<'a> {
+    manifest: &'a Manifest,
     line: usize,
-    bytes: &[u8],
+    bytes: &'a [u8],
     status: Option<i32>,
     stdout_captured: bool,
-    stderr: Option<&[u8]>,
-    stages: &[execution_result::StageResult],
-    retain_value: bool,
+    stderr: Option<&'a [u8]>,
+    stages: &'a [execution_result::StageResult],
     typed_json: Option<serde_json::Value>,
+}
+
+fn bind_call_output(
+    name: &str,
+    output: CallOutput<'_>,
+    retain_value: bool,
     bindings: &mut BTreeMap<String, Value>,
 ) -> Result<Option<Value>> {
-    let value = decode_call_output(
-        manifest,
-        line,
-        bytes,
-        status,
-        stdout_captured,
-        stderr,
-        stages,
-        typed_json,
-    )?;
+    let value = decode_call_output(output)?;
     if retain_value {
         bindings.insert(name.to_owned(), value.clone());
         Ok(Some(value))
@@ -1949,17 +1956,17 @@ fn bind_call_output(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn decode_call_output(
-    manifest: &Manifest,
-    line: usize,
-    bytes: &[u8],
-    status: Option<i32>,
-    stdout_captured: bool,
-    stderr: Option<&[u8]>,
-    stages: &[execution_result::StageResult],
-    typed_json: Option<serde_json::Value>,
-) -> Result<Value> {
+fn decode_call_output(output: CallOutput<'_>) -> Result<Value> {
+    let CallOutput {
+        manifest,
+        line,
+        bytes,
+        status,
+        stdout_captured,
+        stderr,
+        stages,
+        typed_json,
+    } = output;
     let decode_failure = |error: anyhow::Error, outcome: Option<crate::contracts::Outcome>| {
         let error = error.context(format!("line {line}: decoding applet output"));
         execution_result::output_decode_failure(
@@ -2009,17 +2016,40 @@ fn decode_call_output(
     Ok(value)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// One applet call as the runtime sees it: the invocation, its manifest and its
+/// source line.
+#[derive(Clone, Copy)]
+pub(crate) struct CallSite<'a> {
+    pub(crate) call: &'a Invocation,
+    pub(crate) manifest: &'a Manifest,
+    pub(crate) line: usize,
+}
+
+/// The exit status, diagnostic and captured streams of a call whose failure is
+/// retained rather than raised.
+pub(crate) struct RetainedStatus<'a> {
+    pub(crate) status: i32,
+    pub(crate) diagnostic: &'a str,
+    pub(crate) stdout: Option<Vec<u8>>,
+    pub(crate) stderr: Option<Vec<u8>>,
+}
+
 pub(crate) fn check_retained_status(
-    call: &Invocation,
-    manifest: &Manifest,
-    line: usize,
-    status: i32,
-    diagnostic: &str,
-    stdout: Option<Vec<u8>>,
-    stderr: Option<Vec<u8>>,
+    site: CallSite<'_>,
+    retained: RetainedStatus<'_>,
     registry: &Registry,
 ) -> Result<()> {
+    let CallSite {
+        call,
+        manifest,
+        line,
+    } = site;
+    let RetainedStatus {
+        status,
+        diagnostic,
+        stdout,
+        stderr,
+    } = retained;
     let outcome = manifest.outcome_for(status);
     if outcome.kind != OutcomeKind::Success && call.status_binding.is_none() {
         let message = format!(
@@ -2055,18 +2085,30 @@ pub(crate) fn check_retained_status(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn execute_in_process(
-    call: &Invocation,
-    manifest: &Manifest,
-    line: usize,
-    input: Input,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
-    options: &RunOptions,
-    signals: &Signals,
-    registry: &Registry,
-) -> Result<GroupOutput> {
+/// What a single applet launch runs against, shared by the in-process, worker
+/// and remote backends.
+#[derive(Clone, Copy)]
+struct LaunchEnv<'a> {
+    bindings: &'a BTreeMap<String, Value>,
+    cwd: &'a Path,
+    options: &'a RunOptions,
+    signals: &'a Signals,
+    registry: &'a Registry,
+}
+
+fn execute_in_process(site: CallSite<'_>, input: Input, env: LaunchEnv<'_>) -> Result<GroupOutput> {
+    let CallSite {
+        call,
+        manifest,
+        line,
+    } = site;
+    let LaunchEnv {
+        bindings,
+        cwd,
+        options,
+        signals,
+        registry,
+    } = env;
     check_deadline(signals.deadline)?;
     if signals.cancelled.load(Ordering::Relaxed) {
         let mut failure = execution_result::ExecutionResult::runtime_failure(
@@ -2206,13 +2248,17 @@ fn execute_in_process(
             let diagnostic = format!("execute-applet: {error}\n");
             let diagnostic_bytes = diagnostic.as_bytes().to_vec();
             check_retained_status(
-                call,
-                manifest,
-                line,
-                status,
-                &diagnostic,
-                None,
-                Some(diagnostic_bytes),
+                CallSite {
+                    call,
+                    manifest,
+                    line,
+                },
+                RetainedStatus {
+                    status,
+                    diagnostic: &diagnostic,
+                    stdout: None,
+                    stderr: Some(diagnostic_bytes),
+                },
                 registry,
             )?;
             Ok(GroupOutput {
@@ -2254,19 +2300,25 @@ fn in_process_budget_failure(
     Some(failure)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn execute_json_lines_worker(
-    call: &Invocation,
-    manifest: &Manifest,
-    line: usize,
+    site: CallSite<'_>,
     input: Input,
-    cwd: &Path,
-    options: &RunOptions,
-    signals: &Signals,
-    registry: &Registry,
+    env: LaunchEnv<'_>,
     argv: Vec<String>,
     launched: &mut usize,
 ) -> Result<GroupOutput> {
+    let CallSite {
+        call,
+        manifest,
+        line,
+    } = site;
+    let LaunchEnv {
+        cwd,
+        options,
+        signals,
+        registry,
+        ..
+    } = env;
     let input = input.materialize(options.max_output_bytes, signals, options.command_timeout)?;
     let launch = worker_launch_for_call(call, manifest, registry, cwd)?;
     let command_deadline = options
@@ -2331,13 +2383,17 @@ fn execute_json_lines_worker(
         }
     };
     check_retained_status(
-        call,
-        manifest,
-        line,
-        response.status,
-        &String::from_utf8_lossy(&response.stderr),
-        Some(response.output.clone()),
-        Some(response.stderr.clone()),
+        CallSite {
+            call,
+            manifest,
+            line,
+        },
+        RetainedStatus {
+            status: response.status,
+            diagnostic: &String::from_utf8_lossy(&response.stderr),
+            stdout: Some(response.output.clone()),
+            stderr: Some(response.stderr.clone()),
+        },
         registry,
     )?;
     Ok(GroupOutput {
@@ -2360,35 +2416,47 @@ fn execute_json_lines_worker(
 /// `expect_success`. Stdin is closed and the pipeline value is not touched; the
 /// captured output is dropped. Spawn failures, timeouts and cancellation are
 /// errors, and a command that ends without an exit status is also an error.
-#[allow(clippy::too_many_arguments)]
-fn run_command_condition(
-    call: &Invocation,
+/// One command condition: the call that decides it, the outcome it expects and
+/// the group environment it runs in.
+struct ConditionRequest<'a> {
+    call: &'a Invocation,
     expect_success: bool,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &crate::working_dir::WorkingDirectory,
-    options: &RunOptions,
-    launched: &mut usize,
-    signals: &Signals,
-    registry: &Registry,
     line: usize,
-) -> Result<bool> {
+    bindings: &'a BTreeMap<String, Value>,
+    cwd: &'a crate::working_dir::WorkingDirectory,
+    options: &'a RunOptions,
+    signals: &'a Signals,
+    registry: &'a Registry,
+}
+
+fn run_command_condition(request: ConditionRequest<'_>, launched: &mut usize) -> Result<bool> {
+    let ConditionRequest {
+        call,
+        expect_success,
+        line,
+        bindings,
+        cwd,
+        options,
+        signals,
+        registry,
+    } = request;
     let manifest = registry.resolve_call(call)?;
     // A nonzero exit is the answer here, not an applet failure. Retaining the
     // status is the process layer's switch for that; the placeholder name is
     // never bound, and it is set only on this private copy.
     let mut retained = call.clone();
     retained.status_binding = Some(String::from("command condition"));
-    let completed = execute_call_group(
-        &[(&retained, manifest, line)],
-        Input::Empty,
-        None,
+    let completed = execute_call_group(GroupRequest {
+        calls: &[(&retained, manifest, line)],
+        input: Input::Empty,
+        prepared_first_call: None,
         bindings,
         cwd,
         options,
         launched,
         signals,
         registry,
-    )
+    })
     .with_context(|| format!("line {line}: command condition {:?}", call.operation))?;
     let status = completed.status.with_context(|| {
         format!(
@@ -2400,18 +2468,18 @@ fn run_command_condition(
     Ok(succeeded == expect_success)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn execute_call_group_unobserved(
-    calls: &[(&Invocation, &Manifest, usize)],
-    input: Input,
-    prepared_first_call: Option<(PathBuf, Vec<String>)>,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &crate::working_dir::WorkingDirectory,
-    options: &RunOptions,
-    launched: &mut usize,
-    signals: &Signals,
-    registry: &Registry,
-) -> Result<GroupOutput> {
+fn execute_call_group_unobserved(group: GroupRequest<'_>) -> Result<GroupOutput> {
+    let GroupRequest {
+        registry,
+        calls,
+        input,
+        prepared_first_call,
+        bindings,
+        cwd,
+        options,
+        launched,
+        signals,
+    } = group;
     let Some((call, manifest, line)) = calls.first().copied() else {
         bail!("cannot execute an empty applet group");
     };
@@ -2468,14 +2536,24 @@ fn execute_call_group_unobserved(
     } else {
         Vec::new()
     };
+    let site = CallSite {
+        call,
+        manifest,
+        line,
+    };
+    let env = LaunchEnv {
+        bindings,
+        cwd,
+        options,
+        signals,
+        registry,
+    };
     match backend {
         AppletBackend::Command => unreachable!("handled above"),
-        AppletBackend::InProcess => execute_in_process(
-            call, manifest, line, input, bindings, cwd, options, signals, registry,
-        ),
-        AppletBackend::JsonLinesWorker => execute_json_lines_worker(
-            call, manifest, line, input, cwd, options, signals, registry, argv, launched,
-        ),
+        AppletBackend::InProcess => execute_in_process(site, input, env),
+        AppletBackend::JsonLinesWorker => {
+            execute_json_lines_worker(site, input, env, argv, launched)
+        }
         AppletBackend::ProgramModule => {
             let session = current_module_session(signals)?;
             let loaded = session
@@ -2494,23 +2572,18 @@ fn execute_call_group_unobserved(
             })?;
             program_backend::execute(
                 loaded,
-                call,
-                manifest,
+                site,
                 input,
-                bindings,
-                cwd,
-                options,
-                signals,
-                child_registry,
+                LaunchEnv {
+                    registry: child_registry,
+                    ..env
+                },
                 launched,
-                line,
             )
         }
         AppletBackend::Remote => {
             let process_launches_before = signals.process_launch_count();
-            let result = execute_remote_applet(
-                call, manifest, line, input, bindings, cwd, options, signals, registry,
-            );
+            let result = execute_remote_applet(site, input, env);
             *launched += signals
                 .process_launch_count()
                 .saturating_sub(process_launches_before);
@@ -2519,19 +2592,24 @@ fn execute_call_group_unobserved(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[cfg(feature = "remote")]
 fn execute_remote_applet(
-    call: &Invocation,
-    manifest: &Manifest,
-    line: usize,
+    site: CallSite<'_>,
     input: Input,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
-    options: &RunOptions,
-    signals: &Signals,
-    registry: &Registry,
+    env: LaunchEnv<'_>,
 ) -> Result<GroupOutput> {
+    let CallSite {
+        call,
+        manifest,
+        line,
+    } = site;
+    let LaunchEnv {
+        bindings,
+        cwd,
+        options,
+        signals,
+        registry,
+    } = env;
     use crate::contracts::{OutputEncoding, OutputType, RemoteAuthSource};
     use crate::remote::{RemoteClient, RemoteRequest, RemoteValue};
     let contract = manifest
@@ -2672,13 +2750,17 @@ fn execute_remote_applet(
         }
     };
     check_retained_status(
-        call,
-        manifest,
-        line,
-        status,
-        &diagnostic,
-        Some(output_bytes.clone()),
-        Some(diagnostic.as_bytes().to_vec()),
+        CallSite {
+            call,
+            manifest,
+            line,
+        },
+        RetainedStatus {
+            status,
+            diagnostic: &diagnostic,
+            stdout: Some(output_bytes.clone()),
+            stderr: Some(diagnostic.as_bytes().to_vec()),
+        },
         registry,
     )?;
     if output_bytes.len() > options.max_output_bytes {
@@ -2713,20 +2795,14 @@ fn execute_remote_applet(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 #[cfg(not(feature = "remote"))]
 fn execute_remote_applet(
-    call: &Invocation,
-    manifest: &Manifest,
-    line: usize,
+    site: CallSite<'_>,
     input: Input,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
-    options: &RunOptions,
-    signals: &Signals,
-    registry: &Registry,
+    env: LaunchEnv<'_>,
 ) -> Result<GroupOutput> {
-    let _ = (call, input, bindings, cwd, options, signals, registry);
+    let CallSite { manifest, line, .. } = site;
+    let _ = (input, env);
     bail!(
         "line {line}: applet {} is remote-backed, and this build has no remote backend; use the full build",
         manifest.name
@@ -2768,9 +2844,11 @@ fn worker_launch_for_call(
         binary_path(manifest.binary_for(call), cwd)?,
         cwd.to_path_buf(),
         startup_arguments.iter().map(OsString::from).collect(),
-        Duration::from_millis(*timeout_ms),
-        *max_frame_bytes,
-        *max_stderr_bytes,
+        worker_backend::WorkerLimits {
+            timeout: Duration::from_millis(*timeout_ms),
+            max_frame_bytes: *max_frame_bytes,
+            max_stderr_bytes: *max_stderr_bytes,
+        },
     )
 }
 
@@ -3125,23 +3203,45 @@ pub(crate) fn invoke_applet_with_context(
     context: AppletInvocationContext,
 ) -> Result<AppletInvocationResult> {
     invoke_call_with_context(
-        registry, name, false, parameters, input, options, cancelled, context,
+        AppletInvocation {
+            registry,
+            name,
+            direct: false,
+            parameters,
+            input,
+            options,
+        },
+        cancelled,
+        context,
     )
+}
+
+/// One applet invocation: the applet name, its parameters and input, and the
+/// registry and options it runs under.
+pub(crate) struct AppletInvocation<'a> {
+    pub(crate) registry: &'a Registry,
+    pub(crate) name: &'a str,
+    pub(crate) direct: bool,
+    pub(crate) parameters: BTreeMap<String, Value>,
+    pub(crate) input: Vec<u8>,
+    pub(crate) options: &'a RunOptions,
 }
 
 /// [`invoke_applet_with_context`] for either a named applet or, when `direct`
 /// is set, a quoted executable resolved through the direct-call binding.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn invoke_call_with_context(
-    registry: &Registry,
-    name: &str,
-    direct: bool,
-    parameters: BTreeMap<String, Value>,
-    input: Vec<u8>,
-    options: &RunOptions,
+    request: AppletInvocation<'_>,
     cancelled: Arc<AtomicBool>,
     context: AppletInvocationContext,
 ) -> Result<AppletInvocationResult> {
+    let AppletInvocation {
+        registry,
+        name,
+        direct,
+        parameters,
+        input,
+        options,
+    } = request;
     let module_session = Arc::clone(&context.module_session);
     let mut invocation_options = options.clone();
     invocation_options.working_directory = fs::canonicalize(&options.working_directory)?;
@@ -3196,19 +3296,19 @@ pub(crate) fn invoke_call_with_context(
     let bindings = BTreeMap::new();
     let mut launched = 0;
     let invoked = (|| -> Result<AppletInvocationResult> {
-        let completed = execute_call_group(
-            &[(&call, manifest, 1)],
-            Input::Bytes(input),
-            None,
-            &bindings,
-            &crate::working_dir::WorkingDirectory::plain(
+        let completed = execute_call_group(GroupRequest {
+            calls: &[(&call, manifest, 1)],
+            input: Input::Bytes(input),
+            prepared_first_call: None,
+            bindings: &bindings,
+            cwd: &crate::working_dir::WorkingDirectory::plain(
                 invocation_options.working_directory.clone(),
             ),
-            &invocation_options,
-            &mut launched,
-            &signals,
+            options: &invocation_options,
+            launched: &mut launched,
+            signals: &signals,
             registry,
-        )?;
+        })?;
         let status = completed
             .status
             .context("applet invocation finished without an exit status")?;

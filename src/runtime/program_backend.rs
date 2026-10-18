@@ -6,30 +6,33 @@
 //! runtime session.
 
 use super::{
-    configured_inputs, run_finite_inner, FiniteRun, GroupOutput, Input, Manifest, Program,
-    Registry, RunOptions, Signals,
+    configured_inputs, run_finite_inner, CallSite, FiniteRun, GroupOutput, Input, LaunchEnv,
+    Program, RunOptions,
 };
-use crate::ast::{Invocation, Value};
 use crate::modules::LoadedProgramSource;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::BTreeMap;
-use std::path::Path;
 
 /// Execute one prevalidated module export as a private child scope.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn execute(
     loaded: &LoadedProgramSource,
-    call: &Invocation,
-    manifest: &Manifest,
+    site: CallSite<'_>,
     input: Input,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &Path,
-    options: &RunOptions,
-    signals: &Signals,
-    registry: &Registry,
+    env: LaunchEnv<'_>,
     launched: &mut usize,
-    line: usize,
 ) -> Result<GroupOutput> {
+    let CallSite {
+        call,
+        manifest,
+        line,
+    } = site;
+    let LaunchEnv {
+        bindings,
+        cwd,
+        options,
+        signals,
+        registry,
+    } = env;
     if loaded.is_program_service() {
         bail!(
             "persistent .program services can run only as graph service nodes, not as finite applet calls"

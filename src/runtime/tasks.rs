@@ -836,12 +836,14 @@ pub(super) fn run_each(
                         bail!("parallel for each was cancelled before element launch")
                     }
                     super::invoke_call_with_context(
-                        &registry,
-                        &task.applet,
-                        direct,
-                        task.parameters,
-                        Vec::new(),
-                        &task_options,
+                        super::AppletInvocation {
+                            registry: &registry,
+                            name: &task.applet,
+                            direct,
+                            parameters: task.parameters,
+                            input: Vec::new(),
+                            options: &task_options,
+                        },
                         token.cancellation_flag(),
                         context,
                     )

@@ -152,37 +152,9 @@ fn request_for(
 
 /// Run one applet group, or substitute its recorded result when an observer is
 /// installed. Every applet group of a finite run reaches this function.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn execute_call_group(
-    calls: &[(&Invocation, &Manifest, usize)],
-    input: Input,
-    prepared_first_call: Option<(PathBuf, Vec<String>)>,
-    bindings: &BTreeMap<String, Value>,
-    cwd: &crate::working_dir::WorkingDirectory,
-    options: &RunOptions,
-    launched: &mut usize,
-    signals: &Signals,
-    registry: &Registry,
-) -> Result<GroupOutput> {
-    let Some(observer) = current() else {
-        return super::execute_call_group_unobserved(
-            calls,
-            input,
-            prepared_first_call,
-            bindings,
-            cwd,
-            options,
-            launched,
-            signals,
-            registry,
-        );
-    };
-    let request = request_for(calls, bindings);
-    if let Some(recorded) = observer.replay(&request)? {
-        return replayed_output(calls, recorded);
-    }
-    let started = std::time::Instant::now();
-    let output = match super::execute_call_group_unobserved(
+pub(super) fn execute_call_group(group: GroupRequest<'_>) -> Result<GroupOutput> {
+    let GroupRequest {
+        registry,
         calls,
         input,
         prepared_first_call,
@@ -191,8 +163,36 @@ pub(super) fn execute_call_group(
         options,
         launched,
         signals,
+    } = group;
+    let Some(observer) = current() else {
+        return super::execute_call_group_unobserved(GroupRequest {
+            registry,
+            calls,
+            input,
+            prepared_first_call,
+            bindings,
+            cwd,
+            options,
+            launched,
+            signals,
+        });
+    };
+    let request = request_for(calls, bindings);
+    if let Some(recorded) = observer.replay(&request)? {
+        return replayed_output(calls, recorded);
+    }
+    let started = std::time::Instant::now();
+    let output = match super::execute_call_group_unobserved(GroupRequest {
         registry,
-    ) {
+        calls,
+        input,
+        prepared_first_call,
+        bindings,
+        cwd,
+        options,
+        launched,
+        signals,
+    }) {
         Ok(output) => output,
         Err(error) => {
             // A nonzero status is reported as a typed failure. The failed step is the

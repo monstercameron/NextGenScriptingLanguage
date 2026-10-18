@@ -569,13 +569,15 @@ pub(super) fn execute_group_with_sink(
         check_native_abort(calls, &children, &observed_stages, signals)?;
         scan_child_statuses(
             &mut children,
-            calls,
+            StatusScan {
+                calls,
+                trace: options.trace,
+                signals,
+                started,
+            },
             &mut observed_stages,
-            options.trace,
-            signals,
             &mut child_observer,
             &mut observer_ready,
-            started,
         )?;
         let mut reached_eof = false;
         if !eof {
@@ -600,13 +602,15 @@ pub(super) fn execute_group_with_sink(
                                 // reading or emitting the final requested record.
                                 scan_child_statuses(
                                     &mut children,
-                                    calls,
+                                    StatusScan {
+                                        calls,
+                                        trace: options.trace,
+                                        signals,
+                                        started,
+                                    },
                                     &mut observed_stages,
-                                    options.trace,
-                                    signals,
                                     &mut child_observer,
                                     &mut observer_ready,
-                                    started,
                                 )?;
                                 // The script's output limit is deliberate successful
                                 // termination. Children owns kill/reap on this return;
@@ -670,13 +674,15 @@ pub(super) fn execute_group_with_sink(
             check_native_abort(calls, &children, &observed_stages, signals)?;
             scan_child_statuses(
                 &mut children,
-                calls,
+                StatusScan {
+                    calls,
+                    trace: options.trace,
+                    signals,
+                    started,
+                },
                 &mut observed_stages,
-                options.trace,
-                signals,
                 &mut child_observer,
                 &mut observer_ready,
-                started,
             )?;
         }
         if eof && children.0.iter().all(|child| child.reaped) {

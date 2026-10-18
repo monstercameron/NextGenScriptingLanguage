@@ -109,9 +109,11 @@ fn launch(directory: &TempDir, mode: &str) -> WorkerLaunch {
             marker.into_os_string(),
             effects.into_os_string(),
         ],
-        Duration::from_secs(5),
-        MAX_FRAME,
-        MAX_STDERR,
+        worker_backend::WorkerLimits {
+            timeout: Duration::from_secs(5),
+            max_frame_bytes: MAX_FRAME,
+            max_stderr_bytes: MAX_STDERR,
+        },
     )
     .expect("valid worker launch")
 }

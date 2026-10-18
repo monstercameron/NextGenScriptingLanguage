@@ -20,6 +20,16 @@ const MAX_JOB_HANDLES: usize = 32;
 const MAX_JOB_STAGES: usize = 16;
 const MAX_DIAGNOSTIC_BYTES_PER_STAGE: usize = if cfg!(windows) { 65_536 } else { 8_192 };
 
+/// The workflow state a background job is launched against.
+#[derive(Clone, Copy)]
+pub(super) struct JobEnv<'a> {
+    pub(super) registry: &'a Registry,
+    pub(super) bindings: &'a BTreeMap<String, Value>,
+    pub(super) cwd: &'a crate::working_dir::WorkingDirectory,
+    pub(super) options: &'a RunOptions,
+    pub(super) signals: &'a Signals,
+}
+
 #[derive(Default)]
 struct BudgetCounts {
     active_jobs: usize,
@@ -282,18 +292,20 @@ impl Supervisor {
         Ok(scope)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn(
         &mut self,
         scope: usize,
         name: &str,
         stages: &[JobStage],
-        registry: &Registry,
-        bindings: &BTreeMap<String, Value>,
-        cwd: &crate::working_dir::WorkingDirectory,
-        options: &RunOptions,
-        outer_signals: &Signals,
+        env: JobEnv<'_>,
     ) -> Result<usize> {
+        let JobEnv {
+            registry,
+            bindings,
+            cwd,
+            options,
+            signals: outer_signals,
+        } = env;
         if stages.is_empty() || stages.len() > MAX_JOB_STAGES {
             return Err(not_started_failure(
                 format!("background pipeline must contain between 1 and {MAX_JOB_STAGES} stages"),
@@ -967,11 +979,13 @@ mod tests {
             0,
             "short",
             stages,
-            &registry,
-            &BTreeMap::new(),
-            &crate::working_dir::WorkingDirectory::plain(directory.path()),
-            &options,
-            &signals,
+            JobEnv {
+                registry: &registry,
+                bindings: &BTreeMap::new(),
+                cwd: &crate::working_dir::WorkingDirectory::plain(directory.path()),
+                options: &options,
+                signals: &signals,
+            },
         )?;
 
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -1039,11 +1053,13 @@ mod tests {
                 0,
                 "doomed",
                 &stages,
-                &registry,
-                &BTreeMap::new(),
-                &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
-                &options,
-                &signals,
+                JobEnv {
+                    registry: &registry,
+                    bindings: &BTreeMap::new(),
+                    cwd: &crate::working_dir::WorkingDirectory::plain(cwd.clone()),
+                    options: &options,
+                    signals: &signals,
+                },
             );
             sender
                 .send((supervisor, result))

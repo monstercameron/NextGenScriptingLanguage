@@ -2869,13 +2869,17 @@ fn emit_applet_result_counted(
         })?;
         if result.outcome.kind != OutcomeKind::Success && !contract.result_envelope {
             runtime::check_retained_status(
-                call,
-                manifest,
-                node.line.unwrap_or(1),
-                result.status,
-                &String::from_utf8_lossy(&result.stderr),
-                Some(result.output.clone()),
-                Some(result.stderr.clone()),
+                runtime::CallSite {
+                    call,
+                    manifest,
+                    line: node.line.unwrap_or(1),
+                },
+                runtime::RetainedStatus {
+                    status: result.status,
+                    diagnostic: &String::from_utf8_lossy(&result.stderr),
+                    stdout: Some(result.output.clone()),
+                    stderr: Some(result.stderr.clone()),
+                },
                 registry,
             )?;
             bail!(

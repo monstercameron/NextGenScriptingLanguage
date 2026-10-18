@@ -240,17 +240,19 @@ fn next_record_segment(
     Ok((bytes.len(), false))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn fire(
-    body: &Program,
-    registry: &Registry,
-    options: &RunOptions,
-    signals: &Signals,
+    run: FiniteRun<'_>,
     input: Option<(&str, Vec<u8>)>,
     emit: &mut impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
     result: &mut ServiceResult,
     mut journal: Option<&mut Journal>,
 ) -> Result<()> {
+    let FiniteRun {
+        program: body,
+        registry,
+        options,
+        signals,
+    } = run;
     stopped(signals)?;
     let started = Instant::now();
     let (input, binding) = match input {
@@ -538,14 +540,16 @@ fn run_service_internal(
         .transpose()?;
     let signals = Signals::register_with_deadline(workflow_deadline)?;
     run_service_with_signals(
-        program,
-        registry,
-        options,
-        limits,
-        checkpoint,
-        schedule_options,
-        signals,
-        None,
+        ServiceRequest {
+            program,
+            registry,
+            options,
+            limits,
+            checkpoint,
+            schedule_options,
+            signals,
+            additional_sensitivity: None,
+        },
         emit,
     )
 }
@@ -588,14 +592,16 @@ pub(crate) fn run_program_module_service(
         max_record_bytes: options.max_output_bytes.max(1),
     };
     let result = run_service_with_signals(
-        &loaded.program,
-        registry,
-        options,
-        &limits,
-        None,
-        ScheduleOptions::default(),
-        signals,
-        Some(context.additional_sensitivity),
+        ServiceRequest {
+            program: &loaded.program,
+            registry,
+            options,
+            limits: &limits,
+            checkpoint: None,
+            schedule_options: ScheduleOptions::default(),
+            signals,
+            additional_sensitivity: Some(context.additional_sensitivity),
+        },
         emit,
     );
     let cancelled_shutdown = result.as_ref().is_err_and(|error| {
@@ -613,18 +619,32 @@ pub(crate) fn run_program_module_service(
     result
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_service_with_signals(
-    program: &Program,
-    registry: &Registry,
-    options: &RunOptions,
-    limits: &ServiceLimits,
-    checkpoint: Option<&CheckpointOptions>,
+/// Everything a service run needs besides its event sink.
+struct ServiceRequest<'a> {
+    program: &'a Program,
+    registry: &'a Registry,
+    options: &'a RunOptions,
+    limits: &'a ServiceLimits,
+    checkpoint: Option<&'a CheckpointOptions>,
     schedule_options: ScheduleOptions,
-    mut signals: Signals,
+    signals: Signals,
     additional_sensitivity: Option<crate::security::SensitivitySet>,
+}
+
+fn run_service_with_signals(
+    request: ServiceRequest<'_>,
     mut emit: impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
 ) -> Result<ServiceResult> {
+    let ServiceRequest {
+        program,
+        registry,
+        options,
+        limits,
+        checkpoint,
+        schedule_options,
+        mut signals,
+        additional_sensitivity,
+    } = request;
     schedule_options.validate()?;
     stopped(&signals)?;
     validate(program, registry)?;
@@ -760,10 +780,12 @@ fn run_service_with_signals(
     // future schedule tick.
     if journal.as_ref().is_some_and(Journal::has_pending) {
         fire(
-            &body,
-            registry,
-            &options,
-            &signals,
+            FiniteRun {
+                program: &body,
+                registry,
+                options: &options,
+                signals: &signals,
+            },
             None,
             &mut emit,
             &mut result,
@@ -805,10 +827,12 @@ fn run_service_with_signals(
                     || serde_json::json!({"event":"interval_tick","lateness_us":lateness,"pending":pending_runs}),
                 )?;
                 fire(
-                    &body,
-                    registry,
-                    &options,
-                    &signals,
+                    FiniteRun {
+                        program: &body,
+                        registry,
+                        options: &options,
+                        signals: &signals,
+                    },
                     None,
                     &mut emit,
                     &mut result,
@@ -883,10 +907,12 @@ fn run_service_with_signals(
                         || serde_json::json!({"event":"calendar_tick","local_time":candidate.to_rfc3339()}),
                     )?;
                     fire(
-                        &body,
-                        registry,
-                        &options,
-                        &signals,
+                        FiniteRun {
+                            program: &body,
+                            registry,
+                            options: &options,
+                            signals: &signals,
+                        },
                         None,
                         &mut emit,
                         &mut result,
@@ -906,11 +932,13 @@ fn run_service_with_signals(
             listen(
                 source,
                 binding,
-                &body,
-                registry,
-                &options,
+                FiniteRun {
+                    program: &body,
+                    registry,
+                    options: &options,
+                    signals: &signals,
+                },
                 limits,
-                &signals,
                 &mut emit,
                 &mut result,
                 journal.as_mut(),

@@ -391,15 +391,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             &mut bindings,
                             &mut |call, expect_success, values| {
                                 run_command_condition(
-                                    call,
-                                    expect_success,
-                                    values,
-                                    &cwd,
-                                    options,
+                                    ConditionRequest {
+                                        call,
+                                        expect_success,
+                                        line: step.line,
+                                        bindings: values,
+                                        cwd: &cwd,
+                                        options,
+                                        signals,
+                                        registry,
+                                    },
                                     &mut result.launched_processes,
-                                    signals,
-                                    registry,
-                                    step.line,
                                 )
                             },
                         )
@@ -513,15 +515,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     ..
                 } => {
                     let matched = run_command_condition(
-                        call,
-                        *expect_success,
-                        &bindings,
-                        &cwd,
-                        options,
+                        ConditionRequest {
+                            call,
+                            expect_success: *expect_success,
+                            line: step.line,
+                            bindings: &bindings,
+                            cwd: &cwd,
+                            options,
+                            signals,
+                            registry,
+                        },
                         &mut result.launched_processes,
-                        signals,
-                        registry,
-                        step.line,
                     )?;
                     lazy_event(
                         options.trace,
@@ -966,7 +970,16 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 StepKind::SpawnJob { name, stages } => {
                     let scope = call_frames.last().map_or(0, |frame| frame.job_scope);
                     match job_supervisor.spawn(
-                        scope, name, stages, registry, &bindings, &cwd, options, signals,
+                        scope,
+                        name,
+                        stages,
+                        super::jobs::JobEnv {
+                            registry,
+                            bindings: &bindings,
+                            cwd: &cwd,
+                            options,
+                            signals,
+                        },
                     ) {
                         Ok(launched) => {
                             result.launched_processes += launched;
@@ -1456,17 +1469,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 _ => None,
                             };
                             let run_uncached = || {
-                                execute_call_group(
-                                    &calls,
-                                    Input::Bytes(input),
-                                    Some((executable, argv)),
-                                    &bindings,
-                                    &cwd,
+                                execute_call_group(GroupRequest {
+                                    calls: &calls,
+                                    input: Input::Bytes(input),
+                                    prepared_first_call: Some((executable, argv)),
+                                    bindings: &bindings,
+                                    cwd: &cwd,
                                     options,
-                                    &mut result.launched_processes,
+                                    launched: &mut result.launched_processes,
                                     signals,
                                     registry,
-                                )
+                                })
                             };
                             let mut hit = if let Some(cache_key) = key.as_deref() {
                                 match cache::open(&directory, cache_key)? {
@@ -1547,17 +1560,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     .as_ref()
                                     .is_some_and(PendingRedirect::captures_stderr),
                             );
-                            let completed = match execute_call_group(
-                                &calls,
+                            let completed = match execute_call_group(GroupRequest {
+                                calls: &calls,
                                 input,
-                                None,
-                                &bindings,
-                                &cwd,
+                                prepared_first_call: None,
+                                bindings: &bindings,
+                                cwd: &cwd,
                                 options,
-                                &mut result.launched_processes,
+                                launched: &mut result.launched_processes,
                                 signals,
                                 registry,
-                            ) {
+                            }) {
                                 Ok(completed) => completed,
                                 Err(error) => {
                                     // A failed command's stderr still goes to its
@@ -1613,15 +1626,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         let output_value = if let Some(name) = &output_call.binding {
                             bind_call_output(
                                 name,
-                                output_manifest,
-                                calls.last().expect("invocation group is nonempty").2,
-                                &bytes,
-                                status,
-                                stdout_captured,
-                                stderr,
-                                &stages,
+                                CallOutput {
+                                    manifest: output_manifest,
+                                    line: calls.last().expect("invocation group is nonempty").2,
+                                    bytes: &bytes,
+                                    status,
+                                    stdout_captured,
+                                    stderr,
+                                    stages: &stages,
+                                    typed_json,
+                                },
                                 output_call.result_binding.is_some(),
-                                typed_json,
                                 &mut bindings,
                             )?
                         } else if output_call.result_binding.is_some()
@@ -1633,16 +1648,16 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         && output_manifest.output_kind().is_some())
                             })
                         {
-                            Some(decode_call_output(
-                                output_manifest,
-                                calls.last().expect("invocation group is nonempty").2,
-                                &bytes,
+                            Some(decode_call_output(CallOutput {
+                                manifest: output_manifest,
+                                line: calls.last().expect("invocation group is nonempty").2,
+                                bytes: &bytes,
                                 status,
                                 stdout_captured,
                                 stderr,
-                                &stages,
+                                stages: &stages,
                                 typed_json,
-                            )?)
+                            })?)
                         } else {
                             None
                         };

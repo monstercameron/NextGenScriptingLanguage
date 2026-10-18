@@ -72,18 +72,27 @@ pub(crate) struct WorkerLaunch {
     pub max_stderr_bytes: usize,
 }
 
+/// The lifecycle limits a worker is launched under.
+pub(crate) struct WorkerLimits {
+    pub(crate) timeout: Duration,
+    pub(crate) max_frame_bytes: usize,
+    pub(crate) max_stderr_bytes: usize,
+}
+
 impl WorkerLaunch {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn inherited(
         registry: crate::manifest::Registry,
         applet_name: String,
         binary: PathBuf,
         cwd: PathBuf,
         startup_arguments: Vec<OsString>,
-        timeout: Duration,
-        max_frame_bytes: usize,
-        max_stderr_bytes: usize,
+        limits: WorkerLimits,
     ) -> Result<Self> {
+        let WorkerLimits {
+            timeout,
+            max_frame_bytes,
+            max_stderr_bytes,
+        } = limits;
         let policy_fingerprint = crate::capabilities::policy_fingerprint(&registry, &applet_name)?;
         let environment = crate::capabilities::effective_environment(&registry, &applet_name)?;
         if crate::capabilities::policy_fingerprint(&registry, &applet_name)? != policy_fingerprint {

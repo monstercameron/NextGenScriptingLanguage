@@ -297,6 +297,21 @@ pub struct ExecutionRecord {
     pub stages_dropped: usize,
 }
 
+/// The fields one execution record is projected from.
+struct ExecutionFields<'a> {
+    line: usize,
+    applet: String,
+    kind: ExecutionKind,
+    outcome: Option<&'a str>,
+    status: Option<i32>,
+    signal: Option<i32>,
+    effect_certainty: EffectCertainty,
+    stdout: Option<&'a [u8]>,
+    stderr: Option<&'a [u8]>,
+    source_stages: &'a [StageResult],
+    stage_limit: usize,
+}
+
 impl ExecutionRecord {
     pub fn from_result(line: usize, applet: impl Into<String>, result: &ExecutionResult) -> Self {
         Self::from_result_with_stage_limit(line, applet, result, MAX_EXECUTION_STAGES)
@@ -308,19 +323,19 @@ impl ExecutionRecord {
         result: &ExecutionResult,
         stage_limit: usize,
     ) -> Self {
-        Self::from_fields(
+        Self::from_fields(ExecutionFields {
             line,
-            applet,
-            result.kind,
-            result.outcome.as_deref(),
-            result.status,
-            result.signal,
-            result.effect_certainty,
-            result.stdout.as_deref(),
-            result.stderr.as_deref(),
-            &result.stages,
+            applet: applet.into(),
+            kind: result.kind,
+            outcome: result.outcome.as_deref(),
+            status: result.status,
+            signal: result.signal,
+            effect_certainty: result.effect_certainty,
+            stdout: result.stdout.as_deref(),
+            stderr: result.stderr.as_deref(),
+            source_stages: &result.stages,
             stage_limit,
-        )
+        })
     }
 
     /// Project the metadata available at a completed invocation boundary
@@ -357,35 +372,35 @@ impl ExecutionRecord {
             std::iter::once(outcome.effect_certainty)
                 .chain(stages.iter().map(|stage| stage.effect_certainty)),
         );
-        Self::from_fields(
+        Self::from_fields(ExecutionFields {
             line,
-            applet,
-            ExecutionKind::from_outcome(outcome.kind),
-            Some(&outcome.name),
-            Some(outcome.status),
-            None,
+            applet: applet.into(),
+            kind: ExecutionKind::from_outcome(outcome.kind),
+            outcome: Some(&outcome.name),
+            status: Some(outcome.status),
+            signal: None,
             effect_certainty,
             stdout,
             stderr,
-            stages,
+            source_stages: stages,
             stage_limit,
-        )
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn from_fields(
-        line: usize,
-        applet: impl Into<String>,
-        kind: ExecutionKind,
-        outcome: Option<&str>,
-        status: Option<i32>,
-        signal: Option<i32>,
-        effect_certainty: EffectCertainty,
-        stdout: Option<&[u8]>,
-        stderr: Option<&[u8]>,
-        source_stages: &[StageResult],
-        stage_limit: usize,
-    ) -> Self {
+    fn from_fields(fields: ExecutionFields<'_>) -> Self {
+        let ExecutionFields {
+            line,
+            applet,
+            kind,
+            outcome,
+            status,
+            signal,
+            effect_certainty,
+            stdout,
+            stderr,
+            source_stages,
+            stage_limit,
+        } = fields;
         let stage_count = source_stages.len();
         let retained_stage_count = stage_count.min(stage_limit);
         let prefix_count = retained_stage_count.saturating_sub(1);
@@ -401,7 +416,7 @@ impl ExecutionRecord {
         Self {
             line,
             step_id: super::current_step_id().map(|id| id.to_string()),
-            applet: applet.into(),
+            applet,
             kind,
             outcome: outcome.map(str::to_owned),
             status,

@@ -25,19 +25,21 @@ impl Read for WindowsListenerReader {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn listen(
     source: &ListenSource,
     binding: &str,
-    body: &Program,
-    registry: &Registry,
-    options: &RunOptions,
+    run: FiniteRun<'_>,
     limits: &ServiceLimits,
-    signals: &Signals,
     emit: &mut impl FnMut(&[u8], &AtomicBool, Option<Instant>) -> Result<()>,
     result: &mut ServiceResult,
     mut journal: Option<&mut Journal>,
 ) -> Result<()> {
+    let FiniteRun {
+        program: body,
+        registry,
+        options,
+        signals,
+    } = run;
     let mut children = Children::default();
     let mut source_manifest: Option<&Manifest> = None;
     let mut reader = match source {
@@ -114,10 +116,12 @@ fn listen(
                     eof = true;
                     if !record.is_empty() {
                         fire(
-                            body,
-                            registry,
-                            options,
-                            signals,
+                            FiniteRun {
+                                program: body,
+                                registry,
+                                options,
+                                signals,
+                            },
                             Some((binding, std::mem::take(&mut record))),
                             emit,
                             result,
@@ -140,10 +144,12 @@ fn listen(
                         offset += length;
                         if terminated {
                             fire(
-                                body,
-                                registry,
-                                options,
-                                signals,
+                                FiniteRun {
+                                    program: body,
+                                    registry,
+                                    options,
+                                    signals,
+                                },
                                 Some((binding, std::mem::take(&mut record))),
                                 emit,
                                 result,
@@ -229,14 +235,16 @@ mod native_listener_tests {
         let listener_result = listen(
             source,
             binding,
-            &body,
-            &registry,
-            &options,
+            FiniteRun {
+                program: &body,
+                registry: &registry,
+                options: &options,
+                signals: &signals,
+            },
             &ServiceLimits {
                 max_runs: None,
                 max_record_bytes: 1024,
             },
-            &signals,
             &mut |bytes, _, _| {
                 output.push(bytes.to_vec());
                 Ok(())
@@ -293,14 +301,16 @@ mod native_listener_tests {
         let result = listen(
             source,
             binding,
-            &body,
-            &Registry::default(),
-            &options,
+            FiniteRun {
+                program: &body,
+                registry: &Registry::default(),
+                options: &options,
+                signals: &signals,
+            },
             &ServiceLimits {
                 max_runs: None,
                 max_record_bytes: 1024,
             },
-            &signals,
             &mut |_, _, _| Ok(()),
             &mut ServiceResult::default(),
             None,

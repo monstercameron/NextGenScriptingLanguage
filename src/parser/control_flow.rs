@@ -120,12 +120,14 @@ pub(super) fn parse_try<'arena, 'source: 'arena>(
     parse_body(
         line_at,
         cursor,
-        indent,
         steps,
-        depth,
-        scope,
-        header.number,
-        "try",
+        BlockContext {
+            indent,
+            depth,
+            scope,
+            line: header.number,
+            name: "try",
+        },
     )?;
 
     let mut catch_index = None;
@@ -149,12 +151,14 @@ pub(super) fn parse_try<'arena, 'source: 'arena>(
         parse_body(
             line_at,
             cursor,
-            indent,
             steps,
-            depth,
-            scope,
-            clause.number,
-            "catch",
+            BlockContext {
+                indent,
+                depth,
+                scope,
+                line: clause.number,
+                name: "catch",
+            },
         )?;
     }
     if let Some(clause) = line_at(*cursor).filter(|line| {
@@ -171,12 +175,14 @@ pub(super) fn parse_try<'arena, 'source: 'arena>(
         parse_body(
             line_at,
             cursor,
-            indent,
             steps,
-            depth,
-            scope,
-            clause.number,
-            "finally",
+            BlockContext {
+                indent,
+                depth,
+                scope,
+                line: clause.number,
+                name: "finally",
+            },
         )?;
     }
     if catch_index.is_none() && finally_index.is_none() {
@@ -218,17 +224,30 @@ pub(super) fn parse_try<'arena, 'source: 'arena>(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)] // These values are the parser's per-block context.
-fn parse_body<'arena, 'source: 'arena>(
-    line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
-    cursor: &mut usize,
+/// The per-block context a body is parsed under: its indentation, nesting depth,
+/// enclosing statement scope, and the header it belongs to.
+#[derive(Clone, Copy)]
+struct BlockContext<'a> {
     indent: usize,
-    steps: &mut Vec<Step>,
     depth: usize,
     scope: StatementScope,
     line: usize,
-    name: &str,
+    name: &'a str,
+}
+
+fn parse_body<'arena, 'source: 'arena>(
+    line_at: &impl Fn(usize) -> Option<BlockLine<'arena, 'source>>,
+    cursor: &mut usize,
+    steps: &mut Vec<Step>,
+    block: BlockContext<'_>,
 ) -> Result<()> {
+    let BlockContext {
+        indent,
+        depth,
+        scope,
+        line,
+        name,
+    } = block;
     let body_indent = line_at(*cursor)
         .filter(|child| child.indent > indent)
         .map(|child| child.indent)

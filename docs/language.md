@@ -1487,6 +1487,11 @@ stricter than Bash without `pipefail`.
 
 ## CLI and manifests
 
+Source builds enable `graph`, `screens`, `records` and `tooling` by default. Use
+`--no-default-features` for the core interpreter; rebuild with `--features graph`,
+`screens`, `records` or `tooling` to add the corresponding optional programs and
+commands. `tui` includes `screens` and adds interactive terminal support.
+
 ```sh
 execute app.program
 execute check app.program

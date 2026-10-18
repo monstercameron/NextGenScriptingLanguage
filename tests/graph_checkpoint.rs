@@ -2,6 +2,7 @@
 //! A completed node is recorded and replayed by a later run, an interrupted node
 //! needs `--retry-uncertain`, and a changed or unsupported graph is refused before
 //! any effect runs.
+#![cfg(feature = "graph")]
 
 use flow::graph::{self, GraphCheckpointStore, GraphPlan, MemoryGraphStore};
 use flow::manifest::Registry;

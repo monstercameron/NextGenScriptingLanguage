@@ -3,6 +3,7 @@
 //! Build this ignored test target separately, then run its prebuilt test binary
 //! through benchmarks/stress_evidence.py. It creates thousands of real graph
 //! worker threads and queues; it is not part of ordinary cargo test runs.
+#![cfg(feature = "graph")]
 #![cfg(target_os = "linux")]
 
 use flow::{

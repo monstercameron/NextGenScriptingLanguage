@@ -16,7 +16,25 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) mod elements;
+#[cfg(feature = "graph")]
 pub(crate) mod graph;
+
+/// The `kind` a graph run's journal body carries. It lives here rather than in the graph
+/// module so a build without graph support still recognizes and refuses a graph checkpoint.
+pub(crate) const GRAPH_KIND: &str = "graph";
+
+/// Whether a journal body belongs to a graph run.
+pub(crate) fn is_graph_body(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("kind")
+                .and_then(|kind| kind.as_str())
+                .map(|kind| kind == GRAPH_KIND)
+        })
+        .unwrap_or(false)
+}
 #[allow(dead_code)]
 mod leaf_cursor;
 use elements::ElementReplay;
@@ -1240,7 +1258,7 @@ fn read_journal_parts(path: &Path) -> Result<(JournalData, CompletedLog)> {
     let version = serde_json::from_str::<JournalVersion>(body)
         .context("checkpoint journal is malformed or corrupt")?
         .version;
-    if graph::is_graph_body(body) {
+    if is_graph_body(body) {
         bail!("this checkpoint holds a graph run; resume it with `execute resume GRAPH --checkpoint DIR`");
     }
     let (data, log) = if version == LEGACY_JOURNAL_VERSION || version == INLINE_JOURNAL_VERSION {

@@ -71,9 +71,11 @@ mod service;
 mod streaming;
 pub mod tasks;
 pub mod worker_backend;
+#[cfg(feature = "graph")]
 pub(crate) use checkpoint::graph::{open_graph_checkpoint, PersistenceAuthorizer};
 pub use checkpoint::{read_repair_state, CheckpointOptions, RepairState};
 pub use resume::run_checkpointed;
+#[cfg(feature = "graph")]
 pub(crate) use streaming::run_stream_with_context_and_process_observer;
 pub use streaming::{
     run_stream, run_stream_with_cancellation, run_stream_with_context, StreamExecutionContext,
@@ -83,6 +85,7 @@ pub use streaming::{
 mod stdio;
 #[cfg(feature = "live")]
 pub(crate) use service::next_interval;
+#[cfg(feature = "graph")]
 pub(crate) use service::{run_program_module_service, ProgramServiceContext};
 pub use service::{
     run_service, run_service_checkpointed, run_service_checkpointed_with_schedule_options,
@@ -2900,6 +2903,7 @@ fn worker_launch_for_call(
 /// their own event provenance. Preflight may conservatively include workers
 /// whose executable content changed at the same launch path; dispatch checks
 /// the exact content identity before sending a request.
+#[cfg(feature = "graph")]
 pub(crate) fn worker_sensitivity_history_for_call(
     call: &Invocation,
     manifest: &Manifest,

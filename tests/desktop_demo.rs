@@ -1,3 +1,4 @@
+#![cfg(feature = "graph")]
 use flow::ast::Value;
 use flow::graph;
 use flow::manifest::Registry;

@@ -358,6 +358,7 @@ impl WorkerPool {
     /// Create an empty execution-scoped pool with this pool's validated
     /// capacity. Service sessions use this to honor registry configuration
     /// without retaining workers or sensitivity history beyond the service.
+    #[cfg(feature = "graph")]
     pub(crate) fn isolated_like(&self) -> Self {
         Self::with_capacity(self.capacity).expect("existing worker pool capacity is valid")
     }

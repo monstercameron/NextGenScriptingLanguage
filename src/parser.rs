@@ -1666,6 +1666,7 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
 /// Parse one typed literal/reference using the same grammar as `.program` values.
 /// Graph and other source surfaces reuse this to avoid divergent JSON coercions.
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "graph")]
 pub(crate) fn parse_value_source(source: &str) -> Result<Value> {
     let mut tokens = Vec::new();
     tokenize_into(source, &mut tokens)?;

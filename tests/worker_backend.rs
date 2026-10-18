@@ -346,6 +346,8 @@ fn pool_rejects_new_identities_at_capacity_without_evicting_state() {
     }
 }
 
+// isolated_like serves graph program services only.
+#[cfg(feature = "graph")]
 #[test]
 fn isolated_pool_forks_capacity_but_not_retained_workers() {
     let _guard = lock_worker_tests();

@@ -1,3 +1,4 @@
+#![cfg(feature = "graph")]
 use flow::ast::{StepKind, Trigger};
 use flow::manifest::Registry;
 use flow::{parser, runtime};

@@ -1,3 +1,4 @@
+#![cfg(feature = "graph")]
 use flow::ast::Value;
 #[cfg(unix)]
 use flow::graph::PortValue;

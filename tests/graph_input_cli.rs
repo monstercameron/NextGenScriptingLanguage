@@ -1,4 +1,5 @@
 //! Graphs use the same typed process-input contract as finite workflows.
+#![cfg(feature = "graph")]
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};

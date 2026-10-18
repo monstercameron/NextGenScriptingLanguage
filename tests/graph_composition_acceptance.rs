@@ -1,3 +1,4 @@
+#![cfg(feature = "graph")]
 #![cfg(unix)]
 
 use anyhow::{anyhow, bail, Context, Result};

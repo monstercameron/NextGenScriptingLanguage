@@ -1,3 +1,4 @@
+#![cfg(feature = "graph")]
 use anyhow::Result;
 use flow::ast::Value;
 use flow::graph::PortRef;

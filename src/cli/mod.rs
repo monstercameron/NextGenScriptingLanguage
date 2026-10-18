@@ -4,4 +4,6 @@ mod args;
 mod parse;
 
 pub(crate) use args::Args;
-pub(crate) use parse::{parse_args, take_option_value, workflow_path};
+#[cfg(feature = "tooling")]
+pub(crate) use parse::workflow_path;
+pub(crate) use parse::{parse_args, take_option_value};

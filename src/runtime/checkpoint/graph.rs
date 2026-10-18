@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// The `kind` every graph journal body carries. Program readers refuse it.
-const GRAPH_KIND: &str = "graph";
+use super::{is_graph_body, GRAPH_KIND};
 const GRAPH_LOG: &str = "graph.jsonl";
 const GRAPH_CHAIN_START: &str = "execute-graph-completed-log/v5";
 const MAX_JOURNAL_BYTES: usize = 16 * 1024 * 1024;
@@ -41,19 +41,6 @@ struct GraphJournalDisk {
     completed_count: usize,
     completed_chain: String,
     in_flight: Vec<InterruptedNode>,
-}
-
-/// Whether a journal body belongs to a graph run.
-pub(super) fn is_graph_body(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("kind")
-                .and_then(|kind| kind.as_str())
-                .map(|kind| kind == GRAPH_KIND)
-        })
-        .unwrap_or(false)
 }
 
 struct GraphState {

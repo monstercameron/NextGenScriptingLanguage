@@ -1,3 +1,4 @@
+#![cfg(feature = "graph")]
 use flow::contracts::{OutputType, PortDelivery, Sensitivity, ValueSchema};
 use flow::graph::{
     self, BufferPolicy, EdgeSpec, GraphNode, GraphNodeKind, GraphPlan, PortRef, PortSchema,

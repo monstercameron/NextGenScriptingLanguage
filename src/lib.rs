@@ -6,6 +6,7 @@ pub mod ast;
 pub mod bundled_manifests;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capabilities;
+#[cfg(feature = "tooling")]
 pub mod compile_sh;
 pub mod contracts;
 #[cfg(all(feature = "desktop", not(target_arch = "wasm32")))]
@@ -13,10 +14,12 @@ pub mod desktop;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod diagnostics;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "tooling")]
 pub mod discovery;
 #[cfg(feature = "failpoints")]
 pub(crate) mod failpoint;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "graph")]
 pub mod graph;
 pub mod home;
 pub mod inputs;
@@ -32,14 +35,18 @@ pub mod program_files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prompt;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "records")]
 pub mod record;
 #[cfg(all(feature = "remote", not(target_arch = "wasm32")))]
 pub mod remote;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "records")]
 pub mod repair;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "records")]
 pub mod repl;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "records")]
 pub mod replay;
 #[cfg_attr(target_arch = "wasm32", path = "browser.rs")]
 pub mod runtime;
@@ -48,6 +55,7 @@ pub mod schedule;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod security;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "tooling")]
 pub mod service_deployment;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stream;
@@ -58,7 +66,7 @@ pub mod tasks;
 pub mod terminal_text;
 pub mod working_dir;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "screens", not(target_arch = "wasm32")))]
 pub mod ui;
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -6,6 +6,7 @@
 //! lifecycle receipts; it does not claim whole-machine or child-process RSS.
 //! Run only from a prebuilt release test binary through
 //! `benchmarks/stress_evidence.py mixed`.
+#![cfg(feature = "graph")]
 use anyhow::{anyhow, bail, Context, Result};
 use flow::{
     ast::Value,

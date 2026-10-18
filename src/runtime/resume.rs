@@ -382,6 +382,7 @@ fn node_fingerprint_with_digests(
 /// A graph node's checkpoint fingerprint, built as a checkpointed program node's is:
 /// the node's own definition (`base`), its invocation's manifest, executable path and
 /// content digest, and every preloaded program module's fingerprint.
+#[cfg(feature = "graph")]
 pub(crate) fn graph_node_fingerprint(
     base: &[u8],
     call: Option<&Invocation>,

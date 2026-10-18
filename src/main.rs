@@ -13,18 +13,78 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 
 mod cli;
-use cli::{parse_args, take_option_value, workflow_path, Args};
+#[cfg(feature = "tooling")]
+use cli::workflow_path;
+use cli::{parse_args, take_option_value, Args};
 mod github_annotations;
 mod manifest_cache;
+#[cfg(feature = "records")]
 mod record_cli;
+#[cfg(feature = "records")]
 mod repair_cli;
+#[cfg(feature = "records")]
 mod repl_cli;
+#[cfg(feature = "tooling")]
 mod run_parts;
+#[cfg(feature = "tooling")]
 mod test_runner;
 
 struct FiniteCheckSnapshot {
     source: String,
     registry: Registry,
+}
+
+#[cfg(any(not(feature = "screens"), not(feature = "graph")))]
+fn strip_source_comment(line: &str) -> &str {
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, byte) in line.bytes().enumerate() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else if byte == b'"' {
+            quoted = true;
+        } else if byte == b'#' {
+            return &line[..index];
+        }
+    }
+    line
+}
+
+#[cfg(feature = "screens")]
+fn is_screen_source(source: &str) -> bool {
+    flow::ui::syntax::is_screen(source)
+}
+
+#[cfg(not(feature = "screens"))]
+fn is_screen_source(source: &str) -> bool {
+    source
+        .lines()
+        .map(strip_source_comment)
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| line.starts_with("open a screen "))
+}
+
+#[cfg(feature = "graph")]
+fn is_graph_source(source: &str) -> bool {
+    flow::graph::is_graph(source)
+}
+
+#[cfg(not(feature = "graph"))]
+fn is_graph_source(source: &str) -> bool {
+    for line in source.lines().map(strip_source_comment).map(str::trim) {
+        if line.is_empty() || line.split_ascii_whitespace().next() == Some("accept") {
+            continue;
+        }
+        return line.starts_with("graph ");
+    }
+    false
 }
 
 /// A closed stdout reader surfaces as a broken pipe: EPIPE on Unix, and on
@@ -42,14 +102,18 @@ fn is_closed_stdout(error: &anyhow::Error) -> bool {
 /// Exit status when the stdout reader has gone: the SIGPIPE convention (128 + 13).
 const STDOUT_CLOSED_EXIT: i32 = 141;
 
+/// Only graph runs register this cancellation handler.
+#[cfg(feature = "graph")]
 struct SignalRegistration(signal_hook::SigId);
 
+#[cfg(feature = "graph")]
 impl Drop for SignalRegistration {
     fn drop(&mut self) {
         signal_hook::low_level::unregister(self.0);
     }
 }
 
+#[cfg(feature = "graph")]
 fn register_cancellation_signal(
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<SignalRegistration> {
@@ -277,22 +341,40 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         return applets_cli(&arguments[1..]);
     }
     if arguments.first().is_some_and(|a| a == "test") {
+        #[cfg(feature = "tooling")]
         return test_runner::cli(&arguments[1..]);
+        #[cfg(not(feature = "tooling"))]
+        bail!("`test` requires the tooling feature; rebuild with --features tooling");
     }
     if arguments.first().is_some_and(|a| a == "run-parts") {
+        #[cfg(feature = "tooling")]
         return run_parts::cli(&arguments[1..]);
+        #[cfg(not(feature = "tooling"))]
+        bail!("`run-parts` requires the tooling feature; rebuild with --features tooling");
     }
     if arguments.first().is_some_and(|a| a == "show-run") {
+        #[cfg(feature = "records")]
         return record_cli::show_run(&arguments[1..]);
+        #[cfg(not(feature = "records"))]
+        bail!("`show-run` requires the records feature; rebuild with --features records");
     }
     if arguments.first().is_some_and(|a| a == "replay") {
+        #[cfg(feature = "records")]
         return record_cli::replay(&arguments[1..]);
+        #[cfg(not(feature = "records"))]
+        bail!("`replay` requires the records feature; rebuild with --features records");
     }
     if arguments.first().is_some_and(|a| a == "repl") {
+        #[cfg(feature = "records")]
         return repl_cli::repl(&arguments[1..]);
+        #[cfg(not(feature = "records"))]
+        bail!("`repl` requires the records feature; rebuild with --features records");
     }
     if arguments.first().is_some_and(|a| a == "repair") {
+        #[cfg(feature = "records")]
         return repair_cli::repair(&arguments[1..]);
+        #[cfg(not(feature = "records"))]
+        bail!("`repair` requires the records feature; rebuild with --features records");
     }
     #[cfg(feature = "lsp")]
     if arguments.first().is_some_and(|a| a == "lsp") {
@@ -309,10 +391,16 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         return modules_cli(&arguments[1..]);
     }
     if arguments.first().is_some_and(|a| a == "compile") {
+        #[cfg(feature = "tooling")]
         return compile_cli(&arguments[1..]);
+        #[cfg(not(feature = "tooling"))]
+        bail!("`compile` requires the tooling feature; rebuild with --features tooling");
     }
     if arguments.first().is_some_and(|a| a == "service") {
+        #[cfg(feature = "tooling")]
         return service_cli(&arguments[1..]);
+        #[cfg(not(feature = "tooling"))]
+        bail!("`service` requires the tooling feature; rebuild with --features tooling");
     }
     if arguments.first().is_some_and(|a| a == "model") {
         #[cfg(unix)]
@@ -359,11 +447,19 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         let path = args.file.to_string_lossy().into_owned();
         let path_bytes = args.file.as_os_str().as_encoded_bytes().to_vec();
         let source = fs::read_to_string(&args.file).ok();
+        #[cfg(not(feature = "screens"))]
+        if source.as_deref().is_some_and(is_screen_source) {
+            bail!("screen programs require the screens feature; rebuild with --features screens");
+        }
+        #[cfg(not(feature = "graph"))]
+        if source.as_deref().is_some_and(is_graph_source) {
+            bail!("graph programs require the graph feature; rebuild with --features graph");
+        }
         let (static_diagnostics, finite_check_snapshot) = match source {
             Some(source)
-                if !flow::ui::syntax::is_screen(&source)
+                if !is_screen_source(&source)
                     && !flow::stream::is_stream(&source)
-                    && !flow::graph::is_graph(&source) =>
+                    && !is_graph_source(&source) =>
             {
                 match load_registry(
                     args.manifest_dir.clone(),
@@ -577,6 +673,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         Some(path) => Some(flow::agent::instance::acquire(path)?),
         None => None,
     };
+    #[cfg(not(feature = "graph"))]
+    if is_graph_source(&source) {
+        bail!("graph programs require the graph feature; rebuild with --features graph");
+    }
+    #[cfg(feature = "graph")]
     if flow::graph::is_graph(&source) {
         reject_finite_only_options(&args, "graph")?;
         // `run` and `resume` accept `--checkpoint`; the trigger and UI options are not
@@ -707,6 +808,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             _ => unreachable!("argument parser only accepts workflow commands"),
         };
     }
+    #[cfg(not(feature = "screens"))]
+    if is_screen_source(&source) {
+        bail!("screen programs require the screens feature; rebuild with --features screens");
+    }
+    #[cfg(feature = "screens")]
     if flow::ui::syntax::is_screen(&source) {
         reject_finite_only_options(&args, "screen")?;
         if args.missed_ticks.is_some()
@@ -1246,6 +1352,7 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     )?;
                 }
             } else {
+                #[cfg(feature = "records")]
                 let result = if let Some(directory) = args.record_dir.as_deref() {
                     if checkpoint.is_some() {
                         bail!("--record cannot be combined with checkpoints");
@@ -1253,6 +1360,24 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     record_cli::run_recorded(directory, &args.file, &program, &registry, &options)?
                 } else {
                     // Uncaptured stdout streams to this terminal as it is produced.
+                    runtime::with_streamed_stdout(|| {
+                        if let Some(checkpoint) = checkpoint.as_ref() {
+                            runtime::run_checkpointed(&program, &registry, &options, checkpoint)
+                        } else {
+                            runtime::run_with_drain_timeout(
+                                &program,
+                                &registry,
+                                &options,
+                                args.drain_timeout.unwrap_or(runtime::DEFAULT_DRAIN_TIMEOUT),
+                            )
+                        }
+                    })?
+                };
+                #[cfg(not(feature = "records"))]
+                let result = {
+                    if args.record_dir.is_some() {
+                        bail!("--record requires the records feature; rebuild with --features records");
+                    }
                     runtime::with_streamed_stdout(|| {
                         if let Some(checkpoint) = checkpoint.as_ref() {
                             runtime::run_checkpointed(&program, &registry, &options, checkpoint)
@@ -1411,6 +1536,10 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
     if !matches!(command.as_str(), "list" | "inspect" | "discover" | "match") {
         bail!("unknown applets command {command:?}\n{HELP}");
     }
+    #[cfg(not(feature = "tooling"))]
+    if matches!(command.as_str(), "discover" | "match") {
+        bail!("`applets {command}` requires the tooling feature; rebuild with --features tooling");
+    }
     let mut manifest_dir = None;
     let mut manifest_catalog = None;
     let mut name = None;
@@ -1480,6 +1609,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
     if command == "inspect" && name.is_none() {
         bail!("applets inspect requires a name or phrase\n{HELP}");
     }
+    #[cfg(feature = "tooling")]
     if command == "discover" {
         if name.is_some() || request.is_some() || request_file.is_some() {
             bail!("applets discover takes no positional arguments or request JSON");
@@ -1498,6 +1628,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
     }
     // Listing and matching read every manifest, so compare the whole directory first.
     let registry = load_registry(manifest_dir, manifest_catalog, ManifestCheck::Full)?;
+    #[cfg(feature = "tooling")]
     if command == "match" {
         if name.is_some() {
             bail!("applets match takes no positional arguments");
@@ -1537,6 +1668,7 @@ fn applets_cli(arguments: &[String]) -> Result<()> {
 
 /// `execute compile --to sh FILE [--out PATH]`: write a checked POSIX sh script.
 /// Without `--out` the script goes to standard output; with it, only that path is written.
+#[cfg(feature = "tooling")]
 fn compile_cli(arguments: &[String]) -> Result<()> {
     const HELP: &str = "Usage: execute compile --to sh FILE [--out PATH] [--manifest-dir DIR | --manifest-catalog FILE]\n\nCompile a program to a POSIX sh script. Statements with no faithful sh equivalent are refused by name and line; nothing is approximated. Output goes to standard output unless --out names a file.";
     if arguments == ["--help"] || arguments == ["-h"] {
@@ -1767,6 +1899,7 @@ fn modules_cli(arguments: &[String]) -> Result<()> {
     }
 }
 
+#[cfg(feature = "tooling")]
 fn service_cli(arguments: &[String]) -> Result<()> {
     const HELP: &str = "Usage: execute service generate <systemd|systemd-timer|launchd> FILE [--name ID] [--persistent] [--manifest-dir DIR | --manifest-catalog FILE] [--working-dir DIR] [--capability-policy FILE] [--data-flow-policy FILE] [--input NAME=VALUE ...] [-- ARG...]\n\nThe manifest selectors are mutually exclusive. --manifest-dir keeps its directory or single-manifest-file behavior; --manifest-catalog explicitly selects a packed catalog. No catalog is merged or selected automatically. Print a validated per-user service definition. This command never writes, installs, enables, or starts a service.";
     if arguments == ["--help"] || arguments == ["-h"] {
@@ -2104,6 +2237,7 @@ fn write_json(value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "tooling")]
 fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
     let read_limit = limit
         .checked_add(1)

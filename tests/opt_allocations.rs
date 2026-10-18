@@ -4,6 +4,7 @@
 //! `OPT_ALLOC_REPORT` to the JSON output path. The allocator wrapper delegates
 //! to `System`; counting is enabled only around one selected operation at a
 //! time, and report construction/writing happens after counting is disabled.
+#![cfg(feature = "screens")]
 
 use flow::{
     ast::{Invocation, Value},

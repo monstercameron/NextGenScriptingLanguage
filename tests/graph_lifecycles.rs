@@ -1,3 +1,4 @@
+#![cfg(feature = "graph")]
 use anyhow::{anyhow, Result};
 use flow::ast::Value;
 use flow::contracts::{OutputType, ValueSchema};

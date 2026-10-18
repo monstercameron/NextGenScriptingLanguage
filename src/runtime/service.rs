@@ -18,6 +18,7 @@ pub struct ServiceLimits {
 
 /// Runtime-owned inputs that bind an imported persistent program to its graph
 /// execution without creating a second scheduler or registry scope.
+#[cfg(feature = "graph")]
 pub(crate) struct ProgramServiceContext {
     pub(crate) cancelled: Arc<AtomicBool>,
     pub(crate) deadline: Option<Instant>,
@@ -559,6 +560,7 @@ fn run_service_internal(
 /// input provenance; handler execution and scheduling still use the ordinary
 /// service runtime and native process supervisor. The source trigger selects
 /// either schedule ticks or one sequential handler per native listener line.
+#[cfg(feature = "graph")]
 pub(crate) fn run_program_module_service(
     loaded: &crate::modules::LoadedProgramSource,
     registry: &Registry,

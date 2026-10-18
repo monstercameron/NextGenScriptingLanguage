@@ -43,13 +43,15 @@ ctrlc = "3.4"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Memory"] }
 
 [features]
-# The default build is lean: no terminal UI and no model helper. `full` is the
-# product feature set; shipped binaries, release packages, and the test suite build
-# with `--features full`. Disabling `tui` or `model` drops the code each one selects.
-default = []
-full = ["tui", "model", "desktop", "dap", "remote", "live", "lsp"]
+# Optional product areas are enabled by default; core builds can opt out of them.
+default = ["graph", "screens", "records", "tooling"]
+full = ["graph", "screens", "records", "tooling", "tui", "model", "desktop", "dap", "remote", "live", "lsp"]
+graph = []
+screens = []
+records = []
+tooling = []
 # The terminal UI shows live session state, so it implies the live control plane.
-tui = ["live", "dep:ratatui", "dep:crossterm", "dep:unicode-width"]
+tui = ["screens", "live", "dep:ratatui", "dep:crossterm", "dep:unicode-width"]
 # The live control endpoint, `run --control`, and `attach`.
 live = []
 # The language server behind `execute lsp`: editor completions, hovers, and diagnostics.
@@ -58,7 +60,7 @@ lsp = []
 model = ["dep:ureq"]
 remote = ["dep:ureq", "dep:mio"]
 # Quickshell desktop renderer nodes and the DAP adapter. Lean builds refuse both with a clear error.
-desktop = []
+desktop = ["screens"]
 dap = []
 # Test-only fault injection for the crash-consistency tests; never enabled by default.
 failpoints = []
@@ -133,6 +135,12 @@ required-features = ["model"]
 [[example]]
 name = "native-fixture"
 path = "tests/fixtures/native_fixture.rs"
+
+# The probe parses screen programs too, so a core build skips it.
+[[example]]
+name = "parse_probe"
+path = "examples/parse_probe.rs"
+required-features = ["screens"]
 
 # Unsafe policy: every unsafe block has a `// SAFETY:` comment, and every unsafe operation
 # inside an unsafe fn sits in its own block. CI runs clippy with -D warnings.

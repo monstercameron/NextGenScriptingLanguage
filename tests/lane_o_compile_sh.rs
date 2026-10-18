@@ -310,6 +310,107 @@ fn environment_on_one_command_matches_execute() {
     );
 }
 
+#[test]
+fn loader_environment_variables_are_refused() {
+    let directory = tempdir().unwrap();
+    for name in ["LD_PRELOAD", "DYLD_INSERT_LIBRARIES"] {
+        let text = format!(
+            "run \"uname\" with arguments [\"-s\"] and environment {{\"{name}\": \"/tmp/x.so\"}}\n"
+        );
+        let (_, output) = compile(directory.path(), &text);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
+            "{name} is read by the dynamic loader before the program starts; a program cannot set it"
+        )));
+    }
+}
+
+#[test]
+fn loop_variables_are_mapped_to_private_shell_names() {
+    let directory = tempdir().unwrap();
+    for binding in ["PATH", "IFS", "HOME", "__execute_value"] {
+        let program = format!(
+            "for each {binding} in [\"value\"]\n  run \"printf\" with arguments [\"%s\", {binding}]\n"
+        );
+        let (script, output) = compile(directory.path(), &program);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = fs::read_to_string(script).unwrap();
+        assert!(text.contains("for __execute_loop_"), "{binding}: {text}");
+        assert!(
+            !text.contains(&format!("for {binding} in")),
+            "{binding}: {text}"
+        );
+        assert!(text.contains("__execute_loop_") && text.contains("%s"));
+    }
+}
+
+#[test]
+fn pipelines_fail_on_any_stage_and_refuse_shells_without_pipefail() {
+    let directory = tempdir().unwrap();
+    let (script, output) = compile(directory.path(), "run \"false\"\npipe to \"cat\"\n");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = fs::read_to_string(script).unwrap();
+    assert!(
+        text.contains("(set -o pipefail) 2>/dev/null || {"),
+        "{text}"
+    );
+    assert!(text.contains("\nset -o pipefail\n"), "{text}");
+    // Only the first stage gets a closed stdin; the second reads the pipe.
+    assert!(text.contains("'false' < /dev/null | 'cat'"), "{text}");
+    assert!(!text.contains("'cat' < /dev/null"), "{text}");
+}
+
+#[test]
+fn single_commands_do_not_require_pipefail() {
+    let directory = tempdir().unwrap();
+    let (script, output) = compile(directory.path(), "run \"true\"\n");
+    assert!(output.status.success());
+    assert!(!fs::read_to_string(script).unwrap().contains("pipefail"));
+}
+
+#[test]
+fn ordinary_commands_have_closed_stdin() {
+    let directory = tempdir().unwrap();
+    let (script, output) = compile(directory.path(), "run \"cat\"\n");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(fs::read_to_string(script)
+        .unwrap()
+        .contains("'cat' < /dev/null"));
+}
+
+#[test]
+fn merged_stderr_is_refused_when_order_cannot_be_preserved() {
+    let directory = tempdir().unwrap();
+    let (_, output) = compile(
+        directory.path(),
+        "run \"sh\" with arguments [\"-c\", \"echo err >&2; echo out\"] and stderr merged\n",
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("merged stderr"));
+}
+
+#[cfg(unix)]
+#[test]
+fn stderr_redirected_command_is_captured_when_followed_by_fresh_command() {
+    let directory = tempdir().unwrap();
+    assert_matches_execute(
+        directory.path(),
+        "run \"printf\" with arguments [\"first\"] and stderr to \"err.txt\"\nrun \"printf\" with arguments [\"second\"]\n",
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn exit_prints_the_pipeline_value_and_keeps_its_status() {

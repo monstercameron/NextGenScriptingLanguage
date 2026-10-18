@@ -39,6 +39,7 @@ pub fn compile(
         lines: Vec::new(),
         loops: Vec::new(),
         next_id: 0,
+        pipelines: false,
     };
     emitter.block(0, program.steps.len(), 0)?;
     let digest = Sha256::digest(source);
@@ -52,6 +53,14 @@ pub fn compile(
     let _ = writeln!(script, "# Source sha256: {digest:x}");
     script.push_str("# Do not edit; regenerate from the source program.\n");
     script.push_str("set -e\n");
+    if emitter.pipelines {
+        // A pipeline fails when any stage fails, as in execute. `pipefail` is POSIX since
+        // 2024; a shell without it is refused rather than run with weaker semantics.
+        script.push_str(
+            "(set -o pipefail) 2>/dev/null || { echo 'execute: this sh lacks set -o pipefail' >&2; exit 70; }\n",
+        );
+        script.push_str("set -o pipefail\n");
+    }
     script.push_str("__execute_value=''\n");
     for line in &emitter.lines {
         script.push_str(line);
@@ -101,8 +110,10 @@ struct Emitter<'a> {
     steps: &'a [Step],
     lines: Vec<String>,
     /// Loop bindings in scope, innermost last. A reference is valid only for these.
-    loops: Vec<String>,
+    loops: Vec<(String, String)>,
     next_id: usize,
+    /// Whether any multi-stage pipeline was emitted, which needs `set -o pipefail`.
+    pipelines: bool,
 }
 
 /// One command, ready to render as a pipeline stage.
@@ -110,6 +121,7 @@ struct Stage {
     environment: Vec<(String, String)>,
     words: Vec<String>,
     redirects: Vec<String>,
+    close_stdin: bool,
 }
 
 impl Stage {
@@ -122,6 +134,9 @@ impl Stage {
         for redirect in &self.redirects {
             text.push(' ');
             text.push_str(redirect);
+        }
+        if self.close_stdin {
+            text.push_str(" < /dev/null");
         }
         text
     }
@@ -236,6 +251,12 @@ impl Emitter<'_> {
                         );
                     }
                     for (name, value) in set {
+                        if name.starts_with("LD_") || name.starts_with("DYLD_") {
+                            bail!(
+                                "line {}: {name} is read by the dynamic loader before the program starts; a program cannot set it",
+                                self.steps[index].line
+                            );
+                        }
                         if !is_sh_name(name) {
                             bail!(
                                 "line {}: environment name {name:?} is not a valid sh name",
@@ -301,9 +322,13 @@ impl Emitter<'_> {
             if *connection != Connection::Pipe {
                 break;
             }
-            stages.push(self.stage(next, Vec::new(), Vec::new())?);
+            let mut stage = self.stage(next, Vec::new(), Vec::new())?;
+            // A later stage reads the previous stage's output, not a closed stdin.
+            stage.close_stdin = false;
+            stages.push(stage);
             next += 1;
         }
+        self.pipelines |= stages.len() > 1;
         let rendered = stages
             .iter()
             .map(Stage::render)
@@ -313,14 +338,21 @@ impl Emitter<'_> {
         // or by the end of the program, streams its stdout straight to the terminal and
         // leaves an empty pipeline value. Any other command captures its stdout as the
         // pipeline value, and a failed capture leaves the previous value in place.
-        let streams = match self.steps.get(next).map(|step| &step.kind) {
-            None => true,
-            Some(StepKind::Invoke {
-                connection: Connection::Start,
-                ..
-            }) => true,
-            Some(_) => false,
-        };
+        let captures_stderr = stages.iter().any(|stage| {
+            stage
+                .redirects
+                .iter()
+                .any(|redirect| redirect.starts_with("2>") && redirect != "2>/dev/null")
+        });
+        let streams = !captures_stderr
+            && match self.steps.get(next).map(|step| &step.kind) {
+                None => true,
+                Some(StepKind::Invoke {
+                    connection: Connection::Start,
+                    ..
+                }) => true,
+                Some(_) => false,
+            };
         if streams {
             self.push(depth, "__execute_value=''");
             self.push(depth, &rendered);
@@ -354,6 +386,12 @@ impl Emitter<'_> {
             bail!("line {}: expected a command", step.line);
         };
         let argv = self.argv(call, step.line)?;
+        if redirects.iter().any(|redirect| redirect == "2>&1") {
+            bail!(
+                "line {}: merged stderr cannot compile to sh while preserving output order",
+                step.line
+            );
+        }
         if argv.discard_stderr {
             if redirects.iter().any(|redirect| redirect.starts_with("2>")) {
                 bail!(
@@ -367,6 +405,7 @@ impl Emitter<'_> {
             environment,
             words: argv.words,
             redirects,
+            close_stdin: true,
         })
     }
 
@@ -430,10 +469,13 @@ impl Emitter<'_> {
         match value {
             Value::String(text) => quote(text),
             Value::Integer(number) => Ok(number.to_string()),
-            Value::Reference(name) if self.loops.contains(name) => Ok(format!("\"${name}\"")),
-            Value::Reference(name) => bail!(
-                "line {line}: binding {name:?} is not a loop variable in scope, so it cannot compile to sh"
-            ),
+            Value::Reference(name) => self
+                .loops
+                .iter()
+                .rev()
+                .find(|(binding, _)| binding == name)
+                .map(|(_, shell_name)| format!("\"${shell_name}\""))
+                .ok_or_else(|| anyhow::anyhow!("line {line}: binding {name:?} is not a loop variable in scope, so it cannot compile to sh")),
             _ => bail!("line {line}: this value kind cannot compile to sh"),
         }
     }
@@ -502,11 +544,15 @@ impl Emitter<'_> {
                 if words.is_empty() {
                     return Ok(());
                 }
-                self.push(depth, &format!("for {binding} in {}; do", words.join(" ")));
+                let shell_name = self.fresh_name("loop");
+                self.push(
+                    depth,
+                    &format!("for {shell_name} in {}; do", words.join(" ")),
+                );
                 // Reading the variable keeps shellcheck from calling it unused when the
                 // body does not mention it.
-                self.push(depth + 1, &format!(": \"${binding}\""));
-                self.loops.push(binding.clone());
+                self.push(depth + 1, &format!(": \"${shell_name}\""));
+                self.loops.push((binding.clone(), shell_name));
                 let result = self.body(start + 1, body_end - 1, depth + 1);
                 self.loops.pop();
                 result?;

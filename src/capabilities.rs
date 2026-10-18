@@ -662,6 +662,20 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 /// Validate every applet reachable from program source before any workflow
 /// effect. The scan includes all reusable definitions and listen triggers so
 /// a later edit/branch cannot expose a command that escaped the initial check.
+/// Whether a program changes its working directory during a run. Relative host
+/// paths are checked when the step runs, not before, if it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CwdMode {
+    Fixed,
+    Dynamic,
+}
+
+impl CwdMode {
+    fn is_dynamic(self) -> bool {
+        self == CwdMode::Dynamic
+    }
+}
+
 pub fn preflight(program: &Program, registry: &Registry, cwd: &Path) -> Result<()> {
     preflight_with_cache_directory(program, registry, cwd, None)
 }
@@ -676,7 +690,11 @@ pub fn preflight_with_cache_directory(
     cwd: &Path,
     cache_directory: Option<&Path>,
 ) -> Result<()> {
-    let dynamic_cwd = contains_cwd_change(program, registry)?;
+    let cwd_mode = if contains_cwd_change(program, registry)? {
+        CwdMode::Dynamic
+    } else {
+        CwdMode::Fixed
+    };
     let mut calls = Vec::new();
     if let Some(Trigger::Listen {
         source: crate::ast::ListenSource::Applet(call),
@@ -704,7 +722,7 @@ pub fn preflight_with_cache_directory(
     };
     policy.validate()?;
 
-    if dynamic_cwd
+    if cwd_mode.is_dynamic()
         && calls.iter().any(|call| call.cache)
         && !cache_directory.is_some_and(Path::is_absolute)
     {
@@ -731,9 +749,9 @@ pub fn preflight_with_cache_directory(
         }
     }
 
-    preflight_invocations_with_policy(calls.iter().copied(), registry, cwd, dynamic_cwd, policy)?;
+    preflight_invocations_with_policy(calls.iter().copied(), registry, cwd, cwd_mode, policy)?;
 
-    preflight_host_paths(program, registry, policy, cwd, dynamic_cwd)?;
+    preflight_host_paths(program, registry, policy, cwd, cwd_mode)?;
     preflight_cache_paths(&calls, registry, cwd, cache_directory)
 }
 
@@ -774,7 +792,13 @@ pub fn preflight_invocations<'a>(
     };
     policy.validate()?;
     validate_policy_names(policy, registry)?;
-    preflight_invocations_with_policy(calls.iter().copied(), registry, cwd, false, policy)?;
+    preflight_invocations_with_policy(
+        calls.iter().copied(),
+        registry,
+        cwd,
+        CwdMode::Fixed,
+        policy,
+    )?;
     preflight_cache_paths(&calls, registry, cwd, None)
 }
 
@@ -831,7 +855,7 @@ fn preflight_invocations_with_policy<'a>(
     calls: impl IntoIterator<Item = &'a crate::ast::Invocation>,
     registry: &Registry,
     cwd: &Path,
-    dynamic_cwd: bool,
+    cwd_mode: CwdMode,
     policy: &CapabilityPolicy,
 ) -> Result<()> {
     // Privilege is checked for every call before any grant is, so a privileged step is
@@ -869,7 +893,7 @@ fn preflight_invocations_with_policy<'a>(
             };
             // A relative target after a working-directory change is authorized when the
             // step runs, joined onto the directory it actually names (`enter_directory`).
-            if !dynamic_cwd || Path::new(path).is_absolute() {
+            if !cwd_mode.is_dynamic() || Path::new(path).is_absolute() {
                 authorize_host_path(registry, Path::new(path), HostAccess::Read, cwd)?;
             }
             continue;
@@ -960,7 +984,10 @@ fn preflight_invocations_with_policy<'a>(
             && (grant.binary_sha256.is_some() || grant.sandbox_required)
         {
             let requested = manifest.binary_for(call);
-            if dynamic_cwd && !requested.starts_with('@') && !Path::new(requested).is_absolute() {
+            if cwd_mode.is_dynamic()
+                && !requested.starts_with('@')
+                && !Path::new(requested).is_absolute()
+            {
                 bail!(
                     "capability policy cannot resolve a relative or PATH executable after a dynamic working-directory change; use an absolute executable path"
                 );
@@ -983,7 +1010,7 @@ fn preflight_invocations_with_policy<'a>(
             Some(registry),
         )?;
         if grant.sandbox_required {
-            if dynamic_cwd {
+            if cwd_mode.is_dynamic() {
                 bail!(
                     "required sandbox cannot preflight a program with dynamic working-directory changes"
                 );
@@ -1698,14 +1725,14 @@ fn preflight_host_paths(
     registry: &Registry,
     policy: &CapabilityPolicy,
     cwd: &Path,
-    dynamic_cwd: bool,
+    cwd_mode: CwdMode,
 ) -> Result<()> {
     fn check_steps(
         steps: &[Step],
         registry: &Registry,
         policy: &CapabilityPolicy,
         cwd: &Path,
-        dynamic_cwd: bool,
+        cwd_mode: CwdMode,
     ) -> Result<()> {
         for step in steps {
             // A temporary scope creates its path under the system temporary directory,
@@ -1746,7 +1773,7 @@ fn preflight_host_paths(
             let path = expand_home_path(path)?;
             // A relative target after a working-directory change is authorized when the
             // step runs, joined onto the directory it actually names.
-            if !dynamic_cwd || path.is_absolute() {
+            if !cwd_mode.is_dynamic() || path.is_absolute() {
                 authorize_host_path(registry, &path, access, cwd)?;
             }
         }
@@ -1756,9 +1783,9 @@ fn preflight_host_paths(
         let _ = policy;
         Ok(())
     }
-    check_steps(&program.steps, registry, policy, cwd, dynamic_cwd)?;
+    check_steps(&program.steps, registry, policy, cwd, cwd_mode)?;
     for definition in program.definitions.values() {
-        check_steps(&definition.steps, registry, policy, cwd, dynamic_cwd)?;
+        check_steps(&definition.steps, registry, policy, cwd, cwd_mode)?;
     }
     Ok(())
 }

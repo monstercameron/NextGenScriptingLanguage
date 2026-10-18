@@ -16,6 +16,18 @@ impl std::fmt::Display for InputType {
     }
 }
 
+fn input_value_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Integer(_) | Value::Number(_) => "number",
+        Value::String(_) => "text",
+        Value::List(_) => "list",
+        Value::Record(_) => "object",
+        Value::Reference(_) => "binding reference",
+    }
+}
+
 impl InputDeclaration {
     pub fn validate_value(&self, value: &Value) -> Result<()> {
         let valid = match (self.kind, value) {
@@ -28,17 +40,43 @@ impl InputDeclaration {
             _ => false,
         };
         if !valid {
-            bail!(
-                "line {}: input {:?} expects {}{}",
-                self.line,
-                self.name,
-                self.kind,
-                if self.kind == InputType::Json {
-                    " as a literal value"
-                } else {
-                    " without NUL bytes"
+            match (self.kind, value) {
+                (InputType::Text, Value::String(_)) => {
+                    bail!(
+                        "line {}: input {:?} contains a NUL byte",
+                        self.line,
+                        self.name
+                    )
                 }
-            );
+                (InputType::TextList, Value::List(items))
+                    if items.iter().all(|item| matches!(item, Value::String(_))) =>
+                {
+                    bail!(
+                        "line {}: input {:?} contains a NUL byte",
+                        self.line,
+                        self.name
+                    )
+                }
+                (InputType::Json, _) => bail!(
+                    "line {}: input {:?} expects a literal JSON value",
+                    self.line,
+                    self.name
+                ),
+                (InputType::Integer, Value::Number(number)) if number.as_i64().is_none() => {
+                    bail!(
+                        "line {}: input {:?} does not fit in a 64-bit integer",
+                        self.line,
+                        self.name
+                    )
+                }
+                (_, value) => bail!(
+                    "line {}: input {:?} expects {}, got {}",
+                    self.line,
+                    self.name,
+                    self.kind,
+                    input_value_type(value)
+                ),
+            }
         }
         // Checked for every value path (CLI, runtime and live edits), before any effect.
         if let (Some(choices), Value::String(text)) = (&self.choices, value) {
@@ -166,7 +204,7 @@ fn validate_schema<'a>(
     let mut spellings: BTreeSet<&str> = BTreeSet::new();
     for input in declarations {
         if !crate::parser::is_identifier(&input.name)
-            || matches!(input.name.as_str(), "true" | "false")
+            || matches!(input.name.as_str(), "true" | "false" | "null")
         {
             bail!("line {}: invalid input name {:?}", input.line, input.name);
         }
@@ -675,4 +713,43 @@ pub(crate) fn known_values(
         values.insert(name.clone(), value.clone());
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn declaration(kind: InputType) -> InputDeclaration {
+        InputDeclaration {
+            name: "answer".into(),
+            kind,
+            default: None,
+            source: None,
+            line: 1,
+            description: None,
+            choices: None,
+        }
+    }
+
+    #[test]
+    fn input_validation_distinguishes_type_overflow_and_nul() {
+        let wrong_type = declaration(InputType::Text).validate_value(&Value::Integer(5));
+        assert!(wrong_type.unwrap_err().to_string().contains("got number"));
+        let overflow = declaration(InputType::Integer).validate_value(&Value::Number(
+            serde_json::Number::from(9_223_372_036_854_775_808u64),
+        ));
+        assert!(overflow.unwrap_err().to_string().contains("64-bit integer"));
+        let nul = declaration(InputType::Text).validate_value(&Value::String("x\0y".into()));
+        assert!(nul.unwrap_err().to_string().contains("NUL byte"));
+    }
+
+    #[test]
+    fn null_is_reserved_as_an_input_name() {
+        let mut input = declaration(InputType::Text);
+        input.name = "null".into();
+        assert!(validate(&[input])
+            .unwrap_err()
+            .to_string()
+            .contains("invalid input name"));
+    }
 }

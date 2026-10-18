@@ -86,6 +86,13 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
     let mut writer = writer;
     let mut documents = BTreeMap::<String, Document>::new();
     while let Some(message) = read_message(&mut reader)? {
+        let message = match message {
+            Ok(message) => message,
+            Err(error) => {
+                write_error(&mut writer, &JsonValue::Null, -32700, &error)?;
+                continue;
+            }
+        };
         let Some(method) = message.get("method").and_then(JsonValue::as_str) else {
             continue;
         };
@@ -244,7 +251,9 @@ pub fn run_with_io<R: Read, W: Write>(reader: R, writer: W, registry: Registry) 
     Ok(())
 }
 
-fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<JsonValue>> {
+fn read_message<R: BufRead>(
+    reader: &mut R,
+) -> Result<Option<std::result::Result<JsonValue, String>>> {
     let mut content_length = None;
     let mut header_bytes = 0usize;
     loop {
@@ -273,7 +282,9 @@ fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<JsonValue>> {
             }
         }
     }
-    let length = content_length.context("LSP message is missing Content-Length")?;
+    let Some(length) = content_length else {
+        return Ok(Some(Err("LSP message is missing Content-Length".into())));
+    };
     if length > MAX_MESSAGE_BYTES {
         bail!("LSP message exceeds {MAX_MESSAGE_BYTES} bytes");
     }
@@ -281,9 +292,9 @@ fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<JsonValue>> {
     reader
         .read_exact(&mut body)
         .context("reading LSP message body")?;
-    Ok(Some(
-        serde_json::from_slice(&body).context("decoding LSP JSON-RPC message")?,
-    ))
+    Ok(Some(serde_json::from_slice(&body).map_err(|error| {
+        format!("decoding LSP JSON-RPC message: {error}")
+    })))
 }
 
 /// Read a header line without allowing `read_line` to grow an unbounded
@@ -365,9 +376,10 @@ fn publish_diagnostics<W: Write>(
     document: &Document,
     registry: &Registry,
 ) -> Result<()> {
+    let positions = SourcePositions::new(&document.text);
     let diagnostics = analyze_source(&document.text, registry)
         .into_iter()
-        .map(|diagnostic| lsp_diagnostic(&document.text, diagnostic))
+        .map(|diagnostic| lsp_diagnostic(&document.text, &positions, diagnostic))
         .collect::<Vec<_>>();
     let mut params = json!({ "uri": uri, "diagnostics": diagnostics });
     if let Some(version) = document.version {
@@ -376,9 +388,9 @@ fn publish_diagnostics<W: Write>(
     write_notification(writer, "textDocument/publishDiagnostics", params)
 }
 
-fn lsp_diagnostic(source: &str, diagnostic: Diagnostic) -> JsonValue {
+fn lsp_diagnostic(source: &str, positions: &SourcePositions, diagnostic: Diagnostic) -> JsonValue {
     json!({
-        "range": range_from_offsets(source, diagnostic.span.start_byte, diagnostic.span.end_byte),
+        "range": positions.range(source, diagnostic.span.start_byte, diagnostic.span.end_byte),
         "severity": match diagnostic.severity {
             crate::diagnostics::DiagnosticSeverity::Error => 1,
             crate::diagnostics::DiagnosticSeverity::Warning => 2,
@@ -478,6 +490,7 @@ fn code_actions(
         return json!([]);
     };
     let source = document.text.as_str();
+    let positions = SourcePositions::new(source);
     let requested = params.get("range").and_then(|range| {
         let start = position_to_byte(source, read_position(range.get("start")).ok()?)?;
         let end = position_to_byte(source, read_position(range.get("end")).ok()?)?;
@@ -493,14 +506,14 @@ fn code_actions(
                 continue;
             }
         }
-        let lsp = lsp_diagnostic(source, diagnostic.clone());
+        let lsp = lsp_diagnostic(source, &positions, diagnostic.clone());
         for (index, fix) in diagnostic.fixes.iter().enumerate() {
             let edits = fix
                 .edits
                 .iter()
                 .map(|edit| {
                     json!({
-                        "range": range_from_offsets(source, edit.span.start_byte, edit.span.end_byte),
+                        "range": positions.range(source, edit.span.start_byte, edit.span.end_byte),
                         "newText": edit.replacement,
                     })
                 })
@@ -1059,10 +1072,41 @@ fn line_for_byte(source: &str, offset: usize) -> Option<&str> {
 }
 
 fn range_from_offsets(source: &str, start: usize, end: usize) -> JsonValue {
-    json!({
-        "start": position_json(position_for_byte(source, start)),
-        "end": position_json(position_for_byte(source, end))
-    })
+    SourcePositions::new(source).range(source, start, end)
+}
+
+struct SourcePositions {
+    line_starts: Vec<usize>,
+}
+
+impl SourcePositions {
+    fn new(source: &str) -> Self {
+        let mut line_starts =
+            Vec::with_capacity(source.bytes().filter(|byte| *byte == b'\n').count() + 1);
+        line_starts.push(0);
+        line_starts.extend(source.match_indices('\n').map(|(offset, _)| offset + 1));
+        Self { line_starts }
+    }
+
+    fn position(&self, source: &str, offset: usize) -> Position {
+        let offset = offset.min(source.len());
+        let line = self
+            .line_starts
+            .partition_point(|start| *start <= offset)
+            .saturating_sub(1);
+        let start = self.line_starts[line];
+        Position {
+            line,
+            character: source[start..offset].encode_utf16().count(),
+        }
+    }
+
+    fn range(&self, source: &str, start: usize, end: usize) -> JsonValue {
+        json!({
+            "start": position_json(self.position(source, start)),
+            "end": position_json(self.position(source, end))
+        })
+    }
 }
 
 fn position_json(position: Position) -> JsonValue {
@@ -1142,7 +1186,7 @@ mod tests {
         let mut reader = BufReader::new(bytes);
         let mut messages = Vec::new();
         while let Some(message) = read_message(&mut reader).unwrap() {
-            messages.push(message);
+            messages.push(message.unwrap());
         }
         messages
     }
@@ -1377,6 +1421,33 @@ mod tests {
         let bytes = b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}";
         let error = read_message(&mut BufReader::new(bytes.as_slice())).unwrap_err();
         assert!(error.to_string().contains("duplicate Content-Length"));
+    }
+
+    #[test]
+    fn malformed_json_frame_gets_parse_error_and_server_continues() {
+        let initialize = serde_json::to_vec(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}
+        }))
+        .unwrap();
+        let shutdown =
+            serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": 2, "method": "shutdown"})).unwrap();
+        let mut input = Vec::new();
+        for body in [
+            initialize.as_slice(),
+            b"{bad json}".as_slice(),
+            shutdown.as_slice(),
+        ] {
+            input.extend_from_slice(format!("Content-Length: {}\r\n\r\n", body.len()).as_bytes());
+            input.extend_from_slice(body);
+        }
+        let mut output = Vec::new();
+        run_with_io(input.as_slice(), &mut output, Registry::default()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("-32700"), "{output}");
+        assert!(
+            output.contains("\"id\":2"),
+            "shutdown reply missing: {output}"
+        );
     }
 
     #[test]

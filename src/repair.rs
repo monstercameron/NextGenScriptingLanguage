@@ -162,39 +162,87 @@ pub fn apply(
     boundary_line: usize,
     registry: &Registry,
 ) -> Result<Plan> {
+    apply_at(source, None, operation, boundary_line, registry)
+}
+
+/// Path-aware variant used for programs containing `run program file` calls.
+pub fn apply_at(
+    source: &str,
+    path: Option<&Path>,
+    operation: &Operation,
+    boundary_line: usize,
+    registry: &Registry,
+) -> Result<Plan> {
     let line = operation.line();
     if line < boundary_line {
         bail!(
             "line {line} is in completed steps; a repair may change only line {boundary_line} onward"
         );
     }
-    let mut lines: Vec<String> = source.lines().map(str::to_owned).collect();
+    let mut lines: Vec<String> = source.split_inclusive('\n').map(str::to_owned).collect();
+    if !source.is_empty() && !source.ends_with('\n') {
+        // `split_inclusive` already includes the unterminated final line.
+    }
     let index = line - 1;
     match operation {
-        Operation::AddRetry { .. } => bail!(
-            "add-retry is not supported: the grammar has no retry statement. Use --retry-uncertain to retry a checkpoint's in-flight node."
-        ),
+        Operation::AddRetry { count, .. } => {
+            let current = lines
+                .get(index)
+                .ok_or_else(|| anyhow!("line {line} is past the end of the program"))?
+                .clone();
+            let (body, ending) = line_body_and_ending(&current);
+            let comment = parser::strip_comment(body).len();
+            let (code, suffix) = body.split_at(comment);
+            let has_retry = parser::tokenize(code).ok().is_some_and(|tokens| {
+                tokens.windows(4).any(|window| {
+                    matches!(
+                        window,
+                        [
+                            parser::Token::Word("and"),
+                            parser::Token::Word("retry"),
+                            parser::Token::Word("up"),
+                            parser::Token::Word("to")
+                        ]
+                    )
+                })
+            });
+            if has_retry {
+                bail!("line {line} already has a retry policy");
+            }
+            lines[index] = format!(
+                "{} and retry up to {count} times{}{}",
+                code.trim_end(),
+                suffix,
+                ending
+            );
+        }
         Operation::SetParameter { name, value, .. } => {
             let current = lines
                 .get(index)
                 .ok_or_else(|| anyhow!("line {line} is past the end of the program"))?
                 .clone();
-            lines[index] = set_parameter_value(&current, name, value)
-                .with_context(|| format!("line {line}"))?;
+            let (body, ending) = line_body_and_ending(&current);
+            lines[index] = format!(
+                "{}{}",
+                set_parameter_value(body, name, value).with_context(|| format!("line {line}"))?,
+                ending
+            );
         }
         Operation::ReplaceCommand { statement, .. } => {
             let current = lines
                 .get(index)
                 .ok_or_else(|| anyhow!("line {line} is past the end of the program"))?
                 .clone();
-            lines[index] = format!("{}{statement}", indentation(&current));
+            let (body, ending) = line_body_and_ending(&current);
+            lines[index] = format!("{}{statement}{ending}", indentation(body));
         }
         Operation::InsertBefore { statement, .. } => {
             let current = lines
                 .get(index)
                 .ok_or_else(|| anyhow!("line {line} is past the end of the program"))?
                 .clone();
-            lines.insert(index, format!("{}{statement}", indentation(&current)));
+            let (body, ending) = line_body_and_ending(&current);
+            lines.insert(index, format!("{}{statement}{ending}", indentation(body)));
         }
         Operation::Remove { .. } => {
             let current = lines
@@ -202,6 +250,7 @@ pub fn apply(
                 .ok_or_else(|| anyhow!("line {line} is past the end of the program"))?
                 .clone();
             if let Some(next) = lines.get(index + 1) {
+                let (next, _) = line_body_and_ending(next);
                 if !next.trim().is_empty() && indentation(next) > indentation(&current) {
                     bail!("line {line} opens an indented body; remove the body's lines as their own repairs");
                 }
@@ -209,11 +258,8 @@ pub fn apply(
             lines.remove(index);
         }
     }
-    let mut after = lines.join("\n");
-    if source.ends_with('\n') || !after.is_empty() {
-        after.push('\n');
-    }
-    check(&after, registry)?;
+    let after = lines.concat();
+    check(&after, path, registry)?;
     let diff = line_diff(source, &after);
     Ok(Plan {
         operation: operation.clone(),
@@ -225,10 +271,8 @@ pub fn apply(
 }
 
 /// The repaired program must parse and pass the static checks `execute check` runs.
-fn check(source: &str, registry: &Registry) -> Result<()> {
-    parser::parse(source)
-        .map_err(|error| anyhow!("the repaired program does not parse: {error:#}"))?;
-    let errors = crate::diagnostics::analyze_source(source, registry)
+fn check(source: &str, path: Option<&Path>, registry: &Registry) -> Result<()> {
+    let errors = crate::diagnostics::analyze_source_at(source, path, registry)
         .into_iter()
         .filter(|diagnostic| diagnostic.severity == crate::diagnostics::DiagnosticSeverity::Error)
         .map(|diagnostic| format!("line {}: {}", diagnostic.span.line, diagnostic.message))
@@ -241,6 +285,16 @@ fn check(source: &str, registry: &Registry) -> Result<()> {
 
 fn indentation(line: &str) -> &str {
     &line[..line.len() - line.trim_start_matches(' ').len()]
+}
+
+fn line_body_and_ending(line: &str) -> (&str, &str) {
+    if let Some(body) = line.strip_suffix("\r\n") {
+        (body, "\r\n")
+    } else if let Some(body) = line.strip_suffix('\n') {
+        (body, "\n")
+    } else {
+        (line, "")
+    }
 }
 
 /// Replace the value token after `name` on one statement line. Only code before a
@@ -444,7 +498,23 @@ pub fn repairable_program(checkpoint: &Path) -> Result<(PathBuf, usize)> {
 /// The first line of the first top-level step after the completed prefix. Repairs
 /// may change this line and everything after it.
 pub fn boundary_line(source: &str, completed_steps: usize) -> Result<usize> {
-    let program = parser::parse(source).map_err(|error| anyhow!("{error:#}"))?;
+    boundary_line_at(source, None, completed_steps)
+}
+
+/// Path-aware boundary lookup for programs with file-based reusable calls.
+pub fn boundary_line_at(
+    source: &str,
+    path: Option<&Path>,
+    completed_steps: usize,
+) -> Result<usize> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let registry = Registry::default();
+    let access = crate::program_files::Access {
+        registry: &registry,
+        cwd: &cwd,
+    };
+    let program = crate::program_files::parse_at(source, path, Some(access))
+        .map_err(|error| anyhow!("{error:#}"))?;
     Ok(program
         .steps
         .get(completed_steps)
@@ -564,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn repairs_that_do_not_check_are_refused_and_add_retry_says_why() {
+    fn repairs_that_do_not_check_are_refused_and_add_retry_is_applied() {
         let source = "run fixture.count with count 1\n";
         let invalid = apply(
             source,
@@ -578,11 +648,76 @@ mod tests {
             &Operation::parse("add-retry 1 2").unwrap(),
             1,
             &registry(),
+        )
+        .unwrap();
+        assert_eq!(
+            retry.after,
+            "run fixture.count with count 1 and retry up to 2 times\n"
         );
-        assert!(retry
-            .unwrap_err()
-            .to_string()
-            .contains("no retry statement"));
+    }
+
+    #[test]
+    fn repair_preserves_crlf_and_missing_final_newline() {
+        let source = "run fixture.count with count 1\r\nrun fixture.count with count 2\r\n";
+        let plan = apply(
+            source,
+            &Operation::parse("replace-command 2 run fixture.count with count 3").unwrap(),
+            2,
+            &registry(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.after,
+            "run fixture.count with count 1\r\nrun fixture.count with count 3\r\n"
+        );
+        let unterminated = "run fixture.count with count 1\r\nrun fixture.count with count 2";
+        let plan = apply(
+            unterminated,
+            &Operation::parse("replace-command 2 run fixture.count with count 3").unwrap(),
+            2,
+            &registry(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.after,
+            "run fixture.count with count 1\r\nrun fixture.count with count 3"
+        );
+    }
+
+    #[test]
+    fn repair_accepts_logical_continuations_and_path_aware_file_calls() {
+        let directory = tempfile::tempdir().unwrap();
+        let library = directory.path().join("lib.program");
+        std::fs::write(&library, "run \"printf\" with arguments [\"lib\"]\n").unwrap();
+        let path = directory.path().join("main.program");
+        let source = "run program file \"lib.program\"\nrun \"false\"\n";
+        std::fs::write(&path, source).unwrap();
+        let boundary = boundary_line_at(source, Some(&path), 1).unwrap();
+        assert_eq!(boundary, 1);
+        let plan = apply_at(
+            source,
+            Some(&path),
+            &Operation::parse("replace-command 2 run \"true\"").unwrap(),
+            boundary,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.after,
+            "run program file \"lib.program\"\nrun \"true\"\n"
+        );
+
+        let multiline = "run \"printf\" with arguments [\n  \"a\",\n  \"b\"\n]\nrun \"false\"\n";
+        let boundary = boundary_line(multiline, 1).unwrap();
+        assert_eq!(boundary, 5);
+        let plan = apply(
+            multiline,
+            &Operation::parse("replace-command 5 run \"true\"").unwrap(),
+            boundary,
+            &Registry::default(),
+        )
+        .unwrap();
+        assert!(plan.after.ends_with("run \"true\"\n"));
     }
 
     #[test]

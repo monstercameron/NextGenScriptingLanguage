@@ -160,7 +160,7 @@ const STATEMENT_KEYWORDS: &[&str] = &[
 
 /// A statement may start with `fetch:`, a label for its first step. Returns the label
 /// name, or `None` for an ordinary statement.
-fn statement_label(tokens: &[Token<'_>], number: usize) -> Result<Option<String>> {
+pub(crate) fn statement_label(tokens: &[Token<'_>], number: usize) -> Result<Option<String>> {
     let Some(Token::Word(word)) = tokens.first() else {
         return Ok(None);
     };
@@ -1695,6 +1695,11 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
     parse_invocation(tokens)
 }
 
+/// Validate one complete, suffix-aware statement without lowering its block.
+pub(crate) fn validate_statement(tokens: &[Token<'_>]) -> Result<()> {
+    parse_simple_statement(tokens).map(|_| ())
+}
+
 /// Parse one typed literal/reference using the same grammar as `.program` values.
 /// Graph and other source surfaces reuse this to avoid divergent JSON coercions.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1975,7 +1980,11 @@ fn environment_suffix(
                 bail!("invalid environment name {name:?}");
             }
             match &value {
-                Value::String(_) | Value::Reference(_) => {}
+                Value::String(text) if !text.contains('\0') => {}
+                Value::String(_) => {
+                    bail!("environment value for {name:?} cannot contain a NUL byte")
+                }
+                Value::Reference(_) => {}
                 _ => bail!("environment value for {name:?} must be a text literal or text binding"),
             }
             set.insert(name, value);
@@ -2670,6 +2679,20 @@ fn token_text(token: &Token<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_nul_in_command_environment_is_rejected_during_parse() {
+        let error = parse("run \"env\" and environment {\"A\": \"x\\u0000y\"}\n").unwrap_err();
+        assert!(error.to_string().contains("environment value"));
+        assert!(error.to_string().contains("NUL byte"));
+    }
+
+    #[test]
+    fn null_is_reserved_for_binding_names() {
+        let tokens = tokenize("null").unwrap();
+        let error = parse_binding_identifier(tokens.first(), "binding name").unwrap_err();
+        assert!(error.to_string().contains("reserved literal `null`"));
+    }
 
     #[test]
     fn parses_readable_sample_and_keeps_source_lines() {

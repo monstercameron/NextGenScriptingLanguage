@@ -11,7 +11,7 @@ use crate::parser::{self, Token};
 use crate::suggest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -54,6 +54,21 @@ pub const CODES: &[CodeInfo] = &[
         code: "parse.control",
         family: "parse",
         meaning: "a control construct is unsupported or nested beyond the supported depth",
+    },
+    CodeInfo {
+        code: "source.invisible_format",
+        family: "validate",
+        meaning: "source contains a Unicode format control that can change how it is displayed",
+    },
+    CodeInfo {
+        code: "check.undefined_name",
+        family: "validate",
+        meaning: "a referenced result or input name is not defined at this point",
+    },
+    CodeInfo {
+        code: "check.type_mismatch",
+        family: "type",
+        meaning: "statically known value types are incompatible at a use site",
     },
     CodeInfo {
         code: "applet.unknown",
@@ -188,22 +203,34 @@ pub fn analyze_source_at(
     let mut diagnostics = Vec::new();
     let mut local_error_lines = BTreeSet::new();
 
-    for (index, raw_line) in source.split('\n').enumerate() {
-        let line_number = index + 1;
-        let without_cr = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-        let uncommented = parser::strip_comment(without_cr);
-        if uncommented.trim().is_empty() {
-            continue;
+    let line_starts = LineStarts::new(source);
+    for (offset, character) in source.char_indices() {
+        if is_invisible_format(character) {
+            diagnostics.push(Diagnostic::error(
+                "source.invisible_format",
+                format!(
+                    "source contains invisible format character U+{:04X}",
+                    character as u32
+                ),
+                line_starts.span_at(
+                    source,
+                    offset,
+                    offset + character.len_utf8(),
+                    SpanPrecision::Token,
+                ),
+            ));
         }
-
-        if let Some(tab) = indentation_tab(uncommented) {
+    }
+    for statement in parser::logical_lines(source).unwrap_or_default() {
+        let line_number = statement.number;
+        if let Some(tab) = indentation_tab(&statement.text) {
             diagnostics.push(Diagnostic::error(
                 "parse.indentation",
                 "tabs are not allowed for indentation",
-                span_at(
+                line_starts.span_at(
                     source,
-                    line_start(source, line_number) + tab,
-                    line_start(source, line_number) + tab + 1,
+                    line_starts.start(line_number) + tab,
+                    line_starts.start(line_number) + tab + 1,
                     SpanPrecision::Token,
                 ),
             ));
@@ -211,31 +238,51 @@ pub fn analyze_source_at(
             continue;
         }
 
-        let content = uncommented.trim_start_matches(' ');
+        let content = statement.text.as_str();
         let Ok(tokens) = parser::tokenize(content) else {
             diagnostics.push(Diagnostic::error(
                 "parse.lexical",
                 lexical_message(content),
-                line_span(source, line_number),
+                line_starts.span(source, line_number),
             ));
             local_error_lines.insert(line_number);
             continue;
         };
-        if tokens.is_empty() || is_contextual_header(&tokens) {
+        if tokens.is_empty() {
             continue;
         }
-        if let Err(error) = parser::parse_line(&tokens) {
+        let label = match parser::statement_label(&tokens, line_number) {
+            Ok(label) => label,
+            Err(error) => {
+                diagnostics.push(Diagnostic::error(
+                    "parse.syntax",
+                    format!("{error:#}"),
+                    line_starts.span(source, line_number),
+                ));
+                local_error_lines.insert(line_number);
+                continue;
+            }
+        };
+        let tokens = if label.is_some() {
+            &tokens[1..]
+        } else {
+            &tokens[..]
+        };
+        if is_contextual_header(tokens) {
+            continue;
+        }
+        if let Err(error) = parser::validate_statement(tokens) {
             let message = format!("{error:#}");
             let mut diagnostic = Diagnostic::error(
                 syntax_code(&message),
                 message,
-                line_span(source, line_number),
+                line_starts.span(source, line_number),
             );
-            let line_start_offset = line_start(source, line_number);
-            let content_start = line_start_offset + (uncommented.len() - content.len());
+            let line_start_offset = line_starts.start(line_number);
+            let content_start = line_start_offset + statement.indent;
             if let Some(first) = content.split_whitespace().next() {
                 if let Some(keyword) = suggest::keyword_for(first) {
-                    let span = span_at(
+                    let span = line_starts.span_at(
                         source,
                         content_start,
                         content_start + first.len(),
@@ -263,8 +310,14 @@ pub fn analyze_source_at(
     };
     match crate::program_files::parse_at(source, path, Some(access)) {
         Ok(program) => {
-            collect_program_diagnostics(source, &program, registry, &mut diagnostics);
-            collect_pipeline_diagnostics(source, &program, registry, &mut diagnostics);
+            collect_program_diagnostics(source, &program, registry, &line_starts, &mut diagnostics);
+            collect_pipeline_diagnostics(
+                source,
+                &program,
+                registry,
+                &line_starts,
+                &mut diagnostics,
+            );
         }
         Err(error) => {
             let message = format!("{error:#}");
@@ -273,7 +326,7 @@ pub fn analyze_source_at(
                 diagnostics.push(Diagnostic::error(
                     syntax_code(&message),
                     message,
-                    line_span(source, error_line),
+                    line_starts.span(source, error_line),
                 ));
             }
         }
@@ -359,13 +412,85 @@ fn has_closed_quotes(line: &str) -> bool {
 }
 
 fn syntax_code(message: &str) -> &'static str {
-    if message.contains("indent") || message.contains("tabs") {
+    let message = message
+        .split_once(": ")
+        .map_or(message, |(_, message)| message);
+    if message.starts_with("tabs are not allowed for indentation")
+        || message.starts_with("inconsistent indentation")
+    {
         "parse.indentation"
-    } else if message.contains("unsupported control") || message.contains("control nesting") {
+    } else if message.starts_with("unsupported control") || message.starts_with("control nesting") {
         "parse.control"
     } else {
         "parse.syntax"
     }
+}
+
+struct LineStarts(Vec<usize>);
+
+impl LineStarts {
+    fn new(source: &str) -> Self {
+        let mut starts =
+            Vec::with_capacity(source.bytes().filter(|byte| *byte == b'\n').count() + 1);
+        starts.push(0);
+        starts.extend(source.match_indices('\n').map(|(offset, _)| offset + 1));
+        Self(starts)
+    }
+
+    fn start(&self, line: usize) -> usize {
+        self.0
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or_else(|| *self.0.last().unwrap_or(&0))
+    }
+
+    fn span(&self, source: &str, line: usize) -> SourceSpan {
+        let start = self.start(line);
+        let mut end = source[start..]
+            .find('\n')
+            .map_or(source.len(), |offset| start + offset);
+        if end > start && source.as_bytes()[end - 1] == b'\r' {
+            end -= 1;
+        }
+        self.span_at(source, start, end, SpanPrecision::Line)
+    }
+
+    fn span_at(
+        &self,
+        source: &str,
+        start: usize,
+        end: usize,
+        precision: SpanPrecision,
+    ) -> SourceSpan {
+        let start = start.min(source.len());
+        let end = end.max(start).min(source.len());
+        let (line, column) = self.position(source, start);
+        let (end_line, end_column) = self.position(source, end);
+        SourceSpan {
+            start_byte: start,
+            end_byte: end,
+            line,
+            column,
+            end_line,
+            end_column,
+            precision,
+        }
+    }
+
+    fn position(&self, source: &str, offset: usize) -> (usize, usize) {
+        let line_index = self
+            .0
+            .partition_point(|start| *start <= offset)
+            .saturating_sub(1);
+        let start = self.0[line_index];
+        (line_index + 1, source[start..offset].chars().count() + 1)
+    }
+}
+
+fn is_invisible_format(character: char) -> bool {
+    matches!(character as u32,
+        0x061c | 0x200b..=0x200f | 0x202a..=0x202e | 0x2060..=0x2069 | 0xfeff
+    )
 }
 
 fn find_line_number(message: &str) -> Option<usize> {
@@ -388,54 +513,11 @@ fn find_line_number(message: &str) -> Option<usize> {
     None
 }
 
-fn line_start(source: &str, line: usize) -> usize {
-    if line <= 1 {
-        return 0;
-    }
-    source
-        .match_indices('\n')
-        .nth(line - 2)
-        .map_or(source.len(), |(offset, _)| offset + 1)
-}
-
-fn line_span(source: &str, line: usize) -> SourceSpan {
-    let start = line_start(source, line);
-    let mut end = source[start..]
-        .find('\n')
-        .map_or(source.len(), |offset| start + offset);
-    if end > start && source.as_bytes()[end - 1] == b'\r' {
-        end -= 1;
-    }
-    span_at(source, start, end, SpanPrecision::Line)
-}
-
-fn span_at(source: &str, start: usize, end: usize, precision: SpanPrecision) -> SourceSpan {
-    let start = start.min(source.len());
-    let end = end.max(start).min(source.len());
-    let (line, column) = position_for_byte(source, start);
-    let (end_line, end_column) = position_for_byte(source, end);
-    SourceSpan {
-        start_byte: start,
-        end_byte: end,
-        line,
-        column,
-        end_line,
-        end_column,
-        precision,
-    }
-}
-
-fn position_for_byte(source: &str, offset: usize) -> (usize, usize) {
-    let prefix = &source[..offset.min(source.len())];
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
-    let line_prefix = prefix.rsplit_once('\n').map_or(prefix, |(_, tail)| tail);
-    (line, line_prefix.chars().count() + 1)
-}
-
 fn collect_program_diagnostics(
     source: &str,
     program: &Program,
     registry: &Registry,
+    line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut calls = Vec::new();
@@ -448,26 +530,257 @@ fn collect_program_diagnostics(
     {
         calls.push((*line, call));
     }
+    let top_level_call_count = calls.len();
     for definition in program.definitions.values() {
         collect_calls(&definition.steps, &mut calls);
     }
 
-    for (line, call) in calls {
+    let mut known_names = program
+        .inputs
+        .iter()
+        .map(|input| input.name.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let mut known_types = BTreeMap::<String, OutputType>::new();
+    let mut ambiguous_types = BTreeSet::<String>::new();
+    let mut applet_suggestions = BTreeMap::<String, Option<String>>::new();
+    for input in &program.inputs {
+        let kind = match input.kind {
+            crate::ast::InputType::Text => Some(OutputType::Text),
+            crate::ast::InputType::Integer => Some(OutputType::Integer),
+            crate::ast::InputType::Boolean => Some(OutputType::Boolean),
+            crate::ast::InputType::TextList => Some(OutputType::List),
+            crate::ast::InputType::Json => Some(OutputType::Json),
+            crate::ast::InputType::Bytes => Some(OutputType::Bytes),
+        };
+        if let Some(kind) = kind {
+            known_types.insert(input.name.clone(), kind);
+        }
+    }
+    let mut top_level_types = known_types.clone();
+    for (index, (line, call)) in calls.into_iter().enumerate() {
+        for value in call.parameters.values() {
+            collect_undefined_references(
+                source,
+                line,
+                value,
+                &known_names,
+                line_starts,
+                diagnostics,
+            );
+        }
         if call.direct {
+            add_call_bindings(call, &mut known_names);
             continue;
         }
         let manifest = match registry.resolve_call(call) {
             Ok(manifest) => manifest,
             Err(_) => {
-                let span = find_phrase_span(source, line, &call.operation)
-                    .unwrap_or_else(|| line_span(source, line));
+                let span = find_phrase_span_at(source, line, &call.operation, line_starts)
+                    .unwrap_or_else(|| line_starts.span(source, line));
                 diagnostics.push(unknown_applet_diagnostic(
-                    source, line, call, span, registry,
+                    source,
+                    line,
+                    call,
+                    span,
+                    registry,
+                    line_starts,
+                    &mut applet_suggestions,
                 ));
+                add_call_bindings(call, &mut known_names);
                 continue;
             }
         };
-        validate_call(source, line, call, manifest, diagnostics);
+        let empty_types = BTreeMap::new();
+        let active_types = if index < top_level_call_count {
+            &known_types
+        } else {
+            &empty_types
+        };
+        validate_call(
+            source,
+            line,
+            call,
+            manifest,
+            active_types,
+            line_starts,
+            diagnostics,
+        );
+        if index < top_level_call_count {
+            if let Some(binding) = &call.binding {
+                if let Some(kind) = manifest_output_type(manifest) {
+                    record_binding_type(&mut known_types, &mut ambiguous_types, binding, kind);
+                }
+            }
+            top_level_types.clone_from(&known_types);
+        }
+        add_call_bindings(call, &mut known_names);
+    }
+    collect_condition_type_mismatches(
+        source,
+        &program.steps,
+        &top_level_types,
+        line_starts,
+        diagnostics,
+    );
+}
+
+fn record_binding_type(
+    known_types: &mut BTreeMap<String, OutputType>,
+    ambiguous_types: &mut BTreeSet<String>,
+    name: &str,
+    kind: OutputType,
+) {
+    if ambiguous_types.contains(name) {
+        return;
+    }
+    match known_types.get(name) {
+        Some(previous) if *previous != kind => {
+            known_types.remove(name);
+            ambiguous_types.insert(name.to_owned());
+        }
+        _ => {
+            known_types.insert(name.to_owned(), kind);
+        }
+    }
+}
+
+fn collect_condition_type_mismatches(
+    source: &str,
+    steps: &[Step],
+    known_types: &BTreeMap<String, OutputType>,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for step in steps {
+        let condition = match &step.kind {
+            StepKind::If { condition, .. } => Some(condition),
+            StepKind::Loop {
+                kind: crate::ast::LoopKind::While { condition },
+                ..
+            } => Some(condition),
+            _ => None,
+        };
+        if let Some(condition) = condition {
+            let left = known_value_type(&condition.left, known_types);
+            let right = known_value_type(&condition.right, known_types);
+            if let (Some(left), Some(right)) = (left, right) {
+                if !compatible_value_types(left, right) {
+                    let reference = match (&condition.left, &condition.right) {
+                        (Value::Reference(name), _) => Some(name.as_str()),
+                        (_, Value::Reference(name)) => Some(name.as_str()),
+                        _ => None,
+                    };
+                    if let Some(name) = reference {
+                        if let Some(word) =
+                            line_words_from_start(source, line_starts.start(step.line))
+                                .into_iter()
+                                .find(|word| !word.3 && word.0 == name)
+                        {
+                            diagnostics.push(Diagnostic::error(
+                                "check.type_mismatch",
+                                format!(
+                                    "condition compares {} with {}; values must have the same type",
+                                    output_type_name(left),
+                                    output_type_name(right)
+                                ),
+                                line_starts.span_at(source, word.1, word.2, SpanPrecision::Token),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn known_value_type(
+    value: &Value,
+    known_types: &BTreeMap<String, OutputType>,
+) -> Option<OutputType> {
+    match value {
+        Value::Reference(name) => known_types.get(name).copied(),
+        Value::String(_) => Some(OutputType::Text),
+        Value::Integer(_) => Some(OutputType::Integer),
+        Value::Number(_) => Some(OutputType::Number),
+        Value::Bool(_) => Some(OutputType::Boolean),
+        Value::Null | Value::List(_) | Value::Record(_) => None,
+    }
+}
+
+fn compatible_value_types(left: OutputType, right: OutputType) -> bool {
+    left == right
+        || matches!(
+            (left, right),
+            (OutputType::Integer, OutputType::Number) | (OutputType::Number, OutputType::Integer)
+        )
+}
+
+fn add_call_bindings(call: &Invocation, known_names: &mut BTreeSet<String>) {
+    known_names.extend(call.binding.iter().cloned());
+    known_names.extend(call.status_binding.iter().cloned());
+    known_names.extend(call.result_binding.iter().cloned());
+}
+
+fn collect_undefined_references(
+    source: &str,
+    line: usize,
+    value: &Value,
+    known_names: &BTreeSet<String>,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match value {
+        Value::Reference(name) if !known_names.contains(name) => {
+            let Some(span) = line_words_from_start(source, line_starts.start(line))
+                .into_iter()
+                .find(|word| !word.3 && word.0 == *name)
+                .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token))
+            else {
+                return;
+            };
+            let mut diagnostic = Diagnostic::error(
+                "check.undefined_name",
+                format!("undefined result {name:?}"),
+                span.clone(),
+            );
+            if let Some(suggestion) = suggest::closest(name, known_names.iter().map(String::as_str))
+            {
+                diagnostic
+                    .message
+                    .push_str(&format!("; did you mean {suggestion:?}?"));
+                diagnostic.fixes.push(SuggestedFix::replace(
+                    format!("replace {name:?} with {suggestion:?}"),
+                    span,
+                    suggestion,
+                ));
+            }
+            diagnostics.push(diagnostic);
+        }
+        Value::List(values) => {
+            for value in values {
+                collect_undefined_references(
+                    source,
+                    line,
+                    value,
+                    known_names,
+                    line_starts,
+                    diagnostics,
+                );
+            }
+        }
+        Value::Record(values) => {
+            for value in values.values() {
+                collect_undefined_references(
+                    source,
+                    line,
+                    value,
+                    known_names,
+                    line_starts,
+                    diagnostics,
+                );
+            }
+        }
+        _ => {}
     }
 }
 
@@ -481,6 +794,8 @@ fn unknown_applet_diagnostic(
     call: &Invocation,
     span: SourceSpan,
     registry: &Registry,
+    line_starts: &LineStarts,
+    applet_suggestions: &mut BTreeMap<String, Option<String>>,
 ) -> Diagnostic {
     let phrase = call.operation.as_str();
     let words = phrase.split_whitespace().collect::<Vec<_>>();
@@ -493,7 +808,7 @@ fn unknown_applet_diagnostic(
     if let (true, Some(first)) = (words.len() > 1 && token, words.first()) {
         if let Some(keyword) = suggest::keyword_for(first) {
             if source[span.start_byte..].starts_with(first) {
-                let first_span = span_at(
+                let first_span = line_starts.span_at(
                     source,
                     span.start_byte,
                     span.start_byte + first.len(),
@@ -512,7 +827,11 @@ fn unknown_applet_diagnostic(
     }
 
     if fix.is_none() && token {
-        if let Some(name) = suggest::closest(phrase, registry.applet_names()) {
+        let suggestion = applet_suggestions
+            .entry(phrase.to_owned())
+            .or_insert_with(|| suggest::closest(phrase, registry.applet_names()).map(str::to_owned))
+            .clone();
+        if let Some(name) = suggestion {
             message = format!("unknown applet {phrase:?}; did you mean {name:?}?");
             fix = Some(SuggestedFix::replace(
                 format!("use applet {name:?}"),
@@ -537,7 +856,7 @@ fn unknown_applet_diagnostic(
                     .join(", ");
                 replacement.push_str(&format!(" with arguments [{arguments}]"));
             }
-            let at_statement_start = source[line_start(source, line)..span.start_byte]
+            let at_statement_start = source[line_starts.start(line)..span.start_byte]
                 .trim()
                 .is_empty();
             if at_statement_start {
@@ -585,6 +904,8 @@ fn validate_call(
     line: usize,
     call: &Invocation,
     manifest: &Manifest,
+    known_types: &BTreeMap<String, OutputType>,
+    line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let description = manifest.contract();
@@ -603,15 +924,20 @@ fn validate_call(
 
     for (name, value) in &call.parameters {
         let Some(schema) = properties.get(name) else {
-            let span =
-                find_parameter_span(source, line, name).unwrap_or_else(|| line_span(source, line));
+            let span = find_parameter_span_at(source, line, name, line_starts)
+                .unwrap_or_else(|| line_starts.span(source, line));
             let mut diagnostic = Diagnostic::error(
                 "applet.parameter.unknown",
                 format!("applet {:?} has no parameter {name:?}", manifest.name),
                 span.clone(),
             );
-            if let Some(suggestion) = suggest::closest(name, properties.keys().map(String::as_str))
-            {
+            if let Some(suggestion) = suggest::closest(
+                name,
+                properties
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|candidate| !call.parameters.contains_key(*candidate)),
+            ) {
                 diagnostic
                     .message
                     .push_str(&format!("; did you mean {suggestion:?}?"));
@@ -626,7 +952,23 @@ fn validate_call(
             diagnostics.push(diagnostic);
             continue;
         };
-        if !matches!(value, Value::Reference(_)) && !value_matches_schema(value, schema) {
+        if let Value::Reference(reference) = value {
+            if let Some(kind) = known_types.get(reference) {
+                if !output_type_matches_parameter(*kind, schema) {
+                    diagnostics.push(Diagnostic::error(
+                        "applet.parameter.type",
+                        format!(
+                            "parameter {name:?} of applet {:?} expects {}, but result {reference:?} is {}",
+                            manifest.name,
+                            schema_type(schema),
+                            output_type_name(*kind),
+                        ),
+                        parameter_value_span_at(source, line, name, line_starts)
+                            .unwrap_or_else(|| line_starts.span(source, line)),
+                    ));
+                }
+            }
+        } else if !value_matches_schema(value, schema) {
             diagnostics.push(Diagnostic::error(
                 "applet.parameter.type",
                 format!(
@@ -635,7 +977,8 @@ fn validate_call(
                     schema_type(schema),
                     value_type(value),
                 ),
-                parameter_value_span(source, line, name).unwrap_or_else(|| line_span(source, line)),
+                parameter_value_span_at(source, line, name, line_starts)
+                    .unwrap_or_else(|| line_starts.span(source, line)),
             ));
         }
     }
@@ -645,8 +988,8 @@ fn validate_call(
             diagnostics.push(Diagnostic::error(
                 "applet.parameter.required",
                 format!("applet {:?} requires parameter {name:?}", manifest.name),
-                find_phrase_span(source, line, &call.operation)
-                    .unwrap_or_else(|| line_span(source, line)),
+                find_phrase_span_at(source, line, &call.operation, line_starts)
+                    .unwrap_or_else(|| line_starts.span(source, line)),
             ));
         }
     }
@@ -714,6 +1057,43 @@ fn value_matches_schema(value: &Value, schema: &JsonValue) -> bool {
     true
 }
 
+fn manifest_output_type(manifest: &Manifest) -> Option<OutputType> {
+    let contract = manifest.contract();
+    match contract.pointer("/io/output_schema/type")?.as_str()? {
+        "bytes" => Some(OutputType::Bytes),
+        "text" => Some(OutputType::Text),
+        "path" => Some(OutputType::Path),
+        "integer" => Some(OutputType::Integer),
+        "number" => Some(OutputType::Number),
+        "boolean" => Some(OutputType::Boolean),
+        "json" => Some(OutputType::Json),
+        "object" | "record" => Some(OutputType::Record),
+        "array" | "list" => Some(OutputType::List),
+        _ => None,
+    }
+}
+
+fn output_type_matches_parameter(kind: OutputType, schema: &JsonValue) -> bool {
+    let Some(types) = schema.get("type") else {
+        return true;
+    };
+    let accepts = |name: &str| match types {
+        JsonValue::String(expected) => expected == name,
+        JsonValue::Array(expected) => expected.iter().any(|value| value.as_str() == Some(name)),
+        _ => true,
+    };
+    match kind {
+        OutputType::Bytes => accepts("bytes"),
+        OutputType::Text | OutputType::Path => accepts("string"),
+        OutputType::Integer => accepts("integer") || accepts("number"),
+        OutputType::Number => accepts("number"),
+        OutputType::Boolean => accepts("boolean"),
+        OutputType::Record => accepts("object"),
+        OutputType::List => accepts("array"),
+        OutputType::Json => true,
+    }
+}
+
 fn value_type(value: &Value) -> &'static str {
     match value {
         Value::String(_) => "text",
@@ -754,11 +1134,18 @@ fn collect_pipeline_diagnostics(
     source: &str,
     program: &Program,
     registry: &Registry,
+    line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    collect_pipeline_step_pairs(source, &program.steps, registry, diagnostics);
+    collect_pipeline_step_pairs(source, &program.steps, registry, line_starts, diagnostics);
     for definition in program.definitions.values() {
-        collect_pipeline_step_pairs(source, &definition.steps, registry, diagnostics);
+        collect_pipeline_step_pairs(
+            source,
+            &definition.steps,
+            registry,
+            line_starts,
+            diagnostics,
+        );
     }
 }
 
@@ -766,6 +1153,7 @@ fn collect_pipeline_step_pairs(
     source: &str,
     steps: &[Step],
     registry: &Registry,
+    line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for pair in steps.windows(2) {
@@ -810,7 +1198,7 @@ fn collect_pipeline_step_pairs(
                 consumer_manifest.name,
                 reasons.join("; "),
             ),
-            line_span(source, pair[1].line),
+            line_starts.span(source, pair[1].line),
         ));
     }
 }
@@ -932,32 +1320,31 @@ fn enum_constraint_assignable(output: Option<&[String]>, input: Option<&[String]
     }
 }
 
-fn find_phrase_span(source: &str, line: usize, phrase: &str) -> Option<SourceSpan> {
+fn find_phrase_span_at(
+    source: &str,
+    line: usize,
+    phrase: &str,
+    line_starts: &LineStarts,
+) -> Option<SourceSpan> {
     let expected = phrase.split_whitespace().collect::<Vec<_>>();
     if expected.is_empty() {
         return None;
     }
-    let words = line_words(source, line);
+    let words = line_words_from_start(source, line_starts.start(line));
     words.windows(expected.len()).find_map(|window| {
         if window
             .iter()
             .zip(&expected)
             .all(|(word, expected)| !word.3 && word.0 == *expected)
         {
-            Some(span_at(
-                source,
-                window[0].1,
-                window.last()?.2,
-                SpanPrecision::Token,
-            ))
+            Some(line_starts.span_at(source, window[0].1, window.last()?.2, SpanPrecision::Token))
         } else {
             None
         }
     })
 }
 
-fn line_words(source: &str, line: usize) -> Vec<(String, usize, usize, bool)> {
-    let start = line_start(source, line);
+fn line_words_from_start(source: &str, start: usize) -> Vec<(String, usize, usize, bool)> {
     let end = source[start..]
         .find('\n')
         .map_or(source.len(), |offset| start + offset);
@@ -1008,18 +1395,28 @@ fn line_words(source: &str, line: usize) -> Vec<(String, usize, usize, bool)> {
     words
 }
 
-fn parameter_value_span(source: &str, line: usize, name: &str) -> Option<SourceSpan> {
-    let words = line_words(source, line);
+fn parameter_value_span_at(
+    source: &str,
+    line: usize,
+    name: &str,
+    line_starts: &LineStarts,
+) -> Option<SourceSpan> {
+    let words = line_words_from_start(source, line_starts.start(line));
     let parameter_index = find_parameter_index(&words, name)?;
     let value = words.get(parameter_index + 1)?;
-    Some(span_at(source, value.1, value.2, SpanPrecision::Token))
+    Some(line_starts.span_at(source, value.1, value.2, SpanPrecision::Token))
 }
 
-fn find_parameter_span(source: &str, line: usize, name: &str) -> Option<SourceSpan> {
-    let words = line_words(source, line);
+fn find_parameter_span_at(
+    source: &str,
+    line: usize,
+    name: &str,
+    line_starts: &LineStarts,
+) -> Option<SourceSpan> {
+    let words = line_words_from_start(source, line_starts.start(line));
     let index = find_parameter_index(&words, name)?;
     let token = &words[index];
-    Some(span_at(source, token.1, token.2, SpanPrecision::Token))
+    Some(line_starts.span_at(source, token.1, token.2, SpanPrecision::Token))
 }
 
 fn find_parameter_index(words: &[(String, usize, usize, bool)], name: &str) -> Option<usize> {
@@ -1062,6 +1459,46 @@ mod tests {
         assert_eq!(diagnostics[0].span.line, 1);
         assert_eq!(diagnostics[0].span.precision, SpanPrecision::Line);
         assert_eq!(diagnostics[1].span.line, 2);
+    }
+
+    #[test]
+    fn logical_statements_labels_suffixes_and_raw_blocks_validate() {
+        let sources = [
+            "fetch: run \"printf\" with arguments [\"hello\\n\"]\n",
+            "run \"printf\" with arguments [\n  \"%s %s\\n\",\n  \"a\",\n  \"b\"\n]\n",
+            "use value \"\"\"\nsay \"hi\" # not a comment\n  indented [\n\"\"\"\nthen cat\n",
+            "run \"ls\" with arguments [\"-v\"] and stderr to \"e.log\"\n",
+            "run \"env\" and environment {\"A\": \"1\"}\n",
+        ];
+        for source in sources {
+            let errors = analyze_source(source, &Registry::default())
+                .into_iter()
+                .filter(|diagnostic| diagnostic.code.starts_with("parse."))
+                .collect::<Vec<_>>();
+            assert!(errors.is_empty(), "{source:?}: {errors:#?}");
+        }
+    }
+
+    #[test]
+    fn stray_word_does_not_choose_a_published_parse_code() {
+        let diagnostics = analyze_source("run \"printf\" tabs\n", &Registry::default());
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "parse.syntax"));
+    }
+
+    #[test]
+    fn invisible_format_controls_are_reported_with_token_spans() {
+        let source = "run \"printf\" with arguments [\"x\u{202e}y\"]\n";
+        let diagnostic = analyze_source(source, &Registry::default())
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "source.invisible_format")
+            .expect("format control is diagnosed");
+        assert_eq!(diagnostic.span.precision, SpanPrecision::Token);
+        assert_eq!(
+            &source[diagnostic.span.start_byte..diagnostic.span.end_byte],
+            "\u{202e}"
+        );
     }
 
     #[test]
@@ -1284,6 +1721,80 @@ mod tests {
             })
             .unwrap();
         assert_eq!(line_two_required.span.line, 2);
+    }
+
+    #[test]
+    fn parameter_rename_fix_is_withheld_when_target_is_already_supplied() {
+        let manifest = json!({
+            "name": "text.trim_final_lf",
+            "binary": "fixture-text",
+            "parameters": { "text": { "type": "string", "required": true } },
+            "arguments": [{ "parameter": "text" }]
+        });
+        let registry = Registry::from_sources(&[manifest.to_string()]).unwrap();
+        let diagnostics = analyze_source(
+            "run text.trim_final_lf with text \"x\" and txet \"y\"\n",
+            &registry,
+        );
+        let unknown = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "applet.parameter.unknown")
+            .unwrap();
+        assert!(unknown.fixes.is_empty());
+        assert_eq!(unknown.span.precision, SpanPrecision::Token);
+    }
+
+    #[test]
+    fn undefined_result_has_a_token_span_stable_code_and_suggestion() {
+        let source = "accept name as text\nrun \"printf\" with arguments [\"%s\", nme]\n";
+        let diagnostic = analyze_source(source, &Registry::default())
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "check.undefined_name")
+            .expect("undefined binding diagnostic");
+        assert_eq!(diagnostic.span.precision, SpanPrecision::Token);
+        assert_eq!(
+            &source[diagnostic.span.start_byte..diagnostic.span.end_byte],
+            "nme"
+        );
+        assert_eq!(diagnostic.fixes[0].edits[0].replacement, "name");
+    }
+
+    #[test]
+    fn known_applet_result_type_is_checked_at_reference_use() {
+        let producer = json!({
+            "name": "fixture.add",
+            "binary": "fixture-add",
+            "parameters": {}, "arguments": [],
+            "contract": { "version": 1, "output": { "type": "number", "encoding": "json" } }
+        });
+        let consumer = json!({
+            "name": "fixture.text",
+            "binary": "fixture-text",
+            "parameters": { "text": { "type": "string", "required": true } },
+            "arguments": [{ "parameter": "text" }]
+        });
+        let registry =
+            Registry::from_sources(&[producer.to_string(), consumer.to_string()]).unwrap();
+        let diagnostics = analyze_source(
+            "run fixture.add as total\nrun fixture.text with text total\n",
+            &registry,
+        );
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "applet.parameter.type" && diagnostic.span.line == 2
+            }),
+            "{diagnostics:#?}"
+        );
+        let condition = analyze_source(
+            "run fixture.add as total\nif total is \"3\"\n  run \"printf\" with arguments [\"three\"]\n",
+            &registry,
+        );
+        assert!(
+            condition.iter().any(|diagnostic| {
+                diagnostic.code == "check.type_mismatch" && diagnostic.span.line == 2
+            }),
+            "{condition:#?}"
+        );
     }
 
     #[test]

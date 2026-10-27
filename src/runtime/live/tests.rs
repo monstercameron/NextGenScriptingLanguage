@@ -128,9 +128,17 @@ fn live_job_batch_survives_a_node_boundary_until_awaited() -> Result<()> {
 #[test]
 fn live_session_refreshes_job_deadlines_for_each_node() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let program = parser::parse(
-        "run \"sh\" with arguments [\"-c\", \"sleep 0.1\"]\nspawn as first\n  run \"sh\" with arguments [\"-c\", \"sleep 0.2; printf first\"]\nspawn as second\n  run \"printf\" with arguments [\"second\"]\nawait first\nawait second\n",
-    )?;
+    let started = directory.path().join("job-started");
+    let gate = directory.path().join("job-gate");
+    let finished = directory.path().join("job-finished");
+    let script = r#"printf started > "$1"; while [ ! -e "$2" ]; do sleep 0.1; done; printf first; printf done > "$3""#;
+    let program = parser::parse(&format!(
+        "spawn as first\n  run \"sh\" with arguments [\"-c\", {}, \"job\", {}, {}, {}]\nspawn as second\n  run \"printf\" with arguments [\"second\"]\nawait first\nawait second\n",
+        serde_json::to_string(script)?,
+        serde_json::to_string(&started.to_string_lossy())?,
+        serde_json::to_string(&gate.to_string_lossy())?,
+        serde_json::to_string(&finished.to_string_lossy())?,
+    ))?;
     let spawn = program
         .steps
         .iter()
@@ -165,7 +173,8 @@ fn live_session_refreshes_job_deadlines_for_each_node() -> Result<()> {
         data: Vec::new(),
     };
     let mut node_options = options(directory.path());
-    node_options.total_timeout = Some(Duration::from_millis(150));
+    let node_timeout = Duration::from_secs(2);
+    node_options.total_timeout = Some(node_timeout);
     let (_, state) = execute_node_with_session(
         &first,
         &Registry::default(),
@@ -177,8 +186,22 @@ fn live_session_refreshes_job_deadlines_for_each_node() -> Result<()> {
             last_uses: first_last_uses,
             final_node: false,
         },
-    )?;
-    std::thread::sleep(Duration::from_millis(180));
+    )
+    .context("first node should finish within its own deadline")?;
+    let started_deadline = Instant::now() + Duration::from_secs(5);
+    while !started.exists() && Instant::now() < started_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        started.exists(),
+        "the carried job should start before node two"
+    );
+    // Wait beyond node one's deadline while the worker is held by the gate.
+    // Releasing it before node two lets that node finish within its fresh
+    // timeout, while a stale live TaskScope deadline would reject its spawn.
+    std::thread::sleep(node_timeout + Duration::from_millis(100));
+    assert!(!finished.exists(), "the carried job should still be gated");
+    std::fs::write(&gate, b"release")?;
     let (result, _) = execute_node_with_session(
         &second,
         &Registry::default(),
@@ -190,8 +213,13 @@ fn live_session_refreshes_job_deadlines_for_each_node() -> Result<()> {
             last_uses: second_last_uses,
             final_node: true,
         },
-    )?;
+    )
+    .context("second node should use a fresh job deadline")?;
     assert_eq!(result.output, b"second");
+    assert!(
+        finished.exists(),
+        "the carried job should finish after release"
+    );
     Ok(())
 }
 

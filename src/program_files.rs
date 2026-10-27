@@ -38,6 +38,8 @@ pub(crate) struct SourceLoadSnapshot {
     sources: std::sync::Arc<BTreeMap<PathBuf, String>>,
     requests: std::sync::Arc<BTreeMap<PathBuf, PathBuf>>,
     call_paths: std::sync::Arc<BTreeMap<(PathBuf, usize), PathBuf>>,
+    root_request: Option<PathBuf>,
+    root_path: Option<PathBuf>,
     failed_file: Option<PathBuf>,
     failed_call_chain: Vec<(PathBuf, usize)>,
     replay_only: bool,
@@ -48,10 +50,6 @@ impl SourceLoadSnapshot {
         let mut snapshot = self.clone();
         snapshot.replay_only = true;
         snapshot
-    }
-
-    pub(crate) fn is_replay_only(&self) -> bool {
-        self.replay_only
     }
 
     /// Return captured source by canonical path or an exact requested path.
@@ -66,6 +64,16 @@ impl SourceLoadSnapshot {
 
     pub(crate) fn canonical_path_for_call(&self, parent: &Path, line: usize) -> Option<PathBuf> {
         self.call_paths.get(&(parent.to_path_buf(), line)).cloned()
+    }
+
+    pub(crate) fn canonical_root_path(&self, requested: &Path) -> Option<PathBuf> {
+        if self.root_request.as_deref() == Some(requested)
+            || self.root_path.as_deref() == Some(requested)
+        {
+            self.root_path.clone()
+        } else {
+            None
+        }
     }
 
     pub(crate) fn failed_file(&self) -> Option<FailedProgramFile> {
@@ -239,10 +247,6 @@ impl<'a> SourceScope<'a> {
         self.snapshot.borrow().failed_file()
     }
 
-    pub(crate) fn is_replay_only(&self) -> bool {
-        self.replay_only
-    }
-
     pub(crate) fn replay(&self) -> Self {
         Self {
             root: self.root,
@@ -309,9 +313,12 @@ pub(crate) fn parse_at_with_snapshot(
     let snapshot = std::cell::RefCell::new(captured);
     let parsed = match path {
         Some(path) if snapshot.borrow().replay_only => {
-            // A replay must use the same canonical parent used when the request
-            // keys were captured, while still avoiding filesystem reads of callees.
-            let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            // Reuse the root identity captured before any aliases can change,
+            // while still avoiding filesystem reads of callees.
+            let canonical = snapshot
+                .borrow()
+                .canonical_root_path(path)
+                .unwrap_or_else(|| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
             parse_source_resolved_inner(
                 &canonical,
                 source,
@@ -323,14 +330,21 @@ pub(crate) fn parse_at_with_snapshot(
         }
         Some(path) => {
             match fs::canonicalize(path).with_context(|| format!("resolving {}", path.display())) {
-                Ok(canonical) => parse_source_resolved_inner(
-                    &canonical,
-                    source,
-                    access,
-                    #[cfg(feature = "lsp")]
-                    None,
-                    Some(&snapshot),
-                ),
+                Ok(canonical) => {
+                    {
+                        let mut captured = snapshot.borrow_mut();
+                        captured.root_request = Some(path.to_path_buf());
+                        captured.root_path = Some(canonical.clone());
+                    }
+                    parse_source_resolved_inner(
+                        &canonical,
+                        source,
+                        access,
+                        #[cfg(feature = "lsp")]
+                        None,
+                        Some(&snapshot),
+                    )
+                }
                 Err(error) => Err(error),
             }
         }

@@ -652,23 +652,10 @@ fn analyze_source_impl(
         registry,
         cwd: &cwd,
     };
-    let replay_only =
-        snapshot.is_some_and(crate::program_files::SourceLoadSnapshot::is_replay_only) || {
-            #[cfg(feature = "lsp")]
-            {
-                scope.is_some_and(|scope| scope.is_replay_only())
-            }
-            #[cfg(not(feature = "lsp"))]
-            {
-                false
-            }
-        };
     let source_path = path.map(|path| {
-        if replay_only {
-            path.to_path_buf()
-        } else {
-            std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-        }
+        snapshot
+            .and_then(|snapshot| snapshot.canonical_root_path(path))
+            .unwrap_or_else(|| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
     });
     #[cfg(feature = "lsp")]
     let (parsed, captured_snapshot) = if scope.is_some() {
@@ -6883,5 +6870,57 @@ mod tests {
             }),
             "{diagnostics:#?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostic_replay_keeps_symlinked_root_identity_after_alias_removal() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let actual = root.path().join("actual");
+        std::fs::create_dir(&actual).unwrap();
+        let caller = actual.join("caller.program");
+        let alias = root.path().join("caller-alias.program");
+        let callee = actual.join("callee.program");
+        let source = "run program file \"callee.program\"\n";
+        std::fs::write(&caller, source).unwrap();
+        std::fs::write(
+            &callee,
+            "accept theme as text\nrun \"printf\" with arguments [them]\n",
+        )
+        .unwrap();
+        symlink(&caller, &alias).unwrap();
+
+        let canonical_caller = std::fs::canonicalize(&caller).unwrap();
+        let canonical_callee = std::fs::canonicalize(&callee).unwrap();
+        let registry = Registry::default();
+        let access = crate::program_files::Access {
+            registry: &registry,
+            cwd: root.path(),
+        };
+        let (parsed, snapshot) =
+            crate::program_files::parse_at_with_snapshot(source, Some(&alias), Some(access), None);
+        parsed.unwrap();
+        std::fs::remove_file(&alias).unwrap();
+        std::fs::remove_file(&callee).unwrap();
+
+        let diagnostics = analyze_source_impl(
+            source,
+            Some(&alias),
+            &registry,
+            #[cfg(feature = "lsp")]
+            None,
+            Some(&snapshot.replay()),
+        );
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "check.undefined_name"
+                    && diagnostic.span.path.as_deref() == canonical_callee.to_str()
+                    && diagnostic.span.line == 2
+            }),
+            "{diagnostics:#?}"
+        );
+        assert_eq!(snapshot.canonical_root_path(&alias), Some(canonical_caller));
     }
 }

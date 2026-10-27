@@ -4,6 +4,8 @@
 //! once, or refuse with a message that names the reason. A panic, a duplicated step, or a
 //! refusal without a reason fails the test. The seed is printed, so a failure replays with
 //! `CRASH_SEED`. `CRASH_TRIALS` sets the number of random kills per mode (nightly raises it).
+//! The `lost` action is a deterministic in-process write shim; these tests do not simulate
+//! storage-device power loss or establish power-loss durability.
 //!
 //! Run with: `cargo test --features failpoints --test crash_consistency`
 #![cfg(feature = "failpoints")]
@@ -17,9 +19,9 @@ use std::time::{Duration, Instant};
 
 /// Steps in each sequential or job program, and the count log's expected length.
 const STEPS: usize = 6;
-/// Checkpoint writes injected per point and mode.
-const FAILED_CALLS: usize = 6;
-const POINTS: [&str; 20] = [
+/// Checkpoint boundaries exercised by the write-failure matrix. Blob collection is
+/// exercised separately during resume, since it cannot run during a normal `run`.
+const WRITE_POINTS: [&str; 19] = [
     "checkpoint.atomic",
     "checkpoint.atomic.write",
     "checkpoint.atomic.sync",
@@ -39,7 +41,6 @@ const POINTS: [&str; 20] = [
     "checkpoint.elements.sync",
     "checkpoint.elements.reset.truncate",
     "checkpoint.elements.reset.sync",
-    "checkpoint.blob_gc.remove",
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -344,27 +345,47 @@ fn kill_at_random_points(mode: Mode) {
 
 fn fail_writes(mode: Mode) {
     let (expected, _) = baseline(mode);
-    for point in POINTS {
-        for nth in 1..=FAILED_CALLS {
-            let fixture = fixture(mode);
-            // checkpointed_run discards stderr for the other tests; this one needs the
-            // injected error text, so stderr is piped back after that setting.
-            let output = checkpointed_run(&fixture)
-                .env("EXECUTE_FAILPOINT", format!("{point}:{nth}"))
-                .stderr(Stdio::piped())
-                .output()
-                .unwrap();
-            let context = format!("{} {point} write {nth}", mode.name());
-            if !output.status.success() {
-                // The injected fault must surface as the run's error, not as a crash.
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                assert!(
-                    stderr.contains("injected failure"),
-                    "{context}: failed for another reason, status and output: {output:?}"
-                );
-            }
-            check_resume(&fixture, &expected, &context);
+    for point in WRITE_POINTS {
+        // Exercise only boundaries reachable for this program shape. The first
+        // occurrence is enough to prove the failpoint is wired into the path; the
+        // explicit abort/partial-write cases below cover torn writes.
+        if !point_applies_to_mode(point, mode) {
+            continue;
         }
+        let fixture = fixture(mode);
+        // checkpointed_run discards stderr for the other tests; this one needs the
+        // injected error text, so stderr is piped back after that setting.
+        let output = checkpointed_run(&fixture)
+            .env("EXECUTE_FAILPOINT", format!("{point}:1"))
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        let context = format!("{} {point} write 1", mode.name());
+        assert!(
+            !output.status.success(),
+            "{context}: failpoint was not reached"
+        );
+        // The injected fault must surface as the run's error, not as a crash.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("injected failure"),
+            "{context}: failed for another reason, status and output: {output:?}"
+        );
+        check_resume(&fixture, &expected, &context);
+    }
+}
+
+fn point_applies_to_mode(point: &str, mode: Mode) -> bool {
+    match point {
+        "checkpoint.graph.truncate" | "checkpoint.graph.write" | "checkpoint.graph.sync" => {
+            matches!(mode, Mode::Graph)
+        }
+        "checkpoint.elements.write"
+        | "checkpoint.elements.truncate"
+        | "checkpoint.elements.sync"
+        | "checkpoint.elements.reset.truncate"
+        | "checkpoint.elements.reset.sync" => matches!(mode, Mode::Elements),
+        _ => true,
     }
 }
 

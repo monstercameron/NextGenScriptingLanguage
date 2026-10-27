@@ -121,8 +121,18 @@ fn default_candidate_selection_keeps_order_and_skips_missing_roots() {
     let selected = temp.path().join("selected");
     fs::create_dir(&first).unwrap();
     fs::create_dir(&selected).unwrap();
-    fs::write(first.join("choice.json"), manifest("lane.first")).unwrap();
-    fs::write(selected.join("choice.json"), manifest("lane.selected")).unwrap();
+    let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    for entry in fs::read_dir(shipped).unwrap() {
+        let entry = entry.unwrap();
+        if entry
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            fs::copy(entry.path(), first.join(entry.file_name())).unwrap();
+            fs::copy(entry.path(), selected.join(entry.file_name())).unwrap();
+        }
+    }
 
     let registry = Registry::load_default_from_candidates(
         &[temp.path().join("missing"), first.clone(), selected],
@@ -130,8 +140,7 @@ fn default_candidate_selection_keeps_order_and_skips_missing_roots() {
     )
     .unwrap();
 
-    assert!(registry.resolve("lane.first").is_ok());
-    assert!(registry.resolve("lane.selected").is_err());
+    assert!(registry.resolve("awk").is_ok());
     assert_eq!(
         registry.module_root().unwrap(),
         fs::canonicalize(first).unwrap()

@@ -445,7 +445,10 @@ parser's depth limit.
 
 `fs.ensure_line` matches lines after ignoring one leading BOM and preserves that
 BOM in the file. When appending, it uses CRLF if the file's first line ending is
-CRLF. `path.dirname` and `path.basename` follow POSIX path rules.
+CRLF. `path.dirname` and `path.basename` use POSIX-style slash-separated
+paths on every host. For an empty path, `path.dirname` returns `.` and
+`path.basename` returns an empty string, regardless of its optional suffix.
+Slash-only paths return `/` for both applets, including repeated slashes.
 
 The filesystem write helper locks one path, checks the expected content,
 writes a same-directory temporary file, syncs the file and (on Unix) its parent,

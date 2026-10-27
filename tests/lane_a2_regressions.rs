@@ -11,6 +11,8 @@ fn run(operation: &str, arguments: Value, cwd: &Path) -> Result<Value, flow::app
 #[test]
 fn posix_dirname_and_basename_edges() {
     for (input, expected) in [
+        ("", "."),
+        ("///", "/"),
         ("/usr/lib", "/usr"),
         ("/usr/", "/"),
         ("usr", "."),
@@ -26,7 +28,19 @@ fn posix_dirname_and_basename_edges() {
             json!(expected)
         );
     }
+    for (path, expected) in [("", ""), ("/", "/"), ("///", "/"), ("folder/name", "name")] {
+        assert_eq!(
+            run("path.basename", json!({"path": path}), Path::new(".")).unwrap(),
+            json!(expected)
+        );
+    }
     for (path, suffix, expected) in [
+        ("", "", ""),
+        ("", ".", ""),
+        ("", "/", ""),
+        ("/", "/", "/"),
+        ("////", ".", "/"),
+        ("folder/name.txt", ".txt", "name"),
         ("a/b.txt", "b.txt", "b.txt"),
         ("a/b.txt", "/b.txt", "b.txt"),
         (".txt", ".txt", ".txt"),

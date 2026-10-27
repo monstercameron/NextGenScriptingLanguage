@@ -7,6 +7,9 @@ pub(super) fn dirname(args: &Map<String, Value>) -> Result<Value, AppletError> {
 }
 
 fn posix_dirname(value: &str) -> &str {
+    if value.is_empty() {
+        return ".";
+    }
     let trimmed = value.trim_end_matches('/');
     if trimmed.is_empty() {
         return "/";
@@ -29,6 +32,9 @@ pub(super) fn basename(args: &Map<String, Value>) -> Result<Value, AppletError> 
 }
 
 fn posix_basename<'a>(value: &'a str, suffix: Option<&str>) -> &'a str {
+    if value.is_empty() {
+        return value;
+    }
     let trimmed = value.trim_end_matches('/');
     if trimmed.is_empty() {
         return "/";

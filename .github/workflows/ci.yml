@@ -53,6 +53,11 @@ jobs:
             cargo clippy --locked $args --all-targets -- -D warnings
             echo "::endgroup::"
           done
+      - name: Install Bubblewrap for Linux sandbox tests
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
       - name: Test the core and default builds
         shell: bash
         run: |

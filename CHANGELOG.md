@@ -7,6 +7,11 @@ original version labels.
 
 ## Unreleased
 
+- A repeat interrupt (Ctrl-C) during a `finally`, `on exit` or `on interrupt`
+  body now aborts the cleanup at once and kills its running command, exiting
+  with status 130 and a `cleanup interrupted` diagnostic instead of waiting out
+  the 5 s cleanup budget. A single interrupt still runs cleanup to completion.
+
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known
   non-object values during checking while retaining dynamic object keys.

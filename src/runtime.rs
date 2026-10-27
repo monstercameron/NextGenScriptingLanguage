@@ -368,6 +368,117 @@ mod program_exit_tests {
     }
 }
 
+#[cfg(test)]
+mod cleanup_interrupt_tests {
+    use super::*;
+
+    fn cancelled_failure(message: &str) -> anyhow::Error {
+        anyhow::Error::new(execution_result::ExecutionFailure::new(
+            execution_result::ExecutionResult::runtime_failure(
+                execution_result::ExecutionKind::Cancelled,
+                message,
+                execution_result::EffectCertainty::Uncertain,
+            ),
+        ))
+    }
+
+    #[test]
+    fn cleanup_interrupted_names_the_interruption() {
+        assert!(
+            format!("{:#}", cleanup_interrupted()).contains("cleanup interrupted"),
+            "repeat interrupts must report the interruption, not the abandoned cleanup step"
+        );
+    }
+
+    #[test]
+    fn cancellation_errors_are_rewritten_and_others_are_not() {
+        assert!(is_cancellation_error(&cancelled_failure(
+            "workflow cancelled by signal"
+        )));
+        // The pending failure stays recognizable through added context.
+        let chained = Err::<(), _>(cancelled_failure("workflow cancelled by signal"))
+            .context("outer step")
+            .unwrap_err();
+        assert!(is_cancellation_error(&chained));
+        assert!(is_cancellation_error(&anyhow::anyhow!("cancelled by handle")));
+        assert!(is_cancellation_error(&anyhow::anyhow!("cancelled while draining")));
+        // Timeouts, cleanup budgets and ordinary step failures keep their own
+        // errors so they still unwind through the cleanup frames.
+        assert!(!is_cancellation_error(&anyhow::Error::new(
+            execution_result::ExecutionFailure::new(
+                execution_result::ExecutionResult::runtime_failure(
+                    execution_result::ExecutionKind::Timeout,
+                    "command timed out",
+                    execution_result::EffectCertainty::Uncertain,
+                ),
+            )
+        )));
+        assert!(!is_cancellation_error(&anyhow::Error::new(CommandTimedOut)));
+        assert!(!is_cancellation_error(&anyhow::Error::new(
+            control_flow::CleanupBudgetExceeded {
+                after_success: false
+            }
+        )));
+        assert!(!is_cancellation_error(&anyhow::anyhow!("boom")));
+    }
+
+    #[test]
+    fn cleanup_scope_shares_the_second_interrupt_flag() {
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        let scope = signals.cleanup_scope(None);
+        assert!(Arc::ptr_eq(&scope.cancelled, &signals.cleanup_cancel));
+        assert!(Arc::ptr_eq(&scope.cleanup_cancel, &signals.cleanup_cancel));
+        assert!(!scope.is_cancelled());
+        signals.cleanup_cancel.store(true, Ordering::SeqCst);
+        assert!(scope.is_cancelled());
+    }
+
+    #[test]
+    fn entering_cleanup_does_not_inherit_the_first_interrupt() {
+        let signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(true)), false, None)
+                .unwrap();
+        let scope = signals.cleanup_scope(None);
+        assert!(
+            !scope.is_cancelled(),
+            "the first interrupt runs cleanup; only a repeat interrupt sets the shared flag"
+        );
+    }
+
+    #[test]
+    fn expired_drain_marks_cleanup_cancel_like_a_second_interrupt() {
+        let drain = Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cleanup_cancel = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        spawn_drain_watchdog(
+            Arc::clone(&drain),
+            Arc::clone(&cancelled),
+            Arc::clone(&cleanup_cancel),
+            Duration::from_millis(50),
+            Arc::clone(&stop),
+            None,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !cleanup_cancel.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            cleanup_cancel.load(Ordering::SeqCst),
+            "the expired drain never marked cleanup"
+        );
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert_eq!(
+            drain.load(Ordering::SeqCst),
+            crate::platform::DRAIN_CANCELLED
+        );
+        stop.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Result of one explicit applet invocation through its declared backend.
 /// `output` always preserves the exact stdout bytes; `value` is available only
 /// when a typed contract successfully decodes the result (or creates an

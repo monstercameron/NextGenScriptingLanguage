@@ -4912,6 +4912,7 @@ fn compare_schema(
     path: &str,
     reasons: &mut Vec<String>,
 ) {
+    let reason_count = reasons.len();
     if output.kind != input.kind {
         if !output.is_assignable_to(input) {
             reasons.push(format!(
@@ -4945,6 +4946,24 @@ fn compare_schema(
             "{path} does not guarantee the input's required string pattern"
         ));
     }
+    if output.kind == OutputType::Text {
+        if input.nonempty && !output.nonempty {
+            reasons.push(format!(
+                "{path} may be empty, but the input requires nonempty text"
+            ));
+        }
+        if input.single_line
+            && !output.single_line
+            && !output
+                .enum_values
+                .as_ref()
+                .is_some_and(|values| values.iter().all(|value| !value.contains(['\n', '\r'])))
+        {
+            reasons.push(format!(
+                "{path} may contain a carriage return or line feed, but the input requires single-line text"
+            ));
+        }
+    }
     match output.kind {
         OutputType::List => match (&output.items, &input.items) {
             (Some(output_items), Some(input_items)) => {
@@ -4958,7 +4977,11 @@ fn compare_schema(
         },
         OutputType::Record => {
             for (name, output_field) in &output.fields {
-                match input.fields.get(name) {
+                match input
+                    .fields
+                    .get(name)
+                    .or(input.additional_properties.as_deref())
+                {
                     Some(input_field) => compare_schema(
                         output_field,
                         input_field,
@@ -4966,6 +4989,29 @@ fn compare_schema(
                         reasons,
                     ),
                     None => reasons.push(format!("{path} has extra output field {name:?}")),
+                }
+            }
+            if let Some(output_additional) = output.additional_properties.as_deref() {
+                for (name, input_field) in &input.fields {
+                    if !output.fields.contains_key(name) {
+                        compare_schema(
+                            output_additional,
+                            input_field,
+                            &format!("{path}.{name}"),
+                            reasons,
+                        );
+                    }
+                }
+                match input.additional_properties.as_deref() {
+                    Some(input_additional) => compare_schema(
+                        output_additional,
+                        input_additional,
+                        &format!("{path}.*"),
+                        reasons,
+                    ),
+                    None => reasons.push(format!(
+                        "{path} allows additional output fields, but the input record is closed"
+                    )),
                 }
             }
             let output_required = output.required.iter().collect::<BTreeSet<_>>();
@@ -4978,6 +5024,16 @@ fn compare_schema(
             }
         }
         _ => {}
+    }
+    // Keep the detailed explanations above, while making this function's
+    // compatibility decision authoritative with the same directional schema
+    // relation used by manifests and graph planning. This catches constraints
+    // such as numeric minima, JSON scalar-only, and record property-count
+    // bounds that do not have a specialized diagnostic yet.
+    if reasons.len() == reason_count && !output.is_assignable_to(input) {
+        reasons.push(format!(
+            "{path} does not guarantee all constraints required by the input schema"
+        ));
     }
 }
 
@@ -5531,6 +5587,155 @@ mod tests {
         };
         assert!(!schemas_compatible(&output_with_optional, &output_record));
         assert!(!output_with_optional.is_assignable_to(&output_record));
+    }
+
+    #[test]
+    fn diagnostics_compatibility_matches_assignability_for_schema_constraints() {
+        let base = |kind| ValueSchema {
+            kind,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
+            nullable: false,
+            items: None,
+            fields: BTreeMap::new(),
+            required: Vec::new(),
+            enum_values: None,
+            single_line: false,
+            minimum: None,
+            pattern: None,
+        };
+        let list = |items| ValueSchema {
+            items: Some(Box::new(items)),
+            ..base(OutputType::List)
+        };
+        let record_with = |field| ValueSchema {
+            fields: BTreeMap::from([("value".into(), field)]),
+            required: vec!["value".into()],
+            ..base(OutputType::Record)
+        };
+        let pairs = vec![
+            (
+                base(OutputType::Integer),
+                ValueSchema {
+                    minimum: Some(serde_json::json!(10).as_number().unwrap().clone()),
+                    ..base(OutputType::Integer)
+                },
+                false,
+            ),
+            (
+                ValueSchema {
+                    minimum: Some(serde_json::json!(10).as_number().unwrap().clone()),
+                    ..base(OutputType::Integer)
+                },
+                ValueSchema {
+                    minimum: Some(serde_json::json!(5).as_number().unwrap().clone()),
+                    ..base(OutputType::Integer)
+                },
+                true,
+            ),
+            (
+                base(OutputType::Number),
+                ValueSchema {
+                    minimum: Some(serde_json::json!(0.5).as_number().unwrap().clone()),
+                    ..base(OutputType::Number)
+                },
+                false,
+            ),
+            (
+                base(OutputType::Text),
+                ValueSchema {
+                    single_line: true,
+                    ..base(OutputType::Text)
+                },
+                false,
+            ),
+            (
+                ValueSchema {
+                    single_line: true,
+                    nonempty: true,
+                    ..base(OutputType::Text)
+                },
+                base(OutputType::Text),
+                true,
+            ),
+            (
+                base(OutputType::Text),
+                ValueSchema {
+                    nonempty: true,
+                    ..base(OutputType::Text)
+                },
+                false,
+            ),
+            (
+                ValueSchema {
+                    additional_properties: Some(Box::new(base(OutputType::Text))),
+                    ..base(OutputType::Record)
+                },
+                base(OutputType::Record),
+                false,
+            ),
+            (
+                ValueSchema {
+                    additional_properties: Some(Box::new(base(OutputType::Text))),
+                    ..base(OutputType::Record)
+                },
+                ValueSchema {
+                    additional_properties: Some(Box::new(base(OutputType::Text))),
+                    ..base(OutputType::Record)
+                },
+                true,
+            ),
+            (
+                base(OutputType::Record),
+                ValueSchema {
+                    additional_properties: Some(Box::new(base(OutputType::Text))),
+                    ..base(OutputType::Record)
+                },
+                true,
+            ),
+            (
+                ValueSchema {
+                    min_properties: Some(1),
+                    fields: BTreeMap::from([("value".into(), base(OutputType::Text))]),
+                    ..base(OutputType::Record)
+                },
+                ValueSchema {
+                    max_properties: Some(0),
+                    fields: BTreeMap::from([("value".into(), base(OutputType::Text))]),
+                    ..base(OutputType::Record)
+                },
+                false,
+            ),
+            (
+                list(record_with(base(OutputType::Integer))),
+                list(record_with(ValueSchema {
+                    minimum: Some(serde_json::json!(1).as_number().unwrap().clone()),
+                    ..base(OutputType::Integer)
+                })),
+                false,
+            ),
+            (
+                list(record_with(ValueSchema {
+                    nonempty: false,
+                    ..base(OutputType::Text)
+                })),
+                list(record_with(ValueSchema {
+                    nonempty: true,
+                    ..base(OutputType::Text)
+                })),
+                false,
+            ),
+        ];
+
+        for (output, input, expected) in pairs {
+            assert_eq!(output.is_assignable_to(&input), expected);
+            assert_eq!(schemas_compatible(&output, &input), expected);
+            let reasons = schema_mismatch_reasons(&output, &input, "source", "target");
+            assert_eq!(reasons.is_empty(), expected, "{output:#?} → {input:#?}");
+        }
     }
 
     #[test]

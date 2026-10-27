@@ -761,12 +761,7 @@ fn publish_affected_diagnostics<W: Write>(
         let diagnostics = merged
             .into_iter()
             .map(|diagnostic| {
-                lsp_diagnostic_with_documents(
-                    &document.text,
-                    &positions,
-                    diagnostic,
-                    documents,
-                )
+                lsp_diagnostic_with_documents(&document.text, &positions, diagnostic, documents)
             })
             .collect::<Vec<_>>();
         let mut params = json!({ "uri": uri, "diagnostics": diagnostics });
@@ -1759,7 +1754,9 @@ mod tests {
         let callee_text = "run \"printf\" and discard stderr trailing\n";
         fs::write(&caller, caller_text).unwrap();
         fs::write(&callee, callee_text).unwrap();
-        let root_uri = url::Url::from_directory_path(dir.path()).unwrap().to_string();
+        let root_uri = url::Url::from_directory_path(dir.path())
+            .unwrap()
+            .to_string();
         let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
         let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
         let mut input = frame(request(
@@ -2030,11 +2027,20 @@ mod tests {
             .iter()
             .find(|diagnostic| diagnostic.code == "check.undefined_name")
             .expect("the unsaved callee typo is reported");
-        assert_eq!(diagnostic.span.path.as_deref(), Some(callee.canonicalize().unwrap().to_str().unwrap()));
+        assert_eq!(
+            diagnostic.span.path.as_deref(),
+            Some(callee.canonicalize().unwrap().to_str().unwrap())
+        );
         assert_eq!(diagnostic.span.line, 2);
-        assert_eq!(diagnostic.span.precision, crate::diagnostics::SpanPrecision::Token);
+        assert_eq!(
+            diagnostic.span.precision,
+            crate::diagnostics::SpanPrecision::Token
+        );
         assert!(diagnostic.message.contains("did you mean \"theme\""));
-        assert_eq!(diagnostic.related[0].span.path.as_deref(), Some(caller.canonicalize().unwrap().to_str().unwrap()));
+        assert_eq!(
+            diagnostic.related[0].span.path.as_deref(),
+            Some(caller.canonicalize().unwrap().to_str().unwrap())
+        );
         assert_eq!(diagnostic.related[0].span.line, 1);
     }
 
@@ -2048,7 +2054,9 @@ mod tests {
         let callee_overlay = "accept theme as text\nrun \"printf\" with arguments [them]\n";
         fs::write(&caller, caller_text).unwrap();
         fs::write(&callee, callee_disk).unwrap();
-        let root_uri = url::Url::from_directory_path(dir.path()).unwrap().to_string();
+        let root_uri = url::Url::from_directory_path(dir.path())
+            .unwrap()
+            .to_string();
         let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
         let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
         let mut input = frame(request(
@@ -2099,8 +2107,14 @@ mod tests {
             .find(|diagnostic| diagnostic["code"] == "check.undefined_name")
             .expect("the callee receives its own diagnostic");
         assert_eq!(diagnostic["range"]["start"]["line"], 1);
-        assert_eq!(diagnostic["relatedInformation"][0]["location"]["uri"], caller_uri);
-        assert_eq!(diagnostic["relatedInformation"][0]["location"]["range"]["start"]["line"], 0);
+        assert_eq!(
+            diagnostic["relatedInformation"][0]["location"]["uri"],
+            caller_uri
+        );
+        assert_eq!(
+            diagnostic["relatedInformation"][0]["location"]["range"]["start"]["line"],
+            0
+        );
     }
 
     #[cfg(unix)]
@@ -2120,8 +2134,8 @@ mod tests {
         )
         .unwrap();
         let overlays = BTreeMap::new();
-        let scope = crate::program_files::SourceScope::new(&root, &overlays)
-            .with_source_snapshots();
+        let scope =
+            crate::program_files::SourceScope::new(&root, &overlays).with_source_snapshots();
         let registry = Registry::default();
         let access = crate::program_files::Access {
             registry: &registry,
@@ -2137,12 +2151,16 @@ mod tests {
         assert!(scope.loaded_source(&callee).is_some());
         fs::remove_file(&callee).unwrap();
         let replay = scope.replay();
-        let diagnostics = analyze_source_scoped(caller_text, Some(&caller), &registry, Some(&replay));
-        assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "check.undefined_name"
-                && diagnostic.span.path.as_deref() == callee.to_str()
-                && diagnostic.span.line == 2
-        }), "{diagnostics:#?}");
+        let diagnostics =
+            analyze_source_scoped(caller_text, Some(&caller), &registry, Some(&replay));
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "check.undefined_name"
+                    && diagnostic.span.path.as_deref() == callee.to_str()
+                    && diagnostic.span.line == 2
+            }),
+            "{diagnostics:#?}"
+        );
     }
 
     #[cfg(unix)]
@@ -2158,8 +2176,8 @@ mod tests {
         fs::write(&callee, "run \"printf\" with arguments [\"disk\"]\n").unwrap();
         let mut overlays = BTreeMap::new();
         overlays.insert(callee.clone(), overlay_text);
-        let scope = crate::program_files::SourceScope::new(&root, &overlays)
-            .with_source_snapshots();
+        let scope =
+            crate::program_files::SourceScope::new(&root, &overlays).with_source_snapshots();
         let registry = Registry::default();
         let access = crate::program_files::Access {
             registry: &registry,
@@ -2253,7 +2271,9 @@ mod tests {
         let fixed = "accept theme as text\nrun \"printf\" with arguments [\"ok\"]\n";
         fs::write(&caller, caller_text).unwrap();
         fs::write(&callee, fixed).unwrap();
-        let root_uri = url::Url::from_directory_path(dir.path()).unwrap().to_string();
+        let root_uri = url::Url::from_directory_path(dir.path())
+            .unwrap()
+            .to_string();
         let caller_uri = url::Url::from_file_path(&caller).unwrap().to_string();
         let callee_uri = url::Url::from_file_path(&callee).unwrap().to_string();
         let mut input = frame(request(
@@ -2296,16 +2316,19 @@ mod tests {
                     && message["params"]["uri"] == callee_uri
             })
             .collect::<Vec<_>>();
-        assert!(callee_updates.iter().any(|message| {
-            message["params"]["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diagnostic| {
-                    diagnostic["code"] == "check.undefined_name"
-                        && diagnostic.get("relatedInformation").is_none()
-                })
-        }), "{callee_updates:#?}");
+        assert!(
+            callee_updates.iter().any(|message| {
+                message["params"]["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|diagnostic| {
+                        diagnostic["code"] == "check.undefined_name"
+                            && diagnostic.get("relatedInformation").is_none()
+                    })
+            }),
+            "{callee_updates:#?}"
+        );
         assert!(callee_updates.last().unwrap()["params"]["diagnostics"]
             .as_array()
             .unwrap()

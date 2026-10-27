@@ -246,19 +246,19 @@ pub(crate) fn parse_at_with_snapshot(
             None,
             Some(&snapshot),
         ),
-        Some(path) => match fs::canonicalize(path)
-            .with_context(|| format!("resolving {}", path.display()))
-        {
-            Ok(canonical) => parse_source_resolved_inner(
-                &canonical,
-                source,
-                access,
-                #[cfg(feature = "lsp")]
-                None,
-                Some(&snapshot),
-            ),
-            Err(error) => Err(error),
-        },
+        Some(path) => {
+            match fs::canonicalize(path).with_context(|| format!("resolving {}", path.display())) {
+                Ok(canonical) => parse_source_resolved_inner(
+                    &canonical,
+                    source,
+                    access,
+                    #[cfg(feature = "lsp")]
+                    None,
+                    Some(&snapshot),
+                ),
+                Err(error) => Err(error),
+            }
+        }
         None => parser::parse(source),
     };
     (parsed, snapshot.into_inner())
@@ -350,16 +350,16 @@ impl Loader<'_> {
                         .cloned()
                         .map(|source| (canonical, source))
                 });
-                (
-                    snapshot.replay_only,
-                    replayed,
-                )
+                (snapshot.replay_only, replayed)
             })
             .unwrap_or((false, None));
         #[cfg(feature = "lsp")]
         let replay_only = replay_only || self.scope.is_some_and(|scope| scope.replay_only);
         if replay_only && replayed.is_none() {
-            bail!("line {line}: no captured source snapshot exists for called program file {}", path.display());
+            bail!(
+                "line {line}: no captured source snapshot exists for called program file {}",
+                path.display()
+            );
         }
         let canonical = match &replayed {
             Some((canonical, _)) => canonical.clone(),

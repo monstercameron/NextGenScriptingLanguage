@@ -782,9 +782,14 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         )
     };
     // The attribute list and its storage must stay alive through the launch;
-    // both are released once the child exists. The pipe ends handed to
-    // CreatePseudoConsole stay alive through CreateProcess and are released
-    // here, once the child is connected.
+    // both are released once the child exists. Only the two pipe ends handed
+    // to CreatePseudoConsole (in_read, out_write) are released here, once the
+    // child is connected. The communication ends (in_write for input,
+    // out_read for the screen) stay open for the whole session: per the
+    // ConPTY contract the host uses the input write end to talk to the
+    // console, and closing it at startup tears the input channel down while
+    // the child is still attaching, which surfaces as a control-event exit
+    // (STATUS_CONTROL_C_EXIT) with only conhost VT sequences on screen.
     // SAFETY: the attribute list was initialized above and is deleted exactly
     // once here on every path past initialization.
     unsafe {
@@ -793,7 +798,7 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
     drop(attr_storage);
     drop(in_read);
     drop(out_write);
-    drop(in_write);
+    // in_write intentionally stays alive until teardown below.
     if created == FALSE {
         let error = std::io::Error::last_os_error();
         // SAFETY: the console is live and has no owner yet on this path, so it
@@ -861,6 +866,10 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
             ClosePseudoConsole(hpc);
         }
     }
+    // The session is over: closing the input write end now releases the last
+    // host reference to the input channel. It must outlive the child, so it
+    // is dropped here rather than right after CreateProcess.
+    drop(in_write);
     let screen = receiver
         .recv_timeout(Duration::from_secs(15))
         .expect("ConPTY screen reader did not finish");

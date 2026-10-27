@@ -919,6 +919,7 @@ impl Signals {
         })
     }
 
+    #[cfg(feature = "live")]
     fn begin_job_run_with_budget(&self, budget: Arc<jobs::RunBudget>) -> Result<JobRunGuard> {
         let mut context = self
             .job_run_context

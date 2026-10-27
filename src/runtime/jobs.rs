@@ -310,6 +310,7 @@ impl Supervisor {
     /// A live Supervisor spans multiple independently timed nodes. Its task
     /// scope must not retain the first node's deadline; live waits apply the
     /// active node's deadline at the call site instead.
+    #[cfg(feature = "live")]
     pub(super) fn new_for_live(signals: &Signals, _output_limit: usize) -> Result<Self> {
         Self::new_with_task_deadline(signals, None)
     }
@@ -340,6 +341,7 @@ impl Supervisor {
         Ok(scope)
     }
 
+    #[cfg(feature = "live")]
     pub(super) fn run_budget(&self) -> Arc<RunBudget> {
         Arc::clone(&self.budget)
     }

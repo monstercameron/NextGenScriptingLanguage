@@ -454,6 +454,80 @@ fn parallel_for_each_preserves_input_order_when_completion_order_differs() -> Re
     Ok(())
 }
 
+/// Issue #553: `parallel for each` fans out through a bounded worker pool, so
+/// a group far larger than its limit must still run every element in order.
+/// The Linux bench harness (`parallel_each_10000`) asserts the 65-thread
+/// ceiling and wall-time budget; this portable test pins correctness at
+/// scale for every platform.
+#[test]
+fn parallel_for_each_fan_out_far_beyond_the_limit_runs_every_element() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let items = (0..1_000)
+        .map(|index| format!("\"w{index:04}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        "parallel for each word in [{items}] at most 16 as results\n  run text.concat with parts [word, \"!\"] and separator \"\"\nthen encode results as json\n"
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let program = flow::parser::parse(&source)?;
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    flow::runtime::validate(&program, &registry)?;
+    let options = flow::runtime::RunOptions {
+        max_output_bytes: 1024 * 1024,
+        command_timeout: Some(Duration::from_secs(8)),
+        ..flow::runtime::RunOptions::new(directory.path().to_path_buf())
+    };
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    // In-process applets launch no native processes.
+    assert_eq!(result.launched_processes, 0);
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(value["mode"], "for_each");
+    assert_eq!(value["succeeded"], 1000);
+    assert_eq!(value["failed"], 0);
+    assert_eq!(value["cancelled"], 0);
+    assert_eq!(value["not_started"], 0);
+    let elements = value["items"].as_array().expect("for_each items");
+    assert_eq!(elements.len(), 1000);
+    for (index, element) in elements.iter().enumerate() {
+        let expected = format!("w{index:04}");
+        assert_eq!(element["index"], index);
+        assert_eq!(element["item"], expected.as_str());
+        assert_eq!(element["state"], "success");
+    }
+    Ok(())
+}
+
+/// Issue #553: every element currently receives its own copy of the run
+/// options, so a group must still succeed when the run carries inputs. A
+/// future change that shares inputs through `Arc` must keep this behavior.
+#[test]
+fn parallel_for_each_with_run_inputs_present_runs_every_element() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = "accept greeting as text\nparallel for each word in [\"a\", \"b\", \"c\"] at most 2 as results\n  run text.concat with parts [word, \"!\"] and separator \"\"\nthen encode results as json\n";
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let program = flow::parser::parse(source)?;
+    let registry = flow::manifest::Registry::load(&root.join("manifests"))?;
+    flow::runtime::validate(&program, &registry)?;
+    let options = flow::runtime::RunOptions {
+        inputs: std::collections::BTreeMap::from([(
+            "greeting".to_owned(),
+            flow::ast::Value::String("x".repeat(65_536)),
+        )]),
+        max_output_bytes: 1024 * 1024,
+        command_timeout: Some(Duration::from_secs(8)),
+        ..flow::runtime::RunOptions::new(directory.path().to_path_buf())
+    };
+    let result = flow::runtime::run(&program, &registry, &options)?;
+    assert_eq!(result.launched_processes, 0);
+    let value: serde_json::Value = serde_json::from_slice(&result.output)?;
+    assert_eq!(value["succeeded"], 3);
+    assert_eq!(value["failed"], 0);
+    assert_eq!(value["cancelled"], 0);
+    assert_eq!(value["not_started"], 0);
+    Ok(())
+}
+
 #[test]
 fn independent_task_groups_reject_sibling_binding_reads() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));

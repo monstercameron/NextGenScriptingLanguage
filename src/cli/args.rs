@@ -28,6 +28,7 @@ pub(crate) struct Args {
     /// `run --single-instance LOCK`: refuse to run while another run holds LOCK.
     pub(crate) single_instance: Option<PathBuf>,
     pub(crate) github: bool,
+    pub(crate) deny_warnings: bool,
     pub(crate) command: &'static str,
     pub(crate) file: PathBuf,
     pub(crate) manifest_dir: Option<PathBuf>,

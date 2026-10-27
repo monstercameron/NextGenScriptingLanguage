@@ -599,11 +599,18 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         };
         let data_flow_warning = args.capability_policy.is_some() && args.data_flow_policy.is_none();
         let github = args.github;
+        let deny_warnings = args.deny_warnings;
         let result = execute_workflow(args, finite_check_snapshot);
         if !json {
             // Plain check and --json share this analysis: the same static errors fail the
             // check, after the authoritative load's own error.
             result?;
+            if data_flow_warning {
+                eprintln!("warning[data_flow_policy_not_configured]: --capability-policy grants applet capabilities only; without --data-flow-policy, remote egress and persistence are not protected by data-flow grants");
+            }
+            for diagnostic in static_diagnostics.iter().filter(|diagnostic| diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning) {
+                eprintln!("warning[{}]: line {}: {}", diagnostic.code, diagnostic.span.line, diagnostic.message);
+            }
             let errors: Vec<String> = static_diagnostics
                 .iter()
                 .filter(|diagnostic| {
@@ -620,11 +627,15 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
                     )
                 );
             }
+            if deny_warnings && (data_flow_warning || static_diagnostics.iter().any(|diagnostic| diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning)) {
+                bail!("warnings are denied (--deny-warnings)");
+            }
             return Ok(());
         }
         let has_static_error = static_diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Error);
+        let has_denied_warning = deny_warnings && (data_flow_warning || static_diagnostics.iter().any(|diagnostic| diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning));
         let mut diagnostics = static_diagnostics
             .iter()
             .map(serde_json::to_value)
@@ -664,11 +675,11 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         } else {
             write_json(&serde_json::json!({
                 "protocol": "execute.check/1", "validation": "static",
-                "ok": result.is_ok() && !has_static_error, "path": path, "path_bytes": path_bytes,
+                "ok": result.is_ok() && !has_static_error && !has_denied_warning, "path": path, "path_bytes": path_bytes,
                 "diagnostics": diagnostics
             }))?;
         }
-        if result.is_err() || has_static_error {
+        if result.is_err() || has_static_error || has_denied_warning {
             // Validation has no spawned workers/effects. The JSON response is
             // complete; preserve the ordinary failing-check exit status.
             std::process::exit(1);

@@ -46,6 +46,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a declaration, parameter, binding, or object repeats a name",
         example: "run \"true\" as result\nrun \"true\" as result",
         typical_fix: "Rename one binding so every result name is unique in its scope.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.scope",
@@ -53,6 +54,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a control-flow, job, declaration, or trigger is outside its valid scope or order",
         example: "break",
         typical_fix: "Move the statement into a valid loop, program, or job lifetime.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.program.unknown",
@@ -60,6 +62,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a called reusable program is not defined",
         example: "run program workre",
         typical_fix: "Correct the program name or define the called program.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.program.file.unknown",
@@ -67,6 +70,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a called program file path does not exist",
         example: "run program file \"missing.program\"",
         typical_fix: "Correct the path or restore the missing program file.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.program.cycle",
@@ -74,6 +78,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a reusable program call graph contains a recursive cycle",
         example: "define a program named worker\n  run program worker",
         typical_fix: "Remove the recursive call or restructure it without a cycle.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.program.input.unknown",
@@ -81,6 +86,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a reusable program call supplies an input it does not declare",
         example: "run program worker with typo \"value\"",
         typical_fix: "Rename the supplied input to one declared by the program.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.program.input.required",
@@ -88,6 +94,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a reusable program call omits a required input",
         example: "define a program named worker\n  accept input as text\n  use value input\nrun program worker",
         typical_fix: "Supply the required input, or declare a default value.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.range",
@@ -95,6 +102,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a literal is outside the supported range for its setting",
         example: "exit with status 300",
         typical_fix: "Choose an integer within the documented range.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.value.constraint",
@@ -102,6 +110,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a literal violates a declared value or input constraint",
         example: "accept color as text one of [\"red\"] with default \"blue\"",
         typical_fix: "Choose a value that satisfies the declaration's constraints.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.parameter.direct",
@@ -109,6 +118,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a direct executable call uses named applet parameters",
         example: "run \"grep\" with args [\"needle\"]",
         typical_fix: "Use the `arguments` parameter for the direct executable's argv list.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.bound_output_withheld",
@@ -116,6 +126,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a final bound value is internal; explicitly reuse it to produce program stdout",
         example: "run text.trim with text \" value \" as result",
         typical_fix: "Use an unbound `use value result` or encode the value to stdout.",
+        severity: DiagnosticSeverity::Warning,
     },
     CodeInfo {
         code: "parse.lexical",
@@ -123,6 +134,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a line has an unterminated or invalid quoted or bracketed token",
         example: "run \"printf\" with arguments [\"missing quote]",
         typical_fix: "Close the string and use valid escapes and balanced brackets.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "parse.syntax",
@@ -130,6 +142,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a statement does not match the grammar",
         example: "rnu \"printf\" with arguments [\"x\"]",
         typical_fix: "Rewrite the statement using a supported language form.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "parse.indentation",
@@ -137,6 +150,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a line is indented with tabs, or its indentation does not nest",
         example: "\tuse value result",
         typical_fix: "Use spaces and indent the line under its containing block.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "parse.control",
@@ -144,6 +158,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a control construct is unsupported or nested beyond the supported depth",
         example: "try\n  try\n    run \"true\"",
         typical_fix: "Use a supported control construct and stay within its nesting limit.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "source.invisible_format",
@@ -151,6 +166,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "source contains a Unicode format control that can change how it is displayed",
         example: "a source line containing U+200B ZERO WIDTH SPACE",
         typical_fix: "Remove the invisible Unicode format character.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.undefined_name",
@@ -158,6 +174,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a referenced result or input name is not defined at this point",
         example: "use value result",
         typical_fix: "Define the name first or correct it to an existing name.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.type_mismatch",
@@ -165,6 +182,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "statically known value types are incompatible at a use site",
         example: "if count equals \"many\"",
         typical_fix: "Convert the value or use operands with compatible types.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "check.diagnostics.truncated",
@@ -172,6 +190,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "more diagnostics were found than the response limit permits",
         example: "a source file with more than 10,000 independent errors",
         typical_fix: "Fix the reported diagnostics, then check again for the remaining errors.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "applet.unknown",
@@ -179,6 +198,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "the operation names no declared applet and is not a quoted executable",
         example: "run text.trim_finall_lf with text \"x\"",
         typical_fix: "Correct the applet name or quote a direct executable name.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "applet.parameter.unknown",
@@ -186,6 +206,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "the applet declares no parameter with this name",
         example: "run fixture.reader with argumens \"x\"",
         typical_fix: "Rename the parameter to one declared by the applet.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "applet.parameter.type",
@@ -193,6 +214,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a literal value does not match the parameter's declared type",
         example: "run fixture.reader with text 42",
         typical_fix: "Provide a value matching the parameter's declared type.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "applet.parameter.required",
@@ -200,6 +222,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a required parameter is missing from the call",
         example: "run fixture.reader",
         typical_fix: "Supply a value for the required parameter.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "applet.parameter.constraint",
@@ -214,6 +237,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a pipeline stage's declared output does not satisfy the next stage's input",
         example: "then text.decode",
         typical_fix: "Add a conversion or connect stages with compatible schemas and encodings.",
+        severity: DiagnosticSeverity::Error,
     },
     CodeInfo {
         code: "data_flow_policy_not_configured",
@@ -221,6 +245,31 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "a capability policy is set without a data-flow policy, so remote egress and persistence are unprotected",
         example: "execute check workflow.program --capability-policy allow.json",
         typical_fix: "Add a data-flow policy that grants the intended egress and persistence.",
+        severity: DiagnosticSeverity::Warning,
+    },
+    CodeInfo {
+        code: "lint.shell_expansion_literal",
+        family: "lint",
+        meaning: "shell-like expansion syntax in a literal argument is passed literally",
+        example: "run \"echo\" with arguments [\"$HOME/path\"]",
+        typical_fix: "Declare and use the environment value, or format a checked value explicitly.",
+        severity: DiagnosticSeverity::Warning,
+    },
+    CodeInfo {
+        code: "lint.executable_name_whitespace",
+        family: "lint",
+        meaning: "a quoted executable name contains shell metacharacters and is looked up as one filename",
+        example: "run \"ls *.txt\"",
+        typical_fix: "Put the executable in the command name and the remaining words in arguments.",
+        severity: DiagnosticSeverity::Warning,
+    },
+    CodeInfo {
+        code: "lint.empty_loop",
+        family: "lint",
+        meaning: "a loop is guaranteed to execute zero times",
+        example: "repeat 0 times\n  run \"true\"",
+        typical_fix: "Use a positive repeat count or remove the loop.",
+        severity: DiagnosticSeverity::Warning,
     },
     CodeInfo {
         code: "check_failed",
@@ -228,6 +277,7 @@ pub const CODES: &[CodeInfo] = &[
         meaning: "validation failed without a static diagnostic; the causes list explains why",
         example: "a check failure that has no source-aware diagnostic yet",
         typical_fix: "Follow the causes and report any reproducible source case without a specific code.",
+        severity: DiagnosticSeverity::Error,
     },
 ];
 
@@ -438,6 +488,7 @@ pub fn analyze_source_at(
     };
     match crate::program_files::parse_at(source, path, Some(access)) {
         Ok(program) => {
+            collect_lint_diagnostics(source, &program, &line_starts, &mut diagnostics);
             if let Some(step) = program
                 .steps
                 .last()
@@ -736,6 +787,102 @@ fn semantic_token_matches(token: &str, message: &str) -> bool {
         || message.contains(&format!("{token:?}"))
         || message.contains(&format!("`{token}`"))
         || token.bytes().all(|byte| byte.is_ascii_digit()) && message.contains(&token)
+}
+
+fn collect_lint_diagnostics(
+    source: &str,
+    program: &Program,
+    line_starts: &LineStarts,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    collect_step_lints(source, &program.steps, line_starts, diagnostics);
+    for definition in program.definitions.values() {
+        collect_step_lints(source, &definition.steps, line_starts, diagnostics);
+    }
+    let mut calls = Vec::new();
+    collect_calls(&program.steps, &mut calls);
+    for definition in program.definitions.values() {
+        collect_calls(&definition.steps, &mut calls);
+    }
+    for (line, call) in calls {
+        if call.direct && call.operation.chars().any(|ch| matches!(ch, ' ' | '*' | '?' | '|' | ';')) {
+            let span = line_words_from_start(source, line_starts.start(line))
+                .into_iter()
+                .find(|word| word.3 && word.0.trim_matches('"') == call.operation)
+                .map(|word| line_starts.span_at(source, word.1, word.2, SpanPrecision::Token))
+                .unwrap_or_else(|| line_starts.span(source, line));
+            let mut diagnostic = Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "lint.executable_name_whitespace".into(),
+                message: format!("quoted executable name {:?} is treated as one filename; split the executable from its arguments", call.operation),
+                span,
+                fixes: Vec::new(),
+            };
+            if !call.parameters.contains_key("arguments") {
+                let mut words = call.operation.split_whitespace();
+                if let Some(executable) = words.next() {
+                    let arguments = words.map(str::to_owned).collect::<Vec<_>>();
+                    let replacement = if arguments.is_empty() {
+                        format!("\"{executable}\"")
+                    } else {
+                        format!("\"{executable}\" with arguments {}", serde_json::to_string(&arguments).unwrap_or_default())
+                    };
+                    diagnostic.fixes.push(SuggestedFix::replace(
+                        "split executable name and arguments",
+                        diagnostic.span.clone(),
+                        replacement,
+                    ));
+                }
+            }
+            diagnostics.push(diagnostic);
+        }
+        if let Some(Value::List(arguments)) = call.parameters.get("arguments") {
+            for (index, argument) in arguments.iter().enumerate() {
+                let Value::String(value) = argument else { continue };
+                if !has_shell_expansion(value) { continue; }
+                let span = parameter_value_span_at(source, line, "arguments", line_starts)
+                    .unwrap_or_else(|| line_starts.span(source, line));
+                diagnostics.push(Diagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    code: "lint.shell_expansion_literal".into(),
+                    message: format!("argument {index} contains shell expansion syntax, but Execute passes it literally; declare an environment input or format the value explicitly"),
+                    span,
+                    fixes: Vec::new(),
+                });
+            }
+        }
+    }
+}
+
+fn collect_step_lints(source: &str, steps: &[Step], line_starts: &LineStarts, diagnostics: &mut Vec<Diagnostic>) {
+    for step in steps {
+        if let StepKind::Loop { kind: crate::ast::LoopKind::Repeat { count: Value::Integer(0) }, .. } = &step.kind {
+            diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "lint.empty_loop".into(),
+                message: "repeat 0 times never executes its body".into(),
+                span: line_starts.span(source, step.line),
+                fixes: Vec::new(),
+            });
+        }
+    }
+}
+
+fn has_shell_expansion(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if value.starts_with('~') && value.chars().skip(1).next().is_some_and(|ch| ch.is_alphanumeric() || ch == '/') {
+        return true;
+    }
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'$' {
+            if bytes.get(index + 1).is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+                || matches!(bytes.get(index + 1), Some(b'{') | Some(b'(')) { return true; }
+        }
+        if bytes[index] == b'`' { return true; }
+        index += 1;
+    }
+    false
 }
 
 fn is_contextual_header(tokens: &[Token<'_>]) -> bool {

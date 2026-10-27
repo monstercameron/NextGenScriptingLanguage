@@ -104,7 +104,7 @@ jobs:
               "current_catalog": manifest_tree_metadata(sys.argv[2]),
           }, indent=2, sort_keys=True))
           PY
-          cat "$RUNNER_TEMP/latency-catalog-metadata.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/latency-catalog-metadata.json"
 
           preflight_program="$RUNNER_TEMP/latency-catalog-preflight.program"
           printf 'run printf with message "catalog preflight"\n' > "$preflight_program"

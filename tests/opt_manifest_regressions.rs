@@ -100,6 +100,20 @@ fn opt_manifest_json_lists_require_json_arguments_not_spread() {
     );
     assert!(spread_only
         .contains("json and record list items require json_arguments rather than spread"));
+
+    let guarded_by_optional_parameter = opt_manifest_load_error(
+        r#"{"name":"check","binary":"tool","parameters":{"gate":{"type":"boolean"},"items":{"type":"list","items":"json","required":true}},"arguments":[{"when_present":"gate","append":[{"json_arguments":true}]}]}"#,
+    );
+    assert!(guarded_by_optional_parameter
+        .contains("json and record list items require json_arguments rather than spread"));
+
+    let optional_items = opt_manifest_from_json(
+        r#"{"name":"check","binary":"tool","parameters":{"items":{"type":"list","items":"json"}},"arguments":[{"when_present":"items","append":[{"json_arguments":true}]}]}"#,
+    );
+    assert!(optional_items
+        .build_arguments(&BTreeMap::new())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

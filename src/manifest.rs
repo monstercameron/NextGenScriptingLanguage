@@ -3258,11 +3258,31 @@ enum RawArgument {
     },
 }
 
-fn raw_argument_has_json_arguments(argument: &RawArgument) -> bool {
+fn raw_argument_has_json_arguments_for_parameter(
+    argument: &RawArgument,
+    parameter: &str,
+    parameters: &BTreeMap<String, ParameterSpec>,
+    guards: &mut Vec<String>,
+) -> bool {
     match argument {
-        RawArgument::JsonArguments => true,
-        RawArgument::WhenPresent { append, .. } => {
-            append.iter().any(raw_argument_has_json_arguments)
+        RawArgument::JsonArguments => guards.iter().all(|guard| {
+            guard == parameter
+                || parameters
+                    .get(guard)
+                    .is_some_and(|parameter| parameter.required)
+        }),
+        RawArgument::WhenPresent {
+            when_present,
+            append,
+        } => {
+            guards.push(when_present.clone());
+            let available = append.iter().any(|argument| {
+                raw_argument_has_json_arguments_for_parameter(
+                    argument, parameter, parameters, guards,
+                )
+            });
+            guards.pop();
+            available
         }
         _ => false,
     }
@@ -3462,7 +3482,14 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
             .item_type
             .is_some_and(|item| matches!(item, ParameterType::Json | ParameterType::Record))
         {
-            let has_json_arguments = raw.arguments.iter().any(raw_argument_has_json_arguments);
+            let has_json_arguments = raw.arguments.iter().any(|argument| {
+                raw_argument_has_json_arguments_for_parameter(
+                    argument,
+                    name,
+                    &parameters,
+                    &mut Vec::new(),
+                )
+            });
             let has_direct_mapping = raw
                 .arguments
                 .iter()

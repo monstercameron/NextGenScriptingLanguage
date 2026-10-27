@@ -2100,7 +2100,15 @@ fn parameter_accepts_reference(
                 ParameterType::Scalar,
                 InputType::Text | InputType::Integer | InputType::Boolean
             )
-            | (ParameterType::Json, _)
+            | (
+                ParameterType::Json,
+                InputType::Text
+                    | InputType::Integer
+                    | InputType::Boolean
+                    | InputType::TextList
+                    | InputType::IntegerList
+                    | InputType::JsonList
+            )
             | (ParameterType::Record, InputType::Json)
     ) || (expected == ParameterType::List
         && actual == InputType::TextList
@@ -2186,6 +2194,12 @@ fn validate_value(
             spec.kind,
             value_kind(value)
         );
+    }
+    if spec.kind == ParameterType::Json
+        && allow_reference_items
+        && contains_parameter_reference(value)
+    {
+        validate_json_parameter_references(name, value, bindings)?;
     }
     if let Value::String(string) = value {
         if string.contains('\0') {
@@ -2491,6 +2505,10 @@ fn validate_parameter_field(
             bail!("field {name:?} must be nonempty");
         }
     }
+    if field.kind == ParameterType::Json && allow_references && contains_parameter_reference(value)
+    {
+        validate_json_parameter_references(name, value, bindings)?;
+    }
     if field.kind == ParameterType::Record {
         let Value::Record(values) = value else {
             unreachable!("type checked above")
@@ -2532,6 +2550,32 @@ fn is_scalar_type(value: &Value, expected: ParameterType) -> bool {
                 Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_)
             )
     )
+}
+
+fn validate_json_parameter_references(
+    name: &str,
+    value: &Value,
+    bindings: &BTreeMap<String, InputType>,
+) -> Result<()> {
+    match value {
+        Value::Reference(reference) => {
+            if bindings.get(reference).copied().unwrap_or(InputType::Text) == InputType::Bytes {
+                bail!("JSON parameter {name:?} cannot contain a bytes reference");
+            }
+        }
+        Value::List(values) => {
+            for value in values {
+                validate_json_parameter_references(name, value, bindings)?;
+            }
+        }
+        Value::Record(values) => {
+            for value in values.values() {
+                validate_json_parameter_references(name, value, bindings)?;
+            }
+        }
+        Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {}
+    }
+    Ok(())
 }
 
 fn value_kind(value: &Value) -> &'static str {
@@ -3081,6 +3125,9 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         if name.trim().is_empty() {
             bail!("parameter names must be nonempty");
         }
+        if spec.kind == ParameterType::Scalar {
+            bail!("parameter {name:?}: scalar is only valid as a parameter-list item or record field type");
+        }
         if let Some(values) = &spec.enum_values {
             if spec.kind != ParameterType::String {
                 bail!("parameter {name:?}: enum constraints apply only to string parameters");
@@ -3574,11 +3621,12 @@ fn schema_accepts_input_kind(schema: &ValueSchema, kind: InputType) -> bool {
         OutputType::Number => matches!(kind, InputType::Integer | InputType::Json),
         OutputType::Boolean => kind == InputType::Boolean,
         OutputType::Json => {
-            !schema.scalar_only
-                || matches!(
-                    kind,
-                    InputType::Text | InputType::Integer | InputType::Boolean | InputType::Json
-                )
+            kind != InputType::Bytes
+                && (!schema.scalar_only
+                    || matches!(
+                        kind,
+                        InputType::Text | InputType::Integer | InputType::Boolean | InputType::Json
+                    ))
         }
         OutputType::Record => kind == InputType::Json,
         OutputType::List => {
@@ -4288,6 +4336,53 @@ mod tests {
                 ("fourth".into(), Value::String("four".into())),
             ])))
             .is_err());
+    }
+
+    #[test]
+    fn json_map_values_reject_bytes_references_without_a_contract_port() {
+        let manifest = parse_manifest(
+            r#"{"name":"open","binary":"echo","parameters":{"values":{"type":"record","required":true,"fields":{},"additional_properties":{"type":"json"}}},"arguments":[{"json_parameter":"values"}]}"#,
+        )
+        .unwrap();
+        let invocation = |value| Invocation {
+            operation: "open".into(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::from([(
+                "values".into(),
+                Value::Record(BTreeMap::from([("question".into(), value)])),
+            )]),
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        };
+        let bytes = BTreeMap::from([("raw".into(), InputType::Bytes)]);
+        assert!(manifest
+            .validate_with_types(&invocation(Value::Reference("raw".into())), &bytes)
+            .is_err());
+        assert!(manifest
+            .validate_with_types(
+                &invocation(Value::List(vec![Value::Reference("raw".into())])),
+                &bytes,
+            )
+            .is_err());
+
+        for kind in [InputType::Text, InputType::Json] {
+            let bindings = BTreeMap::from([("valid".into(), kind)]);
+            assert!(manifest
+                .validate_with_types(&invocation(Value::Reference("valid".into())), &bindings,)
+                .is_ok());
+        }
+    }
+
+    #[test]
+    fn scalar_parameter_type_is_rejected_at_the_top_level() {
+        assert!(parse_manifest(
+            r#"{"name":"scalar","binary":"echo","parameters":{"value":{"type":"scalar"}},"arguments":[]}"#,
+        )
+        .is_err());
     }
 
     #[test]

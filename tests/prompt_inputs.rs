@@ -22,6 +22,9 @@ fn execute(root: &Path, arguments: &[&str]) -> Output {
         .env("EXECUTE_NO_PROMPT", "1")
         .env("XDG_STATE_HOME", root.join("state"))
         .env("LOCALAPPDATA", root.join("state"))
+        // These assertions cover exact non-CI bytes; hardening under
+        // `GITHUB_ACTIONS=true` may rewrite line-leading `::` or emit masks.
+        .env_remove("GITHUB_ACTIONS")
         .current_dir(root)
         .output()
         .unwrap()

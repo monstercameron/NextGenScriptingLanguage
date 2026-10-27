@@ -7,6 +7,12 @@ original version labels.
 
 ## Unreleased
 
+- `run` and `resume` now harden the job log when `GITHUB_ACTIONS` is `"true"`:
+  line-leading `::` sequences in terminal-bound output are neutralized with a
+  zero-width space (streamed, captured-stderr, final and diagnostic writes,
+  with cross-write line state), and each registered secret emits an escaped
+  `::add-mask::` line. Non-CI output is byte-identical.
+
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known
   non-object values during checking while retaining dynamic object keys.

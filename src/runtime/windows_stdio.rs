@@ -102,7 +102,24 @@ pub fn write_with_deadline(
     deadline: Option<Instant>,
 ) -> Result<()> {
     let target = handle(fd)? as usize;
-    let data = bytes.to_vec();
+    let data = if crate::github_actions::enabled() {
+        if fd == 1 {
+            crate::github_actions::filter_stdout(bytes)
+        } else if fd == 2 {
+            crate::github_actions::filter_stderr(bytes)
+        } else {
+            bytes.to_vec()
+        }
+    } else {
+        bytes.to_vec()
+    };
+    if data.is_empty() {
+        check_deadline(deadline)?;
+        if cancelled.load(Ordering::Relaxed) {
+            bail!("workflow cancelled by signal");
+        }
+        return Ok(());
+    }
     cooperative(cancelled, deadline, move |stop| {
         write_all(target as HANDLE, &data, &stop)
     })
@@ -187,7 +204,15 @@ pub fn write_diagnostic(bytes: &[u8]) {
     let Ok(target) = handle(2) else {
         return;
     };
-    let _ = write_all(target, bytes, &AtomicBool::new(false));
+    let data = if crate::github_actions::enabled() {
+        crate::github_actions::filter_stderr(bytes)
+    } else {
+        bytes.to_vec()
+    };
+    if data.is_empty() {
+        return;
+    }
+    let _ = write_all(target, &data, &AtomicBool::new(false));
 }
 pub(super) fn capture_stdin(
     limit: usize,

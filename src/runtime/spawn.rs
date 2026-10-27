@@ -207,7 +207,13 @@ pub(super) fn resolved_call_stdio(
     signals: &Signals,
 ) -> invocation_io::ResolvedStdio {
     let capture_inherited = observe::captures_inherited_stdio();
-    if terminal::requested() && !capture_inherited {
+    // Under Actions hardening every terminal-bound child stream is captured
+    // and re-emitted through the sanitizing writers, including manifest
+    // `inherit` dispositions and the interactive handoff. Raw fd inheritance
+    // would let a forged `::` line reach the runner untouched. File targets
+    // (redirects to files) stay raw; only the log is filtered.
+    let hardening = crate::github_actions::enabled();
+    if terminal::requested() && !capture_inherited && !hardening {
         // An interactive command keeps all three streams of the terminal.
         return invocation_io::ResolvedStdio::resolve(
             None,
@@ -217,6 +223,7 @@ pub(super) fn resolved_call_stdio(
         .discard_stderr(call.discard_stderr);
     }
     let inherit = !capture_inherited
+        && !hardening
         && INHERIT_TERMINAL_STDOUT.with(|flag| flag.get())
         && manifest.execution_backend() == AppletBackend::Command;
     let mut resolved = invocation_io::ResolvedStdio::resolve(
@@ -235,7 +242,7 @@ pub(super) fn resolved_call_stdio(
         },
     )
     .discard_stderr(call.discard_stderr);
-    if capture_inherited {
+    if capture_inherited || hardening {
         if resolved.stdout == invocation_io::StdioDisposition::Inherit {
             resolved.stdout = invocation_io::StdioDisposition::Capture;
         }
@@ -245,7 +252,7 @@ pub(super) fn resolved_call_stdio(
     }
     // A stream redirected straight to its target is attached at spawn, not captured.
     let (stream_stdout, stream_stderr) = super::redirect::streamed_redirect();
-    if stream_stdout {
+    if stream_stdout && !hardening {
         resolved.stdout = invocation_io::StdioDisposition::Inherit;
     }
     if stream_stderr {

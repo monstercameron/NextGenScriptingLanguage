@@ -975,6 +975,13 @@ fn enforce_policy_header(
 }
 
 fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapshot>) -> Result<()> {
+    // Actions hardening for `run`/`resume`: neutralize forged workflow
+    // commands in terminal-bound output and mask registered secrets. `check
+    // --format github` intentionally emits workflow commands and never
+    // enables this; only execution paths opt in.
+    if matches!(args.command, "run" | "resume") {
+        flow::github_actions::enable_if_ci();
+    }
     let capability_policy = args
         .capability_policy
         .as_deref()
@@ -1833,8 +1840,13 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 body.trigger = None;
                 let result = runtime::run(&body, &registry, &options)
                     .map_err(|error| redact_runtime_error(&registry, error))?;
+                // Under Actions hardening the final output shares the stdout
+                // sanitizer with streamed output, so a forged command split
+                // across the stream boundary is still neutralized. The flush
+                // releases a trailing line-leading `:` at true end of stream.
+                let output = flow::github_actions::filter_stdout_final(&result.output);
                 io::stdout()
-                    .write_all(&result.output)
+                    .write_all(&output)
                     .context("could not write workflow output")?;
                 if let Some(exit) = result.exit {
                     // Same contract as the finite path: flush output, report the
@@ -1934,8 +1946,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     })
                     .map_err(|error| redact_runtime_error(&registry, error))?
                 };
+                // Same end-of-stream sanitization as `--once`: the shared stdout
+                // sanitizer keeps line-start state across streamed writes.
+                let output = flow::github_actions::filter_stdout_final(&result.output);
                 io::stdout()
-                    .write_all(&result.output)
+                    .write_all(&output)
                     .context("could not write workflow output")?;
                 if let Some(exit) = result.exit {
                     // The pipeline output above is already delivered. Flush it

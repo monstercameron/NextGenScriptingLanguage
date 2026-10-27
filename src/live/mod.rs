@@ -886,12 +886,18 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
     };
     // Uncaptured stdout has already streamed. Write what plain run writes last: the
     // pipeline output of a completed run, then its diagnostic, then the status.
+    // Under Actions hardening the final bytes share the stdout sanitizer with
+    // the streamed bytes, so a forged command split across that boundary is
+    // still neutralized. The diagnostic below already filters via
+    // `write_diagnostic`.
     if let Some(output) = end.output {
+        let bytes: Vec<u8> = match output {
+            Data::Text { text } => text.into_bytes(),
+            Data::Bytes { bytes } => bytes,
+        };
+        let filtered = crate::github_actions::filter_stdout_final(&bytes);
         let mut stdout = std::io::stdout().lock();
-        match output {
-            Data::Text { text } => stdout.write_all(text.as_bytes())?,
-            Data::Bytes { bytes } => stdout.write_all(&bytes)?,
-        }
+        stdout.write_all(&filtered)?;
         stdout.flush()?;
     }
     if let Some(diagnostic) = &end.diagnostic {

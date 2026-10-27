@@ -283,7 +283,32 @@ fn write_with_deadline_inner_with_pool(
         }
         return Ok(());
     }
-    write_with_deadline_owned_inner(pool, fd, bytes.to_vec(), cancelled, deadline, worker_gate)
+    // Under GitHub Actions hardening, terminal-bound bytes are neutralized at
+    // the single choke point all runtime terminal writes share, so streamed
+    // step output, redirected stdout-to-stderr, trace events and diagnostics
+    // are all covered without touching framed protocols or file targets.
+    // `check --format github` intentionally emits workflow commands and never
+    // enables hardening, so it stays raw.
+    let owned = if crate::github_actions::enabled() {
+        if fd == 1 {
+            crate::github_actions::filter_stdout(bytes)
+        } else if fd == 2 {
+            crate::github_actions::filter_stderr(bytes)
+        } else {
+            bytes.to_vec()
+        }
+    } else {
+        bytes.to_vec()
+    };
+    // A split `::` held back by the streaming sanitizer must not be lost when
+    // the write is the last of its stream in this call; flushing is harmless
+    // when nothing is pending. Flushing per write keeps each write self
+    // contained; cross-write line state is still preserved for the next call.
+    // Note: flushing here would emit a pending `:` immediately, breaking the
+    // split-`::` protection across writes. Only flush when the caller signals
+    // end-of-stream (final output paths do this explicitly); live streams keep
+    // the pending colon for the next write.
+    write_with_deadline_owned_inner(pool, fd, owned, cancelled, deadline, worker_gate)
 }
 
 pub(super) fn write_with_deadline_owned_reusing(
@@ -300,7 +325,30 @@ pub(super) fn write_with_deadline_owned_reusing(
         }
         return Ok(());
     }
-    write_with_deadline_owned_inner(pool, fd, bytes, cancelled, deadline, None)
+    // Same terminal choke point as the borrowing path: owned streamed writes
+    // (the hot path for step output) are neutralized before reaching the fd.
+    let filtered = if crate::github_actions::enabled() {
+        if fd == 1 {
+            crate::github_actions::filter_stdout(&bytes)
+        } else if fd == 2 {
+            crate::github_actions::filter_stderr(&bytes)
+        } else {
+            bytes
+        }
+    } else {
+        bytes
+    };
+    // A pending split `:` stays buffered across live writes; only an empty
+    // filtered write (a lone held colon) skips the syscall and keeps the state
+    // for the next chunk. End-of-stream callers flush explicitly.
+    if filtered.is_empty() {
+        super::check_deadline(deadline)?;
+        if cancelled.load(Ordering::Relaxed) {
+            bail!("program cancelled by signal");
+        }
+        return Ok(());
+    }
+    write_with_deadline_owned_inner(pool, fd, filtered, cancelled, deadline, None)
 }
 
 fn write_with_deadline_owned_inner(

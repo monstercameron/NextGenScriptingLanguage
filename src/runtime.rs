@@ -4393,7 +4393,9 @@ fn drain_diagnostic(child: &mut ManagedChild, signals: &Signals) -> Result<()> {
                 break;
             }
             Ok(count) => {
-                let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get) {
+                let limit = if FORCE_STDERR_CAPTURE.with(std::cell::Cell::get)
+                    || crate::github_actions::enabled()
+                {
                     FORCED_STDERR_CAPTURE_LIMIT
                 } else {
                     MAX_DIAGNOSTIC_BYTES_PER_STAGE

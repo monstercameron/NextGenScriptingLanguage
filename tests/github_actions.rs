@@ -1,0 +1,187 @@
+//! GitHub Actions hardening end to end: forged workflow commands are
+//! neutralized in streamed output, final output and captured stderr under
+//! `GITHUB_ACTIONS=true`, registered secrets emit `::add-mask::` lines, and
+//! output stays byte-identical without the marker. Unix-only because the
+//! fixtures drive `/bin/sh` through the default registry.
+#![cfg(unix)]
+
+use std::fs;
+use std::process::{Command, Output};
+
+const ZWSP: &str = "\u{200b}";
+
+fn run_source(source: &str, args: &[&str], github_actions: bool) -> Output {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("job.program");
+    fs::write(&program, source).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
+    command.args(["run"]).arg(&program).args(args);
+    command.current_dir(directory.path());
+    // Keep the working tree hermetic: never inherit the ambient CI marker.
+    // Hardening under test is opt-in per command below.
+    command.env_remove("GITHUB_ACTIONS");
+    if github_actions {
+        command.env("GITHUB_ACTIONS", "true");
+    }
+    command.output().unwrap()
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn assert_neutralized(text: &str, forged: &str) {
+    assert!(
+        !text.contains(forged),
+        "forged command leaked: {forged:?} in {text:?}"
+    );
+    let neutralized = forged.replace("::", &format!(":{ZWSP}:"));
+    assert!(
+        text.contains(&neutralized),
+        "neutralized command missing: {neutralized:?} in {text:?}"
+    );
+    // The visible text is unchanged apart from the zero-width break.
+    assert!(
+        text.replace(ZWSP, "").contains(forged),
+        "stripping the break should restore {forged:?} in {text:?}"
+    );
+}
+
+#[test]
+fn streamed_child_forgery_is_neutralized_under_ci() {
+    let source = "run \"sh\" with arguments [\"-c\", \"printf '::stop-commands::x\\n::error::boom\\n'\"]\n";
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert_neutralized(&text, "::stop-commands::x");
+    assert_neutralized(&text, "::error::boom");
+}
+
+#[test]
+fn final_program_output_forgery_is_neutralized_under_ci() {
+    // The second step captures, so its bytes leave through the final-output
+    // write rather than the streamed path. Both share one line-state.
+    let source = concat!(
+        "run \"sh\" with arguments [\"-c\", \"printf 'first\\n'\"]\n",
+        "run \"sh\" with arguments [\"-c\", \"printf '::error::final\\n'\"] as out\n",
+        "use value out\n",
+    );
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert_neutralized(&text, "::error::final");
+    assert!(text.contains("first\n"), "{text:?}");
+}
+
+#[test]
+fn successful_stderr_forgery_is_preserved_sanitized_under_ci() {
+    let source =
+        "run \"sh\" with arguments [\"-c\", \"printf '::error::via-stderr\\n' >&2\"]\n";
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stderr(&output);
+    assert_neutralized(&text, "::error::via-stderr");
+    // The success-path stderr is re-emitted, not swallowed.
+    assert!(!text.is_empty(), "stderr was hidden instead of sanitized");
+}
+
+#[test]
+fn multiline_and_midline_pairs_only_neutralize_line_starts() {
+    let source = "run \"sh\" with arguments [\"-c\", \"printf 'ok\\n::notice::hi\\nmid a::b\\n  ::error::indented\\n'\"]\n";
+    let output = run_source(source, &[], true);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert_neutralized(&text, "::notice::hi");
+    // Mid-line and indented pairs are not workflow commands and stay raw.
+    assert!(text.contains("mid a::b\n"), "{text:?}");
+    assert!(text.contains("  ::error::indented\n"), "{text:?}");
+}
+
+#[test]
+fn registered_secret_emits_an_escaped_mask_line_under_ci() {
+    // `%` must escape as `%25` in the mask line; the program output still
+    // carries the raw value so the runner (not Execute) redacts it.
+    let canary = "MASK-PCT-499-%-END";
+    let source = concat!(
+        "accept token as text from secret prompt \"Token?\"\n",
+        "run \"sh\" with arguments [\"-c\", \"printf '%s\\n' \\\"$TOKEN\\\"\"] and environment {\"TOKEN\": token}\n",
+    );
+    let output = run_source(
+        source,
+        &[ "--input", &format!("token={canary}") ],
+        true,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    let escaped = canary.replace('%', "%25");
+    assert!(
+        text.contains(&format!("::add-mask::{escaped}")),
+        "escaped mask line missing in {text:?}"
+    );
+    // The mask line itself is an intentional workflow command and stays raw.
+    assert!(text.contains("::add-mask::"), "{text:?}");
+}
+
+#[test]
+fn output_stays_raw_without_the_ci_marker() {
+    let source = "run \"sh\" with arguments [\"-c\", \"printf '::error::raw\\n'\"]\n";
+    let output = run_source(source, &[], false);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let text = stdout(&output);
+    assert!(text.contains("::error::raw\n"), "{text:?}");
+    assert!(!text.contains(ZWSP), "non-CI output was rewritten: {text:?}");
+}
+
+#[test]
+fn once_final_output_forgery_is_neutralized_under_ci() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("nightly.program");
+    fs::write(
+        &program,
+        "on schedule \"30 9 * * 1-5\"\n  run \"sh\" with arguments [\"-c\", \"printf '::error::once-final\\n'\"] as out\n  use value out\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["run", "--once"])
+        .arg(&program)
+        .current_dir(directory.path())
+        .env_remove("GITHUB_ACTIONS")
+        .env("GITHUB_ACTIONS", "true")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert_neutralized(&text, "::error::once-final");
+}

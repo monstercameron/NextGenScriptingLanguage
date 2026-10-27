@@ -1970,8 +1970,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         signals,
                                         options.command_timeout,
                                     )?;
+                                // Under Actions hardening this is the last
+                                // Execute-owned output before the child takes
+                                // the terminal, so it shares the stdout
+                                // sanitizer with streamed writes; the flush
+                                // releases a trailing line-leading `:` at true
+                                // end of stream. The handed-over child writes
+                                // raw after `exec`.
+                                let filtered =
+                                    crate::github_actions::filter_stdout_final(&pending);
                                 std::io::stdout()
-                                    .write_all(&pending)
+                                    .write_all(&filtered)
                                     .with_context(|| format!("line {}: hand over", step.line))?;
                                 let code = handoff::hand_over(command)
                                     .with_context(|| format!("line {}: hand over", step.line))?;
@@ -2391,6 +2400,39 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         });
                         if let Some(pending) = merged_redirect {
                             bytes = pending.route(bytes, &redirected_stderr, signals)?;
+                        }
+                        // Under Actions hardening, terminal-bound child stderr was
+                        // force-captured instead of inherited, so it never reached
+                        // the log. Re-emit it sanitized on the success path to
+                        // preserve the visible behavior. Merged output already
+                        // flows through the stdout path and file targets stay raw
+                        // in their files, so only the terminal cases re-emit
+                        // here. Framed harnesses that capture diagnostics keep
+                        // them captured.
+                        if crate::github_actions::enabled() && !signals.capture_diagnostics {
+                            let terminal_stderr = match &redirect {
+                                None => true,
+                                Some(pending) => matches!(
+                                    pending.target,
+                                    crate::ast::RedirectTarget::StdoutToStderr
+                                ),
+                            };
+                            if terminal_stderr {
+                                for stage_stderr in stages
+                                    .iter()
+                                    .filter_map(|stage| stage.stderr.as_deref())
+                                {
+                                    if !stage_stderr.is_empty() {
+                                        write_with_deadline(
+                                            2,
+                                            stage_stderr,
+                                            &signals.cancelled,
+                                            signals.deadline,
+                                        )
+                                        .context("could not write workflow stderr")?;
+                                    }
+                                }
+                            }
                         }
                         if let Some(name) = &call.status_binding {
                             let code = status.context("applet finished without an exit code")?;

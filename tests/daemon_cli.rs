@@ -288,6 +288,8 @@ fn explicit_context_acceptance_forwards_a_run() {
 fn explicit_context_acceptance_preserves_untrusted_mode() {
     let runtime = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
+    let sandbox_cwd = work.path().join("sandbox-cwd");
+    fs::create_dir(&sandbox_cwd).unwrap();
     let _daemon = serve_in_background(runtime.path());
     let manifest_dir = work.path().join("manifests");
     fs::create_dir(&manifest_dir).unwrap();
@@ -295,7 +297,11 @@ fn explicit_context_acceptance_preserves_untrusted_mode() {
         manifest_dir.join("gated.json"),
         serde_json::json!({
             "name": "gated", "binary": "true", "parameters": {}, "arguments": [],
-            "contract": {"version": 1}
+            "contract": {
+                "version": 1,
+                "capabilities": ["process.exec", "filesystem.read"],
+                "effects": ["process.exec", "filesystem.read"]
+            }
         })
         .to_string(),
     )
@@ -303,7 +309,16 @@ fn explicit_context_acceptance_preserves_untrusted_mode() {
     let policy = work.path().join("policy.json");
     fs::write(
         &policy,
-        r#"{"version":1,"applets":{"gated":{"capabilities":["process.exec"]}}}"#,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "applets": {
+                "gated": {
+                    "capabilities": ["process.exec", "filesystem.read"],
+                    "filesystem": {"read": [sandbox_cwd.display().to_string()]}
+                }
+            }
+        }))
+        .unwrap(),
     )
     .unwrap();
     let program = work.path().join("workflow.program");
@@ -314,7 +329,7 @@ fn explicit_context_acceptance_preserves_untrusted_mode() {
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env_remove("EXECUTE_DAEMON")
             .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
-            .current_dir(work.path())
+            .current_dir(&sandbox_cwd)
             .args(["run"])
             .arg(&program)
             .arg("--manifest-dir")
@@ -837,6 +852,8 @@ fn forwarded_runs_do_not_share_capability_policies() {
     let runtime = tempfile::tempdir().unwrap();
     let _daemon = serve_in_background(runtime.path());
     let root = tempfile::tempdir().unwrap();
+    let sandbox_cwd = root.path().join("sandbox-cwd");
+    fs::create_dir(&sandbox_cwd).unwrap();
     let manifests = root.path().join("manifests");
     fs::create_dir(&manifests).unwrap();
     let gated = serde_json::json!({
@@ -844,7 +861,11 @@ fn forwarded_runs_do_not_share_capability_policies() {
         "binary": "true",
         "parameters": {},
         "arguments": [],
-        "contract": {"version": 1}
+        "contract": {
+            "version": 1,
+            "capabilities": ["process.exec", "filesystem.read"],
+            "effects": ["process.exec", "filesystem.read"]
+        }
     });
     fs::write(
         manifests.join("gated.json"),
@@ -854,11 +875,33 @@ fn forwarded_runs_do_not_share_capability_policies() {
     let grant = root.path().join("grant.json");
     fs::write(
         &grant,
-        r#"{"version":1,"applets":{"gated":{"capabilities":["process.exec"]}}}"#,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "applets": {
+                "gated": {
+                    "capabilities": ["process.exec", "filesystem.read"],
+                    "filesystem": {"read": [sandbox_cwd.display().to_string()]}
+                }
+            }
+        }))
+        .unwrap(),
     )
     .unwrap();
     let deny = root.path().join("deny.json");
-    fs::write(&deny, r#"{"version":1,"applets":{}}"#).unwrap();
+    fs::write(
+        &deny,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "applets": {
+                "gated": {
+                    "capabilities": ["filesystem.read"],
+                    "filesystem": {"read": [sandbox_cwd.display().to_string()]}
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let program = root.path().join("workflow.program");
 
     let steps = [
@@ -873,7 +916,7 @@ fn forwarded_runs_do_not_share_capability_policies() {
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env("EXECUTE_DAEMON_ACCEPT_CONTEXT", "1")
             .env_remove("EXECUTE_DAEMON")
-            .current_dir(root.path())
+            .current_dir(&sandbox_cwd)
             .stdin(Stdio::null())
             .arg("run")
             .arg(&program)
@@ -890,7 +933,7 @@ fn forwarded_runs_do_not_share_capability_policies() {
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env_remove("EXECUTE_DAEMON")
             .env_remove("EXECUTE_DAEMON_ACCEPT_CONTEXT")
-            .current_dir(root.path())
+            .current_dir(&sandbox_cwd)
             .stdin(Stdio::null())
             .arg("run")
             .arg(&program)
@@ -913,8 +956,8 @@ fn forwarded_runs_do_not_share_capability_policies() {
         );
         if !allowed {
             assert!(
-                stderr.contains("no allowlist entry"),
-                "step {index}: denial must come from the policy: {stderr}"
+                stderr.contains("does not grant backend requirement \"process.exec\""),
+                "step {index}: denial must come from the missing process.exec policy grant: {stderr}"
             );
         }
     }
@@ -928,6 +971,8 @@ fn setup_heavy_forwarded_run_latency_is_measured() {
     let runtime = tempfile::tempdir().unwrap();
     let _daemon = serve_in_background(runtime.path());
     let root = tempfile::tempdir().unwrap();
+    let sandbox_cwd = root.path().join("sandbox-cwd");
+    fs::create_dir(&sandbox_cwd).unwrap();
     let user = root.path().join("manifests");
     copy_tree(&manifests(), &user);
     let cat = fs::read(manifests().join("cat.json")).unwrap();
@@ -945,7 +990,11 @@ fn setup_heavy_forwarded_run_latency_is_measured() {
     // A capability grant needs a version-1 contract on the applet, and printf runs a process.
     let mut printf: Value =
         serde_json::from_slice(&fs::read(user.join("printf.json")).unwrap()).unwrap();
-    printf["contract"] = serde_json::json!({"version": 1});
+    printf["contract"] = serde_json::json!({
+        "version": 1,
+        "capabilities": ["process.exec", "filesystem.read"],
+        "effects": ["process.exec", "filesystem.read"]
+    });
     fs::write(
         user.join("printf.json"),
         serde_json::to_vec(&printf).unwrap(),
@@ -954,7 +1003,16 @@ fn setup_heavy_forwarded_run_latency_is_measured() {
     let capability = root.path().join("capability.json");
     fs::write(
         &capability,
-        r#"{"version":1,"applets":{"printf":{"capabilities":["process.exec"]}}}"#,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "applets": {
+                "printf": {
+                    "capabilities": ["process.exec", "filesystem.read"],
+                    "filesystem": {"read": [sandbox_cwd.display().to_string()]}
+                }
+            }
+        }))
+        .unwrap(),
     )
     .unwrap();
     let data_flow = root.path().join("data-flow.json");
@@ -979,7 +1037,7 @@ fn setup_heavy_forwarded_run_latency_is_measured() {
                     "0"
                 },
             )
-            .current_dir(root.path())
+            .current_dir(&sandbox_cwd)
             .stdin(Stdio::null())
             .arg("run")
             .arg(&program)

@@ -697,8 +697,9 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
 
     let mut hpc: HPCON = 0;
     // SAFETY: both pipe handles are valid; the size is a real 80x30 grid and
-    // flags are zero. On success the console dups the handles internally, so
-    // the two passed ends are closed below.
+    // flags are zero. The console holds its own references, and the two
+    // passed ends are closed after CreateProcess returns (see below), per the
+    // ConPTY contract.
     let hr = unsafe {
         CreatePseudoConsole(
             COORD { X: 80, Y: 30 },
@@ -709,8 +710,6 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         )
     };
     assert_eq!(hr, 0, "CreatePseudoConsole failed: HRESULT {hr:#X}");
-    drop(in_read);
-    drop(out_write);
 
     let mut attr_size: usize = 0;
     // SAFETY: a null list with a live size out-pointer is the documented size
@@ -729,14 +728,17 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         "ConPTY attribute list init failed: {}",
         std::io::Error::last_os_error()
     );
-    // SAFETY: the list is initialized; hpc is a live console; the value is one
-    // HPCON passed by reference with its exact size.
+    // SAFETY: the list is initialized and hpc is a live console. Per the
+    // ConPTY contract, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE takes the HPCON
+    // value itself (hpc cast to PVOID) with sizeof(HPCON), not the address of
+    // the HPCON variable; passing &hpc yields an invalid console and the
+    // child fails init with 0xC0000142 and an empty screen.
     let attr_updated = unsafe {
         UpdateProcThreadAttribute(
             attr_list,
             0,
             PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
-            &hpc as *const HPCON as *const std::ffi::c_void,
+            hpc as *const std::ffi::c_void,
             std::mem::size_of::<HPCON>(),
             std::ptr::null_mut(),
             std::ptr::null(),
@@ -780,13 +782,17 @@ fn run_under_conpty(exe: &str, args: &[&str], timeout: Duration) -> (Vec<u8>, u3
         )
     };
     // The attribute list and its storage must stay alive through the launch;
-    // both are released once the child exists.
+    // both are released once the child exists. The pipe ends handed to
+    // CreatePseudoConsole stay alive through CreateProcess and are released
+    // here, once the child is connected.
     // SAFETY: the attribute list was initialized above and is deleted exactly
     // once here on every path past initialization.
     unsafe {
         DeleteProcThreadAttributeList(attr_list);
     }
     drop(attr_storage);
+    drop(in_read);
+    drop(out_write);
     drop(in_write);
     if created == FALSE {
         let error = std::io::Error::last_os_error();

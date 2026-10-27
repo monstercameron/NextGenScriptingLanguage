@@ -41,14 +41,22 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn explained_argv(args: &[&str]) -> String {
+    // Text `explain` renders argument vectors with Rust's Debug formatting.
+    format!("argv={args:?}")
+}
+
 #[test]
 fn socket_address_renders_the_unix_connect_family_only() {
     let output =
         explain("run hypr.socket2 with socket_path \"/run/user/1000/hypr/sig/.socket2.sock\"\n");
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
-        stdout(&output)
-            .contains(r#"argv=["-U","-","UNIX-CONNECT:/run/user/1000/hypr/sig/.socket2.sock"]"#),
+        stdout(&output).contains(&explained_argv(&[
+            "-U",
+            "-",
+            "UNIX-CONNECT:/run/user/1000/hypr/sig/.socket2.sock",
+        ])),
         "{}",
         stdout(&output)
     );
@@ -113,14 +121,14 @@ fn generic_dispatch_refuses_exec_and_execr_in_any_case() {
     }
     let ordinary = explain("run hypr.dispatch with arguments [\"workspace\", \"2\"]\n");
     assert!(ordinary.status.success(), "{}", stderr(&ordinary));
-    assert!(stdout(&ordinary).contains(r#"argv=["dispatch","workspace","2"]"#));
+    assert!(stdout(&ordinary).contains(&explained_argv(&["dispatch", "workspace", "2"])));
 }
 
 #[test]
 fn exec_dispatch_manifest_accepts_only_process_dispatchers_and_declares_spawn() {
     let accepted = explain("run hypr.dispatch_exec with arguments [\"EXEC\", \"kitty\"]\n");
     assert!(accepted.status.success(), "{}", stderr(&accepted));
-    assert!(stdout(&accepted).contains(r#"argv=["dispatch","EXEC","kitty"]"#));
+    assert!(stdout(&accepted).contains(&explained_argv(&["dispatch", "EXEC", "kitty"])));
 
     let refused = explain("run hypr.dispatch_exec with arguments [\"workspace\", \"2\"]\n");
     assert!(!refused.status.success());
@@ -179,9 +187,8 @@ fn plain_numbers_remain_usable_after_the_option_rule() {
         let output = explain(&source);
         assert!(output.status.success(), "{amount}: {}", stderr(&output));
         assert!(
-            stdout(&output).contains(&format!(
-                r#"argv=["dispatch","resizeactive","{amount}","0"]"#
-            )),
+            stdout(&output)
+                .contains(&explained_argv(&["dispatch", "resizeactive", amount, "0"])),
             "{amount}: {}",
             stdout(&output)
         );

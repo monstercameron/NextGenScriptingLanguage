@@ -75,7 +75,7 @@ impl CancellationWake {
     /// the pipe, while signals are rare.
     #[cfg(unix)]
     pub(crate) fn notify_signal(&self) {
-        self.notified.store(true, Ordering::AcqRel);
+        self.notified.store(true, Ordering::Release);
         let byte = [1u8];
         // SAFETY: `writer_fd` refers to the nonblocking socket owned by `self`,
         // and the one-byte write uses a live buffer. `write` is async-signal-safe.

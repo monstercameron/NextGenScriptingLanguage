@@ -1029,130 +1029,1235 @@ fn completion(
     };
     let (line_start, _) = line_bounds(&document.text, position.line).unwrap_or((0, 0));
     let prefix = document.text.get(line_start..offset).unwrap_or("");
-    let words = lexical_words(prefix);
+    // A cursor inside a trailing comment completes nothing.
+    if crate::parser::strip_comment(prefix).len() != prefix.len() {
+        return json!({ "isIncomplete": false, "items": [] });
+    }
     let trimmed = prefix.trim_start();
-    let parameter_context = trimmed.contains(" with ") || trimmed.contains(" and ");
-    let command_context = trimmed.starts_with("run ")
-        || trimmed.starts_with("then ")
-        || trimmed.starts_with("pipe to ");
+    // Word tokens of the line prefix; quoted spans stay intact so values with
+    // spaces compare as one token.
+    let tokens = completion_words(prefix);
+    let ends_with_space = prefix.chars().last().is_some_and(char::is_whitespace);
 
     let mut items = Vec::<JsonValue>::new();
-    if parameter_context {
-        let operation = operation_prefix(trimmed);
-        let manifests = operation
-            .and_then(|name| registry.resolve(name).ok())
-            .into_iter()
-            .collect::<Vec<_>>();
-        for manifest in manifests {
-            let contract = manifest.contract();
-            let properties = contract
-                .pointer("/parameters_schema/properties")
-                .and_then(JsonValue::as_object);
-            let required = contract
-                .pointer("/parameters_schema/required")
-                .and_then(JsonValue::as_array);
-            if let Some(properties) = properties {
-                for (name, schema) in properties {
-                    let is_required = required.is_some_and(|values| {
-                        values.iter().any(|value| value.as_str() == Some(name))
-                    });
-                    let detail = schema
-                        .get("type")
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or("value");
-                    items.push(json!({
-                        "label": name,
-                        "kind": 5,
-                        "detail": format!("{} parameter{}", if is_required { "required" } else { "optional" }, format!(" · {detail}")),
-                        "documentation": { "kind": "markdown", "value": format!("Applet `{}` parameter schema:\n\n```json\n{}\n```", manifest.name, serde_json::to_string_pretty(schema).unwrap_or_default()) },
-                        "insertText": name
-                    }));
-                }
-            }
-        }
-    } else if command_context {
-        for manifest in manifests {
-            let description = manifest
-                .description
-                .as_deref()
-                .unwrap_or("Declared Execute applet");
-            items.push(json!({
-                "label": manifest.name,
-                "kind": 3,
-                "detail": description,
-                "insertText": manifest.name,
-                "filterText": format!("{} {} {}", manifest.name, manifest.contract()["phrases"].as_array().into_iter().flatten().filter_map(JsonValue::as_str).collect::<Vec<_>>().join(" "), description)
-            }));
-        }
-        if let Ok(program) = crate::parser::parse(&document.text) {
-            for name in program.definitions.keys() {
-                items.push(json!({ "label": name, "kind": 3, "detail": "Reusable program in this file", "insertText": name }));
-            }
-        }
-    } else {
-        for keyword in [
-            "accept",
-            "define a program named",
-            "run",
-            "then",
-            "pipe to",
-            "read from stdin",
-            "then parse json as",
-            "take",
-            "if",
-            "otherwise",
-            "repeat",
-            "for each",
-            "while",
-            "parallel",
-            "race",
-            "spawn as",
-            "inspect",
-            "await",
-            "cancel",
-            "listen to",
-            "every",
-            "on schedule",
-        ] {
-            items.push(json!({ "label": keyword, "kind": 14, "detail": "Execute language form", "insertText": keyword }));
-        }
-    }
+    complete_at_cursor(
+        &mut items,
+        trimmed,
+        &tokens,
+        ends_with_space,
+        &document.text,
+        position.line,
+        registry,
+        manifests,
+    );
 
-    let prefix_word = if prefix.chars().last().is_some_and(char::is_whitespace) {
+    let prefix_word = if ends_with_space {
         ""
     } else {
-        words
-            .last()
-            .map(|word| &prefix[word.text_start..word.text_end])
-            .unwrap_or("")
+        completion_word_text(&tokens).unwrap_or("")
     };
     if !prefix_word.is_empty() {
+        let needle = prefix_word.to_ascii_lowercase();
         items.retain(|item| {
             item.get("filterText")
                 .or_else(|| item.get("label"))
                 .and_then(JsonValue::as_str)
-                .is_some_and(|label| {
-                    label
-                        .to_ascii_lowercase()
-                        .contains(&prefix_word.to_ascii_lowercase())
-                })
+                .is_some_and(|label| label.to_ascii_lowercase().contains(&needle))
         });
     }
     json!({ "isIncomplete": false, "items": items })
 }
 
-fn operation_prefix(line_prefix: &str) -> Option<&str> {
-    let command_start = line_prefix
-        .strip_prefix("pipe to ")
-        .or_else(|| line_prefix.strip_prefix("run "))
-        .or_else(|| line_prefix.strip_prefix("then "))?;
-    let operation = command_start
-        .split(" with ")
-        .next()?
-        .split(" and ")
-        .next()?
-        .trim();
-    (!operation.is_empty()).then_some(operation)
+/// One word of a completion line prefix. `quoted` marks a `"..."` span so
+/// keyword matching skips string literals.
+struct CompletionWord {
+    text: String,
+    quoted: bool,
+}
+
+/// Split a line prefix into words, keeping `"..."` spans (with `\` escapes)
+/// and `[`/`]`/`,` punctuation as separate tokens.
+fn completion_words(prefix: &str) -> Vec<CompletionWord> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quoted: Option<char> = None;
+    let mut escaped = false;
+    let mut in_word = false;
+    let mut flush = |current: &mut String,
+                     words: &mut Vec<CompletionWord>,
+                     in_word: &mut bool,
+                     quoted_word: bool| {
+        if *in_word || quoted_word {
+            words.push(CompletionWord {
+                text: std::mem::take(current),
+                quoted: quoted_word,
+            });
+            *in_word = false;
+        }
+    };
+    for ch in prefix.chars() {
+        if let Some(quote) = quoted {
+            current.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                quoted = None;
+                flush(&mut current, &mut words, &mut in_word, true);
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                if in_word {
+                    flush(&mut current, &mut words, &mut in_word, false);
+                }
+                quoted = Some('"');
+                current.push(ch);
+            }
+            ' ' | '\t' | '\r' => {
+                flush(&mut current, &mut words, &mut in_word, false);
+            }
+            '[' | ']' | ',' => {
+                flush(&mut current, &mut words, &mut in_word, false);
+                words.push(CompletionWord {
+                    text: ch.to_string(),
+                    quoted: false,
+                });
+            }
+            _ => {
+                current.push(ch);
+                in_word = true;
+            }
+        }
+    }
+    if quoted.is_some() {
+        // An unterminated string still completes its inner text.
+        words.push(CompletionWord {
+            text: current,
+            quoted: true,
+        });
+    } else {
+        flush(&mut current, &mut words, &mut in_word, false);
+    }
+    words
+}
+
+/// Text of the trailing partial word, without its opening quote when the
+/// cursor is inside a string literal.
+fn completion_word_text(words: &[CompletionWord]) -> Option<&str> {
+    let word = words.last()?;
+    if word.quoted {
+        Some(word.text.strip_prefix('"').unwrap_or(&word.text))
+    } else {
+        Some(&word.text)
+    }
+}
+
+/// Unquoted word texts of a line prefix, for keyword matching.
+fn bare_words(tokens: &[CompletionWord]) -> Vec<&str> {
+    tokens
+        .iter()
+        .filter(|word| !word.quoted)
+        .map(|word| word.text.as_str())
+        .collect()
+}
+
+/// Dispatch completion by cursor context: statement start, invocation target,
+/// parameter name, parameter value, condition operand/operator, or a binding
+/// definition (which completes nothing).
+#[allow(clippy::too_many_arguments)]
+fn complete_at_cursor(
+    items: &mut Vec<JsonValue>,
+    trimmed: &str,
+    tokens: &[CompletionWord],
+    ends_with_space: bool,
+    source: &str,
+    line: usize,
+    registry: &Registry,
+    manifests: &[&crate::manifest::Manifest],
+) {
+    let words = bare_words(tokens);
+    if words.is_empty() {
+        push_statement_forms(items);
+        return;
+    }
+    // Declaration options after `accept name as <type> ...`.
+    if words[0] == "accept" {
+        complete_accept_line(items, &words, ends_with_space);
+        return;
+    }
+    // Value types after `take ...`.
+    if words[0] == "take" && !trimmed.contains(" at ") {
+        push_take_types(items);
+        return;
+    }
+    // Conditions: `if`, `otherwise if`, `while`.
+    if words[0] == "if" || words[0] == "while" || trimmed.starts_with("otherwise if ") {
+        complete_condition(items, source, line, tokens, &words, ends_with_space, manifests);
+        return;
+    }
+    if trimmed.starts_with("otherwise") || words[0] == "else" {
+        push_statement_forms(items);
+        return;
+    }
+    // Iteration and repetition tails.
+    if words[0] == "repeat" && words.len() == 2 && ends_with_space {
+        push_keyword(items, "times", "Repeat count unit");
+        return;
+    }
+    if words[0] == "for" && words.get(1).is_some_and(|word| *word == "each") {
+        complete_for_each(items, source, line, &words, ends_with_space);
+        return;
+    }
+    // Single-value statements.
+    if matches!(words[0], "use") {
+        complete_use(items, source, line, &words, ends_with_space);
+        return;
+    }
+    if matches!(words[0], "read") {
+        complete_read(items, source, line, &words, ends_with_space);
+        return;
+    }
+    if matches!(words[0], "exit" | "fail" | "return") {
+        complete_value_statement(items, source, line, &words, ends_with_space);
+        return;
+    }
+    if matches!(words[0], "await" | "inspect" | "cancel") {
+        complete_job_reference(items, source, line, &words, ends_with_space);
+        return;
+    }
+    // Listener sources name applets without a `run` prefix.
+    if words == ["listen", "to"] || (words.len() == 3 && words[0] == "listen" && words[1] == "to") {
+        push_applet_names(items, manifests);
+        if let Ok(program) = crate::parser::parse(source) {
+            push_program_names(items, &program);
+        }
+        return;
+    }
+    // Invocations and their suffixes.
+    if is_invocation_head(&words) {
+        complete_invocation(
+            items,
+            source,
+            line,
+            tokens,
+            &words,
+            ends_with_space,
+            registry,
+            manifests,
+        );
+        return;
+    }
+    // Bare applet phrases (`count lines with ...`) carry no connection head.
+    if trimmed.contains(" with ") || trimmed.contains(" and ") || trimmed.contains(" as ") {
+        complete_invocation(
+            items,
+            source,
+            line,
+            tokens,
+            &words,
+            ends_with_space,
+            registry,
+            manifests,
+        );
+        return;
+    }
+    // Anything else (clause heads, triggers, unknown prefixes) falls back to
+    // statement forms so people discover the grammar from anywhere.
+    push_statement_forms(items);
+}
+
+/// Whether the line starts an invocation (`run`/`then`/`pipe to`, including
+/// handover and detached-launch variants that wrap one native command).
+fn is_invocation_head(words: &[&str]) -> bool {
+    matches!(words.first(), Some(first) if matches!(*first, "run" | "then" | "interactively"))
+        || (words.len() >= 2 && words[0] == "pipe" && words[1] == "to")
+        || (words.len() >= 3 && words[0] == "hand" && words[1] == "over" && words[2] == "to")
+        || (words.len() >= 2 && words[0] == "launch" && words[1] == "detached")
+}
+
+/// Complete `accept` declaration lines: types after `as`, declaration options
+/// after a complete type, nothing inside choice lists.
+fn complete_accept_line(items: &mut Vec<JsonValue>, words: &[&str], ends_with_space: bool) {
+    let Some(as_index) = words.iter().position(|word| *word == "as") else {
+        return;
+    };
+    let after = &words[as_index + 1..];
+    // Still typing the type, or the cursor sits right after `as `.
+    if after.is_empty() || (after.len() == 1 && !ends_with_space) {
+        for form in ["text", "integer", "boolean", "json", "list of text", "list of integer", "list of json"] {
+            push_keyword(items, form, "Input value type");
+        }
+        return;
+    }
+    if !ends_with_space {
+        return;
+    }
+    // A complete type precedes option keywords.
+    push_keyword(items, "one of", "Allowed text values");
+    push_keyword(items, "from", "Input source");
+    push_keyword(items, "with default", "Default value");
+    push_keyword(items, "described as", "Human-readable description");
+}
+
+/// Push the `take` value types from the parser's own table.
+fn push_take_types(items: &mut Vec<JsonValue>) {
+    for form in crate::parser::take_type_forms() {
+        push_keyword(items, form, "Take value type");
+    }
+}
+
+/// Complete a value condition: operators after the left operand, values
+/// (with `one of` choices when the left side names such an input) after the
+/// operator, and values for a bare left operand.
+fn complete_condition(
+    items: &mut Vec<JsonValue>,
+    source: &str,
+    line: usize,
+    tokens: &[CompletionWord],
+    words: &[&str],
+    ends_with_space: bool,
+    manifests: &[&crate::manifest::Manifest],
+) {
+    let head_len = if words[0] == "otherwise" { 2 } else { 1 };
+    let rest = if words.len() > head_len {
+        &words[head_len..]
+    } else {
+        &[][..]
+    };
+    // A trailing quoted span is a value being typed (quoted spans never reach
+    // `words`), so complete values filtered by its inner text.
+    let quoted_value = !ends_with_space && tokens.last().is_some_and(|token| token.quoted);
+    // `if run ...` is a command condition: complete the applet name.
+    if rest.first() == Some(&"run") {
+        if rest.len() <= 2 && !ends_with_space || rest.len() == 1 {
+            push_applet_names(items, manifests);
+        }
+        if rest.len() >= 2 {
+            push_keyword(items, "succeeds", "Branch when the command succeeds");
+            push_keyword(items, "fails", "Branch when the command fails");
+        }
+        return;
+    }
+    let operator_at = rest.iter().position(|word| {
+        matches!(*word, "is" | "contains" | "does" | "succeeds" | "fails")
+    });
+    match operator_at {
+        None => {
+            if rest.is_empty() || (rest.len() == 1 && !ends_with_space) {
+                push_value_items(items, source, line, None, None);
+            } else if ends_with_space {
+                for operator in crate::parser::condition_operator_forms() {
+                    // `succeeds`/`fails` only follow `run`; value conditions
+                    // use the comparison operators.
+                    if matches!(*operator, "succeeds" | "fails") {
+                        continue;
+                    }
+                    push_keyword(items, operator, "Condition operator");
+                }
+            }
+        }
+        Some(index) => {
+            let operator = rest[index];
+            let after = &rest[index + 1..];
+            // A trailing space (or a quoted value being typed) completes the
+            // operator: `if mode is ` already expects the right operand.
+            let complete = matches!(operator, "succeeds" | "fails")
+                || ((operator == "is" || operator == "contains")
+                    && (ends_with_space || quoted_value || !after.is_empty()))
+                || (operator == "does" && after.first() == Some(&"not"));
+            if !complete {
+                // `if mode does ` still needs `not` for `does not contain`.
+                if operator == "does" && after.is_empty() && ends_with_space {
+                    push_keyword(items, "not", "Negate the contains operator");
+                }
+                return;
+            }
+            // The left operand may name an input with `one of` choices.
+            let left = rest.first().copied();
+            push_value_items(items, source, line, left, None);
+        }
+    }
+}
+
+/// Complete `for each <name> in <list>`: values after `in`.
+fn complete_for_each(
+    items: &mut Vec<JsonValue>,
+    source: &str,
+    line: usize,
+    words: &[&str],
+    ends_with_space: bool,
+) {
+    let Some(in_at) = words.iter().position(|word| *word == "in") else {
+        return;
+    };
+    if words.get(in_at + 1).is_none() && (ends_with_space || words.len() == in_at + 1) {
+        push_value_items(items, source, line, None, None);
+    }
+}
+
+/// Complete `use ...` statements.
+fn complete_use(
+    items: &mut Vec<JsonValue>,
+    source: &str,
+    line: usize,
+    words: &[&str],
+    ends_with_space: bool,
+) {
+    match words.get(1).copied() {
+        None | Some("") => {
+            for form in ["use value", "use bytes", "use folder", "use environment", "use without environment"] {
+                push_keyword(items, form, "Pipeline input or directory form");
+            }
+        }
+        Some(form @ ("value" | "folder")) => {
+            let rest = &words[2..];
+            if rest.is_empty() || (rest.len() == 1 && !ends_with_space) {
+                push_value_items(items, source, line, None, None);
+            } else if ends_with_space && form == "value" && !rest.contains(&"as") {
+                push_keyword(items, "as", "Bind the value to a name");
+            }
+        }
+        Some("bytes") => {
+            if words.len() == 2 || (words.len() == 3 && !ends_with_space) {
+                push_value_items(items, source, line, None, None);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Complete `read ...` statements: file values, then nothing after `as`
+/// (a new binding is being named).
+fn complete_read(
+    items: &mut Vec<JsonValue>,
+    source: &str,
+    line: usize,
+    words: &[&str],
+    ends_with_space: bool,
+) {
+    if words.contains(&"as") {
+        return;
+    }
+    if ends_with_space {
+        if words == ["read"] {
+            push_keyword(items, "file", "Read a file path");
+            push_keyword(items, "from stdin", "Read standard input");
+        } else if words == ["read", "from", "stdin"] {
+            push_keyword(items, "as", "Bind the input to a name");
+            return;
+        }
+        push_value_items(items, source, line, None, None);
+        push_keyword(items, "as", "Bind the input to a name");
+        return;
+    }
+    // A partial word: a path value, or one of the `read` keywords.
+    push_value_items(items, source, line, None, None);
+    push_keyword(items, "file", "Read a file path");
+    push_keyword(items, "from stdin", "Read standard input");
+    push_keyword(items, "as", "Bind the input to a name");
+}
+
+/// Complete single-value statements (`exit with status`, `fail with message`,
+/// `return`): values, nothing once the value names a binding with `as`.
+fn complete_value_statement(
+    items: &mut Vec<JsonValue>,
+    source: &str,
+    line: usize,
+    words: &[&str],
+    ends_with_space: bool,
+) {
+    if words.contains(&"as") {
+        return;
+    }
+    push_value_items(items, source, line, None, None);
+    if ends_with_space && words.len() > 2 {
+        push_keyword(items, "and status", "Fail status after a message");
+    }
+}
+
+/// Complete job references (`await`, `inspect`, `cancel`) with spawned jobs.
+fn complete_job_reference(
+    items: &mut Vec<JsonValue>,
+    source: &str,
+    line: usize,
+    words: &[&str],
+    ends_with_space: bool,
+) {
+    if words.len() == 1 && !ends_with_space {
+        push_statement_forms(items);
+        return;
+    }
+    if words.len() == 1 || (words.len() == 2 && !ends_with_space) {
+        for job in collect_jobs(source, line) {
+            items.push(json!({
+                "label": job.name,
+                "kind": 6,
+                "detail": format!("Background job · line {}", job.line),
+                "insertText": job.name
+            }));
+        }
+        return;
+    }
+    // `await <job> ...` takes `and keep status/result as` suffixes.
+    if words[0] == "await" && ends_with_space {
+        push_keyword(items, "and keep status as", "Bind the job exit status");
+        push_keyword(items, "and keep result as", "Bind the job result");
+        return;
+    }
+    // `inspect <job> ...` binds its snapshot with `as`.
+    if words[0] == "inspect" && ends_with_space && words.len() == 2 {
+        push_keyword(items, "as", "Bind the snapshot to a name");
+    }
+}
+
+/// Complete an invocation line: applet names after `run`/`then`/`pipe to`,
+/// parameter names after `with`/`and`, values after a parameter name, and
+/// suffixes after a complete invocation.
+#[allow(clippy::too_many_arguments)]
+fn complete_invocation(
+    items: &mut Vec<JsonValue>,
+    source: &str,
+    line: usize,
+    tokens: &[CompletionWord],
+    words: &[&str],
+    ends_with_space: bool,
+    registry: &Registry,
+    manifests: &[&crate::manifest::Manifest],
+) {
+    // Skip the connection head: `run`, `then`, `pipe to`, `hand over to`,
+    // `launch detached`, or a bare applet phrase.
+    let mut head_len = 0;
+    if words.first() == Some(&"pipe") && words.get(1) == Some(&"to") {
+        head_len = 2;
+    } else if words.first() == Some(&"hand")
+        && words.get(1) == Some(&"over")
+        && words.get(2) == Some(&"to")
+    {
+        head_len = 3;
+    } else if words.first() == Some(&"launch") && words.get(1) == Some(&"detached") {
+        head_len = 2;
+    } else if matches!(words.first(), Some(first) if matches!(*first, "run" | "then" | "interactively")) {
+        head_len = 1;
+    }
+    // A quoted token right after the head is a direct executable, which takes
+    // `arguments` rather than manifest parameter names.
+    let mut token_cursor = 0;
+    for _ in 0..head_len {
+        while token_cursor < tokens.len() && tokens[token_cursor].quoted {
+            token_cursor += 1;
+        }
+        token_cursor += 1;
+    }
+    let direct = token_cursor < tokens.len() && tokens[token_cursor].quoted;
+    // The operation runs to the first `with`, `as`, or `and`. Quoted direct
+    // executables are absent from `words`, so the scan stays in bare-word
+    // space and `direct` only changes how names and schemas resolve.
+    let mut cursor = head_len;
+    while cursor < words.len() && !matches!(words[cursor], "with" | "as" | "and") {
+        cursor += 1;
+    }
+    if cursor >= words.len() || cursor == head_len {
+        // Still typing the operation name.
+        push_applet_names(items, manifests);
+        if let Ok(program) = crate::parser::parse(source) {
+            push_program_names(items, &program);
+        }
+        push_path_executables(items);
+        return;
+    }
+    let rest = &words[cursor..];
+    // `as <name>` defines a new binding: a complete one may still take suffixes.
+    if rest.contains(&"as") {
+        if ends_with_space && rest.len() >= 2 {
+            push_suffix_forms(items);
+        }
+        return;
+    }
+    // Find the trailing `with`/`and` segment.
+    let last_keyword = rest
+        .iter()
+        .rposition(|word| matches!(*word, "with" | "and"));
+    let Some(keyword_at) = last_keyword else {
+        // Complete invocation with no dangling keyword: suffixes.
+        if ends_with_space {
+            push_suffix_forms(items);
+        }
+        return;
+    };
+    let keyword = rest[keyword_at];
+    let tail = &rest[keyword_at + 1..];
+    // Suffix phrases after `and ...` complete from the suffix table.
+    if keyword == "and"
+        && tail.first().is_some_and(|head| {
+            matches!(
+                *head,
+                "keep" | "retry" | "cache" | "discard" | "stdin" | "stderr" | "stdout"
+                    | "environment" | "without" | "output"
+            )
+        })
+    {
+        if ends_with_space || tail.len() <= 3 {
+            push_suffix_forms(items);
+        }
+        return;
+    }
+    // What the operation resolves to: a manifest applet, a reusable program,
+    // or a direct executable.
+    let operation = words[head_len..cursor].join(" ");
+    if keyword == "and" && tail.is_empty() {
+        // `... and ` may start another parameter or a suffix.
+        push_parameter_names(items, source, registry, &operation, direct);
+        push_suffix_forms(items);
+        return;
+    }
+    if tail.is_empty() {
+        // `with ` starts a parameter name.
+        push_parameter_names(items, source, registry, &operation, direct);
+        return;
+    }
+    // A quoted span never reaches `words`, so a trailing quote means a value
+    // is being typed rather than a parameter name.
+    let quoted_value = !ends_with_space && tokens.last().is_some_and(|token| token.quoted);
+    if tail.len() == 1 && !ends_with_space && !quoted_value {
+        // A partial parameter name.
+        push_parameter_names(items, source, registry, &operation, direct);
+        return;
+    }
+    if tail.len() == 1 {
+        // `with <name> ` or `and <name> `: a parameter value. Value positions
+        // complete bindings and inputs, never parameter names.
+        let schema = parameter_value_schema(source, registry, &operation, tail[0], direct);
+        push_value_items(items, source, line, None, schema);
+        return;
+    }
+    // A complete `with <name> <value>` pair: suffixes may follow.
+    if ends_with_space {
+        push_suffix_forms(items);
+    }
+}
+
+/// Push one keyword-style item (CompletionItemKind 14).
+fn push_keyword(items: &mut Vec<JsonValue>, label: &str, detail: &str) {
+    items.push(json!({
+        "label": label,
+        "kind": 14,
+        "detail": detail,
+        "insertText": label,
+        "insertTextFormat": 1
+    }));
+}
+
+/// Push the parser-generated statement-start forms. Forms with snippets use
+/// LSP `insertTextFormat: 2` so editors expand tab stops.
+fn push_statement_forms(items: &mut Vec<JsonValue>) {
+    for form in crate::parser::statement_completion_forms() {
+        match form.snippet {
+            Some(snippet) => items.push(json!({
+                "label": form.label,
+                "kind": 15,
+                "detail": form.detail,
+                "insertText": snippet,
+                "insertTextFormat": 2,
+                "filterText": form.label
+            })),
+            None => items.push(json!({
+                "label": form.label,
+                "kind": 14,
+                "detail": form.detail,
+                "insertText": form.label,
+                "insertTextFormat": 1
+            })),
+        }
+    }
+}
+
+/// Push the parser-generated invocation suffix forms.
+fn push_suffix_forms(items: &mut Vec<JsonValue>) {
+    for form in crate::parser::invocation_suffix_forms() {
+        match form.snippet {
+            Some(snippet) => items.push(json!({
+                "label": form.label,
+                "kind": 15,
+                "detail": form.detail,
+                "insertText": snippet,
+                "insertTextFormat": 2,
+                "filterText": form.label
+            })),
+            None => items.push(json!({
+                "label": form.label,
+                "kind": 14,
+                "detail": form.detail,
+                "insertText": form.label,
+                "insertTextFormat": 1
+            })),
+        }
+    }
+}
+
+/// Push applet names plus one snippet per applet with required parameters.
+fn push_applet_names(items: &mut Vec<JsonValue>, manifests: &[&crate::manifest::Manifest]) {
+    for manifest in manifests {
+        let description = manifest
+            .description
+            .as_deref()
+            .unwrap_or("Declared Execute applet");
+        items.push(json!({
+            "label": manifest.name,
+            "kind": 3,
+            "detail": description,
+            "insertText": manifest.name,
+            "insertTextFormat": 1,
+            "filterText": format!("{} {} {}", manifest.name, manifest.contract()["phrases"].as_array().into_iter().flatten().filter_map(JsonValue::as_str).collect::<Vec<_>>().join(" "), description)
+        }));
+        let contract = manifest.contract();
+        let required: Vec<&str> = contract
+            .pointer("/parameters_schema/required")
+            .and_then(JsonValue::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if required.is_empty() {
+            continue;
+        }
+        let mut snippet = manifest.name.clone();
+        for (index, parameter) in required.iter().enumerate() {
+            snippet.push_str(if index == 0 { " with " } else { " and " });
+            snippet.push_str(parameter);
+            snippet.push_str(&format!(" ${{{}:{}}}", index + 1, parameter));
+        }
+        items.push(json!({
+            "label": format!("{} with {}", manifest.name, required.join(" and ")),
+            "kind": 15,
+            "detail": "Snippet: call with required parameters",
+            "insertText": snippet,
+            "insertTextFormat": 2,
+            "filterText": format!("{} {}", manifest.name, required.join(" "))
+        }));
+    }
+}
+
+/// Push same-file reusable programs as invocation targets.
+fn push_program_names(items: &mut Vec<JsonValue>, program: &crate::ast::Program) {
+    for name in program.definitions.keys() {
+        items.push(json!({
+            "label": name,
+            "kind": 3,
+            "detail": "Reusable program in this file",
+            "insertText": name,
+            "insertTextFormat": 1
+        }));
+    }
+}
+
+/// Opt-in quoted executables from `PATH` for direct calls. Bounded, sorted
+/// and off by default (`EXECUTE_LSP_PATH_COMPLETION=1` enables it) so PATH
+/// scans never surprise clients; entries are names only, never executed.
+fn push_path_executables(items: &mut Vec<JsonValue>) {
+    if std::env::var("EXECUTE_LSP_PATH_COMPLETION").as_deref() != Ok("1") {
+        return;
+    }
+    const MAX_PATH_COMPLETIONS: usize = 64;
+    let Some(paths) = std::env::var_os("PATH") else {
+        return;
+    };
+    let mut names = BTreeSet::new();
+    for dir in std::env::split_paths(&paths) {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if name.is_empty() {
+                continue;
+            }
+            names.insert(name);
+            if names.len() >= MAX_PATH_COMPLETIONS {
+                break;
+            }
+        }
+        if names.len() >= MAX_PATH_COMPLETIONS {
+            break;
+        }
+    }
+    for name in names {
+        items.push(json!({
+            "label": name,
+            "kind": 12,
+            "detail": "Executable on PATH",
+            "insertText": name,
+            "insertTextFormat": 1,
+            "filterText": format!("\"{name}")
+        }));
+    }
+}
+
+/// Push parameter names for an operation: manifest parameters, reusable
+/// program inputs, or `arguments` for direct quoted executables.
+fn push_parameter_names(
+    items: &mut Vec<JsonValue>,
+    source: &str,
+    registry: &Registry,
+    operation: &str,
+    direct: bool,
+) {
+    if direct {
+        items.push(json!({
+            "label": "arguments",
+            "kind": 5,
+            "detail": "required parameter · list",
+            "insertText": "arguments",
+            "insertTextFormat": 1
+        }));
+        return;
+    }
+    if let Some(program_name) = operation.strip_prefix("program ") {
+        if let Ok(program) = crate::parser::parse(source) {
+            if let Some(definition) = program.definitions.get(program_name) {
+                for input in &definition.inputs {
+                    items.push(json!({
+                        "label": input.name,
+                        "kind": 5,
+                        "detail": format!("program input · {}", input_type_label(&input.kind)),
+                        "insertText": input.name,
+                        "insertTextFormat": 1
+                    }));
+                }
+            }
+        }
+        return;
+    }
+    let Ok(manifest) = registry.resolve(operation) else {
+        return;
+    };
+    let contract = manifest.contract();
+    let required: Vec<&str> = contract
+        .pointer("/parameters_schema/required")
+        .and_then(JsonValue::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let Some(properties) = contract
+        .pointer("/parameters_schema/properties")
+        .and_then(JsonValue::as_object)
+    else {
+        return;
+    };
+    for (name, schema) in properties {
+        let is_required = required.iter().any(|value| *value == name);
+        let detail = schema
+            .get("type")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("value");
+        items.push(json!({
+            "label": name,
+            "kind": 5,
+            "detail": format!("{} parameter · {}", if is_required { "required" } else { "optional" }, detail),
+            "documentation": { "kind": "markdown", "value": format!("Applet `{}` parameter schema:\n\n```json\n{}\n```", manifest.name, serde_json::to_string_pretty(schema).unwrap_or_default()) },
+            "insertText": name,
+            "insertTextFormat": 1
+        }));
+    }
+}
+
+/// Resolve the value schema for a parameter in value position: manifest
+/// parameter schemas (including `enum`), reusable program input choices, or
+/// nothing when the type is unknown.
+fn parameter_value_schema(
+    source: &str,
+    registry: &Registry,
+    operation: &str,
+    parameter: &str,
+    direct: bool,
+) -> Option<JsonValue> {
+    if direct {
+        return None;
+    }
+    if let Some(program_name) = operation.strip_prefix("program ") {
+        let program = crate::parser::parse(source).ok()?;
+        let definition = program.definitions.get(program_name)?;
+        let input = definition.inputs.iter().find(|input| input.name == parameter)?;
+        let choices = input.choices.clone().unwrap_or_default();
+        if choices.is_empty() {
+            return None;
+        }
+        return Some(json!({ "enum": choices }));
+    }
+    let manifest = registry.resolve(operation).ok()?;
+    manifest
+        .contract()
+        .pointer(&format!(
+            "/parameters_schema/properties/{}",
+            escape_json_pointer(parameter)
+        ))
+        .cloned()
+}
+
+/// Escape one reference token for a JSON pointer lookup.
+fn escape_json_pointer(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
+}
+
+/// Push value-position completions: manifest `enum` values, `one of` choices
+/// for the left-hand input, bindings in scope, declared inputs, then the
+/// `true`/`false` literals.
+fn push_value_items(
+    items: &mut Vec<JsonValue>,
+    source: &str,
+    line: usize,
+    left: Option<&str>,
+    schema: Option<JsonValue>,
+) {
+    if let Some(values) = schema
+        .as_ref()
+        .and_then(|schema| schema.get("enum"))
+        .and_then(JsonValue::as_array)
+    {
+        for value in values.iter().filter_map(JsonValue::as_str) {
+            let quoted = format!("\"{value}\"");
+            items.push(json!({
+                "label": quoted,
+                "kind": 12,
+                "detail": "Allowed value",
+                "insertText": quoted,
+                "insertTextFormat": 1
+            }));
+        }
+    }
+    if let Some(name) = left {
+        for input in collect_inputs(source) {
+            if input.name == name {
+                // Choice literals reuse their exact quoted spans.
+                for choice in &input.choices {
+                    items.push(json!({
+                        "label": choice,
+                        "kind": 12,
+                        "detail": format!("Choice of input {name}"),
+                        "insertText": choice,
+                        "insertTextFormat": 1
+                    }));
+                }
+            }
+        }
+    }
+    for binding in collect_bindings(source, line) {
+        items.push(json!({
+            "label": binding.name,
+            "kind": 6,
+            "detail": format!("Binding · {} · line {}", binding.kind, binding.line),
+            "insertText": binding.name,
+            "insertTextFormat": 1
+        }));
+    }
+    for input in collect_inputs(source) {
+        items.push(json!({
+            "label": input.name,
+            "kind": 6,
+            "detail": format!("Input · {}", input.kind),
+            "insertText": input.name,
+            "insertTextFormat": 1
+        }));
+    }
+    for literal in ["true", "false"] {
+        items.push(json!({
+            "label": literal,
+            "kind": 12,
+            "detail": "Boolean literal",
+            "insertText": literal,
+            "insertTextFormat": 1
+        }));
+    }
+}
+
+/// A declared `accept` input with its display type and `one of` choices.
+struct InputDecl {
+    name: String,
+    kind: String,
+    choices: Vec<String>,
+    line: usize,
+}
+
+/// A binding defined before the cursor line, with a guessed static type.
+struct BindingDecl {
+    name: String,
+    kind: String,
+    line: usize,
+}
+
+/// A `spawn as` job defined before the cursor line.
+struct JobDecl {
+    name: String,
+    line: usize,
+}
+
+/// Display label for a declared input type.
+fn input_type_label(kind: &crate::ast::InputType) -> &'static str {
+    match kind {
+        crate::ast::InputType::Text => "text",
+        crate::ast::InputType::Integer
+        | crate::ast::InputType::UnsignedInteger
+        | crate::ast::InputType::Usize => "integer",
+        crate::ast::InputType::Boolean => "boolean",
+        crate::ast::InputType::TextList => "list of text",
+        crate::ast::InputType::IntegerList
+        | crate::ast::InputType::UnsignedIntegerList
+        | crate::ast::InputType::UsizeList => "list of integer",
+        crate::ast::InputType::JsonList => "list of json",
+        crate::ast::InputType::Json => "json",
+        crate::ast::InputType::Bytes => "bytes",
+        crate::ast::InputType::Never => "never",
+    }
+}
+
+/// Collect `accept` declarations in order. Choice literals reuse their exact
+/// quoted spans so escaped text round-trips.
+fn collect_inputs(source: &str) -> Vec<InputDecl> {
+    let mut inputs = Vec::new();
+    for (index, raw) in source.lines().enumerate() {
+        let tokens = completion_words(crate::parser::strip_comment(raw));
+        let words = bare_words(&tokens);
+        if words.first() != Some(&"accept") || words.len() < 4 || words[2] != "as" {
+            continue;
+        }
+        if !is_completion_binding_word(words[1]) {
+            continue;
+        }
+        let mut end = 3;
+        while end < words.len()
+            && !matches!(words[end], "one" | "from" | "with" | "described")
+        {
+            end += 1;
+        }
+        let kind = if end > 3 {
+            words[3..end].join(" ")
+        } else {
+            "value".to_owned()
+        };
+        inputs.push(InputDecl {
+            name: words[1].to_owned(),
+            kind,
+            choices: parse_choice_literals(crate::parser::strip_comment(raw)),
+            line: index + 1,
+        });
+    }
+    inputs
+}
+
+/// Collect the quoted literals after `one of [` on one declaration line.
+fn parse_choice_literals(code: &str) -> Vec<String> {
+    let Some(one) = code.find("one of") else {
+        return Vec::new();
+    };
+    let rest = &code[one + "one of".len()..];
+    let Some(open) = rest.find('[') else {
+        return Vec::new();
+    };
+    let bytes = rest.as_bytes();
+    let mut out = Vec::new();
+    let mut index = open + 1;
+    while index < bytes.len() && out.len() < 256 {
+        match bytes[index] {
+            b'"' => {
+                let start = index;
+                index += 1;
+                let mut escaped = false;
+                while index < bytes.len() {
+                    if escaped {
+                        escaped = false;
+                    } else if bytes[index] == b'\\' {
+                        escaped = true;
+                    } else if bytes[index] == b'"' {
+                        break;
+                    }
+                    index += 1;
+                }
+                if index < bytes.len() {
+                    if let Some(literal) = rest.get(start..=index) {
+                        let inner = &literal[1..literal.len() - 1];
+                        if !inner.is_empty() {
+                            out.push(literal.to_owned());
+                        }
+                    }
+                    index += 1;
+                } else {
+                    break;
+                }
+            }
+            b']' => break,
+            _ => {
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Whether a word can name a binding. Mirrors the parser's identifier rule
+/// plus the reserved literals it rejects for bindings.
+fn is_completion_binding_word(word: &str) -> bool {
+    crate::parser::is_identifier(word) && !matches!(word, "true" | "false" | "null")
+}
+
+/// Words after `as` that name a type or keyword rather than a binding.
+fn is_binding_keyword(word: &str) -> bool {
+    matches!(word, "json" | "text" | "integer" | "boolean")
+}
+
+/// Guess a binding's static type from the defining line's head words.
+fn guess_binding_kind(words: &[&str]) -> &'static str {
+    if words.first() == Some(&"take") {
+        if words.get(1) == Some(&"list") {
+            return "list of text";
+        }
+        return match words.get(1) {
+            Some(kind @ ("text" | "integer" | "boolean" | "json")) => kind,
+            _ => "binding",
+        };
+    }
+    if words.contains(&"parse") {
+        return "json";
+    }
+    if words.contains(&"capture") {
+        return "bytes";
+    }
+    if words.first() == Some(&"read") {
+        return "text";
+    }
+    if words.first() == Some(&"inspect") {
+        return "snapshot";
+    }
+    if words.first() == Some(&"spawn") {
+        return "job";
+    }
+    if words.first() == Some(&"whenever") {
+        return "message";
+    }
+    if words.contains(&"temporary") {
+        return "path";
+    }
+    if words.contains(&"status") {
+        return "integer";
+    }
+    if words.contains(&"result") {
+        return "result";
+    }
+    if words.first() == Some(&"use") && words.get(1) == Some(&"value") {
+        return match words.get(2) {
+            Some(literal) if literal.starts_with('"') => "text",
+            Some(literal) if matches!(*literal, "true" | "false") => "boolean",
+            Some(literal)
+                if literal
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_ascii_digit() || first == '-') =>
+            {
+                "integer"
+            }
+            Some(literal) if literal.starts_with('[') => "list",
+            Some(literal) if literal.starts_with('{') => "record",
+            _ => "value",
+        };
+    }
+    "binding"
+}
+
+/// Collect bindings defined on lines before the cursor line: trailing
+/// `as NAME` definitions, `for each` iteration bindings and `catch` names.
+fn collect_bindings(source: &str, before_line: usize) -> Vec<BindingDecl> {
+    let mut bindings = Vec::new();
+    for (index, raw) in source.lines().enumerate() {
+        if index >= before_line {
+            break;
+        }
+        let code = crate::parser::strip_comment(raw).trim();
+        if code.is_empty() {
+            continue;
+        }
+        let tokens = completion_words(code);
+        let words = bare_words(&tokens);
+        if words.is_empty() || matches!(words[0], "accept" | "define") {
+            continue;
+        }
+        if words[0] == "for" && words.get(1) == Some(&"each") {
+            if let Some(name) = words.get(2) {
+                if is_completion_binding_word(name) {
+                    bindings.push(BindingDecl {
+                        name: (*name).to_owned(),
+                        kind: "element".to_owned(),
+                        line: index + 1,
+                    });
+                }
+            }
+            continue;
+        }
+        if words[0] == "parallel"
+            && words.get(1) == Some(&"for")
+            && words.get(2) == Some(&"each")
+        {
+            if let Some(name) = words.get(3) {
+                if is_completion_binding_word(name) {
+                    bindings.push(BindingDecl {
+                        name: (*name).to_owned(),
+                        kind: "element".to_owned(),
+                        line: index + 1,
+                    });
+                }
+            }
+            continue;
+        }
+        if words[0] == "catch" {
+            if let Some(name) = words.get(1) {
+                if is_completion_binding_word(name) {
+                    bindings.push(BindingDecl {
+                        name: (*name).to_owned(),
+                        kind: "error".to_owned(),
+                        line: index + 1,
+                    });
+                }
+            }
+            continue;
+        }
+        let Some(as_at) = words.iter().rposition(|word| *word == "as") else {
+            continue;
+        };
+        let Some(name) = words.get(as_at + 1) else {
+            continue;
+        };
+        if !is_completion_binding_word(name) || is_binding_keyword(name) {
+            continue;
+        }
+        let kind = guess_binding_kind(&words);
+        bindings.push(BindingDecl {
+            name: (*name).to_owned(),
+            kind: kind.to_owned(),
+            line: index + 1,
+        });
+    }
+    bindings
+}
+
+/// Collect `spawn as` jobs defined before the cursor line.
+fn collect_jobs(source: &str, before_line: usize) -> Vec<JobDecl> {
+    collect_bindings(source, before_line)
+        .into_iter()
+        .filter(|binding| binding.kind == "job")
+        .map(|binding| JobDecl {
+            name: binding.name,
+            line: binding.line,
+        })
+        .collect()
 }
 
 fn hover(
@@ -3356,5 +4461,183 @@ mod tests {
             .unwrap()
             .iter()
             .any(|item| { item["label"] == "text" }));
+    }
+
+    fn complete_source(
+        source: &str,
+        line: u64,
+        character: u64,
+        registry: &Registry,
+        manifests: &[&crate::manifest::Manifest],
+    ) -> JsonValue {
+        let uri = "file:///tmp/completion-case.program";
+        let document = Document {
+            text: source.to_owned(),
+            version: Some(1),
+            canonical_path: None,
+        };
+        let documents = BTreeMap::from([(uri.to_owned(), document)]);
+        completion(
+            &json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            }),
+            &documents,
+            registry,
+            manifests,
+        )
+    }
+
+    fn fixture_registry() -> Registry {
+        let manifest = serde_json::json!({
+            "name": "text.upper",
+            "description": "Uppercase text.",
+            "binary": "upper",
+            "parameters": { "text": { "type": "string", "required": true } },
+            "arguments": [{ "parameter": "text" }]
+        });
+        Registry::from_sources(&[manifest.to_string()]).unwrap()
+    }
+
+    #[test]
+    fn completion_statement_start_lists_generated_forms_with_snippets() {
+        let registry = Registry::default();
+        let result = complete_source("", 0, 0, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
+        for required in [
+            "try",
+            "use value",
+            "take",
+            "on exit",
+            "on interrupt",
+            "with temporary file as",
+            "launch detached",
+            "hand over to",
+            "otherwise if",
+            "exit with status",
+            "fail with message",
+            "then save to",
+            "then append to",
+        ] {
+            assert!(
+                items.iter().any(|item| item["label"] == required),
+                "statement completion is missing `{required}`"
+            );
+        }
+        let statement = items.iter().find(|item| item["label"] == "try").unwrap();
+        assert_eq!(statement["insertTextFormat"], 2);
+        assert!(statement["insertText"]
+            .as_str()
+            .unwrap()
+            .contains("${"));
+        // The keyword list is generated from the parser: every statement head
+        // must start a completion form (`cd` is an operation, `interactively`
+        // and `redirect` are suffixes, `until` reserves a future word).
+        for keyword in crate::parser::STATEMENT_KEYWORDS {
+            if ["cd", "interactively", "redirect", "until"].contains(keyword) {
+                continue;
+            }
+            assert!(
+                items.iter().any(|item| {
+                    item["label"]
+                        .as_str()
+                        .is_some_and(|label| label.split(' ').next() == Some(*keyword))
+                }),
+                "statement completion is missing a form for keyword `{keyword}`"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_value_position_lists_bindings_and_inputs_not_parameters() {
+        let registry = fixture_registry();
+        let manifests = registry.manifests().unwrap();
+        let source = "accept shout as text\nrun text.upper with text greeting as upper\nrun text.upper with text ";
+        let result = complete_source(source, 2, 25, &registry, &manifests);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.iter().any(|item| item["label"] == "upper"),
+            "expected the earlier binding, got {items:?}"
+        );
+        assert!(
+            items.iter().any(|item| item["label"] == "shout"),
+            "expected the declared input, got {items:?}"
+        );
+        assert!(
+            !items.iter().any(|item| item["kind"] == 5),
+            "value positions must not offer parameter names, got {items:?}"
+        );
+    }
+
+    #[test]
+    fn completion_condition_lists_one_of_choices() {
+        let registry = Registry::default();
+        let source = "accept mode as text one of [\"a\", \"b\"]\nif mode is ";
+        let result = complete_source(source, 1, 11, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.iter().any(|item| item["label"] == "\"a\""),
+            "expected choice `\"a\"`, got {items:?}"
+        );
+        assert!(
+            items.iter().any(|item| item["label"] == "\"b\""),
+            "expected choice `\"b\"`, got {items:?}"
+        );
+    }
+
+    #[test]
+    fn completion_take_position_lists_value_types() {
+        let registry = Registry::default();
+        let result = complete_source("take ", 0, 5, &registry, &[]);
+        let items = result["items"].as_array().unwrap();
+        for required in ["text", "integer", "boolean", "json", "list of text"] {
+            assert!(
+                items.iter().any(|item| item["label"] == required),
+                "take completion is missing `{required}`"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_after_invocation_lists_suffixes() {
+        let registry = fixture_registry();
+        let manifests = registry.manifests().unwrap();
+        let source = "run text.upper with text hello ";
+        let result = complete_source(source, 0, 31, &registry, &manifests);
+        let items = result["items"].as_array().unwrap();
+        for required in ["as", "and keep status as", "and retry up to"] {
+            assert!(
+                items.iter().any(|item| item["label"] == required),
+                "suffix completion is missing `{required}`"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_parameter_value_lists_manifest_enum_values() {
+        let manifest = serde_json::json!({
+            "name": "enum.test",
+            "description": "Choice applet.",
+            "binary": "choose",
+            "parameters": { "choice": { "type": "string", "required": true, "enum": ["left", "right"] } },
+            "arguments": [{ "parameter": "choice" }]
+        });
+        let registry = Registry::from_sources(&[manifest.to_string()]).unwrap();
+        let manifests = registry.manifests().unwrap();
+        let source = "run enum.test with choice ";
+        let result = complete_source(source, 0, 26, &registry, &manifests);
+        let items = result["items"].as_array().unwrap();
+        assert!(
+            items.iter().any(|item| item["label"] == "\"left\""),
+            "expected enum value `\"left\"`, got {items:?}"
+        );
+        assert!(
+            items.iter().any(|item| item["label"] == "\"right\""),
+            "expected enum value `\"right\"`, got {items:?}"
+        );
+        assert!(
+            !items.iter().any(|item| item["kind"] == 5),
+            "value positions must not offer parameter names, got {items:?}"
+        );
     }
 }

@@ -1,16 +1,18 @@
 {
   "name": "text.join",
-  "description": "Join text values with a chosen separator.",
+  "description": "Combines string parts into one text value, placing the optional separator between neighboring parts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "parts": {
       "type": "list",
       "items": "string",
-      "required": true
+      "required": true,
+      "description": "String values to combine in order."
     },
     "separator": {
-      "type": "string"
+      "type": "string",
+      "description": "Text placed between consecutive values; omitted means no separator."
     }
   },
   "arguments": [
@@ -70,5 +72,11 @@
     "text join",
     "join text",
     "concatenate text"
+  ],
+  "examples": [
+    {
+      "program": "run text.join with parts [\"a\", \"b\", \"c\"] and separator \":\" as value",
+      "expected_output": "a:b:c"
+    }
   ]
 }

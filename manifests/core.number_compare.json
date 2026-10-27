@@ -1,16 +1,18 @@
 {
   "name": "number.compare",
-  "description": "Provides the number compare operation for controlled scripts.",
+  "description": "Compare two finite numbers and return -1, 0, or 1 according to their ordering.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "First finite number to compare."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Second finite number to compare."
     }
   },
   "arguments": [
@@ -65,5 +67,11 @@
   },
   "phrases": [
     "number compare"
+  ],
+  "examples": [
+    {
+      "program": "run number.compare with left 9 and right 10 as result",
+      "expected_output": -1
+    }
   ]
 }

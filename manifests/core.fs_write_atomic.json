@@ -1,6 +1,6 @@
 {
   "name": "fs.write_atomic",
-  "description": "Provides the fs write atomic operation for controlled scripts.",
+  "description": "Atomically replaces one file only when its current SHA-256 matches the expected hash, with explicit symlink and permission policies and an optional content value or stdin.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {

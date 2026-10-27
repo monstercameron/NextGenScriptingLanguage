@@ -1,6 +1,6 @@
 {
   "name": "jq.ps",
-  "description": "Provides the jq ps operation for controlled scripts.",
+  "description": "Parses process-list rows from standard input into JSON records, sorted by descending CPU usage and then process ID, up to the requested limit.",
   "binary": "jq",
   "accepts_stdin": true,
   "cacheable": false,

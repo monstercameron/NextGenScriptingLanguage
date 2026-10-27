@@ -1,6 +1,6 @@
 {
   "name": "tail",
-  "description": "Provides the tail operation for controlled scripts.",
+  "description": "Prints the final lines of the selected file, or standard input when no path is supplied, with optional tail flags.",
   "binary": "tail",
   "accepts_stdin": true,
   "cacheable": false,

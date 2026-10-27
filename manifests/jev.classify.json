@@ -1,6 +1,6 @@
 {
   "name": "jev.classify",
-  "description": "Provides the jev classify operation for controlled scripts.",
+  "description": "Chooses a label or described criterion for the question and returns the label, confidence, and separate threshold-based accepted flag.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,
@@ -35,7 +35,8 @@
     "minimum": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 100
+      "maximum": 100,
+      "description": "Confidence percentage required for `accepted` to be true; ranges from 0 to 100 and defaults to 0, independent of the label or yes/no decision."
     },
     "max_bytes": {
       "type": "integer",

@@ -1,16 +1,18 @@
 {
   "name": "fs.ensure_dir",
-  "description": "Provides the fs ensure dir operation for controlled scripts.",
+  "description": "Creates a directory and missing parent directories when needed, returning whether the filesystem changed and whether the requested mode was applied.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "Directory path to create or verify; relative paths resolve from the program working directory."
     },
     "mode": {
       "type": "string",
-      "pattern": "octal_mode"
+      "pattern": "octal_mode",
+      "description": "Optional octal permission text, such as 0750, to apply on Unix; omitted leaves the existing or platform-default mode unchanged."
     }
   },
   "arguments": [
@@ -101,5 +103,15 @@
   },
   "phrases": [
     "fs ensure_dir"
+  ],
+  "examples": [
+    {
+      "program": "run fs.ensure_dir with path \"catalog-example-dir\" as result",
+      "expected_output": {
+        "changed": true,
+        "path": "catalog-example-dir",
+        "mode_applied": false
+      }
+    }
   ]
 }

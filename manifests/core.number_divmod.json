@@ -1,6 +1,6 @@
 {
   "name": "number.divmod",
-  "description": "Provides number.divmod for controlled scripts.",
+  "description": "Divide two integers and return both the truncated quotient and signed remainder.",
   "phrases": [
     "number divmod",
     "left divmod"
@@ -10,11 +10,13 @@
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Integer dividend."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Nonzero integer divisor."
     }
   },
   "arguments": [
@@ -66,5 +68,14 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.divmod with left 17 and right 5 as result",
+      "expected_output": {
+        "quotient": 3,
+        "remainder": 2
+      }
+    }
+  ]
 }

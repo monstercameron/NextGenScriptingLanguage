@@ -1,6 +1,6 @@
 {
   "name": "json.merge",
-  "description": "Shallow merges two JSON objects; right-hand values replace conflicts.",
+  "description": "Combines two JSON objects, with right-hand values replacing left-hand values for duplicate keys.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
@@ -10,7 +10,8 @@
       "fields": {},
       "additional_properties": {
         "type": "json"
-      }
+      },
+      "description": "First JSON object supplying the initial members."
     },
     "right": {
       "type": "record",
@@ -18,7 +19,8 @@
       "fields": {},
       "additional_properties": {
         "type": "json"
-      }
+      },
+      "description": "Second JSON object whose members are added or replace matching keys from left."
     }
   },
   "arguments": [
@@ -81,5 +83,14 @@
   },
   "phrases": [
     "json merge"
+  ],
+  "examples": [
+    {
+      "program": "run json.merge with left {\"name\":\"Ada\",\"role\":\"writer\"} and right {\"role\":\"editor\"} as result",
+      "expected_output": {
+        "name": "Ada",
+        "role": "editor"
+      }
+    }
   ]
 }

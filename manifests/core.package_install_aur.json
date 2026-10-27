@@ -1,6 +1,6 @@
 {
   "name": "package.install_aur",
-  "description": "Provides the package install aur operation for controlled scripts.",
+  "description": "Installs the listed AUR packages with yay, skipping packages that are already installed; installation privileges must be available to yay.",
   "binary": "yay",
   "accepts_stdin": false,
   "cacheable": false,

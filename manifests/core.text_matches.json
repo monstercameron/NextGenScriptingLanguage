@@ -1,15 +1,17 @@
 {
   "name": "text.matches",
-  "description": "Provides the text matches operation for controlled scripts.",
+  "description": "Finds every overlapping occurrence of a literal needle and returns whether any matched, the match count, and UTF-8 byte offsets.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "needle": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Literal string to find; an empty needle matches at each character boundary."
     },
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to search; omitted text is read from UTF-8 stdin."
     }
   },
   "arguments": [
@@ -103,5 +105,18 @@
   },
   "phrases": [
     "text matches"
+  ],
+  "examples": [
+    {
+      "program": "run text.matches with needle \"aba\" and text \"ababa\" as value",
+      "expected_output": {
+        "matches": true,
+        "count": 2,
+        "byte_offsets": [
+          0,
+          2
+        ]
+      }
+    }
   ]
 }

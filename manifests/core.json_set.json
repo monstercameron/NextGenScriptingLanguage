@@ -1,18 +1,21 @@
 {
   "name": "json.set",
-  "description": "Provides the json set operation for controlled scripts.",
+  "description": "Sets a value at a JSON Pointer, creating an object member or replacing an existing value, then returns the edited document.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "document": {
-      "type": "json"
+      "type": "json",
+      "description": "JSON value to edit; stdin is used when omitted."
     },
     "pointer": {
-      "type": "string"
+      "type": "string",
+      "description": "JSON Pointer identifying the value to replace or the final member to create; an empty pointer replaces the whole document."
     },
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON value to store at pointer."
     }
   },
   "arguments": [
@@ -80,5 +83,14 @@
   },
   "phrases": [
     "json set"
+  ],
+  "examples": [
+    {
+      "program": "run json.set with document {\"name\":\"Ada\"} and pointer \"/active\" and value true as result",
+      "expected_output": {
+        "active": true,
+        "name": "Ada"
+      }
+    }
   ]
 }

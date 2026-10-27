@@ -1,20 +1,23 @@
 {
   "name": "time.format",
-  "description": "Provides the time.format operation for controlled scripts.",
+  "description": "Formats a Unix epoch second with Chrono strftime directives in UTC, local time, or a fixed signed offset measured in seconds.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "format": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Chrono strftime format string used to render the date and time."
     },
     "zone": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "Time zone: `utc`, `local`, or a signed UTC offset in seconds; defaults to `utc`."
     },
     "epoch": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Unix timestamp in whole seconds to format."
     }
   },
   "arguments": [
@@ -77,5 +80,11 @@
   },
   "phrases": [
     "time format"
+  ],
+  "examples": [
+    {
+      "program": "run time.format with epoch 0 and format \"%Y-%m-%d %H:%M:%S\" and zone \"utc\" as value",
+      "expected_output": "1970-01-01 00:00:00"
+    }
   ]
 }

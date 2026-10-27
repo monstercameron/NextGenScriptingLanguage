@@ -1,16 +1,18 @@
 {
   "name": "number.multiply",
-  "description": "Provides the number multiply operation for controlled scripts.",
+  "description": "Multiply two finite numbers and return their product.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "First finite number to multiply."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Second finite number to multiply."
     }
   },
   "arguments": [
@@ -65,5 +67,11 @@
   },
   "phrases": [
     "number multiply"
+  ],
+  "examples": [
+    {
+      "program": "run number.multiply with left 6 and right 7 as result",
+      "expected_output": 42
+    }
   ]
 }

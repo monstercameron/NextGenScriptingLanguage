@@ -1,21 +1,24 @@
 {
   "name": "json.sort_by",
-  "description": "Sorts array elements by a string or numeric JSON Pointer key.",
+  "description": "Sorts the root array by each item value selected by pointer, using string order by default or numeric order when numeric is true.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "pointer": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "JSON Pointer evaluated relative to each item to obtain its string or numeric sort key."
     },
     "document": {
       "type": "list",
       "items": "json",
-      "required": true
+      "required": true,
+      "description": "Root JSON array to sort; stdin is used when omitted."
     },
     "numeric": {
       "type": "boolean",
-      "required": false
+      "required": false,
+      "description": "Set true to compare numeric keys as numbers; false or omission requires string keys."
     }
   },
   "arguments": [
@@ -79,5 +82,20 @@
   },
   "phrases": [
     "json sort_by"
+  ],
+  "examples": [
+    {
+      "program": "run json.sort_by with document [{\"name\":\"Ada\",\"score\":9},{\"name\":\"Lin\",\"score\":7}] and pointer \"/score\" and numeric true as result",
+      "expected_output": [
+        {
+          "name": "Lin",
+          "score": 7
+        },
+        {
+          "name": "Ada",
+          "score": 9
+        }
+      ]
+    }
   ]
 }

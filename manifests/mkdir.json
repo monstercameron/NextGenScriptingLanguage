@@ -1,6 +1,6 @@
 {
   "name": "mkdir",
-  "description": "Provides the mkdir operation for controlled scripts.",
+  "description": "Creates the requested directories using the supplied mkdir flags.",
   "binary": "mkdir",
   "cacheable": false,
   "parameters": {

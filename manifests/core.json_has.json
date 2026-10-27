@@ -1,16 +1,18 @@
 {
   "name": "json.has",
-  "description": "Provides the json.has operation for controlled scripts.",
+  "description": "Reports whether a JSON Pointer identifies a value in the document, including a value whose content is null.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "document": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON value to inspect; stdin is used when omitted."
     },
     "path": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "JSON Pointer to check; an empty pointer refers to the entire document."
     }
   },
   "arguments": [
@@ -65,5 +67,11 @@
   },
   "phrases": [
     "json has"
+  ],
+  "examples": [
+    {
+      "program": "run json.has with document {\"name\":\"Ada\"} and path \"/name\" as result",
+      "expected_output": true
+    }
   ]
 }

@@ -1,21 +1,25 @@
 {
   "name": "json.map",
-  "description": "Provides the json map operation for controlled scripts. An optional default is returned when a lookup is absent or null.",
+  "description": "Maps an array to values selected from each item by a JSON Pointer, substituting default for missing or null selections.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "document": {
-      "type": "json"
+      "type": "json",
+      "description": "JSON document containing the target array; stdin is used when omitted."
     },
     "pointer": {
-      "type": "string"
+      "type": "string",
+      "description": "JSON Pointer locating the array; an empty pointer selects the root array."
     },
     "select": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "JSON Pointer evaluated on each array item to select its output value."
     },
     "default": {
-      "type": "json"
+      "type": "json",
+      "description": "JSON value substituted when an item has no selected value or its selection is null."
     }
   },
   "arguments": [
@@ -96,5 +100,14 @@
   "phrases": [
     "map JSON values",
     "select JSON fields"
+  ],
+  "examples": [
+    {
+      "program": "run json.map with document [{\"name\":\"Ada\"},{\"name\":\"Lin\"}] and select \"/name\" as result",
+      "expected_output": [
+        "Ada",
+        "Lin"
+      ]
+    }
   ]
 }

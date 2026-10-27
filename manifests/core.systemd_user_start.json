@@ -1,6 +1,6 @@
 {
   "name": "systemd.user.start",
-  "description": "Provides the systemd user start operation for controlled scripts.",
+  "description": "Starts the named systemd user unit.",
   "binary": "systemctl",
   "accepts_stdin": false,
   "cacheable": false,

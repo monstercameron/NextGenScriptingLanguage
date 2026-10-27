@@ -1,13 +1,14 @@
 {
   "name": "path.join",
-  "description": "Provides the path join operation for controlled scripts.",
+  "description": "Joins path segments with the host platform separator, skipping empty segments and following the host path library when an absolute segment appears.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "parts": {
       "type": "list",
       "items": "string",
-      "required": true
+      "required": true,
+      "description": "Path segments in order; empty strings are skipped and an absolute segment replaces the preceding path."
     }
   },
   "arguments": [
@@ -59,5 +60,11 @@
   },
   "phrases": [
     "path join"
+  ],
+  "examples": [
+    {
+      "program": "run path.join with parts [\"\", \"config\", \"\"] as value",
+      "expected_output": "config"
+    }
   ]
 }

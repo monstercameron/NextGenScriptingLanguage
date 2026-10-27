@@ -1,17 +1,20 @@
 {
   "name": "text.split",
-  "description": "Provides the text split operation for controlled scripts.",
+  "description": "Splits text on a nonempty literal separator, or on NUL in NUL mode; one trailing separator terminates the final item without adding an empty item.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to split; omitted text is read from UTF-8 stdin."
     },
     "separator": {
-      "type": "string"
+      "type": "string",
+      "description": "Nonempty literal separator; use this unless nul is true."
     },
     "nul": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "When true, split on NUL bytes instead of separator; cannot be combined with separator."
     }
   },
   "arguments": [
@@ -122,6 +125,16 @@
             "value": true
           }
         ]
+      ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run text.split with text \"a,b,c,\" and separator \",\" as value",
+      "expected_output": [
+        "a",
+        "b",
+        "c"
       ]
     }
   ]

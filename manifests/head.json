@@ -1,6 +1,6 @@
 {
   "name": "head",
-  "description": "Provides the head operation for controlled scripts.",
+  "description": "Prints the requested number of leading lines from standard input.",
   "binary": "head",
   "accepts_stdin": true,
   "cacheable": true,

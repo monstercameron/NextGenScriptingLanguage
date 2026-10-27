@@ -1,6 +1,6 @@
 {
   "name": "list.chunk",
-  "description": "Provides list.chunk for controlled scripts.",
+  "description": "Split an input list into consecutive sublists of the requested positive size.",
   "phrases": [
     "list chunk",
     "items chunk"
@@ -10,11 +10,13 @@
   "parameters": {
     "items": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "List of JSON values to divide into chunks."
     },
     "size": {
       "type": "unsigned_integer",
-      "required": true
+      "required": true,
+      "description": "Number of values in each chunk; must be a positive integer."
     }
   },
   "parameter_alternatives": [
@@ -88,5 +90,23 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.chunk with items [1, 2, 3, 4, 5] and size 2 as result",
+      "expected_output": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          4
+        ],
+        [
+          5
+        ]
+      ]
+    }
+  ]
 }

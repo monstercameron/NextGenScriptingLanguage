@@ -1,6 +1,6 @@
 {
   "name": "osd.brightness",
-  "description": "Provides the osd brightness operation for controlled scripts.",
+  "description": "Raises or lowers screen brightness through swayosd and displays the desktop on-screen indicator.",
   "binary": "swayosd-client",
   "accepts_stdin": false,
   "cacheable": false,

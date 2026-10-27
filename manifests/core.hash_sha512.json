@@ -1,12 +1,13 @@
 {
   "name": "hash.sha512",
-  "description": "Provides the hash.sha512 operation for controlled scripts.",
+  "description": "Computes the lowercase SHA-512 digest of text or input-stream bytes and returns 128 hexadecimal characters.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "Optional text to hash; when omitted, the applet hashes bytes from its input stream."
     }
   },
   "arguments": [
@@ -62,5 +63,11 @@
   },
   "phrases": [
     "hash sha512"
+  ],
+  "examples": [
+    {
+      "program": "run hash.sha512 with text \"abc\" as digest",
+      "expected_output": "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+    }
   ]
 }

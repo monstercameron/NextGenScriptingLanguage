@@ -1,6 +1,6 @@
 {
   "name": "wc",
-  "description": "Provides the wc operation for controlled scripts.",
+  "description": "Counts lines, words, bytes, or characters in standard input according to the selected wc flags.",
   "binary": "wc",
   "accepts_stdin": true,
   "cacheable": false,

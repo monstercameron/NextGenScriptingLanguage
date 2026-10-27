@@ -1,6 +1,6 @@
 {
   "name": "omarchy.browser-refresh",
-  "description": "Provides the omarchy browser-refresh operation for controlled scripts.",
+  "description": "Runs the configured browser command with Omarchy’s platform-policy refresh options.",
   "binary": "/usr/bin/env",
   "accepts_stdin": false,
   "cacheable": false,

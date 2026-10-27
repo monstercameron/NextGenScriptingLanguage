@@ -1,6 +1,6 @@
 {
   "name": "number.round",
-  "description": "Provides number.round for controlled scripts.",
+  "description": "Round a finite number to the requested decimal position, with halfway cases rounded away from zero.",
   "phrases": [
     "number round",
     "value round"
@@ -10,10 +10,12 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite number to round."
     },
     "digits": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Decimal places to retain; positive values round fractional digits and negative values round tens or larger places; defaults to 0."
     }
   },
   "parameter_alternatives": [
@@ -98,5 +100,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.round with value 3.14159 and digits 2 as result",
+      "expected_output": 3.14
+    }
+  ]
 }

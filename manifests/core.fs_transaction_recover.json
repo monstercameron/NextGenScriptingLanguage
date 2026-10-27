@@ -1,6 +1,6 @@
 {
   "name": "fs.transaction.recover",
-  "description": "Provides the fs transaction recover operation for controlled scripts.",
+  "description": "Completes or rolls back an interrupted filesystem transaction when each target still matches a recorded before or after state; conflicting changes require manual recovery.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

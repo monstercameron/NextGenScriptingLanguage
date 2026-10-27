@@ -1,6 +1,6 @@
 {
   "name": "number.clamp",
-  "description": "Provides number.clamp for controlled scripts.",
+  "description": "Constrain a finite number to the inclusive interval from min through max.",
   "phrases": [
     "number clamp",
     "value clamp"
@@ -10,15 +10,18 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite number to constrain."
     },
     "min": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Inclusive lower bound; must not exceed max."
     },
     "max": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Inclusive upper bound; must be at least min."
     }
   },
   "arguments": [
@@ -76,5 +79,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.clamp with value 12 and min 0 and max 10 as result",
+      "expected_output": 10
+    }
+  ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "hypr.monitors",
-  "description": "Provides the hypr monitors operation for controlled scripts.",
+  "description": "Returns the current Hyprland monitor details as a JSON list.",
   "binary": "hyprctl",
   "accepts_stdin": false,
   "cacheable": false,

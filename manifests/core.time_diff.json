@@ -1,16 +1,18 @@
 {
   "name": "time.diff",
-  "description": "Provides the time.diff operation for controlled scripts.",
+  "description": "Subtracts the right Unix epoch second from the left and returns the difference in the selected unit, retaining whole results as integers.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "left": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Unix timestamp in whole seconds that is subtracted from."
     },
     "right": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Unix timestamp in whole seconds to subtract."
     },
     "unit": {
       "type": "string",
@@ -20,7 +22,8 @@
         "minutes",
         "hours",
         "days"
-      ]
+      ],
+      "description": "Unit for the returned difference: seconds, minutes, hours, or days."
     }
   },
   "arguments": [
@@ -89,5 +92,11 @@
   },
   "phrases": [
     "time diff"
+  ],
+  "examples": [
+    {
+      "program": "run time.diff with left 3600 and right 0 and unit \"minutes\" as value",
+      "expected_output": 60
+    }
   ]
 }

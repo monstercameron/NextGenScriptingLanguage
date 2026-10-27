@@ -1,15 +1,17 @@
 {
   "name": "json.first",
-  "description": "Provides the json.first operation for controlled scripts.",
+  "description": "Returns the first item of an array selected from the document by JSON Pointer.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "document": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON document containing the target array; stdin is used when omitted."
     },
     "pointer": {
-      "type": "string"
+      "type": "string",
+      "description": "JSON Pointer locating the array; an empty pointer selects the root array."
     }
   },
   "arguments": [
@@ -64,5 +66,11 @@
   },
   "phrases": [
     "json first"
+  ],
+  "examples": [
+    {
+      "program": "run json.first with document [\"Ada\",\"Lin\"] as result",
+      "expected_output": "Ada"
+    }
   ]
 }

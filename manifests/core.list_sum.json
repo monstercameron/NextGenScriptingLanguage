@@ -1,6 +1,6 @@
 {
   "name": "list.sum",
-  "description": "Provides the list sum operation for controlled scripts.",
+  "description": "Add all numeric values in the input list and return their sum.",
   "phrases": [
     "sum values",
     "add list numbers"
@@ -10,22 +10,28 @@
   "parameters": {
     "items": {
       "type": "list",
-      "items": "json"
+      "items": "json",
+      "description": "List of finite numeric JSON values to add."
     },
     "key": {
-      "type": "string"
+      "type": "string",
+      "description": "Accepted for compatibility; this sum operation reads numeric list values directly."
     },
     "n": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Accepted for compatibility; this operation sums all values."
     },
     "collect": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Accepted for compatibility; this operation returns only the sum."
     },
     "delimiter": {
-      "type": "string"
+      "type": "string",
+      "description": "Accepted for compatibility; this operation does not split input fields."
     },
     "field": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Accepted for compatibility; this operation does not select an input field."
     }
   },
   "arguments": [
@@ -111,5 +117,11 @@
         }
       }
     }
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.sum with items [2, 3, 5] as result",
+      "expected_output": 10
+    }
+  ]
 }

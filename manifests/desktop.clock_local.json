@@ -1,6 +1,6 @@
 {
   "name": "desktop.clock_local",
-  "description": "Provides the desktop clock local operation for controlled scripts.",
+  "description": "Reads the local clock on each pulse and emits the current time as an integer timestamp.",
   "binary": "python3",
   "accepts_stdin": false,
   "parameters": {

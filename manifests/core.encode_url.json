@@ -1,16 +1,18 @@
 {
   "name": "encode.url",
-  "description": "Provides the encode.url operation for controlled scripts.",
+  "description": "Percent-encodes text or input-stream bytes for a URL component, optionally using + for spaces in form data.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "Optional text to percent-encode; when omitted, the applet encodes bytes from its input stream."
     },
     "form": {
       "type": "boolean",
-      "required": false
+      "required": false,
+      "description": "Set true to encode spaces as + for form data; omitted or false encodes spaces as %20."
     }
   },
   "arguments": [
@@ -72,5 +74,11 @@
   },
   "phrases": [
     "encode url"
+  ],
+  "examples": [
+    {
+      "program": "run encode.url with text \"a b/~\" as encoded",
+      "expected_output": "a%20b%2F~"
+    }
   ]
 }

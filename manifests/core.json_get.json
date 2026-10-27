@@ -1,21 +1,25 @@
 {
   "name": "json.get",
-  "description": "Looks up the first non-null JSON Pointer from pointer or ordered pointers, returning an optional default for an absent or null value.",
+  "description": "Returns the first non-null value found by a JSON Pointer or ordered pointer list, using default when none matches.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "document": {
-      "type": "json"
+      "type": "json",
+      "description": "JSON value to search; stdin is used when omitted."
     },
     "pointer": {
-      "type": "string"
+      "type": "string",
+      "description": "Single JSON Pointer to try before returning default."
     },
     "default": {
-      "type": "json"
+      "type": "json",
+      "description": "JSON value returned when every candidate pointer is absent or null."
     },
     "pointers": {
       "type": "list",
-      "items": "string"
+      "items": "string",
+      "description": "Ordered JSON Pointer candidates; the first present non-null value wins."
     }
   },
   "arguments": [
@@ -93,5 +97,11 @@
   "phrases": [
     "get JSON value",
     "use JSON fallback"
+  ],
+  "examples": [
+    {
+      "program": "run json.get with document {\"name\":\"Ada\"} and pointer \"/name\" as result",
+      "expected_output": "Ada"
+    }
   ]
 }

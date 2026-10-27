@@ -1,6 +1,6 @@
 {
   "name": "wait.until",
-  "description": "Provides the wait.until operation for controlled scripts.",
+  "description": "Polls a file or TCP readiness probe until it succeeds or the timeout expires, returning readiness and elapsed milliseconds.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
@@ -11,27 +11,33 @@
         "file_exists",
         "file_readable",
         "tcp_port_open"
-      ]
+      ],
+      "description": "Readiness check: file_exists, file_readable, or tcp_port_open."
     },
     "host": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "Host name or IP address for tcp_port_open; required for that probe."
     },
     "path": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "Path checked by file_exists or file_readable, resolved relative to the program working directory."
     },
     "interval_ms": {
       "type": "integer",
-      "required": false
+      "required": false,
+      "description": "Delay between probes in milliseconds; defaults to 50 and must be 1 through 10,000."
     },
     "port": {
       "type": "integer",
-      "required": false
+      "required": false,
+      "description": "TCP port checked by tcp_port_open."
     },
     "timeout_ms": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Maximum wait in milliseconds, from 0 through 86,400,000."
     }
   },
   "arguments": [
@@ -243,6 +249,15 @@
           }
         ]
       ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run wait.until with probe \"file_exists\" and path \".\" and interval_ms 1 and timeout_ms 100 as value",
+      "expected_output": {
+        "ready": true,
+        "waited_ms": 0
+      }
     }
   ]
 }

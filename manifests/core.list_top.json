@@ -1,6 +1,6 @@
 {
   "name": "list.top",
-  "description": "Provides the list top operation for controlled scripts.",
+  "description": "Return up to n largest values, sorted ascending by whole value or a JSON Pointer-selected value.",
   "phrases": [
     "top values",
     "largest records"
@@ -10,17 +10,21 @@
   "parameters": {
     "items": {
       "type": "list",
-      "items": "json"
+      "items": "json",
+      "description": "List of values to rank."
     },
     "key": {
-      "type": "string"
+      "type": "string",
+      "description": "Optional JSON Pointer used to select a value for ranking; omit to compare whole values."
     },
     "n": {
       "type": "unsigned_integer",
-      "required": true
+      "required": true,
+      "description": "Maximum number of largest values to return; must be a nonnegative integer."
     },
     "collect": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Accepted for compatibility; this operation returns the selected values directly."
     }
   },
   "parameter_alternatives": [
@@ -114,5 +118,14 @@
         }
       }
     }
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.top with items [3, 8, 1, 6] and n 2 as result",
+      "expected_output": [
+        8,
+        6
+      ]
+    }
+  ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "list.reverse",
-  "description": "Provides list.reverse for controlled scripts.",
+  "description": "Return the input list in reverse order without changing its values.",
   "phrases": [
     "list reverse",
     "items reverse"
@@ -10,7 +10,8 @@
   "parameters": {
     "items": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "List to reverse."
     }
   },
   "arguments": [
@@ -65,5 +66,15 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.reverse with items [1, 2, 3] as result",
+      "expected_output": [
+        3,
+        2,
+        1
+      ]
+    }
+  ]
 }

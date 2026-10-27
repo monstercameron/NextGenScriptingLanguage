@@ -1,16 +1,18 @@
 {
   "name": "time.sleep",
-  "description": "Provides the time.sleep operation for controlled scripts.",
+  "description": "Waits for a bounded nonnegative duration and returns true when the delay completes; milliseconds takes precedence when it is valid.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "milliseconds": {
       "type": "integer",
-      "required": false
+      "required": false,
+      "description": "Optional whole-millisecond delay from 0 through 86,400,000; used before seconds when nonnegative."
     },
     "seconds": {
       "type": "json",
-      "required": false
+      "required": false,
+      "description": "Optional nonnegative numeric delay in seconds, rounded up to a millisecond and bounded to 24 hours."
     }
   },
   "arguments": [
@@ -105,6 +107,12 @@
           }
         ]
       ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run time.sleep with milliseconds 0 as value",
+      "expected_output": true
     }
   ]
 }

@@ -1,15 +1,17 @@
 {
   "name": "text.strip_suffix",
-  "description": "Provides the text strip suffix operation for controlled scripts.",
+  "description": "Removes one exact suffix when present and otherwise returns the input text unchanged.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to transform; omitted text is read from UTF-8 stdin."
     },
     "suffix": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Exact ending to remove when present."
     }
   },
   "arguments": [
@@ -72,5 +74,11 @@
   "phrases": [
     "text strip_suffix",
     "remove text suffix"
+  ],
+  "examples": [
+    {
+      "program": "run text.strip_suffix with text \"archive.zip\" and suffix \".zip\" as value",
+      "expected_output": "archive"
+    }
   ]
 }

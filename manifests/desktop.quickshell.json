@@ -1,6 +1,6 @@
 {
   "name": "desktop.quickshell",
-  "description": "Provides the desktop quickshell operation for controlled scripts.",
+  "description": "Renders the supplied Quickshell configuration through the desktop rendering capability.",
   "build_feature": "desktop",
   "binary": "qs",
   "accepts_stdin": false,

@@ -1,6 +1,6 @@
 {
   "name": "list.enumerate",
-  "description": "Provides list.enumerate for controlled scripts.",
+  "description": "Pair each input value with its zero-based position in the original list.",
   "phrases": [
     "list enumerate",
     "items enumerate"
@@ -10,7 +10,8 @@
   "parameters": {
     "items": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON list to enumerate; each result contains an index and its corresponding item."
     }
   },
   "arguments": [
@@ -65,5 +66,20 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.enumerate with items [\"red\", \"blue\"] as result",
+      "expected_output": [
+        {
+          "index": 0,
+          "item": "red"
+        },
+        {
+          "index": 1,
+          "item": "blue"
+        }
+      ]
+    }
+  ]
 }

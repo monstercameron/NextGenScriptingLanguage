@@ -1,6 +1,6 @@
 {
   "name": "jev.score",
-  "description": "Provides the jev score operation for controlled scripts.",
+  "description": "Scores the question against the ordered levels and returns the score, confidence, and separate threshold-based accepted flag.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,
@@ -26,7 +26,8 @@
     "minimum": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 100
+      "maximum": 100,
+      "description": "Confidence percentage required for `accepted` to be true; ranges from 0 to 100 and defaults to 0, independent of the label or yes/no decision."
     },
     "max_bytes": {
       "type": "integer",

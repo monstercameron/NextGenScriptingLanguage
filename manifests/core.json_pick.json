@@ -1,6 +1,6 @@
 {
   "name": "json.pick",
-  "description": "Provides the json.pick operation for controlled scripts.",
+  "description": "Returns a copy of the root object containing only the named top-level members that exist.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
@@ -10,12 +10,14 @@
       "fields": {},
       "additional_properties": {
         "type": "json"
-      }
+      },
+      "description": "JSON object to select from; stdin is used when omitted."
     },
     "keys": {
       "type": "list",
       "items": "string",
-      "required": true
+      "required": true,
+      "description": "Names of top-level object members to include in the result."
     }
   },
   "arguments": [
@@ -77,5 +79,14 @@
   },
   "phrases": [
     "json pick"
+  ],
+  "examples": [
+    {
+      "program": "run json.pick with document {\"name\":\"Ada\",\"score\":8,\"active\":true} and keys [\"name\",\"score\"] as result",
+      "expected_output": {
+        "name": "Ada",
+        "score": 8
+      }
+    }
   ]
 }

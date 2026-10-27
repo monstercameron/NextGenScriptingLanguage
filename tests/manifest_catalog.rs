@@ -1,4 +1,5 @@
-use flow::ast::Value;
+use flow::applets;
+use flow::ast::{Connection, StepKind, Value};
 use flow::contracts::AppletBackend;
 use flow::manifest::Registry;
 use flow::modules::load_program_module;
@@ -147,6 +148,252 @@ fn every_shipped_manifest_has_a_description_and_each_in_process_applet_a_phrase(
                 "{} has no discovery phrase",
                 manifest.name
             );
+        }
+    }
+}
+
+#[test]
+fn shipped_catalog_descriptions_parameters_and_in_process_examples_are_useful() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests");
+    let registry = Registry::load(&root).unwrap();
+    let manifests = registry.manifests().unwrap();
+    let expected_example_count = manifests
+        .iter()
+        .filter(|manifest| manifest.execution_backend() == AppletBackend::InProcess)
+        .map(|manifest| manifest.examples.len())
+        .sum::<usize>();
+    let mut example_failures = Vec::new();
+    let mut executed_example_count = 0usize;
+    for manifest in manifests {
+        let description = manifest.description.as_deref().unwrap_or_default();
+        assert!(
+            !description.trim().is_empty(),
+            "{} has no description",
+            manifest.name
+        );
+        let template = format!(
+            "provides the {} operation for controlled scripts.",
+            manifest.name.replace(['.', '_'], " ").to_lowercase()
+        );
+        assert_ne!(
+            description.to_lowercase(),
+            template,
+            "{} has a template description",
+            manifest.name
+        );
+        assert!(
+            !description_only_repeats_name(description, &manifest.name),
+            "{} only restates its name",
+            manifest.name
+        );
+
+        if manifest.execution_backend() != AppletBackend::InProcess {
+            continue;
+        }
+        let contract = manifest.contract();
+        let parameters = contract["parameters_schema"]["properties"]
+            .as_object()
+            .expect("in-process parameter schema is an object");
+        for (name, schema) in parameters {
+            let parameter_description = schema["description"].as_str().unwrap_or_default();
+            assert!(
+                !parameter_description.trim().is_empty(),
+                "{}.{} has no parameter description",
+                manifest.name,
+                name
+            );
+            assert!(
+                !description_only_repeats_name(parameter_description, name),
+                "{}.{} only repeats its parameter name",
+                manifest.name,
+                name
+            );
+        }
+        assert_eq!(
+            contract["examples"],
+            serde_json::to_value(&manifest.examples).unwrap()
+        );
+        assert!(
+            (1..=2).contains(&manifest.examples.len()),
+            "{} must have one or two examples",
+            manifest.name
+        );
+        for example in &manifest.examples {
+            let parsed = match flow::parser::parse(&example.program) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    example_failures.push(format!("{}: parse failed: {error:#}", manifest.name));
+                    continue;
+                }
+            };
+            if !parsed.definitions.is_empty() || !parsed.inputs.is_empty() {
+                example_failures.push(format!(
+                    "{}: example must not define reusable programs or inputs",
+                    manifest.name
+                ));
+                continue;
+            }
+            let (input, call) = match example_invocation(&parsed.steps, &manifest.name) {
+                Ok(invocation) => invocation,
+                Err(error) => {
+                    example_failures.push(format!("{}: {error}", manifest.name));
+                    continue;
+                }
+            };
+            let resolved = match registry.resolve_call(call) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    example_failures.push(format!("{}: resolve failed: {error:#}", manifest.name));
+                    continue;
+                }
+            };
+            if resolved.name != manifest.name {
+                example_failures.push(format!(
+                    "{}: example resolves to {}",
+                    manifest.name, resolved.name
+                ));
+                continue;
+            }
+            if let Err(error) = resolved.validate(call) {
+                example_failures.push(format!("{}: check failed: {error:#}", manifest.name));
+                continue;
+            }
+            let arguments = call
+                .parameters
+                .iter()
+                .map(|(name, value)| (name.clone(), ast_value_to_json(value)))
+                .collect::<serde_json::Map<_, _>>();
+            let temp = tempdir().unwrap();
+            executed_example_count += 1;
+            let actual =
+                match applets::execute_in_cwd(&call.operation, &arguments, &input, temp.path()) {
+                    Ok(actual) => actual,
+                    Err(error) => {
+                        example_failures
+                            .push(format!("{}: execution failed: {error}", manifest.name));
+                        continue;
+                    }
+                };
+            if actual != example.expected_output {
+                example_failures.push(format!(
+                    "{}: expected {}, got {}",
+                    manifest.name, example.expected_output, actual
+                ));
+            }
+        }
+    }
+    assert!(
+        example_failures.is_empty(),
+        "in-process applet example failures:\n{}",
+        example_failures.join("\n")
+    );
+    assert_eq!(
+        executed_example_count, expected_example_count,
+        "every declared in-process applet example must be executed"
+    );
+}
+
+fn description_only_repeats_name(description: &str, name: &str) -> bool {
+    const GENERIC: &[&str] = &[
+        "a",
+        "an",
+        "applet",
+        "apply",
+        "applies",
+        "call",
+        "calls",
+        "controlled",
+        "does",
+        "find",
+        "for",
+        "get",
+        "gets",
+        "handle",
+        "handles",
+        "is",
+        "operation",
+        "perform",
+        "performs",
+        "provide",
+        "provides",
+        "return",
+        "returns",
+        "run",
+        "runs",
+        "scripts",
+        "supports",
+        "the",
+        "to",
+        "use",
+        "value",
+    ];
+    let words = |text: &str, filter_generic: bool| {
+        text.to_lowercase()
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty() && (!filter_generic || !GENERIC.contains(word)))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    words(description, true) == words(name, false)
+}
+
+fn example_invocation<'a>(
+    steps: &'a [flow::ast::Step],
+    name: &str,
+) -> Result<(Vec<u8>, &'a flow::ast::Invocation), String> {
+    match steps {
+        [step] => match &step.kind {
+            StepKind::Invoke {
+                call,
+                connection: Connection::Start,
+            } => Ok((Vec::new(), call)),
+            _ => Err(format!("{name} example must be a direct invocation")),
+        },
+        [source, invoke] => {
+            let input = match &source.kind {
+                StepKind::UseValue {
+                    source: Value::String(text),
+                } => text.as_bytes().to_vec(),
+                _ => {
+                    return Err(format!(
+                        "{name} example input must use a literal text value"
+                    ))
+                }
+            };
+            match &invoke.kind {
+                StepKind::Invoke {
+                    call,
+                    connection: Connection::Pipe,
+                } => Ok((input, call)),
+                _ => Err(format!(
+                    "{name} example must pipe its literal input to the applet"
+                )),
+            }
+        }
+        _ => Err(format!(
+            "{name} example must contain one applet call and optional literal input"
+        )),
+    }
+}
+
+fn ast_value_to_json(value: &Value) -> serde_json::Value {
+    match value {
+        Value::String(value) => serde_json::Value::String(value.clone()),
+        Value::Integer(value) => serde_json::Value::Number((*value).into()),
+        Value::Number(value) => serde_json::Value::Number(value.clone()),
+        Value::Bool(value) => serde_json::Value::Bool(*value),
+        Value::List(values) => {
+            serde_json::Value::Array(values.iter().map(ast_value_to_json).collect())
+        }
+        Value::Record(values) => serde_json::Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), ast_value_to_json(value)))
+                .collect(),
+        ),
+        Value::Null => serde_json::Value::Null,
+        Value::Reference(reference) => {
+            panic!("example values must be literals, found reference {reference:?}")
         }
     }
 }

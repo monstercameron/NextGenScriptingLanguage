@@ -1,16 +1,18 @@
 {
   "name": "json.length",
-  "description": "Provides the json.length operation for controlled scripts.",
+  "description": "Returns the item count of an array or object, or the Unicode character count of a string selected by JSON Pointer.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "document": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON value containing the target array, object, or string; stdin is used when omitted."
     },
     "pointer": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "JSON Pointer locating the value to count; an empty pointer selects the root value."
     }
   },
   "arguments": [
@@ -65,5 +67,11 @@
   },
   "phrases": [
     "json length"
+  ],
+  "examples": [
+    {
+      "program": "run json.length with document [\"Ada\",\"Lin\"] as result",
+      "expected_output": 2
+    }
   ]
 }

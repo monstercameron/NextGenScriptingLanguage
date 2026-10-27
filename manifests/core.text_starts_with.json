@@ -1,6 +1,6 @@
 {
   "name": "text.starts_with",
-  "description": "Provides text.starts_with for controlled scripts.",
+  "description": "Returns whether the input text begins with the exact supplied prefix.",
   "phrases": [
     "check text prefix"
   ],
@@ -8,11 +8,13 @@
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to inspect; omitted text is read from UTF-8 stdin."
     },
     "prefix": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Exact beginning to test; an empty prefix matches."
     }
   },
   "arguments": [
@@ -64,5 +66,11 @@
     "capabilities": [
       "text.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run text.starts_with with text \"release-notes\" and prefix \"release\" as value",
+      "expected_output": true
+    }
+  ]
 }

@@ -1,12 +1,13 @@
 {
   "name": "csv.stringify",
-  "description": "Provides the csv stringify operation for controlled scripts.",
+  "description": "Serializes a rectangular table of string cells as CSV records using CRLF line endings and CSV quoting rules.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "table": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Record containing a string headers array and a rows array of string arrays; each data row must have the same number of cells as the headers."
     }
   },
   "arguments": [
@@ -76,5 +77,11 @@
   },
   "phrases": [
     "csv stringify"
+  ],
+  "examples": [
+    {
+      "program": "run csv.stringify with table {\"headers\":[\"name\",\"city\"],\"rows\":[[\"Ada\",\"London\"]]} as csv",
+      "expected_output": "name,city\r\nAda,London\r\n"
+    }
   ]
 }

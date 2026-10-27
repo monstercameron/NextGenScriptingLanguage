@@ -1,6 +1,6 @@
 {
   "name": "package.query",
-  "description": "Provides the package query operation for controlled scripts.",
+  "description": "Checks one package with pacman and returns its package details when installed, with a distinct not-installed outcome when absent.",
   "binary": "pacman",
   "accepts_stdin": false,
   "cacheable": false,

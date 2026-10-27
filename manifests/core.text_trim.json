@@ -1,6 +1,6 @@
 {
   "name": "text.trim",
-  "description": "Provides text.trim for controlled scripts.",
+  "description": "Removes leading, trailing, or both-side characters from text, using Unicode whitespace by default or the supplied character set.",
   "phrases": [
     "text trim",
     "trim whitespace",
@@ -10,7 +10,8 @@
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to trim; omitted text is read from UTF-8 stdin."
     },
     "mode": {
       "type": "string",
@@ -18,10 +19,12 @@
         "both",
         "start",
         "end"
-      ]
+      ],
+      "description": "Which ends to trim: `both`, `start`, or `end`; defaults to `both`."
     },
     "chars": {
-      "type": "string"
+      "type": "string",
+      "description": "Optional set of individual characters to trim instead of Unicode whitespace."
     }
   },
   "arguments": [
@@ -84,5 +87,11 @@
     "capabilities": [
       "text.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run text.trim with text \"  ready  \" and mode \"both\" as value",
+      "expected_output": "ready"
+    }
+  ]
 }

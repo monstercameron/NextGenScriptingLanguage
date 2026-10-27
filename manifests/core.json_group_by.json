@@ -1,16 +1,18 @@
 {
   "name": "json.group_by",
-  "description": "Groups array elements by a JSON Pointer, ordered by the serialized group key.",
+  "description": "Groups root array items by the JSON value selected by pointer and returns groups ordered by their serialized key.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "document": {
       "type": "list",
       "items": "json",
-      "required": true
+      "required": true,
+      "description": "Root JSON array whose items are grouped; stdin is used when omitted."
     },
     "pointer": {
-      "type": "string"
+      "type": "string",
+      "description": "JSON Pointer evaluated relative to each item; an empty pointer groups equal whole items."
     }
   },
   "arguments": [
@@ -74,5 +76,28 @@
   },
   "phrases": [
     "json group_by"
+  ],
+  "examples": [
+    {
+      "program": "run json.group_by with document [{\"team\":\"blue\",\"name\":\"Ada\"},{\"team\":\"red\",\"name\":\"Lin\"},{\"team\":\"blue\",\"name\":\"Sam\"}] and pointer \"/team\" as result",
+      "expected_output": [
+        [
+          {
+            "name": "Ada",
+            "team": "blue"
+          },
+          {
+            "name": "Sam",
+            "team": "blue"
+          }
+        ],
+        [
+          {
+            "name": "Lin",
+            "team": "red"
+          }
+        ]
+      ]
+    }
   ]
 }

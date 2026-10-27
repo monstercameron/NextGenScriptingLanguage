@@ -1,12 +1,13 @@
 {
   "name": "text.trim_final_lf",
-  "description": "Provides the text trim final lf operation for controlled scripts.",
+  "description": "Removes at most one final LF byte from text and preserves all preceding content, including any earlier newline.",
   "binary": "@execute-applet",
   "cacheable": true,
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to inspect; omitted text is read from UTF-8 stdin."
     }
   },
   "arguments": [
@@ -62,5 +63,11 @@
   },
   "phrases": [
     "text trim_final_lf"
+  ],
+  "examples": [
+    {
+      "program": "run text.trim_final_lf with text \"value\\n\\n\" as value",
+      "expected_output": "value\n"
+    }
   ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "number.trunc",
-  "description": "Provides number.trunc for controlled scripts.",
+  "description": "Discard the fractional part of a finite number, rounding toward zero.",
   "phrases": [
     "number trunc",
     "value trunc"
@@ -10,7 +10,8 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite JSON number to truncate."
     }
   },
   "arguments": [
@@ -56,5 +57,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.trunc with value -2.8 as result",
+      "expected_output": -2.0
+    }
+  ]
 }

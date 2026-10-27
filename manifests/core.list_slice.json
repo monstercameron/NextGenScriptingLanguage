@@ -1,6 +1,6 @@
 {
   "name": "list.slice",
-  "description": "Provides list.slice for controlled scripts.",
+  "description": "Return a contiguous section of a list using an offset and nonnegative length.",
   "phrases": [
     "list slice",
     "items slice"
@@ -10,15 +10,18 @@
   "parameters": {
     "items": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "List to slice."
     },
     "offset": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Starting index; a negative value counts backward from the end of the list."
     },
     "length": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Number of values to return; must be nonnegative and remain within the list bounds."
     }
   },
   "arguments": [
@@ -111,6 +114,15 @@
             "maximum": 100000
           }
         ]
+      ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run list.slice with items [\"a\", \"b\", \"c\", \"d\"] and offset 1 and length 2 as result",
+      "expected_output": [
+        "b",
+        "c"
       ]
     }
   ]

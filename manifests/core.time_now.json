@@ -1,12 +1,13 @@
 {
   "name": "time.now",
-  "description": "Provides the time.now operation for controlled scripts.",
+  "description": "Returns the current clock time as Unix seconds, milliseconds, nanoseconds, and an RFC 3339 UTC string; an explicit epoch makes the result deterministic.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "epoch_s": {
       "type": "integer",
-      "required": false
+      "required": false,
+      "description": "Optional fixed Unix timestamp in seconds for a deterministic result; omitted reads the system clock."
     }
   },
   "arguments": [
@@ -57,5 +58,16 @@
   },
   "phrases": [
     "time now"
+  ],
+  "examples": [
+    {
+      "program": "run time.now with epoch_s 0 as value",
+      "expected_output": {
+        "epoch_s": 0,
+        "epoch_ms": 0,
+        "epoch_ns": 0,
+        "iso": "1970-01-01T00:00:00Z"
+      }
+    }
   ]
 }

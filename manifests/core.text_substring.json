@@ -1,6 +1,6 @@
 {
   "name": "text.substring",
-  "description": "Provides text.substring for controlled scripts.",
+  "description": "Returns a bounded slice starting at a character or byte index; negative starts count backward from the end, and byte indexes must land on UTF-8 boundaries.",
   "phrases": [
     "take text substring"
   ],
@@ -8,22 +8,26 @@
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to slice; omitted text is read from UTF-8 stdin."
     },
     "start": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Zero-based starting index; a negative value counts backward from the end."
     },
     "length": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Nonnegative number of characters or bytes to return."
     },
     "unit": {
       "type": "string",
       "enum": [
         "chars",
         "bytes"
-      ]
+      ],
+      "description": "Indexing unit: `chars` for Unicode scalar values or `bytes` for UTF-8 bytes; defaults to `chars`."
     }
   },
   "arguments": [
@@ -118,6 +122,12 @@
           }
         ]
       ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run text.substring with text \"abcdef\" and start 2 and length 3 as value",
+      "expected_output": "cde"
     }
   ]
 }

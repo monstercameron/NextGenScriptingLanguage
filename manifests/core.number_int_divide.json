@@ -1,6 +1,6 @@
 {
   "name": "number.int_divide",
-  "description": "Provides number.int_divide for controlled scripts.",
+  "description": "Divide two integers and return the quotient truncated toward zero.",
   "phrases": [
     "number int_divide",
     "left int_divide"
@@ -10,11 +10,13 @@
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Integer dividend."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Nonzero integer divisor."
     }
   },
   "arguments": [
@@ -66,5 +68,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.int_divide with left -17 and right 5 as result",
+      "expected_output": -3
+    }
+  ]
 }

@@ -1,15 +1,17 @@
 {
   "name": "path.basename",
-  "description": "Provides the path basename operation for controlled scripts.",
+  "description": "Returns the final slash-delimited path component, optionally removing a matching nonempty suffix while preserving a component that would become empty.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "Path whose final component is requested; `/` separates components."
     },
     "suffix": {
-      "type": "string"
+      "type": "string",
+      "description": "Optional exact suffix to remove from the basename; an empty suffix is ignored."
     }
   },
   "arguments": [
@@ -64,5 +66,11 @@
   },
   "phrases": [
     "path basename"
+  ],
+  "examples": [
+    {
+      "program": "run path.basename with path \"/srv/log/app.log\" and suffix \".log\" as value",
+      "expected_output": "app"
+    }
   ]
 }

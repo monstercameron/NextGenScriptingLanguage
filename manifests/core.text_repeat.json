@@ -1,6 +1,6 @@
 {
   "name": "text.repeat",
-  "description": "Provides text.repeat for controlled scripts.",
+  "description": "Repeats the input text the requested number of times and returns the concatenated result.",
   "phrases": [
     "repeat text"
   ],
@@ -8,11 +8,13 @@
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to repeat; omitted text is read from UTF-8 stdin."
     },
     "count": {
       "type": "unsigned_integer",
-      "required": true
+      "required": true,
+      "description": "Nonnegative number of repetitions."
     }
   },
   "parameter_alternatives": [
@@ -77,5 +79,11 @@
     "capabilities": [
       "text.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run text.repeat with text \"ha\" and count 3 as value",
+      "expected_output": "hahaha"
+    }
+  ]
 }

@@ -1,11 +1,12 @@
 {
   "name": "ini.parse",
-  "description": "Provides the ini parse operation for controlled scripts.",
+  "description": "Parses the supported INI subset into a JSON object, keeping all values as strings and rejecting duplicate keys or sections.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "INI document text to parse; when omitted, the applet reads the document from its input stream."
     }
   },
   "arguments": [
@@ -61,5 +62,16 @@
   },
   "phrases": [
     "ini parse"
+  ],
+  "examples": [
+    {
+      "program": "run ini.parse with text \"port=8080\\n[server]\\nhost=localhost\\n\" as config",
+      "expected_output": {
+        "port": "8080",
+        "server": {
+          "host": "localhost"
+        }
+      }
+    }
   ]
 }

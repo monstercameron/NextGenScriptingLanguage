@@ -1,16 +1,18 @@
 {
   "name": "color.parse_rgb.result",
-  "description": "Provides the color parse rgb result operation for controlled scripts.",
+  "description": "Parses three comma-separated decimal RGB channels into a normalized hex color and returns a structured failure when the input is invalid.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "default_hex": {
       "type": "string",
       "required": true,
-      "pattern": "hex_color_optional_hash"
+      "pattern": "hex_color_optional_hash",
+      "description": "Six-digit hexadecimal fallback used to validate the request; an optional leading # is accepted."
     },
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Optional comma-separated red, green, and blue decimal channels, each from 0 through 255; when omitted, the applet reads its input stream."
     }
   },
   "arguments": [
@@ -112,5 +114,14 @@
   },
   "phrases": [
     "color parse_rgb result"
+  ],
+  "examples": [
+    {
+      "program": "run color.parse_rgb.result with default_hex \"#ffffff\" and text \"12, 34, 56\" as color",
+      "expected_output": {
+        "valid": true,
+        "hex": "0c2238"
+      }
+    }
   ]
 }

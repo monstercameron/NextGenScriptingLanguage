@@ -1,18 +1,21 @@
 {
   "name": "decode.base64",
-  "description": "Encodes or decodes RFC 4648 base64 text, with optional URL-safe alphabet and padding control.",
+  "description": "Decodes RFC 4648 base64 text to UTF-8, with options for the URL-safe alphabet and inputs that omit padding.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "text": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Base64-encoded text to decode; decoded bytes must be valid UTF-8."
     },
     "url_safe": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Set true when the input uses - and _ in place of the standard + and / alphabet; omitted means the standard alphabet."
     },
     "padding": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Set false to accept unpadded input and restore omitted padding; omitted means padding is required."
     }
   },
   "arguments": [
@@ -73,5 +76,11 @@
   },
   "phrases": [
     "decode base64"
+  ],
+  "examples": [
+    {
+      "program": "run decode.base64 with text \"Zg\" and padding false as decoded",
+      "expected_output": "f"
+    }
   ]
 }

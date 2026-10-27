@@ -1,6 +1,6 @@
 {
   "name": "fs.unlink_checked",
-  "description": "Provides the fs unlink checked operation for controlled scripts.",
+  "description": "Removes a file or symlink only if its current filesystem snapshot matches the supplied value, then returns a receipt describing the removed entry.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "stdio": {

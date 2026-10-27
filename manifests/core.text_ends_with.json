@@ -1,6 +1,6 @@
 {
   "name": "text.ends_with",
-  "description": "Provides text.ends_with for controlled scripts.",
+  "description": "Returns whether the input text ends with the exact supplied suffix.",
   "phrases": [
     "check text ending"
   ],
@@ -8,11 +8,13 @@
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to inspect; omitted text is read from UTF-8 stdin."
     },
     "suffix": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Exact ending to test; an empty suffix matches."
     }
   },
   "arguments": [
@@ -64,5 +66,11 @@
     "capabilities": [
       "text.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run text.ends_with with text \"report.csv\" and suffix \".csv\" as value",
+      "expected_output": true
+    }
+  ]
 }

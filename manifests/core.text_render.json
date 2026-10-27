@@ -1,14 +1,16 @@
 {
   "name": "text.render",
-  "description": "Render a text template by substituting named values.",
+  "description": "Renders a template by replacing `{{name}}` placeholders with matching scalar values; exactly one inline template or template file must be supplied.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "template": {
-      "type": "string"
+      "type": "string",
+      "description": "Inline template text; provide this or template_path, but not both."
     },
     "template_path": {
-      "type": "path"
+      "type": "path",
+      "description": "Path to a UTF-8 template file; provide this or template, but not both."
     },
     "values": {
       "type": "record",
@@ -16,7 +18,8 @@
       "fields": {},
       "additional_properties": {
         "type": "scalar"
-      }
+      },
+      "description": "Record of scalar values referenced by placeholder names in the template."
     }
   },
   "arguments": [
@@ -111,6 +114,12 @@
           }
         ]
       ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run text.render with template \"Hello, {{name}}\" and values {\"name\": \"Ada\"} as value",
+      "expected_output": "Hello, Ada"
     }
   ]
 }

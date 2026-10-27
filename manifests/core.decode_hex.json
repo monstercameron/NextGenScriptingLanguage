@@ -1,12 +1,13 @@
 {
   "name": "decode.hex",
-  "description": "Provides the decode.hex operation for controlled scripts.",
+  "description": "Decodes an even-length hexadecimal byte string and returns the decoded bytes as UTF-8 text.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "text": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Hexadecimal byte pairs to decode; the decoded bytes must form valid UTF-8."
     }
   },
   "arguments": [
@@ -55,5 +56,11 @@
   },
   "phrases": [
     "decode hex"
+  ],
+  "examples": [
+    {
+      "program": "run decode.hex with text \"486921\" as decoded",
+      "expected_output": "Hi!"
+    }
   ]
 }

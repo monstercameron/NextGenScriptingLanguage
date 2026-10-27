@@ -1,17 +1,20 @@
 {
   "name": "number.parse_integer.result",
-  "description": "Provides the number parse integer result operation for controlled scripts.",
+  "description": "Parse integer text and return a typed result record that preserves parse success or failure status.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Optional integer text; when omitted, the applet reads stdin."
     },
     "base": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Radix from 2 through 36; defaults to decimal (10)."
     },
     "trim_ascii_whitespace": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "When true, remove ASCII whitespace around the text before parsing."
     }
   },
   "arguments": [
@@ -114,6 +117,12 @@
           }
         ]
       ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run number.parse_integer.result with text \"42\" as result",
+      "expected_output": 42
     }
   ]
 }

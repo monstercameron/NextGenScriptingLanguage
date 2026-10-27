@@ -1,6 +1,6 @@
 {
   "name": "ps",
-  "description": "Provides the ps operation for controlled scripts.",
+  "description": "Lists process information using the selected platform ps flags.",
   "binary": "ps",
   "cacheable": false,
   "parameters": {

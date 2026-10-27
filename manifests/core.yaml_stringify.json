@@ -1,12 +1,13 @@
 {
   "name": "yaml.stringify",
-  "description": "Provides the yaml stringify operation for controlled scripts.",
+  "description": "Serializes JSON-compatible values as two-space-indented YAML and quotes strings that would otherwise parse as another value.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON-compatible value to serialize; object keys are written in sorted order."
     }
   },
   "arguments": [
@@ -55,5 +56,11 @@
   },
   "phrases": [
     "yaml stringify"
+  ],
+  "examples": [
+    {
+      "program": "run yaml.stringify with value {\"name\": \"Ada\"} as value",
+      "expected_output": "name: Ada\n"
+    }
   ]
 }

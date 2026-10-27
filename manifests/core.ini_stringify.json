@@ -1,6 +1,6 @@
 {
   "name": "ini.stringify",
-  "description": "Provides the ini stringify operation for controlled scripts.",
+  "description": "Serializes a JSON object of scalar top-level values and one-level section objects as the supported INI subset.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
@@ -10,7 +10,8 @@
       "fields": {},
       "additional_properties": {
         "type": "json"
-      }
+      },
+      "description": "Object containing top-level scalar values and/or section objects whose members are scalar; arrays, nulls, nested sections and multiline values are unsupported."
     }
   },
   "arguments": [
@@ -63,5 +64,11 @@
   },
   "phrases": [
     "ini stringify"
+  ],
+  "examples": [
+    {
+      "program": "run ini.stringify with value {\"server\":{\"host\":\"localhost\"}} as ini",
+      "expected_output": "[server]\nhost = localhost\n"
+    }
   ]
 }

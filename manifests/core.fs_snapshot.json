@@ -1,6 +1,6 @@
 {
   "name": "fs.snapshot",
-  "description": "Provides the fs snapshot operation for controlled scripts.",
+  "description": "Captures a regular UTF-8 file and returns its text, SHA-256 content hash, filesystem snapshot, symlink target, and mode for later change checks.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "stdio": {

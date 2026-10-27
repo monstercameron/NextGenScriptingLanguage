@@ -1,16 +1,18 @@
 {
   "name": "time.parse",
-  "description": "Provides the time.parse operation for controlled scripts.",
+  "description": "Parses a date-time string with a Chrono format and returns its Unix timestamp in whole seconds.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "text": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Date-time text to parse, including the offset required by the chosen format."
     },
     "format": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Chrono strftime format that describes text, including `%z` when text has an offset."
     }
   },
   "arguments": [
@@ -67,5 +69,11 @@
   },
   "phrases": [
     "time parse"
+  ],
+  "examples": [
+    {
+      "program": "run time.parse with text \"2024-02-29T12:00:00+0000\" and format \"%Y-%m-%dT%H:%M:%S%z\" as value",
+      "expected_output": 1709208000
+    }
   ]
 }

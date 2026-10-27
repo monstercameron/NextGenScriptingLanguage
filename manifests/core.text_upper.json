@@ -1,11 +1,12 @@
 {
   "name": "text.upper",
-  "description": "Provides the text upper operation for controlled scripts.",
+  "description": "Converts text with locale-independent Unicode uppercase mappings.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to uppercase; omitted text is read from UTF-8 stdin."
     }
   },
   "arguments": [
@@ -62,5 +63,11 @@
   "phrases": [
     "text upper",
     "uppercase text"
+  ],
+  "examples": [
+    {
+      "program": "run text.upper with text \"hello\" as value",
+      "expected_output": "HELLO"
+    }
   ]
 }

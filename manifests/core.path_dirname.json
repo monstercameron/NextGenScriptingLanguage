@@ -1,12 +1,13 @@
 {
   "name": "path.dirname",
-  "description": "Provides the path dirname operation for controlled scripts.",
+  "description": "Returns the slash-delimited parent portion of a path, using `.` when it has no parent and `/` for root-level paths.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "Path whose parent component is requested; `/` separates components."
     }
   },
   "arguments": [
@@ -55,5 +56,11 @@
   },
   "phrases": [
     "path dirname"
+  ],
+  "examples": [
+    {
+      "program": "run path.dirname with path \"/srv/log/app.log\" as value",
+      "expected_output": "/srv/log"
+    }
   ]
 }

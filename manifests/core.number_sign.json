@@ -1,6 +1,6 @@
 {
   "name": "number.sign",
-  "description": "Provides number.sign for controlled scripts.",
+  "description": "Return -1 for a negative number, 0 for zero, and 1 for a positive number.",
   "phrases": [
     "number sign",
     "value sign"
@@ -10,7 +10,8 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite JSON number whose sign to return."
     }
   },
   "arguments": [
@@ -56,5 +57,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.sign with value -12 as result",
+      "expected_output": -1
+    }
+  ]
 }

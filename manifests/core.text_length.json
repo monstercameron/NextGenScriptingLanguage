@@ -1,6 +1,6 @@
 {
   "name": "text.length",
-  "description": "Provides text.length for controlled scripts.",
+  "description": "Counts Unicode scalar values or UTF-8 bytes in the input text and returns the selected count as an integer.",
   "phrases": [
     "count text characters"
   ],
@@ -8,14 +8,16 @@
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text whose length is measured; omitted text is read from UTF-8 stdin."
     },
     "unit": {
       "type": "string",
       "enum": [
         "chars",
         "bytes"
-      ]
+      ],
+      "description": "Length unit: `chars` counts Unicode scalar values and `bytes` counts UTF-8 bytes; defaults to `chars`."
     }
   },
   "arguments": [
@@ -71,5 +73,11 @@
     "capabilities": [
       "text.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run text.length with text \"é🙂\" and unit \"bytes\" as value",
+      "expected_output": 6
+    }
+  ]
 }

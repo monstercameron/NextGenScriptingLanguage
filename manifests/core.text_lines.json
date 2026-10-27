@@ -1,11 +1,12 @@
 {
   "name": "text.lines",
-  "description": "Provides the text lines operation for controlled scripts.",
+  "description": "Splits UTF-8 text into lines, treating one final LF as a terminator and removing one CR before each line break.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "UTF-8 text to split into lines; omitted text is read from stdin."
     }
   },
   "arguments": [
@@ -67,5 +68,14 @@
   },
   "phrases": [
     "text lines"
+  ],
+  "examples": [
+    {
+      "program": "run text.lines with text \"first\\nsecond\\n\" as value",
+      "expected_output": [
+        "first",
+        "second"
+      ]
+    }
   ]
 }

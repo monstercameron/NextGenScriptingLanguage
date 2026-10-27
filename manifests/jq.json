@@ -1,6 +1,6 @@
 {
   "name": "jq",
-  "description": "Provides the jq operation for controlled scripts.",
+  "description": "Transforms standard input JSON with the supplied jq filter and optional jq flags.",
   "binary": "jq",
   "accepts_stdin": true,
   "cacheable": false,

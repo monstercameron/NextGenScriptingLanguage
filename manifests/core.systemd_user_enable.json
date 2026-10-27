@@ -1,6 +1,6 @@
 {
   "name": "systemd.user.enable",
-  "description": "Provides the systemd user enable operation for controlled scripts.",
+  "description": "Enables the named systemd user unit to start automatically; it does not start the unit now.",
   "binary": "systemctl",
   "accepts_stdin": false,
   "cacheable": false,

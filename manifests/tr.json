@@ -1,6 +1,6 @@
 {
   "name": "tr",
-  "description": "Provides the tr operation for controlled scripts.",
+  "description": "Translates or deletes characters in standard input using the supplied character sets and tr flags.",
   "binary": "tr",
   "accepts_stdin": true,
   "cacheable": true,

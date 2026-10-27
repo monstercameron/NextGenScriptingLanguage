@@ -1,6 +1,6 @@
 {
   "name": "false",
-  "description": "Provides the false operation for controlled scripts.",
+  "description": "Returns a failure status without producing output, for testing or deliberately taking a failure branch.",
   "phrases": [
     "fail"
   ],

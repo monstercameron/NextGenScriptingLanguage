@@ -1,16 +1,18 @@
 {
   "name": "number.add",
-  "description": "Add two numbers and return their numeric sum.",
+  "description": "Add two finite numbers and return their sum.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "First finite number to add."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Second finite number to add."
     }
   },
   "arguments": [
@@ -67,5 +69,11 @@
     "number add",
     "add numbers",
     "sum numbers"
+  ],
+  "examples": [
+    {
+      "program": "run number.add with left 12 and right 30 as result",
+      "expected_output": 42
+    }
   ]
 }

@@ -1,16 +1,18 @@
 {
   "name": "fs.ensure_symlink",
-  "description": "Provides the fs ensure symlink operation for controlled scripts.",
+  "description": "Creates a symbolic link or atomically retargets an existing link, refusing to replace a regular file or directory.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "Symbolic-link path to create or update; relative paths resolve from the program working directory."
     },
     "target": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "Nonempty target path to store in the link; relative targets are interpreted by the filesystem from the link location."
     }
   },
   "arguments": [
@@ -108,5 +110,16 @@
   },
   "phrases": [
     "fs ensure_symlink"
+  ],
+  "examples": [
+    {
+      "program": "run fs.ensure_symlink with path \"catalog-example-link\" and target \"catalog-example-target\" as result",
+      "expected_output": {
+        "changed": true,
+        "path": "catalog-example-link",
+        "target": "catalog-example-target",
+        "previous": ""
+      }
+    }
   ]
 }

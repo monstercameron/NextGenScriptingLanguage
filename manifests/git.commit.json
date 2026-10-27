@@ -1,6 +1,6 @@
 {
   "name": "git.commit",
-  "description": "Provides the git commit operation for controlled scripts.",
+  "description": "Creates a Git commit with the supplied message, optionally limiting the commit to the listed paths.",
   "phrases": [
     "commit changes"
   ],

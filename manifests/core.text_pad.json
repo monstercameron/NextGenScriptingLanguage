@@ -1,6 +1,6 @@
 {
   "name": "text.pad",
-  "description": "Provides text.pad for controlled scripts.",
+  "description": "Pads text on the selected side until it reaches a target character or terminal display width, repeating the fill string as needed.",
   "phrases": [
     "pad text to width"
   ],
@@ -8,24 +8,29 @@
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to pad; omitted text is read from UTF-8 stdin."
     },
     "width": {
       "type": "unsigned_integer",
-      "required": true
+      "required": true,
+      "description": "Minimum target width, measured in Unicode scalar values unless display_width is true."
     },
     "side": {
       "type": "string",
       "enum": [
         "left",
         "right"
-      ]
+      ],
+      "description": "Side that receives padding: `left` or `right`; defaults to `right`."
     },
     "fill": {
-      "type": "string"
+      "type": "string",
+      "description": "Nonempty string repeated to make padding; defaults to a space."
     },
     "display_width": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "When true, measure terminal display columns instead of Unicode scalar values; defaults to false."
     }
   },
   "parameter_alternatives": [
@@ -131,5 +136,11 @@
     "capabilities": [
       "text.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run text.pad with text \"7\" and width 3 and side \"left\" and fill \"0\" as value",
+      "expected_output": "007"
+    }
+  ]
 }

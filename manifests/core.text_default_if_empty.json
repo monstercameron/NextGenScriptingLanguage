@@ -1,15 +1,17 @@
 {
   "name": "text.default_if_empty",
-  "description": "Provides the text default if empty operation for controlled scripts.",
+  "description": "Returns the supplied text unchanged unless it is empty, in which case it returns the provided fallback.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to keep when it has at least one byte; omitted text is read from UTF-8 stdin."
     },
     "default": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Text returned when the input text is empty."
     }
   },
   "arguments": [
@@ -72,5 +74,11 @@
   "phrases": [
     "text default_if_empty",
     "default empty text"
+  ],
+  "examples": [
+    {
+      "program": "run text.default_if_empty with text \"\" and default \"untitled\" as value",
+      "expected_output": "untitled"
+    }
   ]
 }

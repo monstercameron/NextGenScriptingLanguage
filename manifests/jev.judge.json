@@ -1,6 +1,6 @@
 {
   "name": "jev.judge",
-  "description": "Provides the jev judge operation for controlled scripts.",
+  "description": "Evaluates the question as a yes-or-no decision and returns the decision, confidence, and separate threshold-based accepted flag.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,
@@ -20,7 +20,8 @@
     "minimum": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 100
+      "maximum": 100,
+      "description": "Confidence percentage required for `accepted` to be true; ranges from 0 to 100 and defaults to 0, independent of the label or yes/no decision."
     },
     "max_bytes": {
       "type": "integer",

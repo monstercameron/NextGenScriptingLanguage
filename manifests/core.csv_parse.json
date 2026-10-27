@@ -1,14 +1,16 @@
 {
   "name": "csv.parse",
-  "description": "Provides the csv parse operation for controlled scripts.",
+  "description": "Parses CSV records without inferring cell types and returns a header list plus rows of string cells; duplicate header names remain distinct.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "CSV text to parse; when omitted, the applet reads CSV from its input stream."
     },
     "has_headers": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Whether the first record supplies column names; omitted means true, while false treats every record as data."
     }
   },
   "arguments": [
@@ -112,5 +114,22 @@
   },
   "phrases": [
     "csv parse"
+  ],
+  "examples": [
+    {
+      "program": "run csv.parse with text \"name,city\\nAda,London\\n\" as table",
+      "expected_output": {
+        "headers": [
+          "name",
+          "city"
+        ],
+        "rows": [
+          [
+            "Ada",
+            "London"
+          ]
+        ]
+      }
+    }
   ]
 }

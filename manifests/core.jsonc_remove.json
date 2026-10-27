@@ -1,34 +1,41 @@
 {
   "name": "jsonc.remove",
-  "description": "Provides the jsonc remove operation for controlled scripts.",
+  "description": "Removes a root property from a JSONC file using a content-hash precondition and the declared filesystem policies.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "JSONC file to update."
     },
     "expected_content_hash": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Expected current file hash used to detect concurrent or stale edits."
     },
     "symlink_policy": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Policy controlling whether the target path may resolve through a symbolic link."
     },
     "permissions_policy": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Policy controlling file permissions during the update."
     },
     "lock": {
-      "type": "path"
+      "type": "path",
+      "description": "Optional lock path used to serialize competing updates."
     },
     "key": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Root property name to remove from the JSONC document."
     },
     "lock_timeout_ms": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Maximum time in milliseconds to wait for the lock when one is configured."
     }
   },
   "arguments": [

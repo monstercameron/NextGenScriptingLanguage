@@ -1,12 +1,13 @@
 {
   "name": "fs.test",
-  "description": "Provides the fs test operation for controlled scripts.",
+  "description": "Checks a path predicate such as existence, file type, permissions or emptiness and returns false when the path is absent.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "Path to inspect; relative paths resolve from the program working directory."
     },
     "kind": {
       "type": "string",
@@ -20,7 +21,8 @@
         "writable",
         "executable",
         "empty"
-      ]
+      ],
+      "description": "Predicate to check: exists, file, directory, symlink, readable, writable, executable or empty."
     }
   },
   "arguments": [
@@ -85,5 +87,11 @@
   },
   "phrases": [
     "fs test"
+  ],
+  "examples": [
+    {
+      "program": "run fs.test with path \"catalog-example-missing-494\" and kind \"exists\" as found",
+      "expected_output": false
+    }
   ]
 }

@@ -1,16 +1,18 @@
 {
   "name": "json.keys",
-  "description": "Provides the json.keys operation for controlled scripts.",
+  "description": "Returns the object member names at a JSON Pointer in deterministic sorted order.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "document": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON document containing the target object; stdin is used when omitted."
     },
     "pointer": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "JSON Pointer locating the object; an empty pointer selects the root object."
     }
   },
   "arguments": [
@@ -65,5 +67,14 @@
   },
   "phrases": [
     "json keys"
+  ],
+  "examples": [
+    {
+      "program": "run json.keys with document {\"name\":\"Ada\",\"score\":8} as result",
+      "expected_output": [
+        "name",
+        "score"
+      ]
+    }
   ]
 }

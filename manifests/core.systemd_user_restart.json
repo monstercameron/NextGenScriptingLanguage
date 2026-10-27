@@ -1,6 +1,6 @@
 {
   "name": "systemd.user.restart",
-  "description": "Provides the systemd user restart operation for controlled scripts.",
+  "description": "Restarts the named systemd user unit.",
   "binary": "systemctl",
   "accepts_stdin": false,
   "cacheable": false,

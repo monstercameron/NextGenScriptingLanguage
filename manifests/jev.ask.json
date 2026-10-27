@@ -1,6 +1,6 @@
 {
   "name": "jev.ask",
-  "description": "Provides the jev ask operation for controlled scripts.",
+  "description": "Asks the configured JEV model provider the named questions and returns its structured answers with usage metadata.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,

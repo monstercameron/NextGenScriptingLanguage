@@ -1,12 +1,13 @@
 {
   "name": "json.stringify",
-  "description": "Provides the json stringify operation for controlled scripts.",
+  "description": "Serializes a JSON value as compact JSON text with deterministic object-key ordering.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON value to serialize into compact JSON text."
     }
   },
   "arguments": [
@@ -55,5 +56,11 @@
   },
   "phrases": [
     "json stringify"
+  ],
+  "examples": [
+    {
+      "program": "run json.stringify with value {\"name\":\"Ada\",\"score\":8} as result",
+      "expected_output": "{\"name\":\"Ada\",\"score\":8}"
+    }
   ]
 }

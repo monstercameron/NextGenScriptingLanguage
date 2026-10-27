@@ -1,6 +1,6 @@
 {
   "name": "sort",
-  "description": "Provides the sort operation for controlled scripts.",
+  "description": "Sorts lines from standard input according to the selected sort flags.",
   "binary": "sort",
   "accepts_stdin": true,
   "parameters": {

@@ -1,6 +1,6 @@
 {
   "name": "cut",
-  "description": "Provides the cut operation for controlled scripts.",
+  "description": "Selects the requested delimiter-separated fields from each input line.",
   "binary": "cut",
   "accepts_stdin": true,
   "cacheable": true,

@@ -1,6 +1,6 @@
 {
   "name": "menu.gum_input",
-  "description": "Provides the menu gum input operation for controlled scripts.",
+  "description": "Prompts for text input with gum, optionally showing a placeholder or initial value, and returns the entered text.",
   "binary": "gum",
   "accepts_stdin": false,
   "cacheable": false,

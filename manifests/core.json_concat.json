@@ -1,16 +1,18 @@
 {
   "name": "json.concat",
-  "description": "Provides the json.concat operation for controlled scripts.",
+  "description": "Joins two JSON arrays in order and returns a new array.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "First JSON array to place at the start of the result."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Second JSON array to append after every item in left."
     }
   },
   "arguments": [
@@ -77,5 +79,15 @@
   },
   "phrases": [
     "json concat"
+  ],
+  "examples": [
+    {
+      "program": "run json.concat with left [1, 2] and right [3] as result",
+      "expected_output": [
+        1,
+        2,
+        3
+      ]
+    }
   ]
 }

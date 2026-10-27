@@ -1,6 +1,6 @@
 {
   "name": "hypr.socket2",
-  "description": "Provides the hypr socket2 operation for controlled scripts.",
+  "description": "Streams event lines from the supplied Hyprland socket2 Unix socket.",
   "binary": "socat",
   "accepts_stdin": false,
   "cacheable": false,

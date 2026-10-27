@@ -1,23 +1,27 @@
 {
   "name": "color.rgb_to_hex",
-  "description": "Provides the color rgb to hex operation for controlled scripts.",
+  "description": "Formats three 8-bit color channels as a six-digit hexadecimal color string prefixed by #.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "red": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Red channel as an integer from 0 through 255."
     },
     "green": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Green channel as an integer from 0 through 255."
     },
     "blue": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Blue channel as an integer from 0 through 255."
     },
     "uppercase": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Set true to use A–F uppercase hexadecimal digits; omitted or false uses lowercase digits."
     }
   },
   "arguments": [
@@ -84,5 +88,11 @@
   },
   "phrases": [
     "color rgb_to_hex"
+  ],
+  "examples": [
+    {
+      "program": "run color.rgb_to_hex with red 12 and green 34 and blue 56 as color",
+      "expected_output": "#0c2238"
+    }
   ]
 }

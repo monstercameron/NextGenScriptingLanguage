@@ -1,6 +1,6 @@
 {
   "name": "list.first",
-  "description": "Provides list.first for controlled scripts.",
+  "description": "Return the first value in a nonempty list; an empty list is an error.",
   "phrases": [
     "list first",
     "items first"
@@ -10,7 +10,8 @@
   "parameters": {
     "items": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "List from which to return the first value; must not be empty."
     }
   },
   "arguments": [
@@ -59,5 +60,11 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.first with items [\"first\", \"next\"] as result",
+      "expected_output": "first"
+    }
+  ]
 }

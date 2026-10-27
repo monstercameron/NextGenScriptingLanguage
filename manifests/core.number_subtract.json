@@ -1,16 +1,18 @@
 {
   "name": "number.subtract",
-  "description": "Provides the number subtract operation for controlled scripts.",
+  "description": "Subtract right from left and return the finite numeric difference.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite minuend."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite subtrahend."
     }
   },
   "arguments": [
@@ -65,5 +67,11 @@
   },
   "phrases": [
     "number subtract"
+  ],
+  "examples": [
+    {
+      "program": "run number.subtract with left 10 and right 4 as result",
+      "expected_output": 6
+    }
   ]
 }

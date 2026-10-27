@@ -1,16 +1,18 @@
 {
   "name": "number.divide",
-  "description": "Provides the number divide operation for controlled scripts.",
+  "description": "Divide left by right and return a finite numeric quotient; right must not be zero.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite dividend."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite nonzero divisor."
     }
   },
   "arguments": [
@@ -65,5 +67,11 @@
   },
   "phrases": [
     "number divide"
+  ],
+  "examples": [
+    {
+      "program": "run number.divide with left 7 and right 2 as result",
+      "expected_output": 3.5
+    }
   ]
 }

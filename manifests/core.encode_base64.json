@@ -1,18 +1,21 @@
 {
   "name": "encode.base64",
-  "description": "Encodes or decodes RFC 4648 base64 text, with optional URL-safe alphabet and padding control.",
+  "description": "Encodes text or input-stream bytes as RFC 4648 base64, with optional URL-safe alphabet and padding control.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "Optional text to encode; when omitted, the applet encodes bytes from its input stream."
     },
     "url_safe": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Set true to replace + and / with the URL-safe - and _ characters; omitted means the standard alphabet."
     },
     "padding": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Set false to remove trailing = padding; omitted means include padding."
     }
   },
   "arguments": [
@@ -80,5 +83,11 @@
   },
   "phrases": [
     "encode base64"
+  ],
+  "examples": [
+    {
+      "program": "run encode.base64 with text \"f\" and padding false as encoded",
+      "expected_output": "Zg"
+    }
   ]
 }

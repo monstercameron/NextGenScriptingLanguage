@@ -1,6 +1,6 @@
 {
   "name": "omarchy.editor-install",
-  "description": "Provides the omarchy editor-install operation for controlled scripts.",
+  "description": "Installs the named extension through the configured editor command.",
   "binary": "/usr/bin/env",
   "accepts_stdin": false,
   "cacheable": false,

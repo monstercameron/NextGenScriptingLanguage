@@ -1,13 +1,14 @@
 {
   "name": "json.sum",
-  "description": "Provides the json.sum operation for controlled scripts.",
+  "description": "Adds every numeric item in the root array and returns the resulting number.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "document": {
       "type": "list",
       "items": "json",
-      "required": true
+      "required": true,
+      "description": "Root JSON array of numbers to add; stdin is used when omitted."
     }
   },
   "arguments": [
@@ -59,5 +60,11 @@
   },
   "phrases": [
     "json sum"
+  ],
+  "examples": [
+    {
+      "program": "run json.sum with document [2, 3, 5] as result",
+      "expected_output": 10
+    }
   ]
 }

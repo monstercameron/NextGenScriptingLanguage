@@ -1,38 +1,46 @@
 {
   "name": "jsonc.set",
-  "description": "Provides the jsonc set operation for controlled scripts.",
+  "description": "Creates or replaces a root property in a JSONC file using a content-hash precondition and the declared filesystem policies.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "JSONC file to update."
     },
     "expected_content_hash": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Expected current file hash used to detect concurrent or stale edits."
     },
     "symlink_policy": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Policy controlling whether the target path may resolve through a symbolic link."
     },
     "permissions_policy": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Policy controlling file permissions during the update."
     },
     "lock": {
-      "type": "path"
+      "type": "path",
+      "description": "Optional lock path used to serialize competing updates."
     },
     "key": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Root property name to create or replace in the JSONC document."
     },
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON value to write for the named root property."
     },
     "lock_timeout_ms": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Maximum time in milliseconds to wait for the lock when one is configured."
     }
   },
   "arguments": [

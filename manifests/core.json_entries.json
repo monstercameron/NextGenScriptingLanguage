@@ -1,16 +1,18 @@
 {
   "name": "json.entries",
-  "description": "Provides the json.entries operation for controlled scripts.",
+  "description": "Converts an object into an array of key and value records, optionally at a nested JSON Pointer.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "document": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON object to enumerate; stdin is used when omitted."
     },
     "pointer": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "JSON Pointer locating the object whose members become records; an empty pointer selects the whole document."
     }
   },
   "arguments": [
@@ -65,5 +67,20 @@
   },
   "phrases": [
     "json entries"
+  ],
+  "examples": [
+    {
+      "program": "run json.entries with document {\"name\":\"Ada\",\"score\":8} as result",
+      "expected_output": [
+        {
+          "key": "name",
+          "value": "Ada"
+        },
+        {
+          "key": "score",
+          "value": 8
+        }
+      ]
+    }
   ]
 }

@@ -1,11 +1,12 @@
 {
   "name": "jsonc.edit_content",
-  "description": "Provides the jsonc edit content operation for controlled scripts.",
+  "description": "Edits one root property in JSONC text while preserving comments, formatting, and trailing-comma style.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "content": {
-      "type": "string"
+      "type": "string",
+      "description": "JSONC source text to edit; when omitted, the applet reads UTF-8 JSONC from stdin."
     },
     "action": {
       "type": "string",
@@ -13,14 +14,17 @@
       "enum": [
         "set",
         "remove"
-      ]
+      ],
+      "description": "Choose set to create or replace the root property, or remove to delete it."
     },
     "key": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Name of the root property to edit."
     },
     "value": {
-      "type": "json"
+      "type": "json",
+      "description": "JSON value written when action is set; unused for remove."
     }
   },
   "arguments": [
@@ -98,5 +102,11 @@
   },
   "phrases": [
     "jsonc edit_content"
+  ],
+  "examples": [
+    {
+      "program": "run jsonc.edit_content with content \"{}\" and action \"set\" and key \"theme\" and value \"dark\" as result",
+      "expected_output": "{\"theme\": \"dark\"}"
+    }
   ]
 }

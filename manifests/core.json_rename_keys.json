@@ -1,6 +1,6 @@
 {
   "name": "json.rename_keys",
-  "description": "Provides the json.rename_keys operation for controlled scripts.",
+  "description": "Renames selected top-level object keys while preserving values and rejecting name collisions.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
@@ -10,7 +10,8 @@
       "fields": {},
       "additional_properties": {
         "type": "json"
-      }
+      },
+      "description": "JSON object whose top-level keys may be renamed; stdin is used when omitted."
     },
     "renames": {
       "type": "record",
@@ -18,7 +19,8 @@
       "fields": {},
       "additional_properties": {
         "type": "string"
-      }
+      },
+      "description": "Object mapping existing key names to replacement string names; unlisted keys stay unchanged."
     }
   },
   "arguments": [
@@ -81,5 +83,14 @@
   },
   "phrases": [
     "json rename_keys"
+  ],
+  "examples": [
+    {
+      "program": "run json.rename_keys with document {\"name\":\"Ada\",\"score\":8} and renames {\"name\":\"display_name\"} as result",
+      "expected_output": {
+        "display_name": "Ada",
+        "score": 8
+      }
+    }
   ]
 }

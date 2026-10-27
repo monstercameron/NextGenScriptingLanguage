@@ -1,15 +1,17 @@
 {
   "name": "json.values",
-  "description": "Provides the json.values operation for controlled scripts.",
+  "description": "Returns the values of the object at a JSON Pointer in deterministic key order.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "document": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "JSON document containing the target object; stdin is used when omitted."
     },
     "pointer": {
-      "type": "string"
+      "type": "string",
+      "description": "JSON Pointer locating the object whose values are returned; an empty pointer selects the root object."
     }
   },
   "arguments": [
@@ -70,5 +72,14 @@
   },
   "phrases": [
     "json values"
+  ],
+  "examples": [
+    {
+      "program": "run json.values with document {\"name\":\"Ada\",\"score\":8} as result",
+      "expected_output": [
+        "Ada",
+        8
+      ]
+    }
   ]
 }

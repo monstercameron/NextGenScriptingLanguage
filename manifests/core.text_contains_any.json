@@ -1,6 +1,6 @@
 {
   "name": "text.contains_any",
-  "description": "Provides text.contains_any for controlled scripts.",
+  "description": "Reports whether the input text contains at least one supplied literal string; an empty needle matches any text.",
   "phrases": [
     "find any text"
   ],
@@ -8,12 +8,14 @@
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to search; omitted text is read from UTF-8 stdin."
     },
     "needles": {
       "type": "list",
       "required": true,
-      "items": "string"
+      "items": "string",
+      "description": "Literal substrings to look for; the result is true when any one occurs."
     }
   },
   "arguments": [
@@ -68,5 +70,11 @@
     "capabilities": [
       "text.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run text.contains_any with text \"release ready\" and needles [\"error\", \"ready\"] as value",
+      "expected_output": true
+    }
+  ]
 }

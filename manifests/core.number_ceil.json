@@ -1,6 +1,6 @@
 {
   "name": "number.ceil",
-  "description": "Provides number.ceil for controlled scripts.",
+  "description": "Round a finite number toward positive infinity to the nearest integer value.",
   "phrases": [
     "number ceil",
     "value ceil"
@@ -10,7 +10,8 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite JSON number to round upward."
     }
   },
   "arguments": [
@@ -56,5 +57,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.ceil with value 2.2 as result",
+      "expected_output": 3.0
+    }
+  ]
 }

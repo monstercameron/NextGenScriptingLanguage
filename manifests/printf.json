@@ -1,6 +1,6 @@
 {
   "name": "printf",
-  "description": "Provides the printf operation for controlled scripts.",
+  "description": "Writes the supplied message followed by a newline to standard output.",
   "phrases": [
     "print"
   ],

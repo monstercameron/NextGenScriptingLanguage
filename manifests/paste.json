@@ -1,6 +1,6 @@
 {
   "name": "paste",
-  "description": "Provides the paste operation for controlled scripts.",
+  "description": "Merges corresponding lines from two or more files, using the selected paste flags.",
   "binary": "paste",
   "parameters": {
     "flags": {

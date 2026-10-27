@@ -1,6 +1,6 @@
 {
   "name": "awk",
-  "description": "Provides the awk operation for controlled scripts.",
+  "description": "Filters standard input with an AWK program, optionally splitting fields on the supplied delimiter.",
   "binary": "awk",
   "accepts_stdin": true,
   "parameters": {

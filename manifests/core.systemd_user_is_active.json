@@ -1,6 +1,6 @@
 {
   "name": "systemd.user.is_active",
-  "description": "Provides the systemd user is active operation for controlled scripts.",
+  "description": "Checks whether a systemd user unit is active and reports active, inactive, unknown, or systemctl unavailable as distinct outcomes.",
   "binary": "systemctl",
   "accepts_stdin": false,
   "cacheable": false,

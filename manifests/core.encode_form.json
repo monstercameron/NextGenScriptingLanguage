@@ -1,6 +1,6 @@
 {
   "name": "encode.form",
-  "description": "Provides the encode.form operation for controlled scripts.",
+  "description": "Encodes each member of a record as a form field and joins the percent-encoded name/value pairs with &.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
@@ -10,7 +10,8 @@
       "fields": {},
       "additional_properties": {
         "type": "json"
-      }
+      },
+      "description": "Record of form field names and scalar values; strings are used as-is and other JSON values are serialized before form encoding."
     }
   },
   "arguments": [
@@ -63,5 +64,11 @@
   },
   "phrases": [
     "encode form"
+  ],
+  "examples": [
+    {
+      "program": "run encode.form with value {\"q\":\"hello world\"} as encoded",
+      "expected_output": "q=hello+world"
+    }
   ]
 }

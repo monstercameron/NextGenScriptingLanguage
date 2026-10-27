@@ -1,6 +1,6 @@
 {
   "name": "fs.transaction",
-  "description": "Provides the fs transaction operation for controlled scripts.",
+  "description": "Applies up to 32 expected-hash writes or removals to existing regular files and keeps a recovery journal; files become visible one at a time.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {

@@ -1,6 +1,6 @@
 {
   "name": "list.sort",
-  "description": "Provides the list sort operation for controlled scripts.",
+  "description": "Sort values ascending (numbers numerically, strings lexically), optionally using values selected through a JSON Pointer.",
   "phrases": [
     "sort list",
     "order records"
@@ -10,18 +10,22 @@
   "parameters": {
     "items": {
       "type": "list",
-      "items": "json"
+      "items": "json",
+      "description": "List of values to sort."
     },
     "key": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "Optional JSON Pointer used to select the value compared for each item; omit to compare whole values."
     },
     "n": {
       "type": "integer",
-      "required": false
+      "required": false,
+      "description": "Accepted for compatibility; sorting returns every item and does not truncate to a count."
     },
     "collect": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Accepted for compatibility; sorting returns the ordered values directly."
     }
   },
   "arguments": [
@@ -102,5 +106,15 @@
         }
       }
     }
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.sort with items [3, 1, 2] as result",
+      "expected_output": [
+        1,
+        2,
+        3
+      ]
+    }
+  ]
 }

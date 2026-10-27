@@ -1,6 +1,6 @@
 {
   "name": "package.install",
-  "description": "Provides the package install operation for controlled scripts.",
+  "description": "Installs the listed packages with pacman, skipping packages already installed; the command does not update the package database or grant installation privileges.",
   "binary": "pacman",
   "accepts_stdin": false,
   "cacheable": false,

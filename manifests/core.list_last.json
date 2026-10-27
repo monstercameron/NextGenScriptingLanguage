@@ -1,6 +1,6 @@
 {
   "name": "list.last",
-  "description": "Provides list.last for controlled scripts.",
+  "description": "Return the final value in a nonempty list; an empty list is an error.",
   "phrases": [
     "list last",
     "items last"
@@ -10,7 +10,8 @@
   "parameters": {
     "items": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "List from which to return the last value; must not be empty."
     }
   },
   "arguments": [
@@ -59,5 +60,11 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.last with items [\"first\", \"last\"] as result",
+      "expected_output": "last"
+    }
+  ]
 }

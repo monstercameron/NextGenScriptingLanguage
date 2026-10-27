@@ -1,6 +1,6 @@
 {
   "name": "number.format",
-  "description": "Provides number.format for controlled scripts.",
+  "description": "Format a finite number as locale-independent text with optional precision, digit grouping, and percent suffix.",
   "phrases": [
     "number format",
     "value format"
@@ -10,16 +10,20 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite number to format."
     },
     "precision": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Number of fractional digits for noninteger values; defaults to 0 and must be from 0 through 15."
     },
     "grouping": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "When true, insert commas between groups of three integer digits."
     },
     "percent": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "When true, append a percent sign without scaling the value."
     }
   },
   "arguments": [
@@ -103,6 +107,12 @@
           }
         ]
       ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run number.format with value 12345.6 and precision 2 and grouping true as result",
+      "expected_output": "12,345.60"
     }
   ]
 }

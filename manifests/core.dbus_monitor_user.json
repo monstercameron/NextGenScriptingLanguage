@@ -1,6 +1,6 @@
 {
   "name": "dbus.monitor_user",
-  "description": "Provides the dbus monitor user operation for controlled scripts.",
+  "description": "Streams JSON-encoded D-Bus messages from the current user’s session bus, optionally restricted by a busctl match expression.",
   "binary": "busctl",
   "accepts_stdin": false,
   "cacheable": false,

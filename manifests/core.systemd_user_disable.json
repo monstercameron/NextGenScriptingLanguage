@@ -1,6 +1,6 @@
 {
   "name": "systemd.user.disable",
-  "description": "Provides the systemd user disable operation for controlled scripts.",
+  "description": "Disables the named systemd user unit from starting automatically; it does not stop a currently running unit.",
   "binary": "systemctl",
   "accepts_stdin": false,
   "cacheable": false,

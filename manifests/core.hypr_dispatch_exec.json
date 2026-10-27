@@ -1,6 +1,6 @@
 {
   "name": "hypr.dispatch_exec",
-  "description": "Provides the hypr dispatch exec operation for controlled scripts.",
+  "description": "Starts a process through Hyprland’s `exec` or `execr` dispatcher using the supplied arguments; the manifest restricts the dispatcher and rejects option-like arguments.",
   "binary": "hyprctl",
   "accepts_stdin": false,
   "cacheable": false,

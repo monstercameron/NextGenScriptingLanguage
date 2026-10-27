@@ -29,6 +29,8 @@ pub struct Manifest {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<ManifestExample>,
     pub binary: String,
     pub builtin: Option<Builtin>,
     pub accepts_stdin: bool,
@@ -57,6 +59,13 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     parameter_alternatives: Vec<ParameterAlternatives>,
     arguments: Vec<ArgumentNode>,
+}
+
+/// A runnable `.program` excerpt and the value its applet call should return.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestExample {
+    pub program: String,
+    pub expected_output: serde_json::Value,
 }
 
 /// An invocation is valid if at least one branch can match. References whose
@@ -352,6 +361,8 @@ const RUST_TRIM_WHITESPACE_PATTERN: &str =
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "RawParameter")]
 struct ParameterSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     kind: ParameterType,
     item_type: Option<ParameterType>,
     /// Optional recursive value constraint for JSON parameters. Unlike the
@@ -405,6 +416,7 @@ struct ParameterSpec {
 impl From<RawParameter> for ParameterSpec {
     fn from(raw: RawParameter) -> Self {
         Self {
+            description: raw.description,
             kind: raw.kind,
             item_type: raw.items,
             schema: raw.schema,
@@ -1096,6 +1108,7 @@ impl Registry {
         Ok(DIRECT.get_or_init(|| Manifest {
             name: "direct executable".into(),
             description: None,
+            examples: Vec::new(),
             binary: "".into(),
             builtin: None,
             accepts_stdin: true,
@@ -1110,6 +1123,7 @@ impl Registry {
             parameters: BTreeMap::from([(
                 "arguments".into(),
                 ParameterSpec {
+                    description: None,
                     kind: ParameterType::List,
                     item_type: Some(ParameterType::Scalar),
                     schema: None,
@@ -1929,6 +1943,9 @@ impl Manifest {
                 if let Some(constraint) = &spec.schema {
                     schema = constraint.json_schema();
                 }
+                if let Some(description) = &spec.description {
+                    schema["description"] = serde_json::Value::String(description.clone());
+                }
                 if let Some(values) = &spec.enum_values {
                     schema["enum"] = serde_json::json!(values);
                 }
@@ -1998,6 +2015,10 @@ impl Manifest {
                 "effect": if self.builtin.is_some() { "working_directory" } else { "native_command" }
             }
         });
+        if !self.examples.is_empty() {
+            projection["examples"] =
+                serde_json::to_value(&self.examples).expect("manifest examples serialize");
+        }
         if !self.parameter_alternatives.is_empty() {
             projection["parameter_alternatives"] =
                 serde_json::to_value(&self.parameter_alternatives)
@@ -3571,6 +3592,8 @@ struct RawManifest {
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
+    examples: Vec<ManifestExample>,
+    #[serde(default)]
     phrases: Vec<String>,
     binary: String,
     #[serde(default)]
@@ -3599,6 +3622,8 @@ struct RawManifest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawParameter {
+    #[serde(default)]
+    description: Option<String>,
     #[serde(rename = "type")]
     kind: ParameterType,
     #[serde(default)]
@@ -4081,6 +4106,7 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
     let manifest = Manifest {
         name: raw.name,
         description: raw.description,
+        examples: raw.examples,
         phrases: raw.phrases,
         binary: raw.binary,
         builtin: raw.builtin,
@@ -6744,6 +6770,7 @@ mod first_token_rule_tests {
 
     fn deny_exec() -> ParameterSpec {
         ParameterSpec {
+            description: None,
             kind: ParameterType::List,
             item_type: Some(ParameterType::String),
             schema: None,

@@ -1,11 +1,12 @@
 {
   "name": "toml.parse",
-  "description": "Provides the toml parse operation for controlled scripts.",
+  "description": "Parses the supported TOML subset into JSON-compatible records, arrays, strings, numbers, and booleans; unsupported date/time and nonfinite values fail.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "TOML document to parse; omitted text is read from UTF-8 stdin."
     }
   },
   "arguments": [
@@ -61,5 +62,14 @@
   },
   "phrases": [
     "toml parse"
+  ],
+  "examples": [
+    {
+      "program": "run toml.parse with text \"name = \\\"Ada\\\"\\nactive = true\" as value",
+      "expected_output": {
+        "name": "Ada",
+        "active": true
+      }
+    }
   ]
 }

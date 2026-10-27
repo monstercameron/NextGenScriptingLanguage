@@ -1,12 +1,13 @@
 {
   "name": "text.format",
-  "description": "Provides the text format operation for controlled scripts.",
+  "description": "Substitutes named values in a template and escapes each scalar using the required plain, JSON, shell, URL, CSV, HTML, or regex mode.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "template": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Template containing `{{name}}` placeholders to fill from values."
     },
     "values": {
       "type": "record",
@@ -14,7 +15,8 @@
       "fields": {},
       "additional_properties": {
         "type": "scalar"
-      }
+      },
+      "description": "Record of scalar values addressed by placeholder name."
     },
     "escape": {
       "type": "string",
@@ -27,7 +29,8 @@
         "csv",
         "html",
         "regex"
-      ]
+      ],
+      "description": "Escaping applied to each substituted scalar: plain, json, shell, url, csv, html, or regex."
     }
   },
   "arguments": [
@@ -104,5 +107,11 @@
     "format template",
     "escape text",
     "build safe text"
+  ],
+  "examples": [
+    {
+      "program": "run text.format with template \"Hello, {{name}}\" and values {\"name\": \"Ada\"} and escape \"plain\" as value",
+      "expected_output": "Hello, Ada"
+    }
   ]
 }

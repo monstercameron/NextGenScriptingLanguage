@@ -1,6 +1,6 @@
 {
   "name": "number.abs",
-  "description": "Provides number.abs for controlled scripts.",
+  "description": "Return the nonnegative magnitude of an integer or finite number.",
   "phrases": [
     "number abs",
     "value abs"
@@ -10,7 +10,8 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite JSON number whose absolute magnitude is returned."
     }
   },
   "arguments": [
@@ -56,5 +57,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.abs with value -7.5 as result",
+      "expected_output": 7.5
+    }
+  ]
 }

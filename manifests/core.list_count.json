@@ -1,6 +1,6 @@
 {
   "name": "list.count",
-  "description": "Provides the list count operation for controlled scripts.",
+  "description": "Count the input list elements, or count input lines when no items list is supplied.",
   "phrases": [
     "count items",
     "count values",
@@ -11,22 +11,28 @@
   "parameters": {
     "items": {
       "type": "list",
-      "items": "json"
+      "items": "json",
+      "description": "Optional JSON list whose top-level elements are counted; when omitted, stdin lines are counted."
     },
     "key": {
-      "type": "string"
+      "type": "string",
+      "description": "Accepted for compatibility; this counting operation does not inspect object fields."
     },
     "n": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Accepted for compatibility; this operation does not limit the number of items."
     },
     "collect": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Accepted for compatibility; this operation returns only the count."
     },
     "delimiter": {
-      "type": "string"
+      "type": "string",
+      "description": "Accepted for compatibility; this operation does not split input fields."
     },
     "field": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Accepted for compatibility; this operation does not select an input field."
     }
   },
   "arguments": [
@@ -112,5 +118,11 @@
         }
       }
     }
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.count with items [\"a\", \"b\", \"a\"] as result",
+      "expected_output": 3
+    }
+  ]
 }

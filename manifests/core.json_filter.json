@@ -1,14 +1,16 @@
 {
   "name": "json.filter",
-  "description": "Provides the json filter operation for controlled scripts.",
+  "description": "Keeps array items that satisfy every JSON Pointer predicate in where and returns them in input order.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "document": {
-      "type": "json"
+      "type": "json",
+      "description": "JSON array to filter; stdin is used when omitted."
     },
     "pointer": {
-      "type": "string"
+      "type": "string",
+      "description": "JSON Pointer locating the array inside document; an empty pointer selects the root array."
     },
     "where": {
       "type": "json",
@@ -22,41 +24,71 @@
             {
               "type": "record",
               "fields": {
-                "pointer": { "type": "string" },
-                "exists": { "type": "boolean" }
-              },
-              "required": ["exists"]
-            },
-            {
-              "type": "record",
-              "fields": {
-                "pointer": { "type": "string" },
-                "equals": { "type": "json" }
-              },
-              "required": ["equals"]
-            },
-            {
-              "type": "record",
-              "fields": {
-                "pointer": { "type": "string" },
-                "not_equals": { "type": "json" }
-              },
-              "required": ["not_equals"]
-            },
-            {
-              "type": "record",
-              "fields": {
-                "pointer": { "type": "string" },
-                "type": {
-                  "type": "string",
-                  "enum": ["null", "boolean", "number", "string", "array", "object"]
+                "pointer": {
+                  "type": "string"
+                },
+                "exists": {
+                  "type": "boolean"
                 }
               },
-              "required": ["type"]
+              "required": [
+                "exists"
+              ]
+            },
+            {
+              "type": "record",
+              "fields": {
+                "pointer": {
+                  "type": "string"
+                },
+                "equals": {
+                  "type": "json"
+                }
+              },
+              "required": [
+                "equals"
+              ]
+            },
+            {
+              "type": "record",
+              "fields": {
+                "pointer": {
+                  "type": "string"
+                },
+                "not_equals": {
+                  "type": "json"
+                }
+              },
+              "required": [
+                "not_equals"
+              ]
+            },
+            {
+              "type": "record",
+              "fields": {
+                "pointer": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "null",
+                    "boolean",
+                    "number",
+                    "string",
+                    "array",
+                    "object"
+                  ]
+                }
+              },
+              "required": [
+                "type"
+              ]
             }
           ]
         }
-      }
+      },
+      "description": "List of predicates; each item must contain a JSON Pointer and exactly one of exists, equals, not_equals, or type."
     }
   },
   "arguments": [
@@ -131,5 +163,16 @@
   "phrases": [
     "json filter",
     "filter json records"
+  ],
+  "examples": [
+    {
+      "program": "run json.filter with document [{\"name\":\"Ada\",\"active\":true},{\"name\":\"Lin\",\"active\":false}] and where [{\"pointer\":\"/active\",\"equals\":true}] as result",
+      "expected_output": [
+        {
+          "active": true,
+          "name": "Ada"
+        }
+      ]
+    }
   ]
 }

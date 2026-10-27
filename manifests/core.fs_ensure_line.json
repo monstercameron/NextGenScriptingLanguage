@@ -1,23 +1,26 @@
 {
   "name": "fs.ensure_line",
-  "description": "Provides the fs ensure line operation for controlled scripts.",
+  "description": "Adds one line to a UTF-8 text file or removes matching lines, changing the file only when its requested state is not already satisfied.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "Text file path to update; relative paths resolve from the program working directory."
     },
     "line": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Single line of text to add or remove; carriage returns and line feeds are not allowed."
     },
     "state": {
       "type": "string",
       "enum": [
         "present",
         "absent"
-      ]
+      ],
+      "description": "Desired line state: present to add the line if missing, or absent to remove it; omitted means present."
     }
   },
   "arguments": [
@@ -112,5 +115,14 @@
   },
   "phrases": [
     "fs ensure_line"
+  ],
+  "examples": [
+    {
+      "program": "run fs.ensure_line with path \"catalog-example.txt\" and line \"enabled=true\" as result",
+      "expected_output": {
+        "changed": true,
+        "path": "catalog-example.txt"
+      }
+    }
   ]
 }

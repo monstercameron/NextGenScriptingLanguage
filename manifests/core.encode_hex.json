@@ -1,12 +1,13 @@
 {
   "name": "encode.hex",
-  "description": "Provides the encode.hex operation for controlled scripts.",
+  "description": "Encodes text or input-stream bytes as lowercase hexadecimal, with two digits for each byte.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
       "type": "string",
-      "required": false
+      "required": false,
+      "description": "Optional text to encode; when omitted, the applet encodes bytes from its input stream."
     }
   },
   "arguments": [
@@ -62,5 +63,11 @@
   },
   "phrases": [
     "encode hex"
+  ],
+  "examples": [
+    {
+      "program": "run encode.hex with text \"Hi!\" as encoded",
+      "expected_output": "486921"
+    }
   ]
 }

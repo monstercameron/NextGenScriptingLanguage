@@ -1,17 +1,20 @@
 {
   "name": "number.parse_integer",
-  "description": "Provides the number parse integer operation for controlled scripts.",
+  "description": "Parse signed decimal or base-specific text as a 64-bit integer, optionally trimming ASCII whitespace.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Optional integer text; when omitted, the applet reads stdin."
     },
     "base": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Radix from 2 through 36; defaults to decimal (10)."
     },
     "trim_ascii_whitespace": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "When true, remove ASCII whitespace around the text before parsing."
     }
   },
   "arguments": [
@@ -99,6 +102,12 @@
           }
         ]
       ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run number.parse_integer with text \"-42\" as result",
+      "expected_output": -42
     }
   ]
 }

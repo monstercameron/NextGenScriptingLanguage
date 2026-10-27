@@ -1,6 +1,6 @@
 {
   "name": "list.group",
-  "description": "Provides the list group operation for controlled scripts.",
+  "description": "Group records by the value at a JSON Pointer and return each key with its count.",
   "phrases": [
     "group records",
     "count by key"
@@ -10,18 +10,22 @@
   "parameters": {
     "items": {
       "type": "list",
-      "items": "json"
+      "items": "json",
+      "description": "List of JSON records to group."
     },
     "key": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "JSON Pointer identifying the grouping value in each record, such as /team."
     },
     "n": {
       "type": "integer",
-      "required": false
+      "required": false,
+      "description": "Accepted for compatibility; grouping does not limit the number of records."
     },
     "collect": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "When true, include each group’s original records in an items array."
     }
   },
   "arguments": [
@@ -101,5 +105,20 @@
         }
       }
     }
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.group with items [{\"team\":\"red\"}, {\"team\":\"blue\"}, {\"team\":\"red\"}] and key \"/team\" as result",
+      "expected_output": [
+        {
+          "count": 2,
+          "key": "red"
+        },
+        {
+          "count": 1,
+          "key": "blue"
+        }
+      ]
+    }
+  ]
 }

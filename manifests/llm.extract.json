@@ -1,6 +1,6 @@
 {
   "name": "llm.extract",
-  "description": "Provides the llm extract operation for controlled scripts.",
+  "description": "Asks the selected OpenAI model to produce data matching the supplied schema and returns the structured result with usage metadata.",
   "binary": "@execute-model",
   "accepts_stdin": true,
   "cacheable": false,

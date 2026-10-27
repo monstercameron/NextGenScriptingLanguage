@@ -1,15 +1,17 @@
 {
   "name": "fs.glob",
-  "description": "Provides the fs glob operation for controlled scripts.",
+  "description": "Matches pathname components with *, ?, character sets and ** recursion, returning unique sorted paths while skipping hidden entries by default.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "pattern": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Nonempty pathname pattern resolved from the program working directory; *, ? and character sets match within a component, and ** matches directory levels."
     },
     "include_hidden": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Set true to let wildcard components match names beginning with .; an explicitly dot-prefixed component matches hidden names regardless."
     }
   },
   "arguments": [
@@ -83,5 +85,11 @@
   },
   "phrases": [
     "fs glob"
+  ],
+  "examples": [
+    {
+      "program": "run fs.glob with pattern \"catalog-example-no-match-494-*\" as matches",
+      "expected_output": []
+    }
   ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "list.rest",
-  "description": "Provides list.rest for controlled scripts.",
+  "description": "Return all list values after the first one; an empty or single-value list returns an empty list.",
   "phrases": [
     "list rest",
     "items rest"
@@ -10,7 +10,8 @@
   "parameters": {
     "items": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "List whose first value will be skipped."
     }
   },
   "arguments": [
@@ -65,5 +66,14 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.rest with items [\"head\", \"middle\", \"tail\"] as result",
+      "expected_output": [
+        "middle",
+        "tail"
+      ]
+    }
+  ]
 }

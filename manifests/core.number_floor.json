@@ -1,6 +1,6 @@
 {
   "name": "number.floor",
-  "description": "Provides number.floor for controlled scripts.",
+  "description": "Round a finite number toward negative infinity to the nearest integer value.",
   "phrases": [
     "number floor",
     "value floor"
@@ -10,7 +10,8 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite JSON number to round downward."
     }
   },
   "arguments": [
@@ -56,5 +57,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.floor with value -2.2 as result",
+      "expected_output": -3.0
+    }
+  ]
 }

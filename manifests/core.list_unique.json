@@ -1,6 +1,6 @@
 {
   "name": "list.unique",
-  "description": "Provides the list unique operation for controlled scripts.",
+  "description": "Remove duplicate JSON values while preserving the first occurrence of each value.",
   "phrases": [
     "deduplicate list",
     "unique values"
@@ -10,22 +10,28 @@
   "parameters": {
     "items": {
       "type": "list",
-      "items": "json"
+      "items": "json",
+      "description": "List of JSON values to deduplicate."
     },
     "key": {
-      "type": "string"
+      "type": "string",
+      "description": "Accepted for compatibility; uniqueness compares each complete JSON value."
     },
     "n": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Accepted for compatibility; this operation does not limit the result count."
     },
     "collect": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Accepted for compatibility; unique values are returned directly."
     },
     "delimiter": {
-      "type": "string"
+      "type": "string",
+      "description": "Accepted for compatibility; this operation does not split input fields."
     },
     "field": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Accepted for compatibility; this operation does not select an input field."
     }
   },
   "arguments": [
@@ -118,5 +124,14 @@
         }
       }
     }
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.unique with items [\"red\", \"blue\", \"red\"] as result",
+      "expected_output": [
+        "red",
+        "blue"
+      ]
+    }
+  ]
 }

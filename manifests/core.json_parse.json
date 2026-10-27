@@ -1,11 +1,12 @@
 {
   "name": "json.parse",
-  "description": "Provides the json parse operation for controlled scripts.",
+  "description": "Parses JSON text into a typed JSON value, taking text from the parameter or stdin.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "JSON source text to parse; when omitted, the applet reads JSON from stdin."
     }
   },
   "arguments": [
@@ -61,5 +62,13 @@
   },
   "phrases": [
     "json parse"
+  ],
+  "examples": [
+    {
+      "program": "run json.parse with text \"{\\\"name\\\":\\\"Ada\\\"}\" as result",
+      "expected_output": {
+        "name": "Ada"
+      }
+    }
   ]
 }

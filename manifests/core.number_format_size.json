@@ -1,6 +1,6 @@
 {
   "name": "number.format_size",
-  "description": "Provides number.format_size for controlled scripts.",
+  "description": "Format a nonnegative byte count using SI or IEC units, with a bounded number of decimal places.",
   "phrases": [
     "number format_size",
     "value format_size"
@@ -10,17 +10,20 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Nonnegative finite byte count to format."
     },
     "precision": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Fractional digits to display; defaults to 1 and must be from 0 through 6."
     },
     "system": {
       "type": "string",
       "enum": [
         "si",
         "iec"
-      ]
+      ],
+      "description": "Unit system: \"si\" uses powers of 1000 (kB, MB, …); \"iec\" uses powers of 1024 (KiB, MiB, …) and is the default."
     }
   },
   "arguments": [
@@ -103,6 +106,12 @@
           }
         ]
       ]
+    }
+  ],
+  "examples": [
+    {
+      "program": "run number.format_size with value 1536 and system \"iec\" as result",
+      "expected_output": "1.5 KiB"
     }
   ]
 }

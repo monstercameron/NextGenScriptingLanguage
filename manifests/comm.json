@@ -1,6 +1,6 @@
 {
   "name": "comm",
-  "description": "Provides the comm operation for controlled scripts.",
+  "description": "Compares two sorted files line by line and writes lines unique to either file and lines shared by both.",
   "binary": "comm",
   "parameters": {
     "flags": {

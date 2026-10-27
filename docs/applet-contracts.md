@@ -64,6 +64,13 @@ metadata. A `cacheable` declaration does not prove purity, and an
 once effects. Use this view to inspect the declared interface, then use the
 versioned fields below for typed values and backend behavior.
 
+Shipped manifests describe what each applet returns and put a `description` on
+each in-process parameter. In-process manifests also include one or two
+`examples`, each with a `.program` source string and its JSON `expected_output`.
+The catalog test parses and checks each example, executes the applet, and
+compares its returned value with the declared output; filesystem examples use
+an isolated temporary working directory.
+
 Two other declarations have runtime consequences. For an in-process applet, the
 declared `effects` decide checkpoint [retry safety](language.md#retry-safety): reads or
 no effects are retry-safe, anything else is uncertain after a crash. A manifest may also

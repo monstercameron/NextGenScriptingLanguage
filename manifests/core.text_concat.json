@@ -1,16 +1,18 @@
 {
   "name": "text.concat",
-  "description": "Provides the text concat operation for controlled scripts.",
+  "description": "Concatenates string parts in order and inserts the optional separator between adjacent parts.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "parts": {
       "type": "list",
       "items": "string",
-      "required": true
+      "required": true,
+      "description": "String fragments to concatenate in order."
     },
     "separator": {
-      "type": "string"
+      "type": "string",
+      "description": "Text inserted between parts; omitted means no separator."
     }
   },
   "arguments": [
@@ -68,5 +70,11 @@
   },
   "phrases": [
     "text concat"
+  ],
+  "examples": [
+    {
+      "program": "run text.concat with parts [\"hello\", \"world\"] and separator \" \" as value",
+      "expected_output": "hello world"
+    }
   ]
 }

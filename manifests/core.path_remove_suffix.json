@@ -1,16 +1,18 @@
 {
   "name": "path.remove_suffix",
-  "description": "Provides the path remove suffix operation for controlled scripts.",
+  "description": "Removes one exact suffix from a path string, returning the original string when it does not end with that suffix.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Path text to transform."
     },
     "suffix": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Nonempty exact ending to remove when present."
     }
   },
   "arguments": [
@@ -65,5 +67,11 @@
   },
   "phrases": [
     "path remove_suffix"
+  ],
+  "examples": [
+    {
+      "program": "run path.remove_suffix with path \"backup.tar.gz\" and suffix \".tar.gz\" as value",
+      "expected_output": "backup"
+    }
   ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "menu.fuzzel",
-  "description": "Provides the menu fuzzel operation for controlled scripts.",
+  "description": "Presents newline-delimited standard input in fuzzel’s dmenu mode and returns the selected item as text.",
   "binary": "fuzzel",
   "accepts_stdin": true,
   "cacheable": false,

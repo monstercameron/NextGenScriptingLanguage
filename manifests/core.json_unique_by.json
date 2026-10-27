@@ -1,16 +1,18 @@
 {
   "name": "json.unique_by",
-  "description": "Keeps the first array element for each distinct JSON Pointer value.",
+  "description": "Keeps the first root-array item for each distinct value selected by JSON Pointer.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "document": {
       "type": "list",
       "items": "json",
-      "required": true
+      "required": true,
+      "description": "Root JSON array to deduplicate; stdin is used when omitted."
     },
     "pointer": {
-      "type": "string"
+      "type": "string",
+      "description": "JSON Pointer evaluated relative to each item to identify its uniqueness key."
     }
   },
   "arguments": [
@@ -74,5 +76,20 @@
   },
   "phrases": [
     "json unique_by"
+  ],
+  "examples": [
+    {
+      "program": "run json.unique_by with document [{\"id\":1,\"name\":\"Ada\"},{\"id\":1,\"name\":\"A. Lovelace\"},{\"id\":2,\"name\":\"Lin\"}] and pointer \"/id\" as result",
+      "expected_output": [
+        {
+          "id": 1,
+          "name": "Ada"
+        },
+        {
+          "id": 2,
+          "name": "Lin"
+        }
+      ]
+    }
   ]
 }

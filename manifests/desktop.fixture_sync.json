@@ -1,6 +1,6 @@
 {
   "name": "desktop.fixture_sync",
-  "description": "Provides the desktop fixture sync operation for controlled scripts.",
+  "description": "Sends each click event to the desktop fixture service and returns its synchronization status and message.",
   "build_feature": "remote",
   "binary": "@remote-applet",
   "accepts_stdin": false,

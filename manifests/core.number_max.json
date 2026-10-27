@@ -1,6 +1,6 @@
 {
   "name": "number.max",
-  "description": "Provides number.max for controlled scripts.",
+  "description": "Return the largest number in a nonempty list of numbers.",
   "phrases": [
     "number max",
     "values max"
@@ -12,7 +12,8 @@
       "type": "list",
       "items": "number",
       "required": true,
-      "min_items": 1
+      "min_items": 1,
+      "description": "Nonempty list of finite numeric values to compare."
     }
   },
   "arguments": [
@@ -62,5 +63,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.max with values [4, 9, 2] as result",
+      "expected_output": 9
+    }
+  ]
 }

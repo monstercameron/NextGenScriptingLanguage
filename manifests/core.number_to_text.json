@@ -1,13 +1,14 @@
 {
   "name": "number.to_text",
-  "description": "Provides the number to text operation for controlled scripts.",
+  "description": "Convert a finite JSON number to locale-independent decimal text without coercing strings.",
   "binary": "@execute-applet",
   "cacheable": true,
   "accepts_stdin": false,
   "parameters": {
     "value": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Finite JSON number to render as text."
     }
   },
   "arguments": [
@@ -56,5 +57,11 @@
   },
   "phrases": [
     "number to_text"
+  ],
+  "examples": [
+    {
+      "program": "run number.to_text with value 12.5 as result",
+      "expected_output": "12.5"
+    }
   ]
 }

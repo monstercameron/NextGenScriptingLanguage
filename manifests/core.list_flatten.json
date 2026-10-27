@@ -1,6 +1,6 @@
 {
   "name": "list.flatten",
-  "description": "Provides list.flatten for controlled scripts.",
+  "description": "Flatten nested lists recursively, or only to the optional maximum depth.",
   "phrases": [
     "list flatten",
     "items flatten"
@@ -10,10 +10,12 @@
   "parameters": {
     "items": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "List to flatten; nested lists are expanded while preserving order."
     },
     "depth": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Maximum number of nested list levels to expand; omit to flatten all levels, or use 0 to keep the input nesting."
     }
   },
   "arguments": [
@@ -74,5 +76,17 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.flatten with items [1, [2, [3]]] and depth 1 as result",
+      "expected_output": [
+        1,
+        2,
+        [
+          3
+        ]
+      ]
+    }
+  ]
 }

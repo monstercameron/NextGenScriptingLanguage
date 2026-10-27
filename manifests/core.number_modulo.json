@@ -1,6 +1,6 @@
 {
   "name": "number.modulo",
-  "description": "Provides number.modulo for controlled scripts.",
+  "description": "Return the signed remainder after dividing two integers with quotient truncated toward zero.",
   "phrases": [
     "number modulo",
     "left modulo"
@@ -10,11 +10,13 @@
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Integer dividend."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Nonzero integer divisor."
     }
   },
   "arguments": [
@@ -66,5 +68,11 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run number.modulo with left -17 and right 5 as result",
+      "expected_output": -2
+    }
+  ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "hypr.activewindow",
-  "description": "Provides the hypr activewindow operation for controlled scripts.",
+  "description": "Returns Hyprland’s active-window details as JSON.",
   "binary": "hyprctl",
   "accepts_stdin": false,
   "cacheable": false,

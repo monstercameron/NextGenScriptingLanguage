@@ -1,15 +1,17 @@
 {
   "name": "text.strip_prefix",
-  "description": "Provides the text strip prefix operation for controlled scripts.",
+  "description": "Removes one exact prefix when present and otherwise returns the input text unchanged.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to transform; omitted text is read from UTF-8 stdin."
     },
     "prefix": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Exact beginning to remove when present."
     }
   },
   "arguments": [
@@ -72,5 +74,11 @@
   "phrases": [
     "text strip_prefix",
     "remove text prefix"
+  ],
+  "examples": [
+    {
+      "program": "run text.strip_prefix with text \"v2.4.0\" and prefix \"v\" as value",
+      "expected_output": "2.4.0"
+    }
   ]
 }

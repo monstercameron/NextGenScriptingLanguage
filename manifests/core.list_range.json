@@ -1,6 +1,6 @@
 {
   "name": "list.range",
-  "description": "Provides list.range for controlled scripts.",
+  "description": "Generate integers from start up to, but not including, stop using the requested step.",
   "phrases": [
     "list range",
     "start range"
@@ -10,14 +10,17 @@
   "parameters": {
     "start": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "First integer in the generated range."
     },
     "stop": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Exclusive upper or lower bound; generation stops before this integer."
     },
     "step": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Nonzero increment between values; defaults to 1 or -1 according to the direction from start to stop."
     }
   },
   "parameter_alternatives": [
@@ -100,5 +103,15 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.range with start 2 and stop 8 and step 2 as result",
+      "expected_output": [
+        2,
+        4,
+        6
+      ]
+    }
+  ]
 }

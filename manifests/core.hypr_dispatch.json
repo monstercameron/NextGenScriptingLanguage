@@ -1,6 +1,6 @@
 {
   "name": "hypr.dispatch",
-  "description": "Provides the hypr dispatch operation for controlled scripts.",
+  "description": "Runs an allowlisted, non-spawning Hyprland dispatcher with the supplied arguments.",
   "binary": "hyprctl",
   "accepts_stdin": false,
   "cacheable": false,

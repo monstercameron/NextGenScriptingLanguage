@@ -1,20 +1,23 @@
 {
   "name": "fs.ensure_file",
-  "description": "Provides the fs ensure file operation for controlled scripts.",
+  "description": "Creates or replaces a text file only when its content or requested mode differs, using a locked compare-and-swap write.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "path": {
       "type": "path",
-      "required": true
+      "required": true,
+      "description": "File path to create or update; relative paths resolve from the program working directory."
     },
     "content": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Exact UTF-8 text that the file should contain."
     },
     "mode": {
       "type": "string",
-      "pattern": "octal_mode"
+      "pattern": "octal_mode",
+      "description": "Optional octal permission text, such as 0644, to apply on Unix; omitted preserves the current mode."
     }
   },
   "arguments": [
@@ -113,5 +116,15 @@
   },
   "phrases": [
     "fs ensure_file"
+  ],
+  "examples": [
+    {
+      "program": "run fs.ensure_file with path \"catalog-example.txt\" and content \"ready\\n\" as result",
+      "expected_output": {
+        "changed": true,
+        "path": "catalog-example.txt",
+        "mode_applied": false
+      }
+    }
   ]
 }

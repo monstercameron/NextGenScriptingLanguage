@@ -1,6 +1,6 @@
 {
   "name": "fs.read",
-  "description": "Provides the fs read operation for controlled scripts.",
+  "description": "Reads a regular UTF-8 file and returns its text, SHA-256 content hash, filesystem snapshot, symlink target, and mode.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "stdio": {

@@ -1,6 +1,6 @@
 {
   "name": "package.check_updates",
-  "description": "Provides the package check updates operation for controlled scripts.",
+  "description": "Checks the pacman update repository with checkupdates and returns available package updates, or a distinct up-to-date outcome.",
   "binary": "checkupdates",
   "accepts_stdin": false,
   "cacheable": false,

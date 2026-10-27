@@ -1,6 +1,6 @@
 {
   "name": "tail.follow",
-  "description": "Provides the tail follow operation for controlled scripts.",
+  "description": "Streams new content appended to the path, starting at the current end and following file replacement.",
   "phrases": [
     "follow file"
   ],

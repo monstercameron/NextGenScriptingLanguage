@@ -1,6 +1,6 @@
 {
   "name": "menu.gum_confirm",
-  "description": "Provides the menu gum confirm operation for controlled scripts.",
+  "description": "Prompts for confirmation with gum and reports confirmed, declined, or cancelled as distinct outcomes.",
   "binary": "gum",
   "accepts_stdin": false,
   "cacheable": false,

@@ -1,6 +1,6 @@
 {
   "name": "list.zip",
-  "description": "Provides list.zip for controlled scripts.",
+  "description": "Pair values at matching positions from two lists and stop when the shorter list ends.",
   "phrases": [
     "list zip",
     "left zip"
@@ -10,11 +10,13 @@
   "parameters": {
     "left": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "First list of values to pair."
     },
     "right": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "Second list of values to pair."
     }
   },
   "arguments": [
@@ -78,5 +80,20 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.zip with left [\"a\", \"b\", \"c\"] and right [1, 2] as result",
+      "expected_output": [
+        [
+          "a",
+          1
+        ],
+        [
+          "b",
+          2
+        ]
+      ]
+    }
+  ]
 }

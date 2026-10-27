@@ -1,6 +1,6 @@
 {
   "name": "ls",
-  "description": "Provides the ls operation for controlled scripts.",
+  "description": "Lists entries in the selected directory, or the current working directory when no path is supplied.",
   "binary": "ls",
   "parameters": {
     "flags": {

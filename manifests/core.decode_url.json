@@ -1,15 +1,17 @@
 {
   "name": "decode.url",
-  "description": "Provides the decode.url operation for controlled scripts.",
+  "description": "Percent-decodes URL text to UTF-8, optionally interpreting + as a space for form-encoded values.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "text": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Percent-encoded UTF-8 text to decode."
     },
     "form": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Set true to decode + as a space as in application/x-www-form-urlencoded data; omitted or false preserves + literally."
     }
   },
   "arguments": [
@@ -64,5 +66,11 @@
   },
   "phrases": [
     "decode url"
+  ],
+  "examples": [
+    {
+      "program": "run decode.url with text \"hello+world\" and form true as decoded",
+      "expected_output": "hello world"
+    }
   ]
 }

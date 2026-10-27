@@ -1,6 +1,6 @@
 {
   "name": "join",
-  "description": "Provides the join operation for controlled scripts.",
+  "description": "Joins corresponding lines from two or more files side by side, using the selected join flags.",
   "binary": "join",
   "parameters": {
     "flags": {

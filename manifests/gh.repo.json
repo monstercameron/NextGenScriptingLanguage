@@ -1,6 +1,6 @@
 {
   "name": "gh.repo",
-  "description": "Provides the gh repo operation for controlled scripts.",
+  "description": "Fetches a GitHub repository’s name, star and fork counts, description, URL, and last-update time as JSON.",
   "binary": "gh",
   "cacheable": false,
   "parameters": {

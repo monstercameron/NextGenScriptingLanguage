@@ -1,6 +1,6 @@
 {
   "name": "toml.stringify",
-  "description": "Provides the toml stringify operation for controlled scripts.",
+  "description": "Serializes a JSON record as TOML, writing scalar values and arrays before nested tables; null values are rejected because TOML has no null.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
@@ -10,7 +10,8 @@
       "fields": {},
       "additional_properties": {
         "type": "json"
-      }
+      },
+      "description": "Record to serialize; nested JSON values must be representable in the supported TOML subset."
     }
   },
   "arguments": [
@@ -63,5 +64,11 @@
   },
   "phrases": [
     "toml stringify"
+  ],
+  "examples": [
+    {
+      "program": "run toml.stringify with value {\"name\": \"Ada\"} as value",
+      "expected_output": "name = \"Ada\"\n"
+    }
   ]
 }

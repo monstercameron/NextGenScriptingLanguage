@@ -1,11 +1,12 @@
 {
   "name": "yaml.parse",
-  "description": "Parse YAML text into structured data.",
+  "description": "Parses the supported YAML subset into JSON-compatible values; duplicate keys and unsupported features such as anchors, aliases, tags, and multiple documents fail.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "YAML document to parse; omitted text is read from UTF-8 stdin."
     }
   },
   "arguments": [
@@ -63,5 +64,14 @@
     "yaml parse",
     "parse yaml",
     "read yaml"
+  ],
+  "examples": [
+    {
+      "program": "run yaml.parse with text \"name: Ada\\nactive: true\" as value",
+      "expected_output": {
+        "name": "Ada",
+        "active": true
+      }
+    }
   ]
 }

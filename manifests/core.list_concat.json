@@ -1,6 +1,6 @@
 {
   "name": "list.concat",
-  "description": "Provides list.concat for controlled scripts.",
+  "description": "Concatenate a list of lists into one flat list, preserving each sublist’s order.",
   "phrases": [
     "list concat",
     "items concat"
@@ -10,7 +10,8 @@
   "parameters": {
     "items": {
       "type": "json",
-      "required": true
+      "required": true,
+      "description": "List of lists whose values will be appended in order."
     }
   },
   "arguments": [
@@ -68,5 +69,15 @@
     "capabilities": [
       "data.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.concat with items [[1, 2], [3]] as result",
+      "expected_output": [
+        1,
+        2,
+        3
+      ]
+    }
+  ]
 }

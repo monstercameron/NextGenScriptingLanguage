@@ -1,12 +1,13 @@
 {
   "name": "time.add",
-  "description": "Provides the time.add operation for controlled scripts.",
+  "description": "Adds a signed duration to a Unix epoch timestamp in seconds and returns the resulting epoch second.",
   "binary": "@execute-applet",
   "accepts_stdin": false,
   "parameters": {
     "amount": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Signed quantity of the selected time unit to add."
     },
     "unit": {
       "type": "string",
@@ -16,11 +17,13 @@
         "minutes",
         "hours",
         "days"
-      ]
+      ],
+      "description": "Duration unit for amount: seconds, minutes, hours, or days."
     },
     "epoch": {
       "type": "integer",
-      "required": true
+      "required": true,
+      "description": "Starting Unix timestamp in whole seconds."
     }
   },
   "arguments": [
@@ -89,5 +92,11 @@
   },
   "phrases": [
     "time add"
+  ],
+  "examples": [
+    {
+      "program": "run time.add with epoch 0 and amount 2 and unit \"days\" as value",
+      "expected_output": 172800
+    }
   ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "pwd",
-  "description": "Provides the pwd operation for controlled scripts.",
+  "description": "Prints the script’s current working directory.",
   "binary": "pwd",
   "arguments": []
 }

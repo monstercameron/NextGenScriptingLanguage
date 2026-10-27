@@ -1,6 +1,6 @@
 {
   "name": "hypr.workspaces",
-  "description": "Provides the hypr workspaces operation for controlled scripts.",
+  "description": "Returns the current Hyprland workspaces as a JSON list.",
   "binary": "hyprctl",
   "accepts_stdin": false,
   "cacheable": false,

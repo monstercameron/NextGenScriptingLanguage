@@ -1,6 +1,6 @@
 {
   "name": "menu.gum_choose",
-  "description": "Provides the menu gum choose operation for controlled scripts.",
+  "description": "Presents the supplied items in gum’s interactive chooser and returns the selected item as text, with a separate cancelled outcome.",
   "binary": "gum",
   "accepts_stdin": false,
   "cacheable": false,

@@ -1,11 +1,12 @@
 {
   "name": "text.lower",
-  "description": "Provides the text lower operation for controlled scripts.",
+  "description": "Converts text with locale-independent Unicode lowercase mappings.",
   "binary": "@execute-applet",
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to lowercase; omitted text is read from UTF-8 stdin."
     }
   },
   "arguments": [
@@ -62,5 +63,11 @@
   "phrases": [
     "text lower",
     "lowercase text"
+  ],
+  "examples": [
+    {
+      "program": "run text.lower with text \"Straße\" as value",
+      "expected_output": "straße"
+    }
   ]
 }

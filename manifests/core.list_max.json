@@ -1,6 +1,6 @@
 {
   "name": "list.max",
-  "description": "Provides the list max operation for controlled scripts.",
+  "description": "Return the largest numeric value in a nonempty list.",
   "phrases": [
     "maximum value",
     "largest number"
@@ -10,22 +10,28 @@
   "parameters": {
     "items": {
       "type": "list",
-      "items": "json"
+      "items": "json",
+      "description": "List of numeric JSON values to compare."
     },
     "key": {
-      "type": "string"
+      "type": "string",
+      "description": "Accepted for compatibility; this numeric maximum operation compares each list value directly."
     },
     "n": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Accepted for compatibility; this operation returns one value rather than a top-N list."
     },
     "collect": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "Accepted for compatibility; this operation returns only the maximum."
     },
     "delimiter": {
-      "type": "string"
+      "type": "string",
+      "description": "Accepted for compatibility; this operation does not split input fields."
     },
     "field": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Accepted for compatibility; this operation does not select an input field."
     }
   },
   "arguments": [
@@ -112,5 +118,11 @@
         }
       }
     }
-  }
+  },
+  "examples": [
+    {
+      "program": "run list.max with items [4, 9, 2] as result",
+      "expected_output": 9
+    }
+  ]
 }

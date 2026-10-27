@@ -1,6 +1,6 @@
 {
   "name": "desktop.clock_format",
-  "description": "Provides the desktop clock format operation for controlled scripts.",
+  "description": "Formats an elapsed-seconds value as the text displayed by the desktop clock.",
   "binary": "python3",
   "accepts_stdin": false,
   "parameters": {

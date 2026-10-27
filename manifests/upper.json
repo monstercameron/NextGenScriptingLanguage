@@ -1,6 +1,6 @@
 {
   "name": "upper",
-  "description": "Provides the upper operation for controlled scripts.",
+  "description": "Converts lowercase characters in standard input to their uppercase equivalents.",
   "phrases": [
     "uppercase"
   ],

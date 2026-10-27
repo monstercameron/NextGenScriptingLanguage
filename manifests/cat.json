@@ -1,6 +1,6 @@
 {
   "name": "cat",
-  "description": "Provides the cat operation for controlled scripts.",
+  "description": "Copies the contents of the selected files to standard output; with no file argument, it reads standard input.",
   "phrases": [
     "copy"
   ],

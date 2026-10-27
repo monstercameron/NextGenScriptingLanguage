@@ -1,6 +1,6 @@
 {
   "name": "notify.restore",
-  "description": "Provides the notify restore operation for controlled scripts.",
+  "description": "Restores the most recently dismissed notification in mako.",
   "binary": "makoctl",
   "accepts_stdin": false,
   "cacheable": false,

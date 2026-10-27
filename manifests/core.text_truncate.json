@@ -1,6 +1,6 @@
 {
   "name": "text.truncate",
-  "description": "Provides text.truncate for controlled scripts.",
+  "description": "Keeps text at or below a character-width limit, replacing the tail with an ellipsis string when truncation is needed.",
   "phrases": [
     "shorten text"
   ],
@@ -8,14 +8,17 @@
   "accepts_stdin": true,
   "parameters": {
     "text": {
-      "type": "string"
+      "type": "string",
+      "description": "Text to shorten; omitted text is read from UTF-8 stdin."
     },
     "width": {
       "type": "unsigned_integer",
-      "required": true
+      "required": true,
+      "description": "Maximum output width in Unicode scalar values, including ellipsis."
     },
     "ellipsis": {
-      "type": "string"
+      "type": "string",
+      "description": "Ending used after truncation; defaults to the single-character ellipsis `…`."
     }
   },
   "parameter_alternatives": [
@@ -86,5 +89,11 @@
     "capabilities": [
       "text.transform"
     ]
-  }
+  },
+  "examples": [
+    {
+      "program": "run text.truncate with text \"abcdef\" and width 4 as value",
+      "expected_output": "abc…"
+    }
+  ]
 }

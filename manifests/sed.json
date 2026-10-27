@@ -1,6 +1,6 @@
 {
   "name": "sed",
-  "description": "Provides the sed operation for controlled scripts.",
+  "description": "Edits or filters standard input using the supplied sed program and optional sed flags.",
   "binary": "sed",
   "accepts_stdin": true,
   "parameters": {

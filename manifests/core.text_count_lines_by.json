@@ -1,6 +1,6 @@
 {
   "name": "text.count_lines_by",
-  "description": "Provides the text count lines by operation for controlled scripts.",
+  "description": "Groups UTF-8 input lines by the selected zero-based, delimiter-separated field and returns an array of {key, count} records in first-seen key order.",
   "phrases": [
     "count lines by field",
     "group lines by key"
@@ -10,10 +10,12 @@
   "parameters": {
     "delimiter": {
       "type": "string",
-      "required": true
+      "required": true,
+      "description": "Nonempty literal field separator used to split each input line."
     },
     "field": {
-      "type": "integer"
+      "type": "integer",
+      "description": "Zero-based field index used as the grouping key; defaults to 0."
     }
   },
   "parameter_alternatives": [
@@ -110,5 +112,20 @@
         }
       }
     }
-  }
+  },
+  "examples": [
+    {
+      "program": "use value \"a,red\\nb,blue\\nc,red\"\npipe to text.count_lines_by with delimiter \",\" and field 1 as value",
+      "expected_output": [
+        {
+          "key": "red",
+          "count": 2
+        },
+        {
+          "key": "blue",
+          "count": 1
+        }
+      ]
+    }
+  ]
 }

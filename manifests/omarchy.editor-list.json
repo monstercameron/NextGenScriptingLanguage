@@ -1,6 +1,6 @@
 {
   "name": "omarchy.editor-list",
-  "description": "Provides the omarchy editor-list operation for controlled scripts.",
+  "description": "Lists extensions installed in the configured editor and returns the command’s text output.",
   "binary": "/usr/bin/env",
   "accepts_stdin": false,
   "cacheable": false,

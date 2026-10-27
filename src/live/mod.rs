@@ -800,13 +800,7 @@ fn serve(socket: &Path, shared: Arc<Shared>, options: RunOptions, mode: Mode) ->
         _cleanup: cleanup.clone(),
         _signal_code: signal_code.clone(),
     };
-    signals.ids = crate::platform::signals(
-        shared.stop.clone(),
-        None,
-        None,
-        cleanup,
-        signal_code,
-    )?;
+    signals.ids = crate::platform::signals(shared.stop.clone(), None, None, cleanup, signal_code)?;
     match mode {
         Mode::Serve => {
             writeln!(

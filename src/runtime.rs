@@ -6134,8 +6134,7 @@ mod drain_tests {
 
     #[test]
     fn run_without_an_interrupt_skips_the_interrupt_body() {
-        let (directory, result) =
-            run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_IDLE, false);
+        let (directory, result) = run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_IDLE, false);
         assert!(result.expect("ordinary run").exit.is_none());
         assert!(directory.path().join("main.txt").exists());
         assert!(!directory.path().join("drained.txt").exists());
@@ -6156,8 +6155,7 @@ mod drain_tests {
     #[test]
     fn drain_runs_the_interrupt_body_then_the_exit_body() {
         let source = "on interrupt\n  run printf with message \"interrupted\"\n  then save to file \"interrupted.txt\"\non exit\n  run printf with message \"exit\"\n  then save to file \"exit.txt\"\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
-        let (directory, result) =
-            run_with_drain(source, crate::platform::DRAIN_REQUESTED, false);
+        let (directory, result) = run_with_drain(source, crate::platform::DRAIN_REQUESTED, false);
         assert_eq!(
             result
                 .expect("drain through both cleanups")
@@ -6179,12 +6177,16 @@ mod drain_tests {
         let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let first =
-            Signals::register_with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), None)
-                .unwrap();
-        let second =
-            Signals::register_with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), None)
-                .unwrap();
+        let first = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
+        let second = Signals::register_with_cancellation_and_deadline(
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .unwrap();
         first.record_cancel_signal(2);
         second.record_cancel_signal(15);
         assert_eq!(first.cancel_exit_code(), Some(130));

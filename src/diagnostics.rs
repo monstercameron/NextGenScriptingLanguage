@@ -614,9 +614,9 @@ fn analyze_source_impl(
             if message.contains("stray token") {
                 if let Some(repair) = suffix_order_repair(
                     source,
-                    &content,
-                    &tokens,
-                    &token_ranges,
+                    content,
+                    tokens,
+                    token_ranges,
                     content_source_offset,
                     line_number,
                     &line_starts,

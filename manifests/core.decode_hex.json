@@ -6,7 +6,7 @@
   "parameters": {
     "text": {
       "type": "string",
-      "required": false
+      "required": true
     }
   },
   "arguments": [

@@ -6,7 +6,7 @@
   "parameters": {
     "value": {
       "type": "json",
-      "required": false
+      "required": true
     }
   },
   "arguments": [

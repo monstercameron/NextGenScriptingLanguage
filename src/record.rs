@@ -162,7 +162,7 @@ impl Recorder {
         #[cfg(unix)]
         let directory_handle = create_private_directory(start.directory)?;
         #[cfg(not(unix))]
-        let _ = create_private_directory(start.directory)?;
+        create_private_directory(start.directory)?;
         #[cfg(unix)]
         write_private_at(&directory_handle, PROGRAM_FILE, start.program_source)?;
         #[cfg(not(unix))]

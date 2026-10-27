@@ -256,12 +256,11 @@ fn read_checksum(
             use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
             options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
-        let file = match options.open(&path) {
+        match options.open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error).context("opening cached result checksum"),
-        };
-        file
+        }
     };
     regular(&file.metadata()?)?;
     let mut bytes = Vec::with_capacity(65);
@@ -659,10 +658,9 @@ fn maintenance_lock(
             use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
             options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
-        let file = options
+        options
             .open(&path)
-            .context("opening cache maintenance lock")?;
-        file
+            .context("opening cache maintenance lock")?
     };
     regular(&file.metadata()?)?;
     check_permissions(&file.metadata()?, "cache maintenance lock")?;

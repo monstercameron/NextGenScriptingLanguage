@@ -143,5 +143,8 @@ diagnostic surfaces. Unknown provenance stays unknown, and an active policy
 denies unknown remote egress and persistence by default. Review applet manifests, origin
 grants, persistence grants and cache-purity assertions as part of deployment.
 The policy decision history is bounded and records identifiers, action, origin,
-risk and outcome, not request payloads or secret values.
+risk and outcome, not request payloads or secret values. `execute run
+--record` persists that audit into the run record with the policy in force, so
+grants and denials stay reviewable after the run; `execute show-run` prints
+them. A run with no policy records that no confinement applied.
 

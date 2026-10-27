@@ -5,8 +5,10 @@
 //! Layout of a record directory:
 //!
 //! - `run.json`: protocol `execute.record/1`. Program hash, plan (explain text) and
-//!   its hash, redacted inputs, timing, the final result and output hash, and the
-//!   limits that applied.
+//!   its hash, redacted inputs, timing, the final result and output hash, the
+//!   limits that applied, the policy in force (execution mode and which policies
+//!   were configured, never policy contents), and the bounded policy-decision
+//!   audit: what effects were allowed or denied and why.
 //! - `program.program`: a copy of the program as it ran.
 //! - `trace.jsonl`: one JSON object per applet group, in execution order, with the
 //!   resolved argv, status, declared outcome, wall time, and the stdout and stderr
@@ -133,6 +135,51 @@ fn prepare_plan(redactor: &SecretRedactor, plan: &str) -> (String, String) {
     let redacted = redactor.redact_text(plan);
     let sha256 = sha256_hex(redacted.as_bytes());
     (truncate_text(&redacted, MAX_PLAN_BYTES), sha256)
+}
+
+/// How many of the in-memory policy decisions the run record keeps. Decisions
+/// are safe by construction (bounded identifiers and canonical origins only, no
+/// payloads or secrets), and the tail is kept so the most recent decision --
+/// usually the one that failed the run -- survives. The total is stored
+/// alongside, so a truncated audit is explicit rather than silent.
+pub const MAX_AUDIT_DECISIONS: usize = crate::security::MAX_PERSISTED_DECISIONS;
+
+/// The policy in force for a run: the execution mode and which policies were
+/// configured. Policy contents (grants, paths, digests) are never recorded;
+/// presence alone tells a reviewer whether any confinement applied.
+fn policy_context_json(registry: &Registry) -> Json {
+    let capability = if crate::capabilities::capability_policy_active(registry) {
+        "configured"
+    } else {
+        "absent"
+    };
+    let data_flow = if registry
+        .host_state::<security::DataFlowPolicy>()
+        .is_active()
+    {
+        "configured"
+    } else {
+        "absent"
+    };
+    json!({
+        "execution_mode": crate::capabilities::execution_mode(registry).as_str(),
+        "capability_policy": capability,
+        "data_flow_policy": data_flow,
+    })
+}
+
+/// The bounded durable audit of policy/effect decisions: the most recent
+/// decisions, with the total seen and whether the tail was cut.
+fn decision_audit_json(registry: &Registry) -> (Json, usize, bool) {
+    let decisions = security::policy_decisions(registry);
+    let total = decisions.len();
+    let start = total.saturating_sub(MAX_AUDIT_DECISIONS);
+    let items = decisions[start..]
+        .iter()
+        .map(|decision| serde_json::to_value(decision).unwrap_or(Json::Null))
+        .collect::<Vec<_>>();
+    let truncated = total > items.len();
+    (Json::Array(items), total, truncated)
 }
 
 /// Whether the data-flow persistence policy lets output with these labels be kept
@@ -271,6 +318,11 @@ impl Recorder {
                 .as_ref()
                 .map(|error| self.redactor.redact_text(error))
         });
+        // Snapshot after the persistence checks above, so the record's own
+        // persistence decisions are part of the audit too.
+        let policy = policy_context_json(&self.registry);
+        let (decisions, decision_count, decisions_truncated) =
+            decision_audit_json(&self.registry);
         let document = json!({
             "protocol": PROTOCOL,
             "finished": finished,
@@ -294,6 +346,10 @@ impl Recorder {
             },
             "terminal": terminal,
             "truncated": state.truncated,
+            "policy": policy,
+            "decisions": decisions,
+            "decision_count": decision_count,
+            "decisions_truncated": decisions_truncated,
             "limits": {
                 "loop_iterations_max": state.loop_limit,
                 "loop_iterations_scope": state.loop_scope.map(|scope| match scope {
@@ -855,6 +911,22 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
         .map(step_summary)
         .collect::<Vec<_>>();
     let ok = record.run["result"]["ok"].as_bool().unwrap_or(false);
+    let decisions = record
+        .run
+        .get("decisions")
+        .and_then(Json::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let decision_count = record
+        .run
+        .get("decision_count")
+        .and_then(Json::as_u64)
+        .unwrap_or(decisions.len() as u64);
+    let decisions_truncated = record
+        .run
+        .get("decisions_truncated")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
     if as_json {
         let document = json!({
             "protocol": "execute.show-run/1",
@@ -868,6 +940,10 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
             "truncated": record.run["truncated"],
             "failed_step": failed,
             "slowest_steps": slowest,
+            "policy": record.run.get("policy").cloned().unwrap_or(Json::Null),
+            "decisions": decisions,
+            "decision_count": decision_count,
+            "decisions_truncated": decisions_truncated,
         });
         return Ok(serde_json::to_string_pretty(&document)? + "\n");
     }
@@ -900,6 +976,12 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
             step["index"], step["line"], step["applets"], step["wall_us"]
         ));
     }
+    text.push_str(&policy_summary_text(&record.run));
+    text.push_str(&decisions_summary_text(
+        &decisions,
+        decision_count,
+        decisions_truncated,
+    ));
     if record.run["truncated"].as_bool().unwrap_or(false) {
         text.push_str(
             "note: the record reached a size limit; some trace or output data was not kept\n",
@@ -911,6 +993,98 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
         );
     }
     Ok(text)
+}
+
+/// One line naming the policy in force. Records written before the audit say so
+/// instead of implying confinement that was never checked.
+fn policy_summary_text(run: &Json) -> String {
+    let Some(policy) = run.get("policy") else {
+        return "policy: unknown (record predates policy audit)\n".to_owned();
+    };
+    let mode = policy
+        .get("execution_mode")
+        .and_then(Json::as_str)
+        .unwrap_or("unknown");
+    let capability = policy
+        .get("capability_policy")
+        .and_then(Json::as_str)
+        .unwrap_or("unknown");
+    let data_flow = policy
+        .get("data_flow_policy")
+        .and_then(Json::as_str)
+        .unwrap_or("unknown");
+    let mut line = format!(
+        "policy: execution_mode={mode} capability_policy={capability} data_flow_policy={data_flow}"
+    );
+    if mode == "trusted" && capability == "absent" && data_flow == "absent" {
+        line.push_str(" (no confinement: no policy was active)");
+    }
+    line.push('\n');
+    line
+}
+
+/// The durable policy-decision audit for `show-run`. Decisions carry bounded
+/// identifiers and canonical origins only, so they are safe to print.
+fn decisions_summary_text(decisions: &[Json], total: u64, truncated: bool) -> String {
+    if decisions.is_empty() && total == 0 {
+        return "policy decisions: none recorded\n".to_owned();
+    }
+    let approved = decisions
+        .iter()
+        .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("approved"))
+        .count();
+    let denied = decisions
+        .iter()
+        .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("denied"))
+        .count();
+    let mut text = format!(
+        "policy decisions: {} recorded ({} approved, {} denied)\n",
+        decisions.len(),
+        approved,
+        denied
+    );
+    if truncated {
+        text.push_str(&format!(
+            "note: the audit kept the most recent {} of {total} decisions\n",
+            decisions.len()
+        ));
+    }
+    for decision in decisions {
+        let sequence = decision
+            .get("sequence")
+            .and_then(Json::as_u64)
+            .map(|sequence| sequence.to_string())
+            .unwrap_or_else(|| "?".to_owned());
+        let subject = decision
+            .get("subject")
+            .and_then(Json::as_str)
+            .unwrap_or("unknown");
+        let action = decision
+            .get("action")
+            .and_then(Json::as_str)
+            .unwrap_or("unknown");
+        let outcome = decision
+            .get("outcome")
+            .and_then(Json::as_str)
+            .unwrap_or("unknown");
+        let reason = decision
+            .get("reason")
+            .and_then(Json::as_str)
+            .unwrap_or("unknown");
+        let risk = decision
+            .get("risk")
+            .and_then(Json::as_str)
+            .unwrap_or("unknown");
+        let scope = decision
+            .get("scope_origin")
+            .and_then(Json::as_str)
+            .map(|origin| format!(" scope={origin}"))
+            .unwrap_or_default();
+        text.push_str(&format!(
+            "  #{sequence} {subject} {action}{scope} {outcome} ({reason}) risk={risk}\n"
+        ));
+    }
+    text
 }
 
 fn step_failed(step: &StoredStep) -> bool {
@@ -1343,5 +1517,265 @@ mod bounded_record_tests {
         let record = StoredRecord::open(directory.path()).unwrap();
         assert_eq!(record.run["finished"], false);
         assert_eq!(record.run["steps"], 0);
+    }
+}
+
+#[cfg(test)]
+mod policy_audit_tests {
+    use super::{
+        show_run, RecordStart, Recorder, RunSummary, StoredRecord, MAX_AUDIT_DECISIONS,
+        MAX_RUN_BYTES,
+    };
+    use crate::security::{self, PolicyDecisionOutcome, PolicyDecisionReason, PolicyRisk};
+    use serde_json::{json, Value};
+
+    fn finished_recorder(directory: &tempfile::TempDir, registry: &crate::manifest::Registry) {
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry,
+        })
+        .unwrap();
+        recorder
+            .finish(&RunSummary {
+                ok: true,
+                exit_status: Some(0),
+                error: None,
+                output: Vec::new(),
+            })
+            .unwrap();
+    }
+
+    fn run_document(directory: &tempfile::TempDir) -> Value {
+        let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[test]
+    fn no_policy_run_records_absent_confinement_baseline() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        finished_recorder(&directory, &registry);
+
+        let document = run_document(&directory);
+        assert_eq!(document["policy"]["execution_mode"], "trusted");
+        assert_eq!(document["policy"]["capability_policy"], "absent");
+        assert_eq!(document["policy"]["data_flow_policy"], "absent");
+        // The only decisions are the record's own persistence checks; the
+        // baseline above is what states that no confinement applied.
+        let decisions = document["decisions"].as_array().unwrap();
+        assert!(!decisions.is_empty());
+        assert_eq!(
+            document["decision_count"].as_u64().unwrap(),
+            decisions.len() as u64
+        );
+        assert_eq!(document["decisions_truncated"], false);
+
+        let text = show_run(directory.path(), false).unwrap();
+        assert!(
+            text.contains("no confinement: no policy was active"),
+            "{text}"
+        );
+
+        let report: Value =
+            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+        assert_eq!(report["policy"]["execution_mode"], "trusted");
+    }
+
+    #[test]
+    fn denied_effect_decision_is_persisted_to_the_run_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+        })
+        .unwrap();
+        security::record_policy_decision(
+            &registry,
+            "audit.denied",
+            "capability:network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::CapabilityNotGranted,
+        );
+        security::record_policy_decision(
+            &registry,
+            "audit.allowed",
+            "effect:text.transform",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::PolicyMatched,
+        );
+        recorder
+            .finish(&RunSummary {
+                ok: false,
+                exit_status: Some(1),
+                error: Some("capability policy denies network".to_owned()),
+                output: Vec::new(),
+            })
+            .unwrap();
+
+        let document = run_document(&directory);
+        let decisions = document["decisions"].as_array().unwrap();
+        let denied = decisions
+            .iter()
+            .find(|decision| decision["subject"] == "audit.denied")
+            .expect("the denied effect is in the persisted log");
+        assert_eq!(denied["outcome"], "denied");
+        assert_eq!(denied["reason"], "capability_not_granted");
+        assert_eq!(denied["action"], "capability:network.connect");
+        assert_eq!(denied["risk"], "high");
+        assert!(
+            document["decision_count"].as_u64().unwrap() >= decisions.len() as u64,
+            "{document}"
+        );
+
+        let text = show_run(directory.path(), false).unwrap();
+        assert!(text.contains("1 denied"), "{text}");
+        assert!(text.contains("audit.denied"), "{text}");
+        assert!(text.contains("capability_not_granted"), "{text}");
+
+        let report: Value =
+            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+        assert!(
+            report["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|decision| {
+                    decision["subject"] == "audit.denied" && decision["outcome"] == "denied"
+                })
+        );
+    }
+
+    #[test]
+    fn persisted_audit_is_bounded_and_marks_truncation() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+        })
+        .unwrap();
+        for _ in 0..MAX_AUDIT_DECISIONS + 10 {
+            security::record_policy_decision(
+                &registry,
+                "audit.noise",
+                "effect:text.transform",
+                None,
+                PolicyRisk::Low,
+                PolicyDecisionOutcome::Approved,
+                PolicyDecisionReason::PolicyMatched,
+            );
+        }
+        recorder
+            .finish(&RunSummary {
+                ok: true,
+                exit_status: Some(0),
+                error: None,
+                output: Vec::new(),
+            })
+            .unwrap();
+
+        let total = security::policy_decisions(&registry).len();
+        let document = run_document(&directory);
+        let decisions = document["decisions"].as_array().unwrap();
+        assert_eq!(decisions.len(), MAX_AUDIT_DECISIONS);
+        assert_eq!(document["decision_count"].as_u64().unwrap(), total as u64);
+        assert_eq!(document["decisions_truncated"], true);
+        // The tail is kept: the newest sequence numbers survive.
+        let first = decisions.first().unwrap()["sequence"].as_u64().unwrap();
+        let last = decisions.last().unwrap()["sequence"].as_u64().unwrap();
+        assert!(last > first);
+        assert_eq!(last, total as u64);
+        // The bounded audit keeps run.json within its size limit.
+        let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
+        assert!(bytes.len() < MAX_RUN_BYTES, "{}", bytes.len());
+
+        let text = show_run(directory.path(), false).unwrap();
+        assert!(text.contains("most recent"), "{text}");
+    }
+
+    #[test]
+    fn decision_identifiers_cannot_carry_secret_text_into_the_record() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let canary = "CANARY-AUDIT-SECRET-99173";
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+        })
+        .unwrap();
+        security::record_policy_decision(
+            &registry,
+            &format!("{canary} with spaces"),
+            &format!("{canary} action"),
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
+        recorder
+            .finish(&RunSummary {
+                ok: false,
+                exit_status: None,
+                error: Some("denied".to_owned()),
+                output: Vec::new(),
+            })
+            .unwrap();
+
+        for (name, bytes) in [
+            (
+                super::RUN_FILE,
+                std::fs::read(directory.path().join(super::RUN_FILE)).unwrap(),
+            ),
+            (
+                super::TRACE_FILE,
+                std::fs::read(directory.path().join(super::TRACE_FILE)).unwrap(),
+            ),
+        ] {
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains(canary),
+                "{name} carries the secret"
+            );
+        }
+        let record = StoredRecord::open(directory.path()).unwrap();
+        assert_eq!(record.run["decisions"][0]["subject"], "unknown");
+    }
+
+    #[test]
+    fn show_run_reads_records_written_before_the_audit() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join(super::RUN_FILE),
+            br#"{"protocol":"execute.record/1","finished":true,"steps":0,"result":{"ok":true}}"#,
+        )
+        .unwrap();
+        std::fs::write(directory.path().join(super::TRACE_FILE), b"").unwrap();
+
+        let text = show_run(directory.path(), false).unwrap();
+        assert!(text.contains("record predates policy audit"), "{text}");
+        assert!(text.contains("policy decisions: none recorded"), "{text}");
+
+        let report: Value =
+            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+        assert_eq!(report["policy"], Value::Null);
+        assert_eq!(report["decisions"], json!([]));
+        assert_eq!(report["decision_count"], 0);
+        assert_eq!(report["decisions_truncated"], false);
     }
 }

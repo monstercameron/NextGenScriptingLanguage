@@ -50,12 +50,17 @@ pub fn execution_mode(registry: &Registry) -> ExecutionMode {
     registry
         .host_state::<Option<ExecutionMode>>()
         .unwrap_or_else(|| {
-            if registry.host_state::<Option<CapabilityPolicy>>().is_some() {
+            if capability_policy_active(registry) {
                 ExecutionMode::Untrusted
             } else {
                 ExecutionMode::Trusted
             }
         })
+}
+
+/// Whether a capability policy was installed for this registry.
+pub fn capability_policy_active(registry: &Registry) -> bool {
+    registry.host_state::<Option<CapabilityPolicy>>().is_some()
 }
 
 /// Prospective enforcement for graph, screen and stream advisory renderers.

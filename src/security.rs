@@ -126,6 +126,11 @@ const MAX_POLICY_BYTES: usize = 64 * 1024;
 const MAX_ORIGINS: usize = 256;
 const MAX_TRUSTED_CACHE_APPLETS: usize = 1024;
 const MAX_DECISION_RECORDS: usize = 1024;
+/// How many policy decisions a run record keeps. The in-memory log above is the
+/// live window; the persisted audit is a bounded tail of it so `run.json` stays
+/// within its size limit. The total count is recorded alongside, so a truncated
+/// audit is explicit rather than silent.
+pub const MAX_PERSISTED_DECISIONS: usize = 256;
 const MAX_REDACTION_SECRETS: usize = 256;
 const MAX_REDACTION_SECRET_BYTES: usize = 256 * 1024;
 const MAX_REDACTION_SECRET_BYTES_EACH: usize = 64 * 1024;
@@ -272,6 +277,12 @@ impl fmt::Debug for DataFlowPolicy {
 }
 
 impl DataFlowPolicy {
+    /// Whether a policy was installed. The default preserves legacy behavior;
+    /// only a parsed policy constrains egress and persistence.
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
     /// Load a bounded, owner-private policy file. The file contains only
     /// authorization labels and canonical origins, never credential values.
     pub fn load(path: &Path) -> Result<Self, PolicyError> {
@@ -1064,7 +1075,7 @@ fn reviewed_pure_in_process(manifest: &Manifest) -> bool {
 }
 
 /// Risk level recorded with one policy authorization result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyRisk {
     Low,
@@ -1073,7 +1084,7 @@ pub enum PolicyRisk {
 }
 
 /// Whether a policy-approved action was allowed to proceed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyDecisionOutcome {
     Approved,
@@ -1082,7 +1093,7 @@ pub enum PolicyDecisionOutcome {
 
 /// A bounded reason code for an approval or denial record. These are enums so
 /// callers cannot accidentally attach payload data, credentials, or paths.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyDecisionReason {
     PolicyMatched,
@@ -1104,7 +1115,8 @@ pub enum PolicyDecisionReason {
 
 /// One in-memory policy decision record. Scope contains only a canonical
 /// network origin; it never stores endpoint paths, request values or secrets.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+/// The same shape is persisted into run records, so it stays deserializable.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PolicyDecision {
     pub sequence: u64,
     pub subject: String,

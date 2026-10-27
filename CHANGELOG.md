@@ -7,6 +7,14 @@ original version labels.
 
 ## Unreleased
 
+- Run records now carry a durable policy-decision audit. `execute run
+  --record` writes the allow/deny decisions into `run.json` with the execution
+  mode and which policies were configured (never policy contents), including a
+  baseline on runs with no policy so a record never silently implies
+  confinement that was not there. `execute show-run` prints the audit in text
+  and JSON output. The audit keeps the most recent 256 decisions with an
+  explicit total and truncation flag.
+
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known
   non-object values during checking while retaining dynamic object keys.

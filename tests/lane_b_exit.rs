@@ -104,7 +104,7 @@ catch failure
 }
 
 #[test]
-fn exit_inside_reusable_program_ends_the_whole_run() {
+fn exit_inside_reusable_program_ends_only_the_call() {
     let (_directory, output) = run(r#"define a program named stop
   run printf with message "in stop"
   exit with status 5
@@ -112,9 +112,22 @@ fn exit_inside_reusable_program_ends_the_whole_run() {
 run program stop
 run printf with message "after"
 "#);
-    assert_eq!(status(&output), 5, "{}", stderr(&output));
-    assert!(!stdout(&output).contains("after"), "{}", stdout(&output));
-    assert!(!stdout(&output).contains("never"), "{}", stdout(&output));
+    assert_eq!(status(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "in stop\nafter\n");
+}
+
+#[test]
+fn reusable_program_exit_status_is_captured_when_requested() {
+    let (_directory, output) = run(r#"define a program named stop
+  exit with status 5
+run program stop and keep status as status
+if status is 5
+  run printf with message "5:continued"
+otherwise
+  run printf with message "wrong"
+"#);
+    assert_eq!(status(&output), 0, "{}", stderr(&output));
+    assert_eq!(stdout(&output), "5:continued\n");
 }
 
 #[test]

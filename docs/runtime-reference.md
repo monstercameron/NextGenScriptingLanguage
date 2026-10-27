@@ -598,7 +598,9 @@ Unicode scalar values (not UTF-8 bytes or grapheme clusters); `nonempty: true`
 also rejects strings whose Unicode whitespace-trimmed value is empty. Known
 literals are checked by `execute check`, and referenced values are checked after
 resolution before argv is built. The contract projection exposes these rules as
-JSON Schema `minLength` and a whitespace-only exclusion.
+JSON Schema `minLength` and a whitespace-only exclusion using Rust's exact
+`str::trim` Unicode whitespace set. For example, U+0085 is whitespace while
+U+FEFF is not.
 
 A non-cacheable external manifest may set `"uncertain_on_failure": true` when a
 failed request may already have caused an external effect, including provider

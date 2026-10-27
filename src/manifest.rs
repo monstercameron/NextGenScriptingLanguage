@@ -209,6 +209,11 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+/// ECMAScript-compatible character class for the Unicode White_Space values
+/// treated as whitespace by Rust's `str::trim`.
+const RUST_TRIM_WHITESPACE_PATTERN: &str =
+    r"^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]*$";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "RawParameter")]
 struct ParameterSpec {
@@ -1426,7 +1431,7 @@ impl Manifest {
                 }
                 if spec.nonempty {
                     schema["minLength"] = schema["minLength"].as_u64().unwrap_or(0).max(1).into();
-                    schema["not"] = serde_json::json!({"pattern": "^\\s*$"});
+                    schema["not"] = serde_json::json!({"pattern": RUST_TRIM_WHITESPACE_PATTERN});
                 }
                 if let Some(minimum) = spec.min_items {
                     schema["minItems"] = minimum.into();
@@ -3843,7 +3848,7 @@ mod tests {
         .unwrap();
         let projected = manifest.contract()["parameters_schema"]["properties"]["text"].clone();
         assert_eq!(projected["minLength"], 1);
-        assert_eq!(projected["not"]["pattern"], "^\\s*$");
+        assert_eq!(projected["not"]["pattern"], RUST_TRIM_WHITESPACE_PATTERN);
 
         let invocation = Invocation {
             operation: "nonempty.test".into(),
@@ -3857,7 +3862,7 @@ mod tests {
             retry: None,
         };
         assert!(manifest.validate(&invocation).is_ok());
-        for value in ["", " \t\n"] {
+        for value in ["", " \t\n", "\u{0085}"] {
             let error = manifest
                 .build_arguments(&BTreeMap::from([(
                     "text".into(),
@@ -3871,6 +3876,12 @@ mod tests {
             .build_arguments(&BTreeMap::from([(
                 "text".into(),
                 Value::String("é".into())
+            )]))
+            .is_ok());
+        assert!(manifest
+            .build_arguments(&BTreeMap::from([(
+                "text".into(),
+                Value::String("\u{FEFF}".into())
             )]))
             .is_ok());
     }

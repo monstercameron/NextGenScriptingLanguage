@@ -1021,8 +1021,9 @@ a new executable.
 ### Working directory and `use folder`
 
 `use folder "path"` sets the program's working directory, like `run cd with path
-"path"`; either may precede a trigger as initial setup. Both resolve the physical
-directory and go through one path:
+"path"`. It can appear anywhere a statement can appear, including after data-
+producing steps and inside loops; either form may precede a trigger as initial
+setup. Both resolve the physical directory and go through one path:
 
 1. The folder is opened.
 2. The path it resolves to is authorized. With a capability policy that is a host

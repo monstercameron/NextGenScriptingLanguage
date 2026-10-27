@@ -1509,9 +1509,6 @@ fn validate_range(
                     flow.unresolved_jobs.clear();
                 }
                 StepKind::UseFolder { path } => {
-                    if flow.started {
-                        bail!("use folder must precede data-producing steps");
-                    }
                     check_path(path, &flow.names)?;
                 }
                 StepKind::UseValue { source } => {

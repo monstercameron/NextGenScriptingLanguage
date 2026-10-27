@@ -120,6 +120,76 @@ fn cd_updates_only_workflow_directory_for_later_pwd_and_ls() {
 }
 
 #[test]
+fn use_folder_can_follow_data_and_run_inside_a_loop() {
+    let (directory, manifests) = fixture();
+    let nested = directory.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    let expected = fs::canonicalize(&nested).unwrap();
+
+    let after_data = invoke(
+        directory.path(),
+        &manifests,
+        "default",
+        "run printf with message \"before\"\nuse folder \"nested\"\nrun pwd\n",
+        &[],
+    );
+    assert!(
+        after_data.status.success(),
+        "{}",
+        String::from_utf8_lossy(&after_data.stderr)
+    );
+    let output = String::from_utf8_lossy(&after_data.stdout);
+    assert!(output.contains("before"), "unexpected output: {output:?}");
+    assert!(
+        output
+            .lines()
+            .any(|line| line == expected.to_string_lossy()),
+        "pwd did not report workflow directory {expected:?}: {output:?}"
+    );
+
+    let in_loop = invoke(
+        directory.path(),
+        &manifests,
+        "default",
+        &format!(
+            "repeat 2 times\n  use folder {:?}\nrun pwd\n",
+            expected.display()
+        ),
+        &[],
+    );
+    assert!(
+        in_loop.status.success(),
+        "{}",
+        String::from_utf8_lossy(&in_loop.stderr)
+    );
+    let output = String::from_utf8_lossy(&in_loop.stdout);
+    assert!(
+        output
+            .lines()
+            .any(|line| line == expected.to_string_lossy()),
+        "pwd did not report workflow directory {expected:?}: {output:?}"
+    );
+}
+
+#[test]
+fn missing_use_folder_reports_line_and_path() {
+    let (directory, manifests) = fixture();
+    let result = invoke(
+        directory.path(),
+        &manifests,
+        "default",
+        "use folder \"missing-directory\"\n",
+        &[],
+    );
+    assert!(!result.status.success());
+    let diagnostic = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        diagnostic.contains("line 1: use folder") && diagnostic.contains("missing-directory"),
+        "missing line and folder path: {diagnostic}"
+    );
+}
+
+#[test]
 fn cd_cannot_pipe_to_or_from_an_applet_and_validation_prevents_prior_save() {
     let (directory, manifests) = fixture();
     fs::create_dir(directory.path().join("nested")).unwrap();

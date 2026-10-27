@@ -866,18 +866,22 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 }
                 StepKind::UseFolder { path } => {
                     let folder = path_value(path, &bindings, &cwd)?;
-                    crate::capabilities::authorize_host_path(
-                        registry,
-                        &folder,
-                        crate::capabilities::HostAccess::Read,
-                        &cwd,
-                    )?;
-                    cwd = enter_directory(registry, &folder, &cwd).with_context(|| {
+                    cwd = (|| {
+                        crate::capabilities::authorize_host_path(
+                            registry,
+                            &folder,
+                            crate::capabilities::HostAccess::Read,
+                            &cwd,
+                        )?;
+                        let cwd = enter_directory(registry, &folder, &cwd)?;
+                        if !cwd.is_dir() {
+                            bail!("use folder requires a directory");
+                        }
+                        Ok(cwd)
+                    })()
+                    .with_context(|| {
                         format!("line {}: use folder {:?}", step.line, folder.display())
                     })?;
-                    if !cwd.is_dir() {
-                        bail!("line {}: use folder requires a directory", step.line);
-                    }
                 }
                 StepKind::UseValue { source } => {
                     data = Input::Bytes(text_value_bytes(source, &bindings, step.line)?);

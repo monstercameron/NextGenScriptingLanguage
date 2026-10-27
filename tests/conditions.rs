@@ -550,17 +550,26 @@ fn checkpoint_pins_absent_tools_in_unselected_branches_without_running_them() {
 }
 
 #[test]
-fn readonly_validation_preserves_definite_data_and_folder_ordering() {
+fn readonly_validation_preserves_definite_data_and_accepts_late_folder() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("input"), b"input bytes").unwrap();
-    for (source, expected) in [
-        ("if true is true\n  run \"printf\" with arguments [\"effect\"]\nthen save to \"forbidden\"\n", "save requires preceding output"),
-        ("if true is true\n  run \"sh\" with arguments [\"-c\", \"printf x > forbidden\"]\nuse folder \".\"\n", "use folder must precede data-producing steps"),
-    ] {
-        let error = runtime::run(&parser::parse(source).unwrap(), &Registry::default(), &options(dir.path())).err().unwrap();
-        assert!(format!("{error:#}").contains(expected));
-        assert!(!dir.path().join("forbidden").exists());
-    }
+    let source = "if true is true\n  run \"printf\" with arguments [\"effect\"]\nthen save to \"forbidden\"\n";
+    let error = runtime::run(
+        &parser::parse(source).unwrap(),
+        &Registry::default(),
+        &options(dir.path()),
+    )
+    .err()
+    .unwrap();
+    assert!(format!("{error:#}").contains("save requires preceding output"));
+    assert!(!dir.path().join("forbidden").exists());
+
+    runtime::run(
+        &parser::parse("use value \"safe\"\nuse folder \".\"\n").unwrap(),
+        &Registry::default(),
+        &options(dir.path()),
+    )
+    .expect("use folder should be accepted after a data-producing step");
     for (flag, expected) in [
         ("true", b"input bytes".as_slice()),
         ("false", b"".as_slice()),

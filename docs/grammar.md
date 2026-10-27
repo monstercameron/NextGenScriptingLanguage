@@ -118,8 +118,10 @@ statement   = ... | "use" "folder" value
 ```
 
 `use folder` sets the working directory for the statements that follow, like
-`run cd with path`. The folder is opened, its resolved path is authorized and later
-relative paths join onto it. It may also precede a trigger as initial setup. See
+`run cd with path`. It may appear anywhere a statement can appear, including in
+loops and after data-producing steps. The folder is opened, its resolved path is
+authorized and later relative paths join onto it. It may also precede a trigger as
+initial setup. See
 "Working directory and `use folder`" in [the language reference](language.md).
 
 ```program

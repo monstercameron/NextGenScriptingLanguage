@@ -830,7 +830,13 @@ fn a_real_denial_is_recorded_with_policy_identity_and_a_seal() {
     )
     .unwrap();
     let policy = work.path().join("policy.json");
-    fs::write(&policy, r#"{"version":1,"applets":{}}"#).unwrap();
+    // The decoy allowlist entry exercises privacy: it is policy material that
+    // must never reach the record, while the denied variable stays denied.
+    fs::write(
+        &policy,
+        r#"{"version":1,"applets":{},"host_environment":["CANARY_Q493_ALLOWED"]}"#,
+    )
+    .unwrap();
     private_answers::make_private(&policy);
     let record = work.path().join("record");
 
@@ -885,6 +891,22 @@ fn a_real_denial_is_recorded_with_policy_identity_and_a_seal() {
         document["audit_mac"].as_str().map(str::len) == Some(64),
         "{document}"
     );
+    // The record names the policy by identity only: no grant, path, origin
+    // or allowlist material — including the decoy entry above — reaches it.
+    let raw = fs::read(record.join("run.json")).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&raw).contains("CANARY_Q493_ALLOWED"),
+        "run.json carries policy material"
+    );
+    let policy = &document["policy"];
+    for name in ["capability_policy", "data_flow_policy"] {
+        let identity = policy[name].as_object().expect("policy identity");
+        assert_eq!(
+            identity.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["sha256", "status", "version"],
+            "{identity:?}"
+        );
+    }
 
     // `show-run` verifies the real seal against the same per-user key the
     // recording CLI sealed it with.

@@ -321,13 +321,25 @@ pub fn check_privileged_launch(
         );
         return Ok(());
     };
-    if !policy.deny_privileged {
-        return Ok(());
-    }
     let shown = binary_names
         .first()
         .map(|name| (*name).to_owned())
         .unwrap_or_else(|| resolved.display().to_string());
+    if !policy.deny_privileged {
+        // The policy allows privileged steps, so the launch is approved — and
+        // the audit says so instead of staying silent about the unchecked
+        // launch.
+        record_policy_decision(
+            registry,
+            shown.as_str(),
+            "privilege.elevate",
+            None,
+            PolicyRisk::Low,
+            PolicyDecisionOutcome::Approved,
+            PolicyDecisionReason::PolicyMatched,
+        );
+        return Ok(());
+    }
     let mut names: Vec<String> = binary_names.iter().map(|name| (*name).to_owned()).collect();
     names.push(resolved.display().to_string());
     if let Ok(canonical) = std::fs::canonicalize(resolved) {
@@ -1778,6 +1790,18 @@ fn authorize_environment_override(
             .iter()
             .any(|name| same_environment_name(OsStr::new(name), variable_name))
         {
+            // The ambient allowlist refused the override before any policy is
+            // consulted. The denial is still an audit entry, so the log states
+            // what happened instead of staying silent about it.
+            record_policy_decision(
+                registry,
+                applet_name,
+                "environment.set",
+                None,
+                PolicyRisk::High,
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            );
             bail!("environment override {variable_name:?} is not in EXECUTE_CHILD_ENV_ALLOW");
         }
     }
@@ -1847,9 +1871,11 @@ fn authorize_environment_override(
 impl CapabilityPolicy {
     /// Canonical content digest of the parsed policy: the SHA-256 of its
     /// canonical JSON encoding. Run records store this digest so a reviewer
-    /// can tell which policy produced an allow/deny log. A digest is one-way:
-    /// it names the policy without recording any grant, path, or other
-    /// policy content.
+    /// can tell which policy produced an allow/deny log. The digest records
+    /// no grant, path, or other policy content, but it is an unsalted hash:
+    /// it cannot be reversed, yet it confirms a guessed policy (cheap for a
+    /// small policy space), so it names the policy without hiding it from
+    /// someone who can guess it.
     pub fn canonical_digest(&self) -> String {
         let encoded =
             serde_json::to_vec(self).expect("a validated capability policy is serializable");
@@ -1994,6 +2020,17 @@ pub fn authorize_network_endpoint(
         .resolve(applet_name)
         .with_context(|| format!("resolving applet {applet_name:?} for network access"))?;
     if manifest.name != applet_name || manifest.execution_backend() != AppletBackend::Remote {
+        // No grant covers a non-canonical or non-remote applet, so the denial
+        // is recorded with the same outcome as a missing grant.
+        record_policy_decision(
+            registry,
+            applet_name,
+            "network.connect",
+            None,
+            PolicyRisk::High,
+            PolicyDecisionOutcome::Denied,
+            PolicyDecisionReason::MissingGrant,
+        );
         bail!("network endpoint authorization applies only to canonical remote applets");
     }
     let contract = manifest.execution_contract().ok_or_else(|| {

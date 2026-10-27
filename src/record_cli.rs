@@ -33,8 +33,18 @@ pub fn run_recorded(
         fs::read(source_path).with_context(|| format!("reading {}", source_path.display()))?;
     let plan = runtime::explain_with_inputs(program, registry, &options.inputs)?;
     // The seal needs the per-user key. A key that cannot be read or created is
-    // not a failed run: the record is written unsealed and `show-run` says so.
-    let audit_key = flow::agent::what_if_key::load_or_create().ok();
+    // not a failed run: the record is written unsealed and `show-run` says
+    // so — but the downgrade is said here too, so a missing or unreadable key
+    // is never silent at record time.
+    let audit_key = match flow::agent::what_if_key::load_or_create() {
+        Ok(key) => Some(key),
+        Err(error) => {
+            eprintln!(
+                "record: the per-user audit key is unavailable ({error:#}); writing an unsealed record"
+            );
+            None
+        }
+    };
     let recorder = Arc::new(Recorder::start(RecordStart {
         directory,
         program_source: &source,

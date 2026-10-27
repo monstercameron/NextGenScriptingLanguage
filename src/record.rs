@@ -11,7 +11,10 @@
 //!   and the bounded policy-decision audit: what effects were allowed or
 //!   denied and why. Each kept decision carries a link in a hash chain headed
 //!   by `audit_head`, and the head plus the truncation accounting carry a
-//!   keyed seal (`audit_mac`, an HMAC under the per-user key). `show-run` is
+//!   keyed seal (`audit_mac`, an HMAC under the per-user key). The seal also
+//!   binds the record identity (`record_id`, the program and plan hashes) and
+//!   the policy context, so copying an audit into another record — or editing
+//!   the recorded policy, program or plan — breaks the seal. `show-run` is
 //!   warn-open: it always presents the audit and labels anything short of a
 //!   fully verified chain and seal as unsealed or untrusted, so a tampered
 //!   record stays reviewable instead of hiding its own evidence. The chain
@@ -116,6 +119,9 @@ pub struct Recorder {
     registry: Registry,
     /// Key for the audit seal, or `None` for an unsealed record.
     audit_key: Option<[u8; crate::agent::what_if_key::KEY_BYTES]>,
+    /// Random per-record identity, covered by the audit seal so a copied
+    /// audit does not verify in another record.
+    record_id: String,
     started: Instant,
     started_unix_ms: u128,
     plan_sha256: String,
@@ -221,16 +227,92 @@ fn audit_link(previous_head_hex: &str, decision: &Json) -> String {
 
 /// Domain string for the audit seal. A seal is only meaningful next to the
 /// algorithm and fields it covers; changing this string retires old seals.
-const AUDIT_SEAL_DOMAIN: &str = "execute.policy-audit-seal/1";
+const AUDIT_SEAL_DOMAIN: &str = "execute.policy-audit-seal/2";
 
-/// Length-prefixed encoding of the sealed values: the lifetime total, the
-/// truncation flag, and the chain head. The head transitively binds every kept
-/// decision, so sealing the head seals the audit. Everything covered is public
-/// by construction (counts, a flag, a chain hash), so the seal cannot confirm
-/// a guess at a secret.
-fn audit_seal_encoding(total: u64, truncated: bool, head_hex: &str) -> Vec<u8> {
+/// The retired v1 seal domain: total, flag and head only, with no record
+/// binding. Records sealed before the record identity are still verified
+/// against this encoding so they stay verifiable; its binding is weaker (a
+/// copied audit verifies under it), and new records never use it.
+const AUDIT_SEAL_DOMAIN_V1: &str = "execute.policy-audit-seal/1";
+
+/// The values a v2 seal binds an audit to: the identity of this record (a
+/// random per-record id plus the program and plan hashes) and the policy
+/// context the decisions were made under (execution mode and each policy's
+/// presence, version and digest). Everything covered is public by
+/// construction (identifiers, hashes, counts, a flag, a chain hash), so the
+/// seal cannot confirm a guess at a secret.
+struct SealBinding<'a> {
+    record_id: &'a str,
+    program_sha256: &'a str,
+    plan_sha256: &'a str,
+    policy: &'a Json,
+}
+
+/// Length-prefixed encoding of the sealed values: the record identity, the
+/// policy context, the lifetime total, the truncation flag, and the chain
+/// head. The head transitively binds every kept decision, so sealing the head
+/// seals the audit, and the identity and policy fields bind that audit to the
+/// record and policy that produced it. Length prefixes (not separators) keep
+/// the encoding injective whatever the field contents hold.
+fn audit_seal_encoding(
+    binding: &SealBinding,
+    total: u64,
+    truncated: bool,
+    head_hex: &str,
+) -> Vec<u8> {
     let mut encoding = Vec::new();
     push_audit_field(&mut encoding, AUDIT_SEAL_DOMAIN);
+    push_audit_field(&mut encoding, binding.record_id);
+    push_audit_field(&mut encoding, binding.program_sha256);
+    push_audit_field(&mut encoding, binding.plan_sha256);
+    push_audit_field(
+        &mut encoding,
+        binding
+            .policy
+            .get("execution_mode")
+            .and_then(Json::as_str)
+            .unwrap_or_default(),
+    );
+    for name in ["capability_policy", "data_flow_policy"] {
+        let identity = binding.policy.get(name);
+        push_audit_field(
+            &mut encoding,
+            identity
+                .and_then(|identity| identity.get("status"))
+                .and_then(Json::as_str)
+                .unwrap_or_default(),
+        );
+        push_audit_field(
+            &mut encoding,
+            &identity
+                .and_then(|identity| identity.get("version"))
+                .and_then(Json::as_u64)
+                .map(|version| version.to_string())
+                .unwrap_or_default(),
+        );
+        push_audit_field(
+            &mut encoding,
+            identity
+                .and_then(|identity| identity.get("sha256"))
+                .and_then(Json::as_str)
+                .unwrap_or_default(),
+        );
+    }
+    push_audit_field(&mut encoding, &total.to_string());
+    push_audit_field(
+        &mut encoding,
+        if truncated { "truncated" } else { "complete" },
+    );
+    push_audit_field(&mut encoding, head_hex);
+    encoding
+}
+
+/// The retired v1 encoding: the lifetime total, the truncation flag, and the
+/// chain head, with no record binding. Only verification of records sealed
+/// before the record identity uses this; nothing new is sealed with it.
+fn audit_seal_encoding_v1(total: u64, truncated: bool, head_hex: &str) -> Vec<u8> {
+    let mut encoding = Vec::new();
+    push_audit_field(&mut encoding, AUDIT_SEAL_DOMAIN_V1);
     push_audit_field(&mut encoding, &total.to_string());
     push_audit_field(
         &mut encoding,
@@ -244,19 +326,51 @@ fn audit_seal_encoding(total: u64, truncated: bool, head_hex: &str) -> Vec<u8> {
 /// A same-user holder of the key can recompute this seal over a rewritten
 /// audit, so it evidences edits made without the key (mistakes, corruption,
 /// naive tampering), not a forger with key access.
-fn audit_seal_hex(key: &[u8], total: u64, truncated: bool, head_hex: &str) -> String {
-    crate::agent::what_if_key::hmac_sha256(key, &audit_seal_encoding(total, truncated, head_hex))
+fn audit_seal_hex(
+    key: &[u8],
+    binding: &SealBinding,
+    total: u64,
+    truncated: bool,
+    head_hex: &str,
+) -> String {
+    crate::agent::what_if_key::hmac_sha256(
+        key,
+        &audit_seal_encoding(binding, total, truncated, head_hex),
+    )
+    .iter()
+    .map(|byte| format!("{byte:02x}"))
+    .collect()
+}
+
+/// A seal under the retired v1 encoding, for verifying records sealed before
+/// the record identity. Its binding is weaker by construction: it covers only
+/// the total, the flag and the head, so a copied audit verifies under it.
+fn audit_seal_hex_v1(key: &[u8], total: u64, truncated: bool, head_hex: &str) -> String {
+    crate::agent::what_if_key::hmac_sha256(key, &audit_seal_encoding_v1(total, truncated, head_hex))
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
 
+/// The v2 seal binding read back from a stored record: the values the seal
+/// must reproduce. `None` when a bound field is missing, which itself means
+/// the record was edited after the run.
+fn seal_binding<'a>(run: &'a Json, record_id: &'a str) -> Option<SealBinding<'a>> {
+    Some(SealBinding {
+        record_id,
+        program_sha256: run.get("program")?.get("sha256")?.as_str()?,
+        plan_sha256: run.get("plan")?.get("sha256")?.as_str()?,
+        policy: run.get("policy")?,
+    })
+}
+
 /// The policy in force for a run: the execution mode and, for each policy, its
 /// presence plus the version and canonical content digest when configured.
 /// Policy contents (grants, paths, origins or other policy material) are never
-/// recorded; the digests are one-way, so they name the policy that produced
-/// the allow/deny log without recording what it contains. Absence still tells
-/// a reviewer that no confinement applied.
+/// recorded; the digests are unsalted hashes, so they name the policy that
+/// produced the allow/deny log without recording what it contains, but they
+/// still confirm a guessed policy. Absence still tells a reviewer that no
+/// confinement applied.
 fn policy_context_json(registry: &Registry) -> Json {
     let capability = policy_identity_json(
         crate::capabilities::capability_policy_active(registry),
@@ -309,13 +423,14 @@ fn policy_identity_json(configured: bool, identity: Option<(u64, String)>) -> Js
 /// The bounded durable audit of policy/effect decisions: the most recent
 /// decisions, each linked onto a hash chain, with the lifetime total, whether
 /// the tail was cut, the head of the chain, and the keyed seal (`audit_mac`)
-/// over the total, the truncation flag and the head. The total comes from the
-/// recorder's counter, not the bounded window, so it stays honest even after
-/// the window has dropped the prefix. With no key the seal is JSON null and
-/// the record is unsealed.
+/// over the record identity, the policy context, the total, the truncation
+/// flag and the head. The total comes from the recorder's counter, not the
+/// bounded window, so it stays honest even after the window has dropped the
+/// prefix. With no key the seal is JSON null and the record is unsealed.
 fn decision_audit_json(
     registry: &Registry,
     audit_key: Option<&[u8]>,
+    binding: &SealBinding,
 ) -> (Json, u64, bool, String, Json) {
     // The snapshot and the lifetime total come from one lock acquisition, so
     // the total can never run past the snapshot's own last sequence, even
@@ -338,7 +453,7 @@ fn decision_audit_json(
         .collect::<Vec<_>>();
     let truncated = total > items.len() as u64;
     let seal = audit_key
-        .map(|key| Json::String(audit_seal_hex(key, total, truncated, &head)))
+        .map(|key| Json::String(audit_seal_hex(key, binding, total, truncated, &head)))
         .unwrap_or(Json::Null);
     (Json::Array(items), total, truncated, head, seal)
 }
@@ -347,7 +462,9 @@ fn decision_audit_json(
 #[derive(Debug, Clone, Copy)]
 pub enum SealKey<'a> {
     /// Verify against this exact key. Tests use a fixed key so the seal check
-    /// is deterministic; production code never embeds a key here.
+    /// is deterministic; production code never embeds a key here. A key of
+    /// the wrong length is a caller error: verification reports the audit
+    /// untrusted instead of silently treating the seal as unchecked.
     Explicit(&'a [u8]),
     /// Verify against the per-user key from its usual location, if one exists.
     /// A missing key is not an error: the audit is shown unsealed instead.
@@ -357,6 +474,16 @@ pub enum SealKey<'a> {
 }
 
 impl SealKey<'_> {
+    /// Whether this key can never verify anything because it has the wrong
+    /// length. A malformed explicit key is reported as untrusted, not as
+    /// unsealed: the audit may be fine, but nothing checked it.
+    fn is_malformed(&self) -> bool {
+        matches!(
+            self,
+            SealKey::Explicit(key) if key.len() != crate::agent::what_if_key::KEY_BYTES
+        )
+    }
+
     /// The key bytes to verify against, or `None` when there is nothing to
     /// check with. Reading the system key never creates one: a missing key
     /// means "cannot verify", not "mint a replacement".
@@ -432,9 +559,17 @@ impl AuditVerification {
     }
 
     /// The machine-readable failure, if any, for `audit_error` JSON output.
+    /// Every unverified state carries one: JSON consumers check
+    /// `audit_verified`, and a null `audit_error` next to a false
+    /// `audit_verified` would look like a missing field rather than a reason.
     fn error(&self) -> Option<&str> {
         match self {
-            AuditVerification::PreAudit | AuditVerification::UnchainedLegacy => None,
+            AuditVerification::PreAudit => {
+                Some("this record predates the policy audit; no allow/deny log was kept")
+            }
+            AuditVerification::UnchainedLegacy => Some(
+                "this decision audit predates chaining; edits after the run are not detectable",
+            ),
             AuditVerification::Unsealed { reason, .. } => Some(reason),
             AuditVerification::Untrusted { error, .. } => Some(error),
             AuditVerification::Verified { .. } => None,
@@ -447,11 +582,11 @@ impl AuditVerification {
 /// The checks catch a decision edited in place (link mismatch), a decision
 /// removed from the middle (sequence gap), a reordered audit (same sequences,
 /// wrong order), a dropped prefix or suffix (first/last sequence against the
-/// total), a truncation flag that disagrees with the total, and a seal that
-/// does not match the total, the flag and the head under the given key.
-/// Nothing here fails the read: a failed check labels the audit untrusted or
-/// unsealed and the audit is still shown, so a tampered record stays
-/// reviewable instead of hiding its own evidence.
+/// total), a truncation flag that disagrees with the total, an audit copied
+/// from another record or policy (seal binding mismatch), and a seal that
+/// does not match under the given key. Nothing here fails the read: a failed
+/// check labels the audit untrusted or unsealed and the audit is still shown,
+/// so a tampered record stays reviewable instead of hiding its own evidence.
 ///
 /// Trust boundary: the chain is unanchored — it lives in the same file it
 /// protects — and the seal is keyed under a per-user key that a same-user
@@ -524,6 +659,12 @@ fn verify_decision_audit(run: &Json, seal_key: &SealKey) -> AuditVerification {
             reason: "this record carries no audit seal; it predates the seal or was recorded without a key",
         };
     };
+    if seal_key.is_malformed() {
+        return AuditVerification::untrusted(
+            decisions,
+            "the explicit audit seal key has the wrong length, so the seal was not checked",
+        );
+    }
     let Some(key) = seal_key.resolve() else {
         return AuditVerification::Unsealed {
             approved,
@@ -531,11 +672,28 @@ fn verify_decision_audit(run: &Json, seal_key: &SealKey) -> AuditVerification {
             reason: "the per-user key is unavailable, so the audit seal was not checked",
         };
     };
-    if audit_seal_hex(&key, total, truncated, head) != stored_seal {
+    // Records sealed before the record identity bind only the total, the
+    // flag and the head: a copied audit still verifies under that retired
+    // encoding. Records with an identity bind the record and its policy
+    // context too, so a transplant or a policy, program or plan edit breaks
+    // the seal.
+    let expected = match run.get("record_id").and_then(Json::as_str) {
+        Some(record_id) => {
+            let Some(binding) = seal_binding(run, record_id) else {
+                return AuditVerification::untrusted(
+                    decisions,
+                    "policy audit has no program or policy binding to check its seal against; the record may have been modified after the run",
+                );
+            };
+            audit_seal_hex(&key, &binding, total, truncated, head)
+        }
+        None => audit_seal_hex_v1(&key, total, truncated, head),
+    };
+    if expected != stored_seal {
         return AuditVerification::Untrusted {
             approved,
             denied,
-            error: "policy audit seal does not match its total, truncation flag and head; the audit was modified after the run or sealed under a different key"
+            error: "policy audit seal does not match its total, truncation flag, head, record identity and policy context; the audit was transplanted from another record, modified after the run, or sealed under a different key or retired seal version"
                 .to_owned(),
         };
     }
@@ -660,6 +818,14 @@ impl Recorder {
         #[cfg(not(unix))]
         create_private_directory(&start.directory.join(BLOB_DIR))?;
         let (plan_text, plan_sha256) = prepare_plan(&redactor, start.plan);
+        // The identity is random per record: uniqueness (not secrecy) is what
+        // stops a copied audit from verifying elsewhere.
+        let mut id_bytes = [0u8; 16];
+        getrandom::fill(&mut id_bytes).context("generating the record identity")?;
+        let record_id = id_bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         let recorder = Self {
             #[cfg(not(unix))]
             directory: start.directory.to_path_buf(),
@@ -669,6 +835,7 @@ impl Recorder {
             blobs_handle,
             registry: start.registry.clone(),
             audit_key: start.audit_key,
+            record_id,
             started: Instant::now(),
             started_unix_ms: unix_ms(),
             plan_sha256,
@@ -752,14 +919,26 @@ impl Recorder {
         // Snapshot after the persistence checks above, so the record's own
         // persistence decisions are part of the audit too.
         let policy = policy_context_json(&self.registry);
+        let program_sha256 = sha256_hex(&self.read_program()?);
+        let binding = SealBinding {
+            record_id: self.record_id.as_str(),
+            program_sha256: program_sha256.as_str(),
+            plan_sha256: self.plan_sha256.as_str(),
+            policy: &policy,
+        };
         let (decisions, decision_count, decisions_truncated, audit_head, audit_mac) =
-            decision_audit_json(&self.registry, self.audit_key.as_ref().map(|key| &key[..]));
+            decision_audit_json(
+                &self.registry,
+                self.audit_key.as_ref().map(|key| &key[..]),
+                &binding,
+            );
         let document = json!({
             "protocol": PROTOCOL,
             "finished": finished,
+            "record_id": self.record_id,
             "program": {
                 "file": PROGRAM_FILE,
-                "sha256": sha256_hex(&self.read_program()?),
+                "sha256": program_sha256,
             },
             "plan": {
                 "sha256": self.plan_sha256,
@@ -1388,6 +1567,7 @@ pub fn show_run_with_key(
             "ok": ok,
             "exit_status": record.run["result"]["exit_status"],
             "error": record.run["result"]["error"],
+            "record_id": record.run.get("record_id").cloned().unwrap_or(Json::Null),
             "program_sha256": record.run["program"]["sha256"],
             "plan_sha256": record.run["plan"]["sha256"],
             "steps": record.steps.len(),
@@ -1436,16 +1616,17 @@ pub fn show_run_with_key(
         ));
     }
     text.push_str(&policy_summary_text(&record.run));
-    text.push_str(&decisions_summary_text(
-        &decisions,
-        decision_count,
-        decisions_truncated,
-    ));
+    // The audit warning comes before the decisions it qualifies: steps and
+    // decisions printed first would read as fact on a tampered record.
     match &audit {
-        AuditVerification::PreAudit => {}
+        AuditVerification::PreAudit => {
+            text.push_str(
+                "warning: this record predates the policy audit; no allow/deny log was kept\n",
+            );
+        }
         AuditVerification::UnchainedLegacy => {
             text.push_str(
-                "note: this decision audit predates chaining; edits after the run are not detectable (re-record for a verifiable audit)\n",
+                "warning: this decision audit predates chaining; edits after the run are not detectable (re-record for a verifiable audit)\n",
             );
         }
         AuditVerification::Unsealed { reason, .. } => {
@@ -1460,6 +1641,11 @@ pub fn show_run_with_key(
         }
         AuditVerification::Verified { .. } => {}
     }
+    text.push_str(&decisions_summary_text(
+        &decisions,
+        decision_count,
+        decisions_truncated,
+    ));
     if record.run["truncated"].as_bool().unwrap_or(false) {
         text.push_str(
             "note: the record reached a size limit; some trace or output data was not kept\n",
@@ -2351,6 +2537,15 @@ mod policy_audit_tests {
         assert_eq!(report["decisions"], json!([]));
         assert_eq!(report["decision_count"], 0);
         assert_eq!(report["decisions_truncated"], false);
+        // Legacy states are unverified with a machine-readable reason, so JSON
+        // consumers never see a false `audit_verified` next to a null error.
+        assert_eq!(report["audit_verified"], false);
+        assert!(
+            report["audit_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("predates the policy audit")),
+            "{report}"
+        );
     }
 
     /// A record shaped like the first bounded audit (decisions but no chain)
@@ -2385,6 +2580,12 @@ mod policy_audit_tests {
             .unwrap();
         assert_eq!(report["audit_verified"], false);
         assert_eq!(report["audit_head"], Value::Null);
+        assert!(
+            report["audit_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("predates chaining")),
+            "{report}"
+        );
         assert!(!report["decisions"].as_array().unwrap().is_empty());
     }
 
@@ -2648,6 +2849,167 @@ mod policy_audit_tests {
         );
     }
 
+    /// Copying one record's audit into another record must not verify: the
+    /// seal binds the record identity and policy context, not just the total,
+    /// the flag and the head.
+    #[test]
+    fn transplanted_audit_from_another_record_does_not_verify() {
+        let source = tempfile::tempdir().unwrap();
+        let source_document = audited_document(&source);
+
+        // The target ran a different program, so its identity differs even
+        // though the transplanted chain is internally consistent.
+        let target = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: target.path(),
+            program_source: b"run text.concat with parts [\"other\"]",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+            audit_key: Some(TEST_AUDIT_KEY),
+        })
+        .unwrap();
+        recorder
+            .finish(&RunSummary {
+                ok: true,
+                exit_status: Some(0),
+                error: None,
+                output: Vec::new(),
+            })
+            .unwrap();
+        let mut target_document = run_document(&target);
+        for name in [
+            "decisions",
+            "audit_head",
+            "decision_count",
+            "decisions_truncated",
+            "audit_mac",
+        ] {
+            target_document[name] = source_document[name].clone();
+        }
+        rewrite_run_document(&target, &target_document);
+
+        let (text, report) = warn_open_output(&target);
+        assert_untrusted_shown(&text, &report, "record identity");
+    }
+
+    /// Editing the recorded policy identity breaks the seal even though the
+    /// chain over the decisions is untouched.
+    #[test]
+    fn edited_policy_identity_breaks_the_seal() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        document["policy"]["execution_mode"] = json!("untrusted");
+        rewrite_run_document(&directory, &document);
+
+        let (text, report) = warn_open_output(&directory);
+        assert_untrusted_shown(&text, &report, "policy context");
+    }
+
+    /// Editing the recorded program hash breaks the seal even though the
+    /// chain over the decisions is untouched.
+    #[test]
+    fn edited_program_identity_breaks_the_seal() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        document["program"]["sha256"] = json!("f".repeat(64));
+        rewrite_run_document(&directory, &document);
+
+        let (text, report) = warn_open_output(&directory);
+        assert_untrusted_shown(&text, &report, "record identity");
+    }
+
+    /// A wrong-length explicit key is a caller error: the audit is reported
+    /// untrusted, never silently unsealed.
+    #[test]
+    fn malformed_explicit_key_is_untrusted_not_unsealed() {
+        let directory = tempfile::tempdir().unwrap();
+        audited_document(&directory);
+        let short = [0x51; 3];
+
+        let text =
+            show_run_with_key(directory.path(), false, SealKey::Explicit(&short)).unwrap();
+        assert!(text.contains("untrusted"), "{text}");
+        assert!(!text.contains("unsealed"), "{text}");
+
+        let report: Value = serde_json::from_str(
+            &show_run_with_key(directory.path(), true, SealKey::Explicit(&short)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["audit_verified"], false);
+        assert!(
+            report["audit_error"]
+                .as_str()
+                .is_some_and(|error| error.contains("wrong length")),
+            "{report}"
+        );
+    }
+
+    /// Policy material — grants, paths, origins, environment allowlists —
+    /// never reaches the record, even under a configured policy. The audit
+    /// still verifies, bound to the recorded policy identity.
+    #[test]
+    fn configured_policy_material_never_reaches_the_record() {
+        use crate::capabilities::{AppletGrant, CapabilityPolicy, FilesystemGrant};
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        let mut applets = BTreeMap::new();
+        applets.insert(
+            "canary-applet".to_owned(),
+            AppletGrant {
+                capabilities: BTreeSet::from([
+                    "network.connect".to_owned(),
+                    "filesystem.read".to_owned(),
+                ]),
+                binary_sha256: None,
+                environment: BTreeSet::from(["CANARY_ENV_ALLOW".to_owned()]),
+                filesystem: FilesystemGrant {
+                    read: vec![std::path::PathBuf::from("/canary/grant-path")],
+                    write: Vec::new(),
+                },
+                network: true,
+                network_origins: BTreeSet::from(["https://canary-origin.example".to_owned()]),
+                sandbox_required: false,
+            },
+        );
+        registry.set_host_state(Some(CapabilityPolicy {
+            version: crate::capabilities::CAPABILITY_POLICY_VERSION,
+            applets,
+            host: None,
+            host_environment: BTreeSet::from(["CANARY_HOST_ENV".to_owned()]),
+            deny_privileged: false,
+            allow_wrappers: BTreeSet::new(),
+        }));
+        finished_recorder(&directory, &registry);
+
+        let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        for forbidden in [
+            "CANARY",
+            "canary",
+            "applets",
+            "network_origins",
+            "host_environment",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "run.json carries policy material {forbidden:?}"
+            );
+        }
+        let document: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(document["policy"]["execution_mode"], "untrusted");
+        assert_eq!(document["policy"]["capability_policy"]["status"], "configured");
+
+        let report: Value =
+            serde_json::from_str(&show_run_with_key(directory.path(), true, test_seal()).unwrap())
+                .unwrap();
+        assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["audit_error"], Value::Null);
+    }
+
     /// A key holder can rewrite the audit and reseal it, and `show-run` cannot
     /// tell. This test pins that limitation: the seal raises the bar to key
     /// holders, it does not stop them. Whole-record tamper evidence belongs
@@ -2673,12 +3035,24 @@ mod policy_audit_tests {
             decision["audit_hash"] = json!(head.clone());
         }
         document["audit_head"] = json!(head.clone());
-        document["audit_mac"] = json!(super::audit_seal_hex(
-            &TEST_AUDIT_KEY,
-            total,
-            truncated,
-            &head
-        ));
+        // A key holder reforges exactly what the recorder seals: the forged
+        // head bound to the same record identity and policy context.
+        let seal = {
+            let binding = super::SealBinding {
+                record_id: document["record_id"]
+                    .as_str()
+                    .expect("a sealed record carries its identity"),
+                program_sha256: document["program"]["sha256"]
+                    .as_str()
+                    .expect("a sealed record carries its program hash"),
+                plan_sha256: document["plan"]["sha256"]
+                    .as_str()
+                    .expect("a sealed record carries its plan hash"),
+                policy: &document["policy"],
+            };
+            super::audit_seal_hex(&TEST_AUDIT_KEY, &binding, total, truncated, &head)
+        };
+        document["audit_mac"] = json!(seal);
         rewrite_run_document(&directory, &document);
 
         let text = show_run_with_key(directory.path(), false, test_seal()).unwrap();

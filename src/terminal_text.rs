@@ -1,15 +1,27 @@
 //! Terminal-safe rendering of text that can carry untrusted bytes: file names, applet
 //! output and error messages. Control characters, including ESC (which starts terminal
 //! sequences), CSI, OSC and the C1 range, become visible `\u{..}` escapes. Newlines and
-//! tabs stay, so multi-line messages keep their shape.
+//! tabs stay in rendered messages so intentional layout keeps its shape.
 
 use std::fmt::Write;
 
 /// Escape control characters, except newline and tab, as visible `\u{..}` sequences.
 pub fn escape_controls(text: &str) -> String {
+    escape(text, true)
+}
+
+/// Escape controls and line separators in one untrusted field, including newlines and tabs, so
+/// the field cannot inject terminal rows or columns into surrounding output.
+pub fn escape_terminal_field(text: &str) -> String {
+    escape(text, false)
+}
+
+fn escape(text: &str, preserve_layout: bool) -> String {
     let mut out = String::with_capacity(text.len());
     for character in text.chars() {
-        if character == '\n' || character == '\t' || !is_unsafe_terminal_character(character) {
+        if (preserve_layout && (character == '\n' || character == '\t'))
+            || !is_unsafe_terminal_character(character)
+        {
             out.push(character);
         } else {
             let _ = write!(out, "\\u{{{:x}}}", u32::from(character));
@@ -32,6 +44,7 @@ fn is_unsafe_terminal_character(character: char) -> bool {
                 // and the variation selectors stay: Persian, Indic and emoji text need them.
                 | 0x200b
                 | 0x200e..=0x200f
+                | 0x2028..=0x2029
                 | 0x202a..=0x202e
                 | 0x2060..=0x206f
                 | 0x3164
@@ -70,6 +83,18 @@ mod tests {
         assert_eq!(
             escape_controls(&char::from_u32(0x9b).unwrap().to_string()),
             r"\u{9b}"
+        );
+    }
+
+    #[test]
+    fn field_escaping_turns_layout_controls_and_unicode_separators_visible() {
+        assert_eq!(
+            super::escape_terminal_field("line\nnext\tcol\u{2028}row\u{2029}paragraph"),
+            r"line\u{a}next\u{9}col\u{2028}row\u{2029}paragraph"
+        );
+        assert_eq!(
+            escape_controls("line\u{2028}next\u{2029}paragraph"),
+            r"line\u{2028}next\u{2029}paragraph"
         );
     }
 }

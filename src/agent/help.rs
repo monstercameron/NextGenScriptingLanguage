@@ -5,7 +5,7 @@
 //! until then every input reports `description: null`.
 
 use crate::ast::{InputDeclaration, InputSource, InputType, Program, Value as ProgramValue};
-use crate::terminal_text::escape_controls;
+use crate::terminal_text::{escape_controls, escape_terminal_field};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::io::{self, Write};
@@ -163,7 +163,8 @@ fn source_label(source: &InputSource) -> String {
 }
 
 fn render_text(description: &Value) -> String {
-    let mut text = format!("{}\n", description["usage"].as_str().unwrap_or(""));
+    let usage = escape_terminal_field(description["usage"].as_str().unwrap_or(""));
+    let mut text = format!("{usage}\n");
     let inputs = description["inputs"]
         .as_array()
         .cloned()
@@ -178,7 +179,7 @@ fn render_text(description: &Value) -> String {
     if !options.is_empty() {
         text.push_str("\nOptions:\n");
         for option in options {
-            let spelling = option["spelling"].as_str().unwrap_or("");
+            let spelling = escape_terminal_field(option["spelling"].as_str().unwrap_or(""));
             text.push_str(&format!(
                 "  {spelling:<30}  {}  {}",
                 option["type"].as_str().unwrap_or(""),
@@ -191,14 +192,15 @@ fn render_text(description: &Value) -> String {
     if !arguments.is_empty() {
         text.push_str("\nInputs:\n");
         for input in arguments {
+            let name = escape_terminal_field(input["name"].as_str().unwrap_or(""));
             text.push_str(&format!(
                 "  {}  {}  {}",
-                input["name"].as_str().unwrap_or(""),
+                name,
                 input["type"].as_str().unwrap_or(""),
                 requirement(input)
             ));
             if let Some(source) = input["source"].as_str() {
-                text.push_str(&format!("  (from {source})"));
+                text.push_str(&format!("  (from {})", escape_terminal_field(source)));
             }
             push_description(&mut text, input);
         }
@@ -210,13 +212,13 @@ fn requirement(input: &Value) -> String {
     if input["required"] == true {
         "required".to_owned()
     } else {
-        format!("default {}", input["default"])
+        escape_terminal_field(&format!("default {}", input["default"]))
     }
 }
 
 fn push_description(text: &mut String, input: &Value) {
     if let Some(description) = input["description"].as_str() {
-        text.push_str(&format!("  {description}"));
+        text.push_str(&format!("  {}", escape_terminal_field(description)));
     }
     text.push('\n');
 }
@@ -257,5 +259,27 @@ mod tests {
         assert!(rendered.contains(r"\u{1b}"));
         assert!(rendered.contains(r"\u{202e}"));
         assert!(rendered.contains(r"\u{9b}"));
+    }
+
+    #[test]
+    fn help_fields_escape_line_controls_without_changing_template_layout() {
+        let description = json!({
+            "usage": "execute program\nInjected",
+            "inputs": [{
+                "type": "text",
+                "required": true,
+                "default": null,
+                "description": "first\nsecond\tcolumn\u{2028}line\u{2029}paragraph",
+                "name": "name\nInjected",
+                "source": "environment NAME\nInjected"
+            }]
+        });
+
+        let rendered = render_text(&description);
+        assert_eq!(rendered.matches('\n').count(), 4, "{rendered:?}");
+        assert!(rendered.contains(r"execute program\u{a}Injected"));
+        assert!(rendered.contains(r"name\u{a}Injected"));
+        assert!(rendered.contains(r"environment NAME\u{a}Injected"));
+        assert!(rendered.contains(r"first\u{a}second\u{9}column\u{2028}line\u{2029}paragraph"));
     }
 }

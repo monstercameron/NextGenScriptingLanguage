@@ -373,7 +373,7 @@ fn text_explain_is_unchanged_without_the_flag() {
 #[test]
 fn text_explain_escapes_terminal_controls_and_bidi_in_program_text() {
     let directory = tempfile::tempdir().unwrap();
-    let source = "run \"printf\" with arguments [\"\\u001b[31m\\u009b31m\\u202e\"] and environment {\"KEY\\u202e\": \"hidden\"}\n";
+    let source = "run \"printf\" with arguments [\"\\u001b[31m\\u009b31m\\u202e\\n\\t\"] and environment {\"KEY\\u202e\\u2028\\u2029\": \"hidden\"}\n";
     let output = explain(directory.path(), source, &[]);
     assert!(
         output.status.success(),
@@ -394,8 +394,17 @@ fn text_explain_escapes_terminal_controls_and_bidi_in_program_text() {
         !text.contains('\u{202e}'),
         "raw bidi override in explain output: {text:?}"
     );
+    assert!(
+        !text.contains('\u{2028}') && !text.contains('\u{2029}'),
+        "raw Unicode line separator in explain output: {text:?}"
+    );
+    assert_eq!(
+        text.matches('\n').count(),
+        4,
+        "unexpected injected line: {text:?}"
+    );
     assert!(text.contains(r"\u{1b}[31m\u{9b}31m\u{202e}"), "{text:?}");
-    assert!(text.contains(r"KEY\u{202e}"), "{text:?}");
+    assert!(text.contains(r"KEY\u{202e}\u{2028}\u{2029}"), "{text:?}");
     assert!(
         !text.contains("hidden"),
         "environment values must stay hidden: {text:?}"

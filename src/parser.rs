@@ -2019,9 +2019,9 @@ enum EnvironmentSuffix {
     Unset(Vec<String>),
 }
 
-/// Environment variable names cannot be empty or contain `=` or NUL.
+/// Environment variable names cannot be empty, contain `=`, or include control characters.
 fn valid_environment_name(name: &str) -> bool {
-    !name.is_empty() && !name.contains('=') && !name.contains('\0')
+    !name.is_empty() && !name.contains('=') && !name.chars().any(char::is_control)
 }
 
 /// Index of the token that closes the bracket opened at `open`.
@@ -2915,6 +2915,25 @@ mod tests {
         let error = parse("run \"env\" and environment {\"A\": \"x\\u0000y\"}\n").unwrap_err();
         assert!(error.to_string().contains("environment value"));
         assert!(error.to_string().contains("NUL byte"));
+    }
+
+    #[test]
+    fn control_characters_in_command_environment_names_are_rejected_during_parse() {
+        for name in ["BAD\\u001bNAME", "BAD\\u009bNAME"] {
+            let source = format!("run \"env\" and environment {{\"{name}\": \"x\"}}\n");
+            let error = parse(&source).unwrap_err();
+            assert!(
+                error.to_string().contains("invalid environment name"),
+                "{error}"
+            );
+        }
+
+        let source = "run \"env\" and without environment [\"BAD\\u001bNAME\"]\n";
+        let error = parse(source).unwrap_err();
+        assert!(
+            error.to_string().contains("invalid environment name"),
+            "{error}"
+        );
     }
 
     #[test]

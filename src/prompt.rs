@@ -10,10 +10,10 @@
 //! record entry is replaced by a marker.
 
 use crate::ast::{InputDeclaration, InputSource, Value};
-use crate::terminal_text::escape_controls;
+use crate::terminal_text::escape_terminal_field;
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 
 /// The longest answer a prompt accepts, in bytes.
@@ -22,6 +22,10 @@ pub const MAX_ANSWER_BYTES: usize = 4096;
 const MAX_ANSWERS_FILE_BYTES: u64 = 64 * 1024;
 const NEWLINE: u8 = b'\n';
 const RETURN: u8 = b'\r';
+
+fn write_question(output: &mut impl Write, question: &str) -> std::io::Result<()> {
+    write!(output, "{}: ", escape_terminal_field(question))
+}
 
 /// Ask one question. `Ok(None)` means there is no terminal to ask on.
 pub type Ask<'a> = dyn FnMut(&str, bool) -> Result<Option<String>> + 'a;
@@ -135,7 +139,6 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     if prompts_disabled() {
         return Ok(None);
     }
-    use std::io::Write;
     use std::os::unix::io::AsFd;
     let Ok(mut tty) = std::fs::OpenOptions::new()
         .read(true)
@@ -144,7 +147,7 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     else {
         return Ok(None);
     };
-    write!(tty, "{}: ", escape_controls(question)).context("writing the prompt")?;
+    write_question(&mut tty, question).context("writing the prompt")?;
     tty.flush().context("writing the prompt")?;
     // The echo guard borrows its own duplicate of the terminal, so `tty` stays free for
     // reading. Both descriptors name the same terminal, and tcsetattr applies to it.
@@ -170,7 +173,6 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     if prompts_disabled() {
         return Ok(None);
     }
-    use std::io::Write;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::System::Console::{GetConsoleMode, SetConsoleMode, ENABLE_ECHO_INPUT};
     let Ok(mut input) = std::fs::OpenOptions::new()
@@ -183,7 +185,7 @@ pub fn terminal_ask(question: &str, secret: bool) -> Result<Option<String>> {
     let Ok(mut output) = std::fs::OpenOptions::new().write(true).open("CONOUT$") else {
         return Ok(None);
     };
-    write!(output, "{}: ", escape_controls(question)).context("writing the prompt")?;
+    write_question(&mut output, question).context("writing the prompt")?;
     output.flush().context("writing the prompt")?;
     let handle = input.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
     let mut mode = 0u32;
@@ -279,6 +281,20 @@ mod private_answers;
 mod tests {
     use super::*;
     use crate::ast::InputType;
+
+    #[test]
+    fn terminal_prompt_escapes_controls_and_bidi_before_writing() {
+        let mut output = Vec::new();
+        write_question(
+            &mut output,
+            "Who\u{001b}[2J\u{009b}31m\u{202e}\n\t\u{2028}\u{2029}?",
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            r"Who\u{1b}[2J\u{9b}31m\u{202e}\u{a}\u{9}\u{2028}\u{2029}?: "
+        );
+    }
 
     fn prompt(
         name: &str,

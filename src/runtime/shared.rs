@@ -2809,7 +2809,11 @@ pub fn explain_with_inputs(
         };
         rows.push(format!("line {}: {description}; {stdout}", step.line));
     }
-    Ok(crate::terminal_text::escape_controls(&rows.join("\n")))
+    Ok(rows
+        .iter()
+        .map(|row| crate::terminal_text::escape_terminal_field(row))
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 fn resolve<B>(value: &Value, bindings: &BTreeMap<String, B>) -> Result<Value>

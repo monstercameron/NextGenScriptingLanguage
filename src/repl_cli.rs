@@ -48,10 +48,22 @@ pub fn repl(arguments: &[String]) -> Result<()> {
     }
     let interactive = io::stdin().is_terminal();
     if json {
-        repl::run_json(&mut session, io::stdin().lock(), io::stdout().lock(), what_if)?;
+        repl::run_json(
+            &mut session,
+            io::stdin().lock(),
+            io::stdout().lock(),
+            what_if,
+        )?;
     } else {
-        if what_if { bail!("--what-if requires --json"); }
-        repl::run(&mut session, io::stdin().lock(), io::stdout().lock(), interactive)?;
+        if what_if {
+            bail!("--what-if requires --json");
+        }
+        repl::run(
+            &mut session,
+            io::stdin().lock(),
+            io::stdout().lock(),
+            interactive,
+        )?;
     }
     Ok(())
 }

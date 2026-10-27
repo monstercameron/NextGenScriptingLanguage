@@ -280,6 +280,138 @@ fn failed_json_submission_returns_redacted_partial_stdout() {
 }
 
 #[test]
+fn failed_multicommand_submission_keeps_ordered_redacted_partial_stdout() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = directory.path().join("manifests");
+    std::fs::create_dir(&manifests).unwrap();
+    let first_secret = "first-command-secret";
+    let failed_secret = "failed-command-secret";
+    for (name, env_name, secret, script) in [
+        (
+            "first.echo",
+            "FIRST_SECRET",
+            first_secret,
+            "printf 'first=%s|' \"$FIRST_SECRET\"",
+        ),
+        (
+            "last.fail",
+            "FAILED_SECRET",
+            failed_secret,
+            "printf 'last=%s' \"$FAILED_SECRET\"; exit 7",
+        ),
+    ] {
+        let environment = serde_json::Map::from_iter([(
+            env_name.to_owned(),
+            serde_json::Value::String(secret.to_owned()),
+        )]);
+        let manifest = serde_json::json!({
+            "name":name, "binary":"/bin/sh", "arguments":[{"literal":"-c"},{"literal":script}],
+            "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"},"environment":{"set":environment}}
+        });
+        std::fs::write(manifests.join(format!("{name}.json")), manifest.to_string()).unwrap();
+    }
+    let policy = directory.path().join("policy.json");
+    std::fs::write(
+        &policy,
+        r#"{"version":1,"secrets":{"environment":{"first.echo":["FIRST_SECRET"],"last.fail":["FAILED_SECRET"]}}}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["repl", "--json", "--manifest-dir"])
+        .arg(&manifests)
+        .args(["--data-flow-policy"])
+        .arg(&policy)
+        .current_dir(directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let request = serde_json::json!({"submit":"run first.echo\nrun last.fail"});
+    writeln!(child.stdin.take().unwrap(), "{request}").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = String::from_utf8(output.stdout).unwrap();
+    assert!(!raw.contains(first_secret));
+    assert!(!raw.contains(failed_secret));
+    let responses = parse_lines(raw.as_bytes());
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["status"], "failed");
+    assert_eq!(responses[0]["stdout"], "first=[REDACTED]|last=[REDACTED]");
+}
+
+#[test]
+fn failed_pipeline_submission_returns_redacted_terminal_partial_stdout() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = directory.path().join("manifests");
+    std::fs::create_dir(&manifests).unwrap();
+    let secret = "pipeline-failure-secret";
+    let first = serde_json::json!({
+        "name":"pipeline.first", "binary":"/bin/sh", "arguments":[{"literal":"-c"},{"literal":"printf ignored-pipeline-input"}],
+        "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"}}
+    });
+    let last = serde_json::json!({
+        "name":"pipeline.last", "binary":"/bin/sh", "accepts_stdin":true,
+        "arguments":[{"literal":"-c"},{"literal":"cat >/dev/null; printf 'pipeline=%s' \"$PIPELINE_SECRET\"; exit 7"}],
+        "contract":{"version":1,"backend":"command","lifecycle":{"kind":"oneshot"},"environment":{"set":{"PIPELINE_SECRET":secret}}}
+    });
+    std::fs::write(manifests.join("pipeline.first.json"), first.to_string()).unwrap();
+    std::fs::write(manifests.join("pipeline.last.json"), last.to_string()).unwrap();
+    let policy = directory.path().join("policy.json");
+    std::fs::write(
+        &policy,
+        r#"{"version":1,"secrets":{"environment":{"pipeline.last":["PIPELINE_SECRET"]}}}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args(["repl", "--json", "--manifest-dir"])
+        .arg(&manifests)
+        .args(["--data-flow-policy"])
+        .arg(&policy)
+        .current_dir(directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"submit\":\"run pipeline.first\\npipe to pipeline.last\"}\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw = String::from_utf8(output.stdout).unwrap();
+    assert!(!raw.contains(secret));
+    let responses = parse_lines(raw.as_bytes());
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["status"], "failed", "{responses:?}");
+    assert_eq!(
+        responses[0]["stdout"], "pipeline=[REDACTED]",
+        "{responses:?}"
+    );
+}
+
+#[test]
 fn what_if_returns_a_plan_without_running_the_block() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");

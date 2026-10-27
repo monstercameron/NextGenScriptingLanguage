@@ -157,8 +157,9 @@ pub(super) fn parse_reusable_statement<'arena, 'source: 'arena>(
 }
 
 /// Statement heads that cannot name a step: a label with one of these names would read
-/// like the statement it labels.
-const STATEMENT_KEYWORDS: &[&str] = &[
+/// like the statement it labels. This is also the source of truth for LSP
+/// statement-start completion (see [`statement_completion_forms`]).
+pub(crate) const STATEMENT_KEYWORDS: &[&str] = &[
     "accept",
     "break",
     "cancel",
@@ -199,6 +200,414 @@ const STATEMENT_KEYWORDS: &[&str] = &[
     "launch",
     "execute",
 ];
+
+/// One LSP statement-start form, generated from the grammar the parser
+/// accepts. `label` is shown and inserted; `snippet` is an LSP snippet
+/// (`insertTextFormat: 2`) expanding the form with tab stops.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StatementCompletionForm {
+    pub label: &'static str,
+    pub detail: &'static str,
+    pub snippet: Option<&'static str>,
+}
+
+/// Statement-start completion forms, derived from the parser's accepted
+/// syntax (see `parse_statement_in_scope`, `parse_line`, `parse_transfer`,
+/// the trigger headers and `parse_process_handoff`). Keep this beside the
+/// parser so the tables cannot drift from the grammar: when a new statement
+/// head is accepted, `statement_completion_covers_every_keyword` fails until
+/// a form is added here too.
+pub(crate) fn statement_completion_forms() -> &'static [StatementCompletionForm] {
+    const FORMS: &[StatementCompletionForm] = &[
+        StatementCompletionForm {
+            label: "accept",
+            detail: "Declare a typed program input",
+            snippet: Some("accept ${1:name} as ${2:text}"),
+        },
+        StatementCompletionForm {
+            label: "break",
+            detail: "Exit the innermost active loop",
+            snippet: None,
+        },
+        StatementCompletionForm {
+            label: "cancel",
+            detail: "Cancel a named background job",
+            snippet: Some("cancel ${1:job}"),
+        },
+        StatementCompletionForm {
+            label: "catch",
+            detail: "Catch a failure inside a try block",
+            snippet: Some("catch ${1:error}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "continue",
+            detail: "Continue the innermost active loop",
+            snippet: None,
+        },
+        StatementCompletionForm {
+            label: "define a program named",
+            detail: "Define a reusable program",
+            snippet: Some("define a program named ${1:name}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "every",
+            detail: "Run on a time interval trigger",
+            snippet: Some("every ${1:5} ${2:minutes}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "execute 1",
+            detail: "Language version marker, first line only",
+            snippet: None,
+        },
+        StatementCompletionForm {
+            label: "exit with status",
+            detail: "Exit with an integer status",
+            snippet: Some("exit with status ${1:0}"),
+        },
+        StatementCompletionForm {
+            label: "fail with message",
+            detail: "Fail with a text message",
+            snippet: Some("fail with message ${1:\"reason\"}"),
+        },
+        StatementCompletionForm {
+            label: "finally",
+            detail: "Cleanup body of a try block",
+            snippet: Some("finally\n  ${1}"),
+        },
+        StatementCompletionForm {
+            label: "for each",
+            detail: "Loop over a list value",
+            snippet: Some("for each ${1:item} in ${2:items}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "hand over to",
+            detail: "Replace this script with a native command",
+            snippet: Some("hand over to ${1:\"program\"}"),
+        },
+        StatementCompletionForm {
+            label: "if",
+            detail: "Branch on a value or command condition",
+            snippet: Some("if ${1:value} is ${2:other}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "inspect",
+            detail: "Read a snapshot of a named job",
+            snippet: Some("inspect ${1:job} as ${2:state}"),
+        },
+        StatementCompletionForm {
+            label: "launch detached",
+            detail: "Start an unowned native command",
+            snippet: Some("launch detached ${1:\"program\"}"),
+        },
+        StatementCompletionForm {
+            label: "listen to",
+            detail: "Listen trigger for lines or applet events",
+            snippet: Some("listen to ${1:stdin}\nwhenever a line arrives as ${2:message}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "on exit",
+            detail: "Cleanup block running on every exit path",
+            snippet: Some("on exit\n  ${1}"),
+        },
+        StatementCompletionForm {
+            label: "on interrupt",
+            detail: "Cleanup block running on first interrupt",
+            snippet: Some("on interrupt\n  ${1}"),
+        },
+        StatementCompletionForm {
+            label: "on schedule",
+            detail: "Run on a cron schedule trigger",
+            snippet: Some("on schedule ${1:\"*/5 * * * *\"}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "otherwise",
+            detail: "Default branch of an if block",
+            snippet: Some("otherwise\n  ${1}"),
+        },
+        StatementCompletionForm {
+            label: "otherwise if",
+            detail: "Else-if branch of an if block",
+            snippet: Some("otherwise if ${1:value} is ${2:other}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "parallel",
+            detail: "Run independent tasks and join them",
+            snippet: Some("parallel at most ${1:4} as ${2:results}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "parallel for each",
+            detail: "Run one task per list element",
+            snippet: Some(
+                "parallel for each ${1:item} in ${2:items} at most ${3:4} as ${4:results}\n  ${5}",
+            ),
+        },
+        StatementCompletionForm {
+            label: "pipe to",
+            detail: "Pipe stdout into the next command",
+            snippet: Some("pipe to ${1:tool}"),
+        },
+        StatementCompletionForm {
+            label: "race",
+            detail: "Return the first successful task",
+            snippet: Some("race at most ${1:4} as ${2:result}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "read",
+            detail: "Read a file into a binding",
+            snippet: Some("read ${1:\"file\"} as ${2:content}"),
+        },
+        StatementCompletionForm {
+            label: "read from stdin",
+            detail: "Read stdin into a binding",
+            snippet: Some("read from stdin as ${1:input}"),
+        },
+        StatementCompletionForm {
+            label: "repeat",
+            detail: "Repeat a body N times",
+            snippet: Some("repeat ${1:3} times\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "return",
+            detail: "Return from a reusable program",
+            snippet: None,
+        },
+        StatementCompletionForm {
+            label: "run",
+            detail: "Run an applet or native command",
+            snippet: Some("run ${1:tool} with ${2:parameter} ${3:value}"),
+        },
+        StatementCompletionForm {
+            label: "run program",
+            detail: "Call a reusable program",
+            snippet: Some("run program ${1:name}"),
+        },
+        StatementCompletionForm {
+            label: "run program file",
+            detail: "Call another .program file",
+            snippet: Some("run program file ${1:\"path.program\"}"),
+        },
+        StatementCompletionForm {
+            label: "spawn as",
+            detail: "Spawn a named background pipeline",
+            snippet: Some("spawn as ${1:job}\n  run ${2:tool}"),
+        },
+        StatementCompletionForm {
+            label: "await",
+            detail: "Wait for a background job",
+            snippet: Some("await ${1:job}"),
+        },
+        StatementCompletionForm {
+            label: "take",
+            detail: "Read a typed value out of JSON",
+            snippet: Some("take ${1:text} at ${2:\"/pointer\"} from ${3:source} as ${4:name}"),
+        },
+        StatementCompletionForm {
+            label: "then",
+            detail: "Run after the previous statement",
+            snippet: Some("then ${1:tool}"),
+        },
+        StatementCompletionForm {
+            label: "then append to",
+            detail: "Append pipeline output to a file",
+            snippet: Some("then append to ${1:\"out.txt\"}"),
+        },
+        StatementCompletionForm {
+            label: "then capture bytes as",
+            detail: "Bind raw pipeline bytes",
+            snippet: Some("then capture bytes as ${1:bytes}"),
+        },
+        StatementCompletionForm {
+            label: "then encode",
+            detail: "Encode a value as JSON",
+            snippet: Some("then encode ${1:value} as json"),
+        },
+        StatementCompletionForm {
+            label: "then parse json as",
+            detail: "Parse pipeline output as JSON",
+            snippet: Some("then parse json as ${1:data}"),
+        },
+        StatementCompletionForm {
+            label: "then save to",
+            detail: "Replace a file with pipeline output",
+            snippet: Some("then save to ${1:\"out.txt\"}"),
+        },
+        StatementCompletionForm {
+            label: "try",
+            detail: "Guard a body with catch/finally",
+            snippet: Some("try\n  ${1}\ncatch ${2:error}\n  ${3}\nfinally\n  ${4}"),
+        },
+        StatementCompletionForm {
+            label: "use bytes",
+            detail: "Set pipeline input from a byte binding",
+            snippet: Some("use bytes ${1:payload}"),
+        },
+        StatementCompletionForm {
+            label: "use environment",
+            detail: "Set workflow environment variables",
+            snippet: Some("use environment {${1:\"NAME\": \"value\"}}"),
+        },
+        StatementCompletionForm {
+            label: "use folder",
+            detail: "Set the working directory",
+            snippet: Some("use folder ${1:\"work\"}"),
+        },
+        StatementCompletionForm {
+            label: "use value",
+            detail: "Set pipeline input to a value",
+            snippet: Some("use value ${1:\"text\"}"),
+        },
+        StatementCompletionForm {
+            label: "use without environment",
+            detail: "Remove workflow environment variables",
+            snippet: Some("use without environment [${1:\"NAME\"}]"),
+        },
+        StatementCompletionForm {
+            label: "whenever a line arrives as",
+            detail: "Listener event header binding",
+            snippet: Some("whenever a line arrives as ${1:message}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "while",
+            detail: "Loop while a condition holds",
+            snippet: Some("while ${1:ready} is ${2:value}\n  ${3}"),
+        },
+        StatementCompletionForm {
+            label: "with temporary directory as",
+            detail: "Scoped fresh private directory",
+            snippet: Some("with temporary directory as ${1:scratch}\n  ${2}"),
+        },
+        StatementCompletionForm {
+            label: "with temporary file as",
+            detail: "Scoped fresh private file",
+            snippet: Some("with temporary file as ${1:scratch}\n  ${2}"),
+        },
+    ];
+    FORMS
+}
+
+/// One LSP suffix form accepted after an invocation: `label` is shown and
+/// inserted, `snippet` expands the suffix with tab stops.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SuffixCompletionForm {
+    pub label: &'static str,
+    pub detail: &'static str,
+    pub snippet: Option<&'static str>,
+}
+
+/// Invocation suffixes from `parse_invocation`, `redirect_suffix`,
+/// `environment_suffix`, `parse_process_handoff` and the job `await` suffixes.
+///
+/// The core families are listed in the canonical `suffixes` order from the
+/// grammar (`as`, `and discard stderr`, `and keep status as`,
+/// `and keep result as`, `and keep secret`, `and cache`, then
+/// `and retry ...`; see `suffix_kind_rank`): completion only suggests a
+/// family in canonical position, and never suggests the combinations the
+/// parser rejects (`and retry` with `and cache`/`and keep status`/`and keep
+/// result`, `and keep secret` without `as`, `and discard stderr` for
+/// non-direct commands). Redirection and environment suffixes accept any
+/// relative order and follow the core families.
+pub(crate) fn invocation_suffix_forms() -> &'static [SuffixCompletionForm] {
+    const FORMS: &[SuffixCompletionForm] = &[
+        SuffixCompletionForm {
+            label: "as",
+            detail: "Bind the output to a name",
+            snippet: Some("as ${1:binding}"),
+        },
+        SuffixCompletionForm {
+            label: "and discard stderr",
+            detail: "Discard stderr of a direct command",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and keep status as",
+            detail: "Bind the exit status",
+            snippet: Some("and keep status as ${1:status}"),
+        },
+        SuffixCompletionForm {
+            label: "and keep result as",
+            detail: "Bind the execution result",
+            snippet: Some("and keep result as ${1:result}"),
+        },
+        SuffixCompletionForm {
+            label: "and keep secret",
+            detail: "Mark the bound output sensitive",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and cache",
+            detail: "Cache a deterministic applet call",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and retry up to",
+            detail: "Retry a run command",
+            snippet: Some("and retry up to ${1:3} times"),
+        },
+        SuffixCompletionForm {
+            label: "and stdin from",
+            detail: "Feed a file as stdin",
+            snippet: Some("and stdin from ${1:\"input.txt\"}"),
+        },
+        SuffixCompletionForm {
+            label: "and stderr to",
+            detail: "Redirect stderr to a file",
+            snippet: Some("and stderr to ${1:\"errors.txt\"}"),
+        },
+        SuffixCompletionForm {
+            label: "and stderr appended to",
+            detail: "Append stderr to a file",
+            snippet: Some("and stderr appended to ${1:\"errors.txt\"}"),
+        },
+        SuffixCompletionForm {
+            label: "and stderr merged",
+            detail: "Merge stderr into stdout",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and stdout to stderr",
+            detail: "Redirect stdout to stderr",
+            snippet: None,
+        },
+        SuffixCompletionForm {
+            label: "and environment",
+            detail: "Set per-command environment",
+            snippet: Some("and environment {${1:\"NAME\": \"value\"}}"),
+        },
+        SuffixCompletionForm {
+            label: "and without environment",
+            detail: "Remove per-command environment",
+            snippet: Some("and without environment [${1:\"NAME\"}]"),
+        },
+        SuffixCompletionForm {
+            label: "and output to",
+            detail: "Detached launch output file",
+            snippet: Some("and output to ${1:\"out.txt\"}"),
+        },
+        SuffixCompletionForm {
+            label: "interactively",
+            detail: "Run a top-level native command interactively",
+            snippet: None,
+        },
+    ];
+    FORMS
+}
+
+/// Value-comparison operators from `parse_condition`, for `if`/`otherwise if`/`while`.
+pub(crate) fn condition_operator_forms() -> &'static [&'static str] {
+    &[
+        "is",
+        "is not",
+        "contains",
+        "does not contain",
+        "succeeds",
+        "fails",
+    ]
+}
+
+/// Value types accepted by `take` (see `parse_take_json`).
+pub(crate) fn take_type_forms() -> &'static [&'static str] {
+    &["text", "integer", "boolean", "json", "list of text"]
+}
 
 /// A statement may start with `fetch:`, a label for its first step. Returns the label
 /// name, or `None` for an ordinary statement.
@@ -3397,6 +3806,163 @@ mod tests {
     }
 
     #[test]
+    fn statement_completion_covers_every_keyword() {
+        // `cd` names an applet operation completed after `run`, `interactively`
+        // and `redirect` are suffixes covered by `invocation_suffix_forms`, and
+        // `until` reserves a future loop word: it appears in no parser, a
+        // `grep` for `until` outside this list and the keyword table finds no
+        // consumer, so it intentionally has no statement form yet.
+        // (`stream from` is the streaming DSL in `stream.rs`, not program
+        // grammar, so it is correctly absent here too.)
+        const NON_STATEMENT_HEADS: &[&str] = &["cd", "interactively", "redirect", "until"];
+        let forms = statement_completion_forms();
+        for keyword in STATEMENT_KEYWORDS {
+            if NON_STATEMENT_HEADS.contains(keyword) {
+                continue;
+            }
+            let covered = forms
+                .iter()
+                .any(|form| form.label.split(' ').next() == Some(*keyword));
+            assert!(
+                covered,
+                "completion is missing a form for statement keyword `{keyword}`; \
+                 add one to `statement_completion_forms`"
+            );
+        }
+        // Full-label coverage: the first-word check above would miss a new
+        // head sharing an existing first word (another `with ...` form), so
+        // every form label is listed. Adding or removing a statement form
+        // must update this list.
+        const REQUIRED_FORMS: &[&str] = &[
+            "accept",
+            "break",
+            "cancel",
+            "catch",
+            "continue",
+            "define a program named",
+            "every",
+            "execute 1",
+            "exit with status",
+            "fail with message",
+            "finally",
+            "for each",
+            "hand over to",
+            "if",
+            "inspect",
+            "launch detached",
+            "listen to",
+            "on exit",
+            "on interrupt",
+            "on schedule",
+            "otherwise",
+            "otherwise if",
+            "parallel",
+            "parallel for each",
+            "pipe to",
+            "race",
+            "read",
+            "read from stdin",
+            "repeat",
+            "return",
+            "run",
+            "run program",
+            "run program file",
+            "spawn as",
+            "await",
+            "take",
+            "then",
+            "then append to",
+            "then capture bytes as",
+            "then encode",
+            "then parse json as",
+            "then save to",
+            "try",
+            "use bytes",
+            "use environment",
+            "use folder",
+            "use value",
+            "use without environment",
+            "whenever a line arrives as",
+            "while",
+            "with temporary directory as",
+            "with temporary file as",
+        ];
+        for required in REQUIRED_FORMS {
+            assert!(
+                forms.iter().any(|form| form.label == *required),
+                "completion is missing the `{required}` statement form"
+            );
+        }
+        let distinct: std::collections::BTreeSet<&str> =
+            forms.iter().map(|form| form.label).collect();
+        assert_eq!(
+            distinct.len(),
+            forms.len(),
+            "statement completion form labels must be distinct"
+        );
+        assert_eq!(
+            forms.len(),
+            REQUIRED_FORMS.len(),
+            "statement completion added or dropped a form; update REQUIRED_FORMS"
+        );
+        const REQUIRED_SUFFIXES: &[&str] = &[
+            "as",
+            "and discard stderr",
+            "and keep status as",
+            "and keep result as",
+            "and keep secret",
+            "and cache",
+            "and retry up to",
+            "and stdin from",
+            "and stderr to",
+            "and stderr appended to",
+            "and stderr merged",
+            "and stdout to stderr",
+            "and environment",
+            "and without environment",
+            "and output to",
+            "interactively",
+        ];
+        let suffixes = invocation_suffix_forms();
+        for required in REQUIRED_SUFFIXES {
+            assert!(
+                suffixes.iter().any(|form| form.label == *required),
+                "completion is missing the `{required}` invocation suffix"
+            );
+        }
+        assert_eq!(
+            suffixes.len(),
+            REQUIRED_SUFFIXES.len(),
+            "invocation suffixes added or dropped a form; update REQUIRED_SUFFIXES"
+        );
+        // The core families must follow the canonical `suffixes` grammar
+        // order enforced by `suffix_kind_rank` and the `parse.suffix_order`
+        // diagnostic, so following a suggestion never needs a reorder fix.
+        let position = |label: &str| {
+            suffixes
+                .iter()
+                .position(|form| form.label == label)
+                .unwrap_or(usize::MAX)
+        };
+        let core = [
+            "as",
+            "and discard stderr",
+            "and keep status as",
+            "and keep result as",
+            "and keep secret",
+            "and cache",
+            "and retry up to",
+        ];
+        let order: Vec<usize> = core.iter().map(|label| position(label)).collect();
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            order, sorted,
+            "invocation suffixes are out of canonical order"
+        );
+    }
+
+    #[test]
     fn parses_readable_sample_and_keeps_source_lines() {
         let program = parse(
             "# input\nuse folder \"work\"\nread file \"notes.txt\" as notes\ncount lines with source notes and limit 10 as total and cache\nthen save to file \"summary.txt\" # output\n",
@@ -3493,6 +4059,20 @@ mod tests {
             );
         }
         assert!(parse("run program child and discard stderr\n").is_err());
+    }
+
+    #[test]
+    fn run_program_calls_reject_interactively() {
+        for source in [
+            "run program emit interactively\n",
+            "define a program named emit\n  run pwd\nrun program emit interactively\n",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("`interactively`"),
+                "unexpected error for {source:?}: {error:#}"
+            );
+        }
     }
 
     #[test]

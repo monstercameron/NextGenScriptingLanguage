@@ -611,19 +611,19 @@ pub(super) fn run_group(
         if let Some(index) = winner {
             let value = group_value(mode, &records, Some(index), &secret_redactor);
             ensure_encoded_limit(&value, max_output_bytes).map_err(|error| {
-                task_group_failure(
+                task_group_failure(TaskGroupFailureRequest {
                     mode,
-                    &prepared[index].id,
-                    format!("{error:#}"),
-                    records[index]
+                    failed_task: &prepared[index].id,
+                    message: format!("{error:#}"),
+                    outcome: records[index]
                         .invocation
                         .as_ref()
                         .map(|result| result.outcome.clone()),
-                    records[index].uncertain,
-                    &records,
-                    &secret_redactor,
-                    false,
-                )
+                    uncertain: records[index].uncertain,
+                    records: &records,
+                    secret_redactor: &secret_redactor,
+                    compact: false,
+                })
             })?;
             return Ok(TaskGroupResult {
                 value,
@@ -631,16 +631,16 @@ pub(super) fn run_group(
             });
         }
         if let Some((index, message, outcome, uncertain)) = first_failure {
-            return Err(task_group_failure(
+            return Err(task_group_failure(TaskGroupFailureRequest {
                 mode,
-                &prepared[index].id,
+                failed_task: &prepared[index].id,
                 message,
                 outcome,
                 uncertain,
-                &records,
-                &secret_redactor,
-                false,
-            )
+                records: &records,
+                secret_redactor: &secret_redactor,
+                compact: false,
+            })
             .into());
         }
         // A race with all candidates returning non-success outcomes has no
@@ -661,16 +661,16 @@ pub(super) fn run_group(
                 .error
                 .clone()
                 .unwrap_or_else(|| "no task produced a success outcome".into());
-            return Err(task_group_failure(
+            return Err(task_group_failure(TaskGroupFailureRequest {
                 mode,
-                &prepared[failed_index].id,
+                failed_task: &prepared[failed_index].id,
                 message,
                 outcome,
-                records[failed_index].uncertain,
-                &records,
-                &secret_redactor,
-                false,
-            )
+                uncertain: records[failed_index].uncertain,
+                records: &records,
+                secret_redactor: &secret_redactor,
+                compact: false,
+            })
             .into());
         }
     }
@@ -679,19 +679,19 @@ pub(super) fn run_group(
         .iter()
         .find(|record| record.state != TaskState::Succeeded)
     {
-        return Err(task_group_failure(
+        return Err(task_group_failure(TaskGroupFailureRequest {
             mode,
-            &record.id,
-            "task did not complete successfully".into(),
-            record
+            failed_task: &record.id,
+            message: "task did not complete successfully".into(),
+            outcome: record
                 .invocation
                 .as_ref()
                 .map(|result| result.outcome.clone()),
-            record.uncertain,
-            &records,
-            &secret_redactor,
-            false,
-        )
+            uncertain: record.uncertain,
+            records: &records,
+            secret_redactor: &secret_redactor,
+            compact: false,
+        })
         .into());
     }
     let value = group_value(mode, &records, None, &secret_redactor);
@@ -871,16 +871,16 @@ pub(super) fn run_each(
                 record.state = TaskState::NotStarted;
             }
         }
-        return Err(task_group_failure(
-            TaskGroupMode::Join,
-            &prepared[0].id,
-            format!("restored parallel for each output exceeded {max_output_bytes} bytes"),
-            None,
-            false,
-            &records,
-            &secret_redactor,
-            true,
-        )
+        return Err(task_group_failure(TaskGroupFailureRequest {
+            mode: TaskGroupMode::Join,
+            failed_task: &prepared[0].id,
+            message: format!("restored parallel for each output exceeded {max_output_bytes} bytes"),
+            outcome: None,
+            uncertain: false,
+            records: &records,
+            secret_redactor: &secret_redactor,
+            compact: true,
+        })
         .into());
     }
     // Native element output is charged against one shared budget as it arrives, so
@@ -1109,16 +1109,16 @@ pub(super) fn run_each(
                 _ => {}
             }
         }
-        return Err(task_group_failure(
-            TaskGroupMode::Join,
-            &prepared[index.min(prepared.len() - 1)].id,
+        return Err(task_group_failure(TaskGroupFailureRequest {
+            mode: TaskGroupMode::Join,
+            failed_task: &prepared[index.min(prepared.len() - 1)].id,
             message,
-            None,
-            false,
-            &records,
-            &secret_redactor,
-            true,
-        )
+            outcome: None,
+            uncertain: false,
+            records: &records,
+            secret_redactor: &secret_redactor,
+            compact: true,
+        })
         .into());
     }
 
@@ -1254,40 +1254,6 @@ fn update_record(
             record.uncertain = task_error_uncertain(&error, tasks[index].uncertain_on_error);
             record.launched_processes = launched_processes;
         }
-    }
-}
-
-#[cfg(test)]
-mod cancellation_tests {
-    use super::*;
-
-    #[test]
-    fn parent_cancellation_marks_task_completion_cancelled() {
-        let mut scope = TaskScope::new(1, None).unwrap();
-        let token = scope.cancellation_token();
-        let parent_cancelled = Arc::new(AtomicBool::new(true));
-        let inherited = [Arc::clone(&parent_cancelled)];
-        let cancelled = completion_was_cancelled(&token, &inherited);
-        let tasks = [PreparedTask {
-            id: "child".into(),
-            applet: "fixture.wait".into(),
-            parameters: BTreeMap::new(),
-            uncertain_on_error: false,
-        }];
-        let mut records = vec![TaskRecord::pending(&tasks[0])];
-        let mut total_output_bytes = 0;
-
-        update_record(
-            0,
-            Err(anyhow!("in-process applet observed parent cancellation")),
-            cancelled,
-            0,
-            &mut records,
-            &tasks,
-            &mut total_output_bytes,
-        );
-
-        assert_eq!(records[0].state, TaskState::Cancelled);
     }
 }
 
@@ -1480,16 +1446,28 @@ pub(super) fn each_result_encoded_limit(raw_limit: usize, item_count: usize) -> 
         .saturating_add(1024)
 }
 
-fn task_group_failure(
+struct TaskGroupFailureRequest<'a> {
     mode: TaskGroupMode,
-    failed_task: &str,
+    failed_task: &'a str,
     message: String,
     outcome: Option<Outcome>,
     uncertain: bool,
-    records: &[TaskRecord],
-    secret_redactor: &crate::security::SecretRedactor,
+    records: &'a [TaskRecord],
+    secret_redactor: &'a crate::security::SecretRedactor,
     compact: bool,
-) -> TaskGroupFailure {
+}
+
+fn task_group_failure(request: TaskGroupFailureRequest<'_>) -> TaskGroupFailure {
+    let TaskGroupFailureRequest {
+        mode,
+        failed_task,
+        message,
+        outcome,
+        uncertain,
+        records,
+        secret_redactor,
+        compact,
+    } = request;
     TaskGroupFailure {
         mode,
         failed_task: failed_task.to_owned(),
@@ -1524,4 +1502,39 @@ fn task_panic(payload: Box<dyn std::any::Any + Send>) -> anyhow::Error {
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("non-string panic payload");
     anyhow!("task worker panicked: {message}")
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn parent_cancellation_marks_task_completion_cancelled() {
+        let scope = TaskScope::new(1, None).unwrap();
+        let token = scope.cancellation_token();
+        let parent_cancelled = Arc::new(AtomicBool::new(true));
+        let inherited = [Arc::clone(&parent_cancelled)];
+        let cancelled = completion_was_cancelled(&token, &inherited);
+        let tasks = [PreparedTask {
+            id: "child".into(),
+            applet: "fixture.wait".into(),
+            parameters: BTreeMap::new(),
+            uncertain_on_error: false,
+            native_command: false,
+        }];
+        let mut records = vec![TaskRecord::pending(&tasks[0])];
+        let mut total_output_bytes = 0;
+
+        update_record(
+            0,
+            Err(anyhow!("in-process applet observed parent cancellation")),
+            cancelled,
+            0,
+            &mut records,
+            &tasks,
+            &mut total_output_bytes,
+        );
+
+        assert_eq!(records[0].state, TaskState::Cancelled);
+    }
 }

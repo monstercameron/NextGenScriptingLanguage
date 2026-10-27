@@ -3790,7 +3790,7 @@ pub(crate) fn invoke_call_with_context(
             cwd: &crate::working_dir::WorkingDirectory::plain(
                 invocation_options.working_directory.clone(),
             ),
-            options: &invocation_options,
+            options: invocation_options,
             launched: &mut launched,
             signals: &signals,
             registry,

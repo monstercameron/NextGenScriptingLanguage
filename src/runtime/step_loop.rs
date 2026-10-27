@@ -1125,9 +1125,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             };
                             match &next.kind {
                                 StepKind::UseValue { source }
-                                | StepKind::BindValue { source, .. } => {
-                                    replacement_fits(source)
-                                }
+                                | StepKind::BindValue { source, .. } => replacement_fits(source),
                                 _ => false,
                             }
                         });

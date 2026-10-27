@@ -2065,7 +2065,7 @@ fn encoded_byte_field_size(record: &BTreeMap<String, Value>, key: &str) -> Optio
 
 fn base64_decoded_size(value: &str) -> Option<usize> {
     let bytes = value.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
     let padding = if bytes.ends_with(b"==") {
@@ -2078,12 +2078,19 @@ fn base64_decoded_size(value: &str) -> Option<usize> {
     if bytes[..bytes.len().saturating_sub(padding)]
         .iter()
         .any(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'+' | b'/'))
-        || (padding > 0 && bytes[bytes.len() - padding..].iter().any(|byte| *byte != b'='))
+        || (padding > 0
+            && bytes[bytes.len() - padding..]
+                .iter()
+                .any(|byte| *byte != b'='))
         || (padding == 1 && bytes.len() >= 2 && bytes[bytes.len() - 2] == b'=')
     {
         return None;
     }
-    bytes.len().checked_div(4)?.checked_mul(3)?.checked_sub(padding)
+    bytes
+        .len()
+        .checked_div(4)?
+        .checked_mul(3)?
+        .checked_sub(padding)
 }
 
 /// A `u8_array` holds one byte per item, so each integer in 0..=255 counts as one
@@ -2106,7 +2113,8 @@ fn value_size(value: &Value) -> usize {
         Value::Null => 0,
         Value::Number(value) => value.to_string().len(),
         Value::Record(values) => values.iter().fold(0usize, |size, (key, value)| {
-            let field_size = encoded_byte_field_size(values, key).unwrap_or_else(|| value_size(value));
+            let field_size =
+                encoded_byte_field_size(values, key).unwrap_or_else(|| value_size(value));
             size.saturating_add(key.len()).saturating_add(field_size)
         }),
         Value::List(values) => values

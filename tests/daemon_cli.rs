@@ -2,6 +2,9 @@
 //! runs. A forwarded run must match a cold run in output and exit status.
 #![cfg(unix)]
 
+#[path = "support/private_answers.rs"]
+mod private_answers;
+
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -326,6 +329,7 @@ fn explicit_context_acceptance_preserves_untrusted_mode() {
         .unwrap(),
     )
     .unwrap();
+    private_answers::make_private(&policy);
     let program = work.path().join("workflow.program");
     fs::write(&program, "run gated\n").unwrap();
     let run = |forward: bool| {
@@ -406,6 +410,7 @@ fn opted_in_untrusted_forwarding_denies_ungranted_write() {
         r#"{"version":1,"applets":{"gated":{"capabilities":["process.exec"]}}}"#,
     )
     .unwrap();
+    private_answers::make_private(&policy);
     let program = work.path().join("write.program");
     let marker = work.path().join("forbidden");
     fs::write(
@@ -909,6 +914,7 @@ fn forwarded_runs_do_not_share_capability_policies() {
         .unwrap(),
     )
     .unwrap();
+    private_answers::make_private(&grant);
     let deny = root.path().join("deny.json");
     fs::write(
         &deny,
@@ -924,6 +930,7 @@ fn forwarded_runs_do_not_share_capability_policies() {
         .unwrap(),
     )
     .unwrap();
+    private_answers::make_private(&deny);
     let program = root.path().join("workflow.program");
 
     let steps = [
@@ -1059,14 +1066,11 @@ fn setup_heavy_forwarded_run_latency_is_measured() {
         .unwrap(),
     )
     .unwrap();
+    private_answers::make_private(&capability);
     let data_flow = root.path().join("data-flow.json");
     fs::write(&data_flow, r#"{"version":1}"#).unwrap();
-    // The data-flow policy loader accepts only an owner-private file.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&data_flow, fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    // Both policy loaders accept only an owner-private file.
+    private_answers::make_private(&data_flow);
     let program = root.path().join("workflow.program");
     fs::write(&program, PRINT_OUT).unwrap();
     let run = |extra: &[&str]| {

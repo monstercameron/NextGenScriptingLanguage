@@ -369,27 +369,50 @@ fn unused_bindings_and_inputs_warn_but_references_are_counted() {
 }
 
 #[test]
-fn unused_name_quick_fixes_only_add_behavior_neutral_suppression_comments() {
-    let source =
-        "accept unused_input as text\nrun \"printf\" with arguments [\"x\"] as unused_result\n";
+fn unused_name_warnings_withhold_fixes_that_only_hide_the_warning() {
+    let source = "accept unused_input as text\nrun \"cat\" as unused_result\n";
     let diagnostics = analyze_source(source, &Registry::default());
-    for (code, line) in [
-        ("lint.unused_input", "accept unused_input as text # execute-allow: lint.unused_input\n"),
-        (
-            "lint.unused_binding",
-            "run \"printf\" with arguments [\"x\"] as unused_result # execute-allow: lint.unused_binding\n",
-        ),
-    ] {
+    for code in ["lint.unused_input", "lint.unused_binding"] {
         let warning = diagnostics
             .iter()
             .find(|diagnostic| diagnostic.code == code)
             .expect("unused-name warning");
-        let fix = warning.fixes.first().expect("safe suppression fix");
-        let repaired = apply_fix(source, fix);
-        assert!(repaired.contains(line), "{repaired:?}");
-        assert!(!analyze_source(&repaired, &Registry::default())
+        assert!(warning.fixes.is_empty(), "{warning:#?}");
+    }
+}
+
+#[test]
+fn unused_literal_printf_capture_offers_a_labeled_stdout_behavior_change() {
+    let source = "run \"printf\" with arguments [\"hello\\n\"] as unused_result\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.unused_binding")
+        .expect("unused printf binding warning");
+    let fix = warning.fixes.first().expect("literal stdout fix");
+    assert!(fix
+        .message
+        .contains("command's stdout visible on program stdout"));
+    assert!(fix.message.contains("behavior change"));
+    let repaired = apply_fix(source, fix);
+    assert_eq!(repaired, "run \"printf\" with arguments [\"hello\\n\"]\n");
+}
+
+#[test]
+fn unused_printf_stdout_fix_is_withheld_when_status_or_result_is_also_captured() {
+    for source in [
+        "run \"printf\" with arguments [\"x\"] as unused_result and keep status as status\n",
+        "run \"printf\" with arguments [\"x\"] as unused_result and keep result as execution\n",
+    ] {
+        let diagnostics = analyze_source(source, &Registry::default());
+        let warning = diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == code));
+            .find(|diagnostic| {
+                diagnostic.code == "lint.unused_binding"
+                    && diagnostic.message.contains("unused_result")
+            })
+            .expect("unused stdout capture warning");
+        assert!(warning.fixes.is_empty(), "{warning:#?}");
     }
 }
 
@@ -407,7 +430,7 @@ fn unused_intermediate_pipeline_binding_can_be_removed_without_changing_the_pipe
         .fixes
         .first()
         .expect("safe removal fix for an intermediate pipeline binding");
-    assert!(fix.message.contains("literal printf pipeline"));
+    assert!(fix.message.contains("pipeline consumer"));
     let repaired = apply_fix(source, fix);
     assert_eq!(
         repaired,
@@ -432,7 +455,7 @@ fn unused_sensitive_pipeline_binding_is_not_removed_by_quick_fix() {
         warning
             .fixes
             .iter()
-            .all(|fix| !fix.message.contains("intermediate pipeline")),
+            .all(|fix| !fix.message.contains("pipeline consumer")),
         "{warning:#?}"
     );
 }
@@ -494,7 +517,7 @@ fn unused_pipeline_binding_fix_is_withheld_after_secret_pipeline_input() {
         warning
             .fixes
             .iter()
-            .all(|fix| !fix.message.contains("literal printf pipeline")),
+            .all(|fix| !fix.message.contains("pipeline consumer")),
         "{warning:#?}"
     );
 }

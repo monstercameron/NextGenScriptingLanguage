@@ -1547,9 +1547,7 @@ fn mini_language_program_arguments(
         "jq" => {
             let mut index = 0;
             while index < arguments.len() {
-                let Some(argument) = string_argument(arguments, index) else {
-                    return None;
-                };
+                let argument = string_argument(arguments, index)?;
                 if argument == "--" {
                     return string_argument(arguments, index + 1)
                         .map(|_| BTreeSet::from([index + 1]));
@@ -2120,12 +2118,7 @@ fn collect_unused_names(
                 code: "lint.unused_input".into(),
                 message: format!("input {:?} is declared but never read", input.name),
                 span: binding_span(source, line_starts, input.line, &input.name),
-                fixes: vec![allow_warning_fix(
-                    source,
-                    line_starts,
-                    input.line,
-                    "lint.unused_input",
-                )],
+                fixes: Vec::new(),
                 related: Vec::new(),
             });
         }
@@ -2134,15 +2127,10 @@ fn collect_unused_names(
     collect_step_bindings(steps, &mut bindings);
     for (name, line) in bindings {
         if implicit_listener_record != Some(name.as_str()) && !reads.contains(&name) {
-            let mut fixes = unused_pipeline_binding_fix(source, steps, line_starts, line, &name)
-                .into_iter()
-                .collect::<Vec<_>>();
-            fixes.push(allow_warning_fix(
-                source,
-                line_starts,
-                line,
-                "lint.unused_binding",
-            ));
+            let fix = unused_pipeline_binding_fix(source, steps, line_starts, line, &name).or_else(
+                || unused_literal_printf_stdout_fix(source, steps, line_starts, line, &name),
+            );
+            let fixes = fix.into_iter().collect::<Vec<_>>();
             diagnostics.push(Diagnostic {
                 severity: DiagnosticSeverity::Warning,
                 code: "lint.unused_binding".into(),
@@ -2152,50 +2140,6 @@ fn collect_unused_names(
                 related: Vec::new(),
             });
         }
-    }
-}
-
-fn allow_warning_fix(
-    source: &str,
-    line_starts: &LineStarts,
-    line: usize,
-    code: &str,
-) -> SuggestedFix {
-    let line_span = line_starts.span(source, line);
-    let line_text = &source[line_span.start_byte..line_span.end_byte];
-    let mut in_string = false;
-    let mut escaped = false;
-    let comment_offset = line_text.bytes().enumerate().find_map(|(index, byte)| {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-            None
-        } else if byte == b'"' {
-            in_string = true;
-            None
-        } else if byte == b'#' {
-            Some(index)
-        } else {
-            None
-        }
-    });
-    let insert_at = comment_offset.map_or(line_span.end_byte, |offset| {
-        line_span.start_byte + offset + 1
-    });
-    let replacement = if comment_offset.is_some() {
-        format!(" execute-allow: {code} ")
-    } else {
-        format!(" # execute-allow: {code}")
-    };
-    let span = line_starts.span_at(source, insert_at, insert_at, SpanPrecision::Token);
-    SuggestedFix {
-        message: "mark this unused name as intentional".into(),
-        edits: vec![TextEdit { span, replacement }],
     }
 }
 
@@ -2246,11 +2190,71 @@ fn unused_pipeline_binding_fix(
     {
         return None;
     }
+    binding_removal_fix(
+        source,
+        line_starts,
+        line,
+        name,
+        "remove this unused binding; the pipeline consumer still receives the same stdout",
+    )
+}
+
+fn unused_literal_printf_stdout_fix(
+    source: &str,
+    steps: &[Step],
+    line_starts: &LineStarts,
+    line: usize,
+    name: &str,
+) -> Option<SuggestedFix> {
+    // In this single-step case, removing the capture makes the command's
+    // stdout visible. Keep the behavior change explicit and avoid references,
+    // sensitive outputs, and pipeline effects.
+    if steps.len() != 1 {
+        return None;
+    }
+    let step = &steps[0];
+    let StepKind::Invoke { call, connection } = &step.kind else {
+        return None;
+    };
+    let literal_arguments = matches!(
+        call.parameters.get("arguments"),
+        Some(Value::List(arguments))
+            if arguments.iter().all(|argument| matches!(argument, Value::String(_)))
+    );
+    if step.line != line
+        || *connection != Connection::Start
+        || call.binding.as_deref() != Some(name)
+        || !call.direct
+        || call.operation != "printf"
+        || call.parameters.len() != 1
+        || !literal_arguments
+        || call.status_binding.is_some()
+        || call.result_binding.is_some()
+        || call.sensitive_binding
+        || call.marks_sensitive_output()
+    {
+        return None;
+    }
+    binding_removal_fix(
+        source,
+        line_starts,
+        line,
+        name,
+        "remove the unused capture and make this command's stdout visible on program stdout (behavior change)",
+    )
+}
+
+fn binding_removal_fix(
+    source: &str,
+    line_starts: &LineStarts,
+    line: usize,
+    name: &str,
+    message: &'static str,
+) -> Option<SuggestedFix> {
     let words = line_words_from_start(source, line_starts.start(line));
     let words = words
         .windows(2)
-        .filter(|pair| !pair[0].3 && !pair[1].3 && pair[0].0 == "as" && pair[1].0 == name)
-        .last()?;
+        .rfind(|pair| !pair[0].3 && !pair[1].3 && pair[0].0 == "as" && pair[1].0 == name)?;
     let as_word = &words[0];
     let name_word = &words[1];
     let mut start = as_word.1;
@@ -2258,11 +2262,7 @@ fn unused_pipeline_binding_fix(
         start -= 1;
     }
     let span = line_starts.span_at(source, start, name_word.2, SpanPrecision::Token);
-    Some(SuggestedFix::replace(
-        "remove the unused binding from this literal printf pipeline stage",
-        span,
-        "",
-    ))
+    Some(SuggestedFix::replace(message, span, ""))
 }
 
 fn binding_span(source: &str, line_starts: &LineStarts, line: usize, name: &str) -> SourceSpan {

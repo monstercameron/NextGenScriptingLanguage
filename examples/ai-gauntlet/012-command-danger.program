@@ -22,7 +22,7 @@ try
       read source_path as requested
       if requested is "pwd"
         if confirmed is true
-          run "pwd" with arguments [] as diagnostic # execute-allow: lint.unused_binding intentional command-output capture keeps the final report as the program output
+          run "pwd" with arguments [] as diagnostic # execute-allow: lint.unused_binding intentional capture keeps raw pwd output out of the review JSON
           run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"executed-allowlisted-command"} and pointer "/result" and value "pwd"
         otherwise
           run json.set with document {"action":"Review against the original input before acting.","result":null,"status":"awaiting-confirmation"} and pointer "/result" and value "pwd"

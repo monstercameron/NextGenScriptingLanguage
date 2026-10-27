@@ -115,6 +115,7 @@ pub(crate) fn signals(
     cancel: Arc<AtomicBool>,
     drain: Option<Arc<std::sync::atomic::AtomicU8>>,
     wake: Option<Arc<crate::tasks::CancellationWake>>,
+    cleanup: Arc<AtomicBool>,
 ) -> Result<Vec<signal_hook::SigId>> {
     #[cfg(unix)]
     {
@@ -123,8 +124,12 @@ pub(crate) fn signals(
             let flag = cancel.clone();
             let drain = drain.clone();
             let wake = wake.clone();
+            let cleanup = cleanup.clone();
             // SAFETY: the action performs atomic operations and a nonblocking
             // one-byte write through the cancellation wake, all signal-safe.
+            // A repeat interrupt also marks the shared cleanup flag so a
+            // `finally`, `on exit` or `on interrupt` body aborts at once
+            // instead of running out its cleanup budget.
             let registered = unsafe {
                 signal_hook::low_level::register(signal, move || {
                     record_cancel_signal(signal);
@@ -133,8 +138,16 @@ pub(crate) fn signals(
                             return;
                         }
                         drain.store(DRAIN_CANCELLED, std::sync::atomic::Ordering::SeqCst);
+                        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                        cleanup.store(true, std::sync::atomic::Ordering::Relaxed);
+                        if let Some(wake) = &wake {
+                            wake.notify_signal();
+                        }
+                        return;
                     }
-                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    if flag.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        cleanup.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                     if let Some(wake) = &wake {
                         wake.notify_signal();
                     }
@@ -155,7 +168,7 @@ pub(crate) fn signals(
     #[cfg(windows)]
     {
         let _ = wake;
-        windows::signals(cancel, drain)?;
+        windows::signals(cancel, drain, cleanup)?;
         Ok(Vec::new())
     }
 }

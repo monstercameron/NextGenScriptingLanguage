@@ -1600,7 +1600,12 @@ impl Signals {
             cancel: Arc::new(AtomicBool::new(false)),
             ids: Vec::new(),
         };
-        guard.ids = crate::platform::signals(guard.cancel.clone(), None, None)?;
+        guard.ids = crate::platform::signals(
+            guard.cancel.clone(),
+            None,
+            None,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )?
         Ok(guard)
     }
 }

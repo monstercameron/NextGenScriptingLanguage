@@ -478,6 +478,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     // failed node stays in flight and nothing after it is recorded: the run ends
     // failed, and a resume retries that node and runs the cleanup again.
     let mut journal_suspended = false;
+    // Set once a repeat interrupt during cleanup is recorded, so the diagnostic
+    // names the interruption exactly once however many statements fail fast after it.
+    let mut cleanup_interrupted_reported = false;
     macro_rules! control_context {
         () => {
             ControlContext {
@@ -537,6 +540,32 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
             None
         };
         let signals = cleanup_signals.as_ref().unwrap_or(parent_signals);
+        // A repeat interrupt during cleanup aborts the cleanup at once instead
+        // of running out its budget: the running command is already being
+        // killed through the shared flag, and the remaining statements fail
+        // fast until the cleanup frames unwind.
+        if let Some(cleanup) = &cleanup_signals {
+            if !cleanup_interrupted_reported && cleanup.is_cancelled() {
+                cleanup_interrupted_reported = true;
+                let action = control_state.fail(cleanup_interrupted(), true)?;
+                match apply_control_action(action, control_context!())? {
+                    AppliedControl::Continue => {}
+                    AppliedControl::Jump(target) => {
+                        journal_suspended = true;
+                        index = target;
+                        continue;
+                    }
+                    AppliedControl::Rethrow(error) => {
+                        if let Some(journal) = journal.as_deref_mut() {
+                            if !journal.persistence_failed() {
+                                journal.fail(&format!("{error:#}"), true)?;
+                            }
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+        }
         // An interrupt that requested a drain unwinds from this statement boundary, as
         // `exit` does: finally blocks run, including `on interrupt` and `on exit`.
         // Running steps are not cancelled; the run stops before starting the next one.
@@ -2656,7 +2685,25 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     frame.name, frame.line
                 ))
             });
-            let cancellation = !was_cleanup && parent_signals.cancelled.load(Ordering::Relaxed);
+            // A repeat interrupt that landed mid-statement is reported as a
+            // cleanup interruption, with the pending failure kept as context
+            // below. Other cleanup errors (budgets, timeouts, step failures)
+            // keep their own errors so they still unwind through the frames.
+            let cleanup_cancelled = was_cleanup
+                && cleanup_signals
+                    .as_ref()
+                    .is_some_and(|cleanup| cleanup.is_cancelled())
+                && is_cancellation_error(&error);
+            let (error, cancellation) = if cleanup_cancelled && !cleanup_interrupted_reported {
+                cleanup_interrupted_reported = true;
+                (cleanup_interrupted(), true)
+            } else if cleanup_cancelled {
+                (error, true)
+            } else {
+                let cancellation =
+                    !was_cleanup && parent_signals.cancelled.load(Ordering::Relaxed);
+                (error, cancellation)
+            };
             let action = if let Some(call_depth) = status_capture_depth {
                 control_state.fail_for_call(error, cancellation, call_depth)?
             } else {

@@ -66,11 +66,16 @@ where
 pub(crate) fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
-type Registration = (Weak<AtomicBool>, Option<Weak<std::sync::atomic::AtomicU8>>);
+type Registration = (
+    Weak<AtomicBool>,
+    Option<Weak<std::sync::atomic::AtomicU8>>,
+    Weak<AtomicBool>,
+);
 
 pub(crate) fn signals(
     cancel: Arc<AtomicBool>,
     drain: Option<Arc<std::sync::atomic::AtomicU8>>,
+    cleanup: Arc<AtomicBool>,
 ) -> Result<()> {
     static FLAGS: OnceLock<Mutex<Vec<Registration>>> = OnceLock::new();
     static INSTALLED: OnceLock<std::result::Result<(), String>> = OnceLock::new();
@@ -80,17 +85,30 @@ pub(crate) fn signals(
             super::record_cancel_signal(2);
             if let Some(flags) = FLAGS.get() {
                 let mut flags = flags.lock().unwrap_or_else(|e| e.into_inner());
-                flags.retain(|(cancel, _)| cancel.strong_count() != 0);
-                for (cancel, drain) in flags.iter() {
+                flags.retain(|(cancel, _, _)| cancel.strong_count() != 0);
+                for (cancel, drain, cleanup) in flags.iter() {
                     // A run with an `on interrupt` body drains on its first interrupt.
+                    // A repeat interrupt also marks the shared cleanup flag so a
+                    // `finally`, `on exit` or `on interrupt` body aborts at once.
                     if let Some(drain) = drain.as_ref().and_then(|weak| weak.upgrade()) {
                         if super::request_drain(&drain) {
                             continue;
                         }
                         drain.store(super::DRAIN_CANCELLED, Ordering::SeqCst);
+                        if let Some(flag) = cancel.upgrade() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        if let Some(flag) = cleanup.upgrade() {
+                            flag.store(true, Ordering::Relaxed);
+                        }
+                        continue;
                     }
                     if let Some(flag) = cancel.upgrade() {
-                        flag.store(true, Ordering::Relaxed);
+                        if flag.swap(true, Ordering::Relaxed) {
+                            if let Some(flag) = cleanup.upgrade() {
+                                flag.store(true, Ordering::Relaxed);
+                            }
+                        }
                     }
                 }
             }
@@ -105,8 +123,12 @@ pub(crate) fn signals(
         .unwrap()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    flags.retain(|(cancel, _)| cancel.strong_count() != 0);
-    flags.push((Arc::downgrade(&cancel), drain.as_ref().map(Arc::downgrade)));
+    flags.retain(|(cancel, _, _)| cancel.strong_count() != 0);
+    flags.push((
+        Arc::downgrade(&cancel),
+        drain.as_ref().map(Arc::downgrade),
+        Arc::downgrade(&cleanup),
+    ));
     Ok(())
 }
 

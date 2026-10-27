@@ -223,6 +223,30 @@ fn is_timeout_error(error: &anyhow::Error) -> bool {
             .downcast_ref::<execution_result::ExecutionFailure>()
             .is_some_and(|failure| failure.result.kind == execution_result::ExecutionKind::Timeout)
 }
+
+/// Whether an error already reports an interrupt cancellation. Only these are
+/// rewritten when a repeat interrupt lands during cleanup; timeouts, cleanup
+/// budgets and ordinary step failures keep their own errors so they still
+/// unwind through the cleanup frames.
+fn is_cancellation_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<execution_result::ExecutionFailure>()
+            .is_some_and(|failure| failure.result.kind == execution_result::ExecutionKind::Cancelled)
+    }) || error.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("workflow cancelled")
+            || message.contains("cancelled by handle")
+            || message.contains("cancelled while")
+    })
+}
+
+/// A repeat interrupt landed while cleanup was active: the cleanup stops at
+/// once and its running command is killed. The pending failure stays on the
+/// error chain as context when the control-flow machinery records this.
+fn cleanup_interrupted() -> anyhow::Error {
+    anyhow!("cleanup interrupted")
+}
 fn deadline_after(timeout: Option<Duration>, label: &str) -> Result<Option<Instant>> {
     timeout
         .map(|duration| {
@@ -522,6 +546,11 @@ pub(crate) struct Signals {
     cancelled: Arc<AtomicBool>,
     /// Interrupt drain state (`platform::DRAIN_*`); shared with cleanup scopes.
     drain: Arc<AtomicU8>,
+    /// Set by a repeat interrupt (or an expired interrupt drain) while cleanup
+    /// may be active. Cleanup scopes share this flag instead of minting a fresh
+    /// one, so a second Ctrl-C aborts the cleanup at once and kills its running
+    /// command. The first interrupt never sets it, so cleanup still runs.
+    cleanup_cancel: Arc<AtomicBool>,
     /// Stops this run's drain watchdog when the run's signals are dropped.
     drain_stop: Option<Arc<AtomicBool>>,
     registrations: Vec<signal_hook::SigId>,
@@ -660,9 +689,11 @@ impl Signals {
     }
 
     fn register(deadline: Option<Instant>, drain: Option<Duration>) -> Result<Self> {
+        let cleanup_cancel = Arc::new(AtomicBool::new(false));
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+            cleanup_cancel: Arc::clone(&cleanup_cancel),
             drain_stop: None,
             registrations: Vec::with_capacity(3),
             capture_diagnostics: false,
@@ -697,6 +728,7 @@ impl Signals {
                 spawn_drain_watchdog(
                     Arc::clone(&guard.drain),
                     Arc::clone(&guard.cancelled),
+                    Arc::clone(&guard.cleanup_cancel),
                     budget,
                     Arc::clone(&stop),
                     Some(Arc::clone(&signal_wake)),
@@ -707,8 +739,12 @@ impl Signals {
             None => None,
         };
         guard.cancel_wakes.push(Arc::clone(&signal_wake));
-        guard.registrations =
-            crate::platform::signals(guard.cancelled.clone(), armed, Some(signal_wake))?;
+        guard.registrations = crate::platform::signals(
+            guard.cancelled.clone(),
+            armed,
+            Some(signal_wake),
+            Arc::clone(&guard.cleanup_cancel),
+        )?;
         Ok(guard)
     }
 
@@ -721,8 +757,12 @@ impl Signals {
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
         let signal_wake = Arc::new(crate::tasks::CancellationWake::new()?);
         guard.cancel_wakes.push(Arc::clone(&signal_wake));
-        guard.registrations =
-            crate::platform::signals(guard.cancelled.clone(), None, Some(signal_wake))?;
+        guard.registrations = crate::platform::signals(
+            guard.cancelled.clone(),
+            None,
+            Some(signal_wake),
+            Arc::clone(&guard.cleanup_cancel),
+        )?;
         Ok(guard)
     }
 
@@ -739,6 +779,7 @@ impl Signals {
         Ok(Self {
             cancelled,
             drain: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
+            cleanup_cancel: Arc::new(AtomicBool::new(false)),
             drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics,
@@ -768,13 +809,15 @@ impl Signals {
         })
     }
 
-    /// Fork the execution context for bounded finally cleanup. Cleanup gets
-    /// fresh cancellation and deadline state while retaining its enclosing
+    /// Fork the execution context for bounded finally cleanup. Cleanup keeps
+    /// the shared second-interrupt flag and wakes so a repeat interrupt aborts
+    /// it at once, with a fresh deadline, while retaining its enclosing
     /// module, worker, provenance, accounting, observation, and job-run scope.
     fn cleanup_scope(&self, deadline: Option<Instant>) -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::clone(&self.cleanup_cancel),
             drain: Arc::clone(&self.drain),
+            cleanup_cancel: Arc::clone(&self.cleanup_cancel),
             drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
@@ -787,8 +830,8 @@ impl Signals {
             process_observer: Arc::clone(&self.process_observer),
             worker_pool: self.worker_pool.clone(),
             outer_cancelled: Vec::new(),
-            cancel_wakes: Vec::new(),
-            unnotified_cancellation: true,
+            cancel_wakes: self.cancel_wakes.clone(),
+            unnotified_cancellation: self.unnotified_cancellation,
             job_cancelled: None,
             job_launch_ack: None,
             job_output_budget: None,
@@ -816,6 +859,7 @@ impl Signals {
         Some(Self {
             cancelled: Arc::clone(&self.cancelled),
             drain: Arc::clone(&self.drain),
+            cleanup_cancel: Arc::clone(&self.cleanup_cancel),
             drain_stop: None,
             registrations: Vec::new(),
             capture_diagnostics: self.capture_diagnostics,
@@ -1253,11 +1297,12 @@ impl DrainClock {
 }
 
 /// Polls a run's drain state and turns an expired drain into a cancel: the same
-/// state change and flag a second interrupt makes. It exits once the run cancels
+/// state change and flags a second interrupt makes. It exits once the run cancels
 /// or its signals are dropped.
 fn spawn_drain_watchdog(
     drain: Arc<AtomicU8>,
     cancelled: Arc<AtomicBool>,
+    cleanup_cancel: Arc<AtomicBool>,
     budget: Duration,
     stop: Arc<AtomicBool>,
     wake: Option<Arc<crate::tasks::CancellationWake>>,
@@ -1274,6 +1319,7 @@ fn spawn_drain_watchdog(
                 if clock.expired(state, Instant::now()) {
                     drain.store(crate::platform::DRAIN_CANCELLED, Ordering::SeqCst);
                     cancelled.store(true, Ordering::SeqCst);
+                    cleanup_cancel.store(true, Ordering::SeqCst);
                     if let Some(wake) = &wake {
                         wake.notify();
                     }
@@ -6083,6 +6129,7 @@ mod drain_tests {
         spawn_drain_watchdog(
             Arc::clone(&drain),
             Arc::clone(&cancelled),
+            Arc::new(AtomicBool::new(false)),
             Duration::from_millis(50),
             Arc::clone(&stop),
             None,
@@ -6111,6 +6158,7 @@ mod drain_tests {
         spawn_drain_watchdog(
             Arc::clone(&drain),
             Arc::clone(&cancelled),
+            Arc::new(AtomicBool::new(false)),
             Duration::from_millis(10),
             Arc::clone(&stop),
             None,

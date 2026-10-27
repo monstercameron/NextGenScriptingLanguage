@@ -226,9 +226,8 @@ fn fcntl_and_eagain_oracle_fires_on_nonblocking_pipe() {
         0,
         "test pipe unexpectedly starts nonblocking"
     );
-    // SAFETY: `writer` is the live write end above; F_SETFL only changes its
-    // status flags, and the read end stays open in this test.
     let set_flags =
+        // SAFETY: writer is live, F_SETFL changes its flags, and the read end stays open.
         unsafe { libc::fcntl(writer.as_raw_fd(), libc::F_SETFL, before | libc::O_NONBLOCK) };
     assert_eq!(set_flags, 0, "F_SETFL failed on a test pipe");
     // SAFETY: `writer` is still open; F_GETFL only reads its status flags.

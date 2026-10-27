@@ -377,10 +377,8 @@ fn write_framed_raw(
         let next = remaining.min(frame.len());
         let mut offset = 0;
         while offset < next {
-            // SAFETY: `offset < next <= frame.len()` and `fd` is an open
-            // writer owned by this process (stdout or the inherited stderr).
-            // The call changes no status flags.
             let count =
+                // SAFETY: the slice is in bounds and fd is an open writer; flags are unchanged.
                 unsafe { libc::write(fd, frame[offset..next].as_ptr().cast(), next - offset) };
             if count > 0 {
                 offset += count as usize;

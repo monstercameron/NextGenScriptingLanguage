@@ -1946,11 +1946,10 @@ mod tests {
         let messages = decode_frames(&output);
         let published = messages
             .iter()
-            .filter(|message| {
+            .rfind(|message| {
                 message["method"] == "textDocument/publishDiagnostics"
                     && message["params"]["uri"] == caller_uri
             })
-            .last()
             .unwrap();
         let diagnostics = published["params"]["diagnostics"].as_array().unwrap();
         assert_eq!(

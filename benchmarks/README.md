@@ -31,18 +31,25 @@ pipeline equivalent for its dash arm. The tests/test_bash_compare.py contract te
 the inventory, grouping and shell oracles.
 
 The bash-compare.yml workflow runs the contract test and then compares all configured
-release/profile variants on ubuntu-24.04 and ubuntu-24.04-arm. The report includes
-scenario group, medians with bootstrap 95% confidence intervals, peak RSS when GNU
-time is available, median instruction counts when a Linux counter works (perf
-`instructions:u`, or experimental cachegrind `I refs` via `--instructions-backend
-cachegrind`), the producing backend plus counter diagnostics, and
-binary sizes. `tools/check_instruction_regression.py` defines a +2% gate for the
-CPU-bound rows, run fail-closed with `--fail-closed --require-provenance` only when a
-verified per-OS/variant baseline is present; no such baseline is checked in, so the
-real gate is explicitly incomplete. Baselines are backend-specific (perf and
-cachegrind counts are different units; the gate rejects mixed-backend comparisons).
-CI additionally runs a canary on each fresh report proving the wired gate fails a
-synthetic +3% regression; the canary is wiring proof, not a regression gate. Defaults
+release/profile variants on ubuntu-24.04 and ubuntu-24.04-arm. The wall-time
+comparison runs counter-free (`--instructions-backend none`) so counting never
+perturbs its medians or spends its budget; the report includes scenario group,
+medians with bootstrap 95% confidence intervals, peak RSS when GNU time is
+available, and binary sizes. A separate gate pair then measures the eight gated
+CPU-bound scenarios twice back-to-back on the same runner, pinned to cachegrind
+(`I refs` via valgrind, which needs no PMU), and each focused report prints its
+own table with real per-scenario instruction counts, the producing backend,
+counter diagnostics, and coverage. `tools/check_instruction_regression.py`
+defines the +2% gate for the CPU-bound rows: CI runs it fail-closed with
+`--fail-closed --require-provenance` on the two same-runner reports (revisions
+suffixed run-a/run-b), then runs a canary requiring the wired gate to fail a
+synthetic +3% regression on the measured report. An inconclusive canary or an
+incomplete pair fails the job; there is no incomplete-green. Baselines are
+backend-specific (perf and cachegrind counts are different units; the gate
+rejects any backend mismatch, including a missing backend against a recorded
+one). No cross-commit stored baseline exists yet, so the gate proves stability
+within one runner plus a live +3% tripwire rather than catching regressions
+across commits. Defaults
 are two warmups and twenty samples, with fewer samples for the larger workloads. A
 285-second end-to-end budget (300-second maximum) bounds each run. Scenarios that write
 files or checkpoint state reset their temporary outputs between invocations. Each report

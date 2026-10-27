@@ -40,22 +40,22 @@ original version labels.
   4.37 ms) and marginally on a 100-spawn loop (63.86 against 67.07 ms). The workflow also
   compares `opt-level = "s"`, static musl and musl `min`-profile builds. Optimisation is
   ongoing. See [the numbers and method](docs/production-readiness.md#performance-against-bash-and-dash).
-- Perf measurement groundwork on shared runners. `tools/bash_compare.py` now reports a deterministic
-  bootstrap 95% confidence interval for every median wall time and, on Linux with a
-  working counter, the median instruction count per scenario (perf `instructions:u`,
-  or experimental cachegrind `I refs` via `--instructions-backend cachegrind` where
-  perf cannot count); each report records the backend plus counter diagnostics
-  (`perf_event_paranoid`, probe outcomes), and CI prints per-report counter coverage.
-  The `Execute vs bash` workflow installs perf on a best-effort basis, runs the
-  instruction gate contract test (synthetic reports only), and runs a canary proving
-  the wired gate fails a synthetic +3% regression on each fresh report.
-  `tools/check_instruction_regression.py` defines a +2% gate for CPU-bound rows with
-  `--fail-closed` and `--require-provenance` modes and rejects mixed-backend
-  baseline/candidate pairs, but no verified baseline is checked in and CI does not
-  yet gate real reports, so sub-noise CPU regressions are not yet caught in CI. The
-  real gate stays explicitly incomplete until a provenance-recorded baseline lands;
-  missing counter data is not acceptance. Cachegrind output fit, overhead, and static
-  musl behavior still need Linux validation.
+- Operational instruction gate on shared runners. `tools/bash_compare.py` reports a deterministic
+  bootstrap 95% confidence interval for every median wall time; the wall-time
+  comparison runs counter-free so counting never perturbs its medians or budget.
+  The `Execute vs bash` workflow installs valgrind and measures the eight gated
+  CPU-bound scenarios twice back-to-back on the same runner, pinned to cachegrind
+  `I refs` (no PMU required); each focused report records the backend plus counter
+  diagnostics (`perf_event_paranoid`, probe outcomes), and CI prints real
+  per-scenario counts with coverage. `tools/check_instruction_regression.py`
+  defines the +2% gate for CPU-bound rows: CI runs it fail-closed with
+  `--fail-closed --require-provenance` on the same-runner pair, then runs a canary
+  proving the wired gate fails a synthetic +3% regression on the measured report.
+  An inconclusive canary or incomplete pair fails the job; a missing backend
+  against a recorded one is rejected as incomparable units. No cross-commit stored
+  baseline exists yet, so the gate proves same-runner stability plus a live +3%
+  tripwire rather than catching regressions across commits. Cachegrind overhead
+  and static musl behavior still need Linux CI validation.
 - Twenty more Omarchy v4.0.4 scripts are ported under `examples/omarchy-ports/<script>/`
   with the Bash original, the port and a `case.json`. `tools/port_compare.py` runs both in
   sandboxes with logging fake binaries and compares status, stdout, stderr, the

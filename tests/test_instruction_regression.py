@@ -392,13 +392,36 @@ class InstructionGateTests(unittest.TestCase):
         _, failures, _ = gate.evaluate(baseline, candidate)
         self.assertEqual(failures, [])
 
-    def test_missing_backend_stays_comparable_with_new_reports(self):
+    def test_missing_backend_is_rejected_as_unknown_units(self):
         baseline = full_report("base", {"builtin_loop": 1_000_000}, ("builtin_loop",))
         candidate = report("head", {"builtin_loop": 1_010_000},
                            keys=("builtin_loop",),
                            extra={"instructions_backend": "perf"})
-        _, failures, _ = gate.evaluate(baseline, candidate)
+        with self.assertRaisesRegex(ValueError, "instructions_backend"):
+            gate.evaluate(baseline, candidate)
+
+    def test_explicit_none_backend_rejected_against_a_counting_backend(self):
+        baseline = report("base", {"builtin_loop": 1_000_000},
+                          keys=("builtin_loop",),
+                          extra={"instructions_backend": None})
+        candidate = report("head", {"builtin_loop": 1_010_000},
+                           keys=("builtin_loop",),
+                           extra={"instructions_backend": "cachegrind"})
+        with self.assertRaisesRegex(ValueError, "instructions_backend"):
+            gate.evaluate(baseline, candidate)
+
+    def test_matching_none_backends_without_data_stay_comparable(self):
+        baseline = report("base", {"builtin_loop": None},
+                          keys=("builtin_loop",),
+                          extra={"instructions_backend": None})
+        candidate = report("head", {"builtin_loop": None},
+                           keys=("builtin_loop",),
+                           extra={"instructions_backend": None})
+        _, failures, skipped = gate.evaluate(baseline, candidate)
         self.assertEqual(failures, [])
+        self.assertEqual(skipped, ["builtin_loop"])
+        _, failures, _ = gate.evaluate(baseline, candidate, fail_closed=True)
+        self.assertEqual(failures, ["builtin_loop"])
 
     def test_require_provenance_needs_recorded_hashes(self):
         provenance = {"execute_sha256": "exe", "runner_sha256": "runner", "instruction_repeats": 3}
@@ -534,6 +557,89 @@ class CanaryTests(unittest.TestCase):
 
     def test_canary_reports_a_missing_report_as_incomplete(self):
         self.assertEqual(gate.main(["--canary", "/nonexistent/candidate.json"]), 2)
+
+    def test_canary_baseline_keeps_backend_and_provenance(self):
+        candidate = full_report(
+            "head", {"builtin_loop": 1_030_000}, ("builtin_loop",))
+        candidate["metadata"].update({
+            "instructions_backend": "cachegrind",
+            "execute_sha256": "exe",
+            "runner_sha256": "runner",
+            "instruction_repeats": 2,
+        })
+        baseline, expected = gate.synthesize_canary_baseline(candidate, 3.0)
+        self.assertEqual(expected, ["builtin_loop"])
+        for field in ("instructions_backend", "execute_sha256",
+                      "runner_sha256", "instruction_repeats"):
+            self.assertEqual(baseline["metadata"][field],
+                             candidate["metadata"][field])
+        _, failures, _ = gate.evaluate(baseline, candidate)
+        self.assertEqual(failures, ["builtin_loop"])
+
+    def test_canary_flags_failures_outside_the_synthetic_set(self):
+        candidate = full_report(
+            "head", {"builtin_loop": 1_030_000, "spawn_loop": 2_000_000},
+            ("builtin_loop", "spawn_loop"),
+        )
+        with patch.object(gate, "evaluate",
+                          return_value=([], ["builtin_loop", "spawn_loop"], [])):
+            code, detail = gate.run_canary(candidate, 3.0)
+        self.assertEqual(code, 1)
+        self.assertIn("spawn_loop", detail)
+
+
+class SameRunnerPairTests(unittest.TestCase):
+    """The CI gate pair: two focused runs of one binary on one runner."""
+
+    GATED_KEYS = ("builtin_loop", "text_upper", "json_get", "csv_parse",
+                  "read_10k_lines", "suffix_strip", "here_string",
+                  "text_substitution")
+    COUNTS = {"builtin_loop": 1_000_000, "text_upper": 500_000,
+              "json_get": 750_000, "csv_parse": 620_000,
+              "read_10k_lines": 410_000, "suffix_strip": 90_000,
+              "here_string": 95_000, "text_substitution": 88_000}
+
+    def focused_pair(self, scale=1.0):
+        provenance = {"execute_sha256": "exe", "runner_sha256": "runner",
+                      "instructions_backend": "cachegrind",
+                      "instruction_repeats": 2}
+        before = report("abc123-run-a",
+                        {key: self.COUNTS[key] for key in self.GATED_KEYS},
+                        keys=self.GATED_KEYS, extra=dict(provenance))
+        after = report("abc123-run-b",
+                       {key: self.COUNTS[key] * scale for key in self.GATED_KEYS},
+                       keys=self.GATED_KEYS, extra=dict(provenance))
+        return before, after
+
+    def test_stable_pair_passes_fail_closed_with_provenance(self):
+        before, after = self.focused_pair()
+        comparisons, failures, skipped = gate.evaluate(
+            before, after, fail_closed=True, require_provenance=True)
+        self.assertEqual(failures, [])
+        self.assertEqual(skipped, [])
+        self.assertEqual(len(comparisons), len(self.GATED_KEYS))
+        self.assertTrue(all(gated for _, _, _, _, gated in comparisons))
+
+    def test_three_percent_pair_fails_on_every_gated_row(self):
+        before, after = self.focused_pair(scale=1.03)
+        _, failures, _ = gate.evaluate(
+            before, after, fail_closed=True, require_provenance=True)
+        self.assertEqual(sorted(failures), sorted(self.GATED_KEYS))
+
+    def test_pair_needs_distinct_revisions(self):
+        before, _ = self.focused_pair()
+        twin = report("abc123-run-a",
+                      {key: self.COUNTS[key] for key in self.GATED_KEYS},
+                      keys=self.GATED_KEYS,
+                      extra={"instructions_backend": "cachegrind"})
+        with self.assertRaisesRegex(ValueError, "distinct source revisions"):
+            gate.evaluate(before, twin)
+
+    def test_pair_rejects_a_flapped_backend(self):
+        before, after = self.focused_pair()
+        after["metadata"]["instructions_backend"] = "perf"
+        with self.assertRaisesRegex(ValueError, "instructions_backend"):
+            gate.evaluate(before, after, fail_closed=True)
 
 
 if __name__ == "__main__":

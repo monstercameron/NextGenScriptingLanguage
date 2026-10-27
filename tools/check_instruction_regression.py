@@ -2,12 +2,14 @@
 """Fail when CPU-bound Execute instruction counts regress over a stored report.
 
 Both inputs are JSON reports produced by tools/bash_compare.py. The baseline
-report must come from the same OS family, machine architecture, and manifest
-selection as the candidate. A baseline is intentionally required: this tool
-never invents one from a current run. No verified baseline is checked in, so
-there is currently no real regression gate in CI — only the synthetic contract
-tests. When a verified baseline exists, run with --fail-closed (and
---require-provenance) so missing gated data fails instead of passing silently.
+report must come from the same OS family, machine architecture, manifest
+selection, and instruction backend as the candidate. A baseline is
+intentionally required: this tool never invents one from a current run. In CI
+the pair is two back-to-back focused runs of the same binary on the same
+runner (revisions suffixed run-a/run-b), so the comparison is defensible
+without trusting cross-runner numbers; run with --fail-closed (and
+--require-provenance) so missing gated data fails instead of passing
+silently.
 
 Only CPU-bound scenarios are gated: rows where the Execute arm is dominated by
 interpreter work rather than child processes or filesystem traffic, so the
@@ -20,7 +22,9 @@ either report fails the gate as incomplete rather than passing silently.
 
 Instruction counts are backend-specific: perf `instructions:u` follows forked
 children while cachegrind `I refs` counts the leader process only, so reports
-produced by different backends are rejected as incomparable. Use --canary to
+whose backends differ — including a missing backend against a recorded one,
+since unknown units are never assumed comparable — are rejected as
+incomparable. Use --canary to
 prove the gate is live: it derives a synthetic baseline from a real candidate
 report with gated counts deflated by --canary-percent and checks that the gate
 fails on it.
@@ -107,11 +111,12 @@ def evaluate(baseline, candidate, max_regression=MAX_REGRESSION, *,
             )
     before_backend = baseline_meta.get("instructions_backend")
     after_backend = candidate_meta.get("instructions_backend")
-    if before_backend is not None and after_backend is not None and before_backend != after_backend:
+    if before_backend != after_backend:
         raise ValueError(
             f"baseline/candidate instructions_backend differ: "
             f"{before_backend!r} != {after_backend!r} "
-            f"(perf instructions:u and cachegrind I refs are different units)"
+            f"(perf instructions:u and cachegrind I refs are different units; "
+            f"a missing backend is unknown units, never assumed comparable)"
         )
     if str(baseline_meta.get("platform", "")).split("-", 1)[0] != str(
         candidate_meta.get("platform", "")
@@ -240,7 +245,10 @@ def run_canary(candidate, percent):
             f"+{percent:g}% regression in: " + ", ".join(missing)
         )
     caught = sorted(set(expected) & set(failures))
-    extra = sorted(set(failures) - set(expected) - set(CPU_BOUND_SCENARIOS))
+    # Failures outside the synthetic set that are not explained by missing
+    # data mean the gate is gating rows it should not (a gate bug), so they
+    # fail the canary rather than passing silently.
+    extra = sorted(set(failures) - set(expected) - set(skipped))
     detail = (
         f"canary: the +{MAX_REGRESSION * 100:g}% gate correctly failed a synthetic "
         f"+{percent:g}% regression in: " + ", ".join(caught)

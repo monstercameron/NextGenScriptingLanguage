@@ -38,7 +38,7 @@ fn cases() -> [(&'static str, &'static str); 6] {
         ),
         (
             "fs.transaction",
-            "run fs.transaction with journal \"journal\" and operations []",
+            "run fs.transaction with journal \"journal\" and operations [{\"action\":\"remove\",\"path\":\"absent\",\"expected_content_hash\":\"missing\"}]",
         ),
         (
             "fs.transaction.recover",

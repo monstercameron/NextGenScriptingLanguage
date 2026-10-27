@@ -243,6 +243,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     // separately from pipeline bytes, which remain available to later consumers.
     const STDOUT_ELIGIBILITY: &str = "@execute/program-stdout";
     let mut program_stdout = true;
+    let mut last_program_stdout_line = None;
     // The step index of a declared retry in progress, and its failed attempts so far.
     let mut retry_failures: Option<(usize, u32)> = None;
     let mut index = 0;
@@ -1963,6 +1964,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         if execution.is_ok() {
             if let Some(eligible) = program.steps[index].kind.program_stdout() {
                 program_stdout = eligible;
+                last_program_stdout_line = Some(program.steps[index].line);
             }
         }
         // A declared retry runs the command again from its first marker. The journal
@@ -2137,19 +2139,22 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         signals,
         options.command_timeout,
     )?;
-    result.binding_types = bindings.iter().map(|(name, value)| {
-        let kind = match value {
-            Value::String(_) => "string",
-            Value::Integer(_) => "integer",
-            Value::Bool(_) => "boolean",
-            Value::List(_) => "list",
-            Value::Record(_) => "record",
-            Value::Null => "null",
-            Value::Number(_) => "number",
-            Value::Reference(_) => "reference",
-        };
-        (name.clone(), kind)
-    }).collect();
+    result.binding_types = bindings
+        .iter()
+        .map(|(name, value)| {
+            let kind = match value {
+                Value::String(_) => "string",
+                Value::Integer(_) => "integer",
+                Value::Bool(_) => "boolean",
+                Value::List(_) => "list",
+                Value::Record(_) => "record",
+                Value::Null => "null",
+                Value::Number(_) => "number",
+                Value::Reference(_) => "reference",
+            };
+            (name.clone(), kind)
+        })
+        .collect();
     #[cfg(feature = "live")]
     if let Some(state) = state_out {
         *state = live::NodeState {
@@ -2160,6 +2165,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     }
     if !program_stdout {
         result.output.clear();
+    } else {
+        observe::note_program_output(&result.output, last_program_stdout_line);
     }
     result.executions = execution_history.executions;
     result.dropped_executions = execution_history.dropped_executions;

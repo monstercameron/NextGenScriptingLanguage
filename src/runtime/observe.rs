@@ -59,8 +59,18 @@ pub trait Observer: Send + Sync {
         true
     }
 
+    /// Whether streamed output should be written to the process stdout. An
+    /// observer may instead capture it for a framed protocol response.
+    fn writes_streamed_stdout(&self) -> bool {
+        true
+    }
+
     /// Bytes the run wrote to the terminal as streamed output, in order.
     fn terminal_output(&self, _bytes: &[u8]) {}
+
+    /// The final implicit program output and the line whose executed statement
+    /// made it eligible. Replayers can associate it with the current block.
+    fn program_output(&self, _bytes: &[u8], _line: Option<usize>) {}
 
     /// Whether streamed output of this line is withheld from the terminal, because
     /// an earlier run already showed it.
@@ -79,6 +89,18 @@ pub(super) fn note_terminal_output(bytes: &[u8]) {
     if let Some(observer) = current() {
         observer.terminal_output(bytes);
     }
+}
+
+/// Report the final implicit program output to an active observer.
+pub(super) fn note_program_output(bytes: &[u8], line: Option<usize>) {
+    if let Some(observer) = current() {
+        observer.program_output(bytes, line);
+    }
+}
+
+/// Whether streamed output should reach the process stdout.
+pub(super) fn writes_streamed_stdout() -> bool {
+    current().is_none_or(|observer| observer.writes_streamed_stdout())
 }
 
 static OBSERVER: Mutex<Option<Arc<dyn Observer>>> = Mutex::new(None);

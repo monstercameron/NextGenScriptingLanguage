@@ -18,20 +18,36 @@ fn json_repl_returns_one_response_per_request_and_reports_block_spans() {
         .args(["repl", "--json", "--manifest-dir"])
         .arg(manifests)
         .current_dir(directory.path())
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .spawn().unwrap();
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     let mut input = child.stdin.take().unwrap();
-    writeln!(input, "{{\"submit\":\"run ok.helper as value and keep status as exit_code\"}}").unwrap();
+    writeln!(
+        input,
+        "{{\"submit\":\"run ok.helper as value and keep status as exit_code\"}}"
+    )
+    .unwrap();
     writeln!(input, "{{\"submit\":\"run missing.helper\"}}").unwrap();
     writeln!(input, "{{\"submit\":\"use value \\\"from-use-value\\\"\"}}").unwrap();
     writeln!(input, "{{\"submit\":\"read file \\\"notes.txt\\\"\"}}").unwrap();
+    writeln!(input, "{{\"submit\":\"run ok.helper as discard\"}}").unwrap();
+    writeln!(input, "{{\"submit\":\"\"}}").unwrap();
     writeln!(input, "{{\"source\":true}}").unwrap();
     drop(input);
     let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let responses = String::from_utf8(output.stdout).unwrap().lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect::<Vec<_>>();
-    assert_eq!(responses.len(), 5);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 7);
     assert_eq!(responses[0]["status"], "ran", "{responses:?}");
     assert_eq!(responses[0]["bindings"]["value"]["type"], "string");
     assert_eq!(responses[0]["bindings"]["exit_code"]["type"], "integer");
@@ -39,7 +55,42 @@ fn json_repl_returns_one_response_per_request_and_reports_block_spans() {
     assert!(responses[1]["diagnostics"][0]["span"]["block"].is_object());
     assert_eq!(responses[2]["stdout"], "from-use-value");
     assert_eq!(responses[3]["stdout"], "from-read");
-    assert_eq!(responses[4]["source"], "run ok.helper as value and keep status as exit_code\nuse value \"from-use-value\"\nread file \"notes.txt\"\n");
+    assert_eq!(responses[4]["stdout"], "", "{responses:?}");
+    assert_eq!(responses[5]["stdout"], "", "{responses:?}");
+    assert_eq!(responses[6]["source"], "run ok.helper as value and keep status as exit_code\nuse value \"from-use-value\"\nread file \"notes.txt\"\nrun ok.helper as discard\n");
+}
+
+#[test]
+fn json_repl_captures_each_fresh_streamed_command_without_leaking_to_process_stdout() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = directory.path().join("manifests");
+    std::fs::create_dir(&manifests).unwrap();
+    write_version_manifest(&manifests);
+    let version = Command::new(env!("CARGO_BIN_EXE_execute-model"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(version.status.success());
+    let version = String::from_utf8(version.stdout).unwrap();
+    let mut child = repl_child(directory.path(), &manifests, false);
+    let mut input = child.stdin.take().unwrap();
+    writeln!(input, "{{\"submit\":\"run ok.helper\"}}").unwrap();
+    writeln!(input, "{{\"submit\":\"run ok.helper\\nrun ok.helper\"}}").unwrap();
+    writeln!(input, "{{\"submit\":\"run ok.helper as discard\"}}").unwrap();
+    writeln!(input, "{{\"submit\":\"\"}}").unwrap();
+    drop(input);
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses = parse_lines(&output.stdout);
+    assert_eq!(responses.len(), 4);
+    assert_eq!(responses[0]["stdout"], version);
+    assert_eq!(responses[1]["stdout"], format!("{version}{version}"));
+    assert_eq!(responses[2]["stdout"], "", "{responses:?}");
+    assert_eq!(responses[3]["stdout"], "", "{responses:?}");
 }
 
 #[test]
@@ -48,9 +99,15 @@ fn what_if_returns_a_plan_without_running_the_block() {
     let manifests = directory.path().join("manifests");
     std::fs::create_dir(&manifests).unwrap();
     let (binary, arguments) = if cfg!(windows) {
-        ("cmd", vec!["/c".to_owned(), "type nul > marker.txt".to_owned()])
+        (
+            "cmd",
+            vec!["/c".to_owned(), "type nul > marker.txt".to_owned()],
+        )
     } else {
-        ("/bin/sh", vec!["-c".to_owned(), "touch marker.txt".to_owned()])
+        (
+            "/bin/sh",
+            vec!["-c".to_owned(), "touch marker.txt".to_owned()],
+        )
     };
     let manifest = serde_json::json!({
         "name":"side.effect", "binary":binary,
@@ -59,13 +116,27 @@ fn what_if_returns_a_plan_without_running_the_block() {
     std::fs::write(manifests.join("side.effect.json"), manifest.to_string()).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["repl", "--json", "--what-if", "--manifest-dir"])
-        .arg(manifests).current_dir(directory.path())
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .spawn().map(|mut child| {
-            child.stdin.take().unwrap().write_all(b"{\"submit\":\"run side.effect\"}\n{\"source\":true}\n").unwrap();
+        .arg(manifests)
+        .current_dir(directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"{\"submit\":\"run side.effect\"}\n{\"source\":true}\n")
+                .unwrap();
             child.wait_with_output().unwrap()
-        }).unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        })
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let responses = parse_lines(&output.stdout);
     let response = &responses[0];
     assert_eq!(response["status"], "planned");
@@ -94,10 +165,16 @@ fn five_step_session_repairs_rejection_saves_checks_and_matches_output() {
         r#"{"submit":"run ok.helper as fifth"}"#,
         r#"{"save":"saved.program"}"#,
     ];
-    for request in requests { writeln!(input, "{request}").unwrap(); }
+    for request in requests {
+        writeln!(input, "{request}").unwrap();
+    }
     drop(input);
     let repl_output = child.wait_with_output().unwrap();
-    assert!(repl_output.status.success(), "{}", String::from_utf8_lossy(&repl_output.stderr));
+    assert!(
+        repl_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repl_output.stderr)
+    );
     let responses = parse_lines(&repl_output.stdout);
     assert_eq!(responses.len(), 7);
     assert_eq!(responses[0]["status"], "ran", "{responses:?}");
@@ -111,14 +188,29 @@ fn five_step_session_repairs_rejection_saves_checks_and_matches_output() {
     assert_eq!(source.lines().count(), 5);
     let check = Command::new(env!("CARGO_BIN_EXE_execute"))
         .args(["check", saved.to_str().unwrap(), "--manifest-dir"])
-        .arg(&manifests).current_dir(directory.path())
-        .output().unwrap();
-    assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
+        .arg(&manifests)
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
     let run = Command::new(env!("CARGO_BIN_EXE_execute"))
-        .args([saved.to_str().unwrap(), "--manifest-dir"]).arg(&manifests)
-        .current_dir(directory.path()).output().unwrap();
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
-    let session_output = responses.iter().filter_map(|response| response["stdout"].as_str())
+        .args([saved.to_str().unwrap(), "--manifest-dir"])
+        .arg(&manifests)
+        .current_dir(directory.path())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let session_output = responses
+        .iter()
+        .filter_map(|response| response["stdout"].as_str())
         .collect::<String>();
     assert_eq!(String::from_utf8(run.stdout).unwrap(), session_output);
 }
@@ -130,9 +222,15 @@ fn all_json_commands_work_and_declared_secrets_are_redacted() {
     std::fs::create_dir(&manifests).unwrap();
     let secret = "repl-protocol-secret-value-that-is-well-over-sixty-characters-and-would-leak-with-a-prefix";
     let (binary, arguments) = if cfg!(windows) {
-        ("cmd", serde_json::json!([{"literal":"/c"},{"literal":"echo %REPL_SECRET%"}]))
+        (
+            "cmd",
+            serde_json::json!([{"literal":"/c"},{"literal":"echo %REPL_SECRET%"}]),
+        )
     } else {
-        ("/bin/sh", serde_json::json!([{"literal":"-c"},{"literal":r#"printf %s "$REPL_SECRET""#}]))
+        (
+            "/bin/sh",
+            serde_json::json!([{"literal":"-c"},{"literal":r#"printf %s "$REPL_SECRET""#}]),
+        )
     };
     let manifest = serde_json::json!({
         "name":"secret.echo", "binary":binary, "arguments":arguments,
@@ -140,16 +238,31 @@ fn all_json_commands_work_and_declared_secrets_are_redacted() {
     });
     std::fs::write(manifests.join("secret.echo.json"), manifest.to_string()).unwrap();
     let policy = directory.path().join("policy.json");
-    std::fs::write(&policy, r#"{"version":1,"secrets":{"environment":{"secret.echo":["REPL_SECRET"]}}}"#).unwrap();
-    #[cfg(unix)] {
+    std::fs::write(
+        &policy,
+        r#"{"version":1,"secrets":{"environment":{"secret.echo":["REPL_SECRET"]}}}"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&policy, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
     let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
-        .args(["repl", "--json", "--manifest-dir"]).arg(&manifests)
-        .args(["--data-flow-policy"]).arg(&policy)
-        .current_dir(directory.path()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        .args(["repl", "--json", "--manifest-dir"])
+        .arg(&manifests)
+        .args(["--data-flow-policy"])
+        .arg(&policy)
+        .current_dir(directory.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     let mut input = child.stdin.take().unwrap();
+    let secret_source = serde_json::json!({"submit":format!("use value \"{secret}\"")}).to_string();
+    let secret_path = serde_json::json!({"save":secret}).to_string();
+    let no_op = serde_json::json!({"submit":"run secret.echo as discard"}).to_string();
     for request in [
         r#"{"submit":"run secret.echo as secret_value"}"#,
         r#"{"explain":true}"#,
@@ -159,12 +272,25 @@ fn all_json_commands_work_and_declared_secrets_are_redacted() {
         r#"{"source":true}"#,
         r#"{"submit":"run secret.echo as secret_value"}"#,
         r#"{"save":"secret.program"}"#,
-    ] { writeln!(input, "{request}").unwrap(); }
+        &secret_source,
+        r#"{"source":true}"#,
+        &secret_path,
+        &secret_path,
+        &no_op,
+        r#"{"undo":1}"#,
+        r#"{"source":true}"#,
+    ] {
+        writeln!(input, "{request}").unwrap();
+    }
     drop(input);
     let output = child.wait_with_output().unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let responses = parse_lines(&output.stdout);
-    assert_eq!(responses.len(), 8);
+    assert_eq!(responses.len(), 15);
     assert_eq!(responses[0]["status"], "ran", "{responses:?}");
     // A typed binding consumes applet stdout; it is exposed only as a redacted
     // binding preview, not as terminal stdout.
@@ -173,13 +299,38 @@ fn all_json_commands_work_and_declared_secrets_are_redacted() {
     assert_eq!(responses[0]["bindings"]["secret_value"]["type"], "string");
     assert_eq!(responses[1]["status"], "ok");
     assert_eq!(responses[2]["status"], "ok");
-    assert_eq!(responses[2]["bindings"]["secret_value"]["preview"], "\"[REDACTED]\"");
+    assert_eq!(
+        responses[2]["bindings"]["secret_value"]["preview"],
+        "\"[REDACTED]\""
+    );
     assert_eq!(responses[3]["source"], "run secret.echo as secret_value\n");
     assert_eq!(responses[4]["status"], "undone");
     assert_eq!(responses[5]["source"], "");
     assert_eq!(responses[7]["status"], "saved");
+    assert_eq!(responses[8]["stdout"], "[REDACTED]");
+    assert!(responses[9]["source"]
+        .as_str()
+        .unwrap()
+        .contains("use value \"[REDACTED]\""));
+    assert_eq!(responses[10]["path"], "[REDACTED]");
+    assert_eq!(responses[11]["status"], "error");
+    assert!(!responses[11].to_string().contains(secret));
+    assert_eq!(responses[12]["stdout"], "", "{responses:?}");
+    assert!(responses[13]["source"]
+        .as_str()
+        .unwrap()
+        .contains("use value \"[REDACTED]\""));
+    assert!(responses[14]["source"]
+        .as_str()
+        .unwrap()
+        .contains("use value \"[REDACTED]\""));
+    assert!(std::fs::read_to_string(directory.path().join(secret))
+        .unwrap()
+        .contains(secret));
     assert!(!String::from_utf8_lossy(&output.stdout).contains(secret));
-    assert!(!responses[1].to_string().contains(secret));
+    assert!(responses
+        .iter()
+        .all(|response| !response.to_string().contains(secret)));
 }
 
 #[test]
@@ -210,15 +361,31 @@ fn write_version_manifest(manifests: &std::path::Path) {
     std::fs::write(manifests.join("ok.helper.json"), manifest.to_string()).unwrap();
 }
 
-fn repl_child(directory: &std::path::Path, manifests: &std::path::Path, what_if: bool) -> std::process::Child {
+fn repl_child(
+    directory: &std::path::Path,
+    manifests: &std::path::Path,
+    what_if: bool,
+) -> std::process::Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_execute"));
     command.args(["repl", "--json"]);
-    if what_if { command.arg("--what-if"); }
-    command.arg("--manifest-dir").arg(manifests).current_dir(directory)
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()
+    if what_if {
+        command.arg("--what-if");
+    }
+    command
+        .arg("--manifest-dir")
+        .arg(manifests)
+        .current_dir(directory)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
 }
 
 fn parse_lines(bytes: &[u8]) -> Vec<Value> {
-    String::from_utf8(bytes.to_vec()).unwrap().lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap()).collect()
+    String::from_utf8(bytes.to_vec())
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect()
 }

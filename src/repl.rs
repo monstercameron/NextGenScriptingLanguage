@@ -44,6 +44,9 @@ struct ObserverState {
     earlier: Vec<SessionStep>,
     cursor: usize,
     fresh: Vec<SessionStep>,
+    capture_only: bool,
+    terminal_output: Vec<u8>,
+    program_output: Vec<u8>,
 }
 
 /// Answers earlier statements from the session's record and captures the new ones.
@@ -53,20 +56,25 @@ struct SessionObserver {
 }
 
 impl SessionObserver {
-    fn begin(&self, boundary: usize, earlier: Vec<SessionStep>) {
+    fn begin(&self, boundary: usize, earlier: Vec<SessionStep>, capture_only: bool) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         *state = ObserverState {
             boundary,
             earlier,
             cursor: 0,
             fresh: Vec::new(),
+            capture_only,
+            terminal_output: Vec::new(),
+            program_output: Vec::new(),
         };
     }
 
-    /// The steps the block ran live, once it has finished.
-    fn finish(&self) -> Vec<SessionStep> {
+    /// The steps and stdout produced by the submitted block.
+    fn finish(&self) -> (Vec<SessionStep>, Vec<u8>) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        std::mem::take(&mut state.fresh)
+        let mut output = std::mem::take(&mut state.terminal_output);
+        output.extend(std::mem::take(&mut state.program_output));
+        (std::mem::take(&mut state.fresh), output)
     }
 }
 
@@ -114,6 +122,29 @@ impl Observer for SessionObserver {
         Ok(())
     }
 
+    fn writes_streamed_stdout(&self) -> bool {
+        !self
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .capture_only
+    }
+
+    fn terminal_output(&self, bytes: &[u8]) {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .terminal_output
+            .extend_from_slice(bytes);
+    }
+
+    fn program_output(&self, bytes: &[u8], line: Option<usize>) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if line.is_some_and(|line| line >= state.boundary) {
+            state.program_output.extend_from_slice(bytes);
+        }
+    }
+
     fn suppresses_writes(&self, line: usize) -> bool {
         line < self
             .state
@@ -138,7 +169,12 @@ pub struct Session<'a> {
     source: String,
     steps: Vec<SessionStep>,
     observer: Arc<SessionObserver>,
-    history: Vec<(String, Vec<SessionStep>, BTreeMap<String, &'static str>, Vec<u8>)>,
+    history: Vec<(
+        String,
+        Vec<SessionStep>,
+        BTreeMap<String, &'static str>,
+        Vec<u8>,
+    )>,
     machine_protocol: bool,
     binding_types: BTreeMap<String, &'static str>,
     last_output: Vec<u8>,
@@ -180,6 +216,7 @@ impl<'a> Session<'a> {
     pub fn submit(&mut self, block: &str) -> Result<BlockOutcome> {
         let block = block.trim_end_matches('\n');
         if block.trim().is_empty() {
+            self.last_output.clear();
             return Ok(BlockOutcome::Ran);
         }
         let boundary = self.source.lines().count() + 1;
@@ -199,24 +236,27 @@ impl<'a> Session<'a> {
             )]));
         }
         let earlier = self.steps.clone();
-        self.observer.begin(boundary, earlier);
+        self.observer
+            .begin(boundary, earlier, self.machine_protocol);
         let guard = runtime::observe::install(self.observer.clone())?;
         let options = RunOptions {
             max_output_bytes: 16 * 1024 * 1024,
             ..RunOptions::new(self.working_directory.clone())
         };
-        let result = if self.machine_protocol {
-            runtime::run(&program, self.registry, &options)
-        } else {
-            runtime::with_streamed_stdout(|| runtime::run(&program, self.registry, &options))
-        };
+        let result =
+            runtime::with_streamed_stdout(|| runtime::run(&program, self.registry, &options));
         drop(guard);
-        let fresh = self.observer.finish();
+        let (fresh, fresh_output) = self.observer.finish();
         match result {
             Ok(run_result) => {
-                self.history.push((self.source.clone(), self.steps.clone(), self.binding_types.clone(), self.last_output.clone()));
+                self.history.push((
+                    self.source.clone(),
+                    self.steps.clone(),
+                    self.binding_types.clone(),
+                    self.last_output.clone(),
+                ));
                 self.binding_types = run_result.binding_types;
-                self.last_output = run_result.output;
+                self.last_output = fresh_output;
                 self.source = candidate;
                 self.steps.extend(fresh);
                 Ok(BlockOutcome::Ran)
@@ -232,7 +272,8 @@ impl<'a> Session<'a> {
             bail!("undo count must be between 1 and {}", self.history.len());
         }
         for _ in 0..blocks {
-            let (source, steps, binding_types, last_output) = self.history.pop().expect("validated history length");
+            let (source, steps, binding_types, last_output) =
+                self.history.pop().expect("validated history length");
             self.source = source;
             self.steps = steps;
             self.binding_types = binding_types;
@@ -244,8 +285,10 @@ impl<'a> Session<'a> {
     fn validate(&self, block: &str) -> Result<(String, Vec<crate::diagnostics::Diagnostic>)> {
         let block = block.trim_end_matches('\n');
         let candidate = format!("{}{}\n", self.source, block);
-        let diagnostics = analyze_source(&candidate, self.registry).into_iter()
-            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error).collect();
+        let diagnostics = analyze_source(&candidate, self.registry)
+            .into_iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+            .collect();
         Ok((candidate, diagnostics))
     }
 
@@ -253,18 +296,29 @@ impl<'a> Session<'a> {
     fn what_if(&mut self, block: &str) -> Result<serde_json::Value> {
         let (candidate, diagnostics) = self.validate(block)?;
         if !diagnostics.is_empty() {
-            return redact_json(self.registry, serde_json::json!({"status":"rejected", "protocol":"execute.check/1", "diagnostics":diagnostics_json(self.source.len(), block, diagnostics)}));
+            return redact_json(
+                self.registry,
+                serde_json::json!({"status":"rejected", "protocol":"execute.check/1", "diagnostics":diagnostics_json(self.source.len(), block, diagnostics)}),
+            );
         }
         let program = crate::parser::parse(&candidate)?;
         if let Some(reason) = crate::replay::unsupported_reason(&program) {
-            return redact_json(self.registry, serde_json::json!({"status":"rejected", "protocol":"execute.check/1", "diagnostics":[{"severity":"error","code":"repl.unsupported","message":format!("the REPL does not run {reason}")}]}));
+            return redact_json(
+                self.registry,
+                serde_json::json!({"status":"rejected", "protocol":"execute.check/1", "diagnostics":[{"severity":"error","code":"repl.unsupported","message":format!("the REPL does not run {reason}")}]}),
+            );
         }
         let plan_path = self.working_directory.to_string_lossy();
         let plan = redact_json(
             self.registry,
             crate::agent::explain::explain_json(&program, self.registry, &plan_path)?,
         )?;
-        self.history.push((self.source.clone(), self.steps.clone(), self.binding_types.clone(), self.last_output.clone()));
+        self.history.push((
+            self.source.clone(),
+            self.steps.clone(),
+            self.binding_types.clone(),
+            self.last_output.clone(),
+        ));
         self.source = candidate;
         Ok(serde_json::json!({"status":"planned", "plan":plan}))
     }
@@ -277,10 +331,20 @@ impl<'a> Session<'a> {
         Ok(top_level_bindings(&program)
             .into_iter()
             .map(|(line, name, kind)| {
-                let value = self.steps.iter().rev().find(|step| step.line == line)
+                let value = self
+                    .steps
+                    .iter()
+                    .rev()
+                    .find(|step| step.line == line)
                     .map(|step| match kind {
-                        BindingPreview::Output => preview(&redactor.redact_bytes(&step.result.stdout)),
-                        BindingPreview::Status => step.result.status.map(|status| status.to_string()).unwrap_or_else(|| "(no status)".into()),
+                        BindingPreview::Output => {
+                            preview(&redactor.redact_bytes(&step.result.stdout))
+                        }
+                        BindingPreview::Status => step
+                            .result
+                            .status
+                            .map(|status| status.to_string())
+                            .unwrap_or_else(|| "(no status)".into()),
                         BindingPreview::Result => "(execution result)".into(),
                     })
                     .unwrap_or_else(|| "(not run)".into());
@@ -307,7 +371,11 @@ impl<'a> Session<'a> {
 }
 
 #[derive(Clone, Copy)]
-enum BindingPreview { Output, Status, Result }
+enum BindingPreview {
+    Output,
+    Status,
+    Result,
+}
 
 fn top_level_bindings(program: &Program) -> Vec<(usize, String, BindingPreview)> {
     program
@@ -316,9 +384,15 @@ fn top_level_bindings(program: &Program) -> Vec<(usize, String, BindingPreview)>
         .flat_map(|step| match &step.kind {
             StepKind::Invoke { call, .. } => {
                 let mut found = Vec::new();
-                if let Some(name) = &call.binding { found.push((step.line, name.clone(), BindingPreview::Output)); }
-                if let Some(name) = &call.status_binding { found.push((step.line, name.clone(), BindingPreview::Status)); }
-                if let Some(name) = &call.result_binding { found.push((step.line, name.clone(), BindingPreview::Result)); }
+                if let Some(name) = &call.binding {
+                    found.push((step.line, name.clone(), BindingPreview::Output));
+                }
+                if let Some(name) = &call.status_binding {
+                    found.push((step.line, name.clone(), BindingPreview::Status));
+                }
+                if let Some(name) = &call.result_binding {
+                    found.push((step.line, name.clone(), BindingPreview::Result));
+                }
                 found
             }
             _ => Vec::new(),
@@ -332,35 +406,63 @@ fn diagnostics_json(
     diagnostics: Vec<crate::diagnostics::Diagnostic>,
 ) -> Vec<serde_json::Value> {
     let block = block.trim_end_matches('\n');
-    diagnostics.into_iter().map(|diagnostic| {
-        let start = diagnostic.span.start_byte.saturating_sub(block_start).min(block.len());
-        let end = diagnostic.span.end_byte.saturating_sub(block_start).min(block.len());
-        // Analyzer byte offsets are UTF-8 boundaries. Clamp defensively before
-        // slicing in case a diagnostic points into the prior session portion.
-        let prefix = &block[..start];
-        let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
-        let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-        serde_json::json!({
-            "severity": diagnostic.severity,
-            "code": diagnostic.code,
-            "message": diagnostic.message,
-            "span": {
-                "session": diagnostic.span,
-                "block": {"start_byte":start,"end_byte":end,"line":line,"column":column}
-            }
+    diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            let start = diagnostic
+                .span
+                .start_byte
+                .saturating_sub(block_start)
+                .min(block.len());
+            let end = diagnostic
+                .span
+                .end_byte
+                .saturating_sub(block_start)
+                .min(block.len());
+            // Analyzer byte offsets are UTF-8 boundaries. Clamp defensively before
+            // slicing in case a diagnostic points into the prior session portion.
+            let prefix = &block[..start];
+            let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+            let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+            serde_json::json!({
+                "severity": diagnostic.severity,
+                "code": diagnostic.code,
+                "message": diagnostic.message,
+                "span": {
+                    "session": diagnostic.span,
+                    "block": {"start_byte":start,"end_byte":end,"line":line,"column":column}
+                }
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn redact_json(registry: &Registry, mut value: serde_json::Value) -> Result<serde_json::Value> {
+    const MARKER: &str = "[REDACTED]";
+    fn redact_text(redactor: &crate::security::SecretRedactor, text: &str) -> String {
+        if !text.contains(MARKER) {
+            return redactor.redact_text(text);
+        }
+        text.split(MARKER)
+            .map(|part| redactor.redact_text(part))
+            .collect::<Vec<_>>()
+            .join(MARKER)
+    }
+
     fn visit(value: &mut serde_json::Value, redactor: &crate::security::SecretRedactor) {
         match value {
-            serde_json::Value::String(text) => *text = redactor.redact_text(text),
+            serde_json::Value::String(text) => *text = redact_text(redactor, text),
             serde_json::Value::Array(items) => {
-                for item in items { visit(item, redactor); }
+                for item in items {
+                    visit(item, redactor);
+                }
             }
             serde_json::Value::Object(fields) => {
-                for item in fields.values_mut() { visit(item, redactor); }
+                let previous = std::mem::take(fields);
+                for (key, mut item) in previous {
+                    visit(&mut item, redactor);
+                    fields.insert(redact_text(redactor, &key), item);
+                }
             }
             _ => {}
         }
@@ -468,10 +570,13 @@ pub fn run_json(
     const MAX_REQUEST_BYTES: usize = 1024 * 1024;
     session.set_machine_protocol(true);
     loop {
-        let Some((line, oversized)) = read_json_line(&mut input, MAX_REQUEST_BYTES)? else { break; };
+        let Some((line, oversized)) = read_json_line(&mut input, MAX_REQUEST_BYTES)? else {
+            break;
+        };
         let response = if oversized {
             serde_json::json!({"status":"error","error":"request line exceeds the 1048576-byte limit"})
-        } else { (|| -> Result<serde_json::Value> {
+        } else {
+            (|| -> Result<serde_json::Value> {
             let request: serde_json::Value = serde_json::from_slice(&line).context("request must be JSON")?;
             if !request.is_object() { bail!("request must be a JSON object"); }
             if let Some(block) = request.get("submit").and_then(serde_json::Value::as_str) {
@@ -524,7 +629,9 @@ pub fn run_json(
                 session.undo(usize::try_from(count).context("undo count is too large")?)?;
                 Ok(serde_json::json!({"status":"undone","source":session.source()}))
             } else { bail!("request must contain submit, explain, bindings, source, save, or undo"); }
-        })().unwrap_or_else(|error| serde_json::json!({"status":"error","error":format!("{error:#}")})) };
+        })().unwrap_or_else(|error| serde_json::json!({"status":"error","error":format!("{error:#}")}))
+        };
+        let response = redact_json(session.registry, response)?;
         serde_json::to_writer(&mut output, &response)?;
         writeln!(output)?;
         output.flush()?;

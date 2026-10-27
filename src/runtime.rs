@@ -1823,8 +1823,11 @@ fn write_streamed_stdout(bytes: &[u8], signals: &Signals) -> Result<()> {
         return Ok(());
     }
     observe::note_terminal_output(bytes);
-    write_with_deadline(1, bytes, &signals.cancelled, signals.deadline)
-        .context("could not stream workflow stdout")
+    if observe::writes_streamed_stdout() {
+        write_with_deadline(1, bytes, &signals.cancelled, signals.deadline)
+            .context("could not stream workflow stdout")?;
+    }
+    Ok(())
 }
 
 fn hash_field(hash: &mut Sha256, bytes: &[u8]) {

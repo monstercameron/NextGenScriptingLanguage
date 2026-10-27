@@ -653,10 +653,7 @@ fn verify_decision_audit(run: &Json, seal_key: &SealKey) -> AuditVerification {
     // needs them even when the audit turns out unsealed rather than verified.
     let chained = verify_audit_chain(decisions, head, total);
     let (approved, denied) = AuditVerification::counts(decisions);
-    let chain_error = match chained {
-        Ok(()) => None,
-        Err(error) => Some(error),
-    };
+    let chain_error = chained.err();
     if let Some(error) = chain_error {
         return AuditVerification::Untrusted {
             approved,

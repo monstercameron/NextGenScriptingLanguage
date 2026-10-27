@@ -165,44 +165,44 @@ core.time_parse.json	1231	time.parse	time parse	69519	404
 core.time_sleep.json	2143	time.sleep	time sleep	69923	550
 core.toml_parse.json	1138	toml.parse	toml parse	70473	390
 core.toml_stringify.json	1027	toml.stringify	toml stringify	70863	378
-core.wait_until.json	2064	wait.until	wait until	71241	482
-core.yaml_parse.json	1153	yaml.parse	yaml parseparse yamlread yaml	71723	401
-core.yaml_stringify.json	1027	yaml.stringify	yaml stringify	72124	379
-count.lines.json	265	count.lines	count lines	72503	164
-cut.json	497	cut		72667	206
-desktop.clock_format.json	1449	desktop.clock_format		72873	487
-desktop.clock_local.json	1170	desktop.clock_local		73360	438
-desktop.clock_remote.json	1213	desktop.clock_remote		73798	438
-desktop.fixture_sync.json	1769	desktop.fixture_sync		74236	528
-desktop.quickshell.json	599	desktop.quickshell		74764	283
-false.json	166	false	fail	75047	117
-gh.repo.json	546	gh.repo		75164	249
-git.commit.json	701	git.commit	commit changes	75413	271
-grep.json	515	grep		75684	232
-head.json	347	head		75916	186
-jev.ask.json	1678	jev.ask		76102	399
-jev.classify.json	3744	jev.classify		76501	732
-jev.judge.json	3247	jev.judge		77233	662
-jev.score.json	3434	jev.score		77895	705
-join.json	528	join		78600	230
-jq.json	529	jq		78830	245
-jq.ps.json	993	jq.ps		79075	480
-llm.ask.json	4157	llm.ask		79555	724
-llm.extract.json	4318	llm.extract		80279	746
-ls.json	546	ls		81025	217
-mkdir.json	553	mkdir		81242	242
-omarchy.browser-refresh.json	1052	omarchy.browser-refresh		81484	416
-omarchy.editor-install.json	1109	omarchy.editor-install		81900	408
-omarchy.editor-list.json	1057	omarchy.editor-list		82308	421
-paste.json	531	paste		82729	230
-printf.json	345	printf	print	82959	183
-ps.json	358	ps		83142	191
-pwd.json	129	pwd		83333	100
-sed.json	512	sed		83433	235
-sort.json	367	sort		83668	191
-tail.follow.json	476	tail.follow	follow file	83859	216
-tail.json	599	tail		84075	240
-tr.json	627	tr		84315	248
-uniq.json	367	uniq		84563	192
-upper.json	300	upper	uppercase	84755	169
-wc.json	383	wc		84924	203
+core.wait_until.json	2062	wait.until	wait until	71241	488
+core.yaml_parse.json	1153	yaml.parse	yaml parseparse yamlread yaml	71729	401
+core.yaml_stringify.json	1027	yaml.stringify	yaml stringify	72130	379
+count.lines.json	265	count.lines	count lines	72509	164
+cut.json	497	cut		72673	206
+desktop.clock_format.json	1449	desktop.clock_format		72879	487
+desktop.clock_local.json	1170	desktop.clock_local		73366	438
+desktop.clock_remote.json	1213	desktop.clock_remote		73804	438
+desktop.fixture_sync.json	1769	desktop.fixture_sync		74242	528
+desktop.quickshell.json	599	desktop.quickshell		74770	283
+false.json	166	false	fail	75053	117
+gh.repo.json	546	gh.repo		75170	249
+git.commit.json	701	git.commit	commit changes	75419	271
+grep.json	515	grep		75690	232
+head.json	347	head		75922	186
+jev.ask.json	1678	jev.ask		76108	399
+jev.classify.json	3744	jev.classify		76507	732
+jev.judge.json	3247	jev.judge		77239	662
+jev.score.json	3434	jev.score		77901	705
+join.json	528	join		78606	230
+jq.json	529	jq		78836	245
+jq.ps.json	993	jq.ps		79081	480
+llm.ask.json	4157	llm.ask		79561	724
+llm.extract.json	4318	llm.extract		80285	746
+ls.json	546	ls		81031	217
+mkdir.json	553	mkdir		81248	242
+omarchy.browser-refresh.json	1052	omarchy.browser-refresh		81490	416
+omarchy.editor-install.json	1109	omarchy.editor-install		81906	408
+omarchy.editor-list.json	1057	omarchy.editor-list		82314	421
+paste.json	531	paste		82735	230
+printf.json	345	printf	print	82965	183
+ps.json	358	ps		83148	191
+pwd.json	129	pwd		83339	100
+sed.json	512	sed		83439	235
+sort.json	367	sort		83674	191
+tail.follow.json	476	tail.follow	follow file	83865	216
+tail.json	599	tail		84081	240
+tr.json	627	tr		84321	248
+uniq.json	367	uniq		84569	192
+upper.json	300	upper	uppercase	84761	169
+wc.json	383	wc		84930	203

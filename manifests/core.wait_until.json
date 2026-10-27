@@ -6,7 +6,7 @@
   "parameters": {
     "probe": {
       "type": "string",
-      "required": false
+      "required": true
     },
     "host": {
       "type": "string",
@@ -26,7 +26,7 @@
     },
     "timeout_ms": {
       "type": "integer",
-      "required": false
+      "required": true
     }
   },
   "arguments": [

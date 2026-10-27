@@ -7,6 +7,11 @@ original version labels.
 
 ## Unreleased
 
+- `env.load` can mark loaded values secret with `secret true` or
+  `secret ["NAME", ...]`; marked values are redacted from records, traces and
+  diagnostics and refuse `--checkpoint` before effects. Checkpoint
+  documentation now states the refusal instead of HMAC storage.
+
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known
   non-object values during checking while retaining dynamic object keys.

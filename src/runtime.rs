@@ -484,6 +484,41 @@ mod cleanup_interrupt_tests {
     }
 
     #[test]
+    fn cleanup_scope_inherits_outer_cancellation_but_not_the_first_interrupt() {
+        let mut signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(true)), false, None)
+                .unwrap();
+        let ancestor = Arc::new(AtomicBool::new(false));
+        signals.outer_cancelled.push(Arc::clone(&ancestor));
+        let scope = signals.cleanup_scope(None);
+        assert!(
+            !scope.is_cancelled(),
+            "neither the first interrupt nor an unset ancestor cancels cleanup"
+        );
+        ancestor.store(true, Ordering::SeqCst);
+        assert!(
+            scope.is_cancelled(),
+            "an ancestor task-group cancel during cleanup must abort it"
+        );
+    }
+
+    #[test]
+    fn cleanup_scope_inherits_job_cancellation() {
+        let mut signals =
+            Signals::with_cancellation_and_deadline(Arc::new(AtomicBool::new(false)), false, None)
+                .unwrap();
+        let job = Arc::new(AtomicBool::new(false));
+        signals.job_cancelled = Some(Arc::clone(&job));
+        let scope = signals.cleanup_scope(None);
+        assert!(!scope.is_cancelled());
+        job.store(true, Ordering::SeqCst);
+        assert!(
+            scope.is_cancelled(),
+            "a job-handle cancel during cleanup must abort it"
+        );
+    }
+
+    #[test]
     fn expired_drain_marks_cleanup_cancel_like_a_second_interrupt() {
         let drain = Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED));
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -836,6 +871,9 @@ impl Signals {
     }
 
     fn register(deadline: Option<Instant>, drain: Option<Duration>) -> Result<Self> {
+        // A new signal-owned run must not inherit the previous run's recorded
+        // interrupt: clear it before installing this run's handlers.
+        crate::platform::clear_cancel_signal();
         let cleanup_cancel = Arc::new(AtomicBool::new(false));
         let mut guard = Self {
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -899,6 +937,9 @@ impl Signals {
         cancelled: Arc<AtomicBool>,
         deadline: Option<Instant>,
     ) -> Result<Self> {
+        // As with `register`: a new signal-owned run starts without a recorded
+        // interrupt from an earlier run in this process.
+        crate::platform::clear_cancel_signal();
         // The caller can set this flag directly without notifying the signal
         // wake, so native supervisors retain the bounded cancellation check.
         let mut guard = Self::with_cancellation_and_deadline(cancelled, false, deadline)?;
@@ -960,6 +1001,10 @@ impl Signals {
     /// the shared second-interrupt flag and wakes so a repeat interrupt aborts
     /// it at once, with a fresh deadline, while retaining its enclosing
     /// module, worker, provenance, accounting, observation, and job-run scope.
+    /// Ancestor task-group (`outer_cancelled`) and job-handle (`job_cancelled`)
+    /// flags are inherited so an outer or job cancel during cleanup still
+    /// aborts it; the run's own first-interrupt flag is deliberately not
+    /// inherited, so one interrupt still runs cleanup to completion.
     fn cleanup_scope(&self, deadline: Option<Instant>) -> Self {
         Self {
             cancelled: Arc::clone(&self.cleanup_cancel),
@@ -976,10 +1021,10 @@ impl Signals {
             process_launches: Arc::clone(&self.process_launches),
             process_observer: Arc::clone(&self.process_observer),
             worker_pool: self.worker_pool.clone(),
-            outer_cancelled: Vec::new(),
+            outer_cancelled: self.outer_cancelled.clone(),
             cancel_wakes: self.cancel_wakes.clone(),
             unnotified_cancellation: self.unnotified_cancellation,
-            job_cancelled: None,
+            job_cancelled: self.job_cancelled.clone(),
             job_launch_ack: None,
             job_output_budget: None,
             job_output_limit: None,
@@ -2461,7 +2506,8 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     result.with_context(|| format!("writing {}", path.display()))
 }
 
-/// Exit status of a run ended by an interrupt drain: the interrupt's own status, or 130.
+/// Exit status of a run ended by an interrupt drain: 128 plus the recorded
+/// signal (130 for SIGINT), or 130 when no signal was recorded.
 fn drain_exit_status() -> u8 {
     crate::platform::cancel_exit_code()
         .and_then(|code| u8::try_from(code).ok())
@@ -6018,7 +6064,18 @@ mod drain_tests {
         source: &str,
         state: u8,
         cancel: bool,
-    ) -> (tempfile::TempDir, Result<RunResult>) {
+    ) -> (
+        tempfile::TempDir,
+        Result<RunResult>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        // Hold the cancel-signal serial lock for the whole run so a
+        // concurrent probe cannot move this run off 130. The guard is
+        // returned so the calling test keeps it alive until its assertions.
+        let serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::platform::clear_cancel_signal();
         let directory = tempfile::tempdir().unwrap();
         let registry =
             Registry::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("manifests")).unwrap();
@@ -6038,7 +6095,7 @@ mod drain_tests {
             None,
             None,
         );
-        (directory, result)
+        (directory, result, serial)
     }
 
     /// The interrupt body and the main body each leave a marker file, so the test can
@@ -6047,7 +6104,7 @@ mod drain_tests {
 
     #[test]
     fn requested_drain_runs_only_the_interrupt_body() {
-        let (directory, result) =
+        let (directory, result, _serial) =
             run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_REQUESTED, false);
         let result = result.expect("a drain is a clean end, not an error");
         assert_eq!(result.exit.map(|exit| exit.status), Some(130));
@@ -6057,7 +6114,8 @@ mod drain_tests {
 
     #[test]
     fn run_without_an_interrupt_skips_the_interrupt_body() {
-        let (directory, result) = run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_IDLE, false);
+        let (directory, result, _serial) =
+            run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_IDLE, false);
         assert!(result.expect("ordinary run").exit.is_none());
         assert!(directory.path().join("main.txt").exists());
         assert!(!directory.path().join("drained.txt").exists());
@@ -6065,7 +6123,7 @@ mod drain_tests {
 
     #[test]
     fn hard_cancel_skips_the_interrupt_body() {
-        let (directory, result) =
+        let (directory, result, _serial) =
             run_with_drain(INTERRUPTIBLE, crate::platform::DRAIN_CANCELLED, true);
         let error = result.err().expect("a second interrupt cancels the run");
         assert!(
@@ -6078,7 +6136,8 @@ mod drain_tests {
     #[test]
     fn drain_runs_the_interrupt_body_then_the_exit_body() {
         let source = "on interrupt\n  run printf with message \"interrupted\"\n  then save to file \"interrupted.txt\"\non exit\n  run printf with message \"exit\"\n  then save to file \"exit.txt\"\nrun printf with message \"main\"\nthen save to file \"main.txt\"\n";
-        let (directory, result) = run_with_drain(source, crate::platform::DRAIN_REQUESTED, false);
+        let (directory, result, _serial) =
+            run_with_drain(source, crate::platform::DRAIN_REQUESTED, false);
         assert_eq!(
             result
                 .expect("drain through both cleanups")

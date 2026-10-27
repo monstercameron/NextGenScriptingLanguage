@@ -7,7 +7,7 @@
 //! SIGINT to the foreground process group exactly like typed Ctrl-C keys. The
 //! second Ctrl-C is gated on marker files (no guessed delays decide when the
 //! run is interruptible) and the exit after it is bounded at 200 ms with
-//! status 130 and a `cleanup interrupted` diagnostic. Every wait also watches
+//! status 128+SIGINT (130) and a `cleanup interrupted` diagnostic. Every wait also watches
 //! the run, and a fail-safe watchdog kills a stuck run, so the probes always
 //! end with diagnostics instead of hanging after their child is gone. The
 //! direct-`kill` variants below are supplementary regression cover for
@@ -93,6 +93,13 @@ struct WatchedChild {
     /// Set if the guard mutex ever failed to lock; every wait/kill silently
     /// degrades then, so failures must say so.
     lock_failed: AtomicBool,
+    /// Join handle for the fail-safe watchdog, stored so `finish` can stand it
+    /// down and reap the thread instead of leaking a 50 s sleeper per test.
+    watchdog: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Accumulated stderr already drained from the piped child. The handle is
+    /// one-shot (`take_stderr`), so repeated diagnoses share this cache
+    /// instead of losing output after the first drain.
+    stderr_text: Mutex<String>,
 }
 
 impl WatchedChild {
@@ -106,16 +113,27 @@ impl WatchedChild {
             last_wait_errno: AtomicI32::new(0),
             last_kill_errno: AtomicI32::new(0),
             lock_failed: AtomicBool::new(false),
+            watchdog: Mutex::new(None),
+            stderr_text: Mutex::new(String::new()),
         });
         let watchdog = Arc::clone(&watched);
-        std::thread::spawn(move || {
-            std::thread::sleep(WATCHDOG_BUDGET);
+        let handle = std::thread::spawn(move || {
+            // Poll so `finish` stands the watchdog down promptly instead of
+            // leaking a 50 s sleeper per test.
+            let deadline = Instant::now() + WATCHDOG_BUDGET;
+            while Instant::now() < deadline {
+                if watchdog.done.load(Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
             if watchdog.done.load(Ordering::SeqCst) {
                 return;
             }
             watchdog.watchdog_fired.store(true, Ordering::SeqCst);
             watchdog.kill();
         });
+        *watched.watchdog.lock().unwrap() = Some(handle);
         watched
     }
 
@@ -164,6 +182,36 @@ impl WatchedChild {
 
     fn pid(&self) -> Option<u32> {
         self.child.lock().ok().map(|child| child.id())
+    }
+
+    /// Send SIGINT to the live child while holding its handle lock, so the pid
+    /// cannot be reaped and recycled between the liveness check and the
+    /// signal. Refuses to signal once the child is exited or gone: after a
+    /// reap the pid may already name an unrelated process.
+    fn signal_interrupt(&self) {
+        let Ok(guard) = self.child.lock() else {
+            self.lock_failed.store(true, Ordering::SeqCst);
+            panic!(
+                "cannot interrupt: child lock failed ({})",
+                self.wait_evidence()
+            );
+        };
+        if self.exited.load(Ordering::SeqCst) || self.gone.load(Ordering::SeqCst) {
+            panic!(
+                "cannot interrupt: the acceptance run is already gone ({})",
+                self.wait_evidence()
+            );
+        }
+        let pid = guard.id();
+        // SAFETY: `guard` owns the unreaped child, so its pid is still
+        // reserved (running or zombie) and cannot have been recycled.
+        let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) };
+        assert_eq!(
+            result,
+            0,
+            "signalling the acceptance run failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
 
     fn watchdog_killed(&self) -> bool {
@@ -215,9 +263,15 @@ impl WatchedChild {
         guard.stderr.take()
     }
 
-    /// Mark the test finished so a late watchdog stands down.
+    /// Mark the test finished so a late watchdog stands down, then reap the
+    /// watchdog thread instead of leaking it.
     fn finish(&self) {
         self.done.store(true, Ordering::SeqCst);
+        if let Ok(mut slot) = self.watchdog.lock() {
+            if let Some(handle) = slot.take() {
+                let _ = handle.join();
+            }
+        }
     }
 
     fn exit_note(&self, status: ExitStatus) -> String {
@@ -239,25 +293,26 @@ fn wait_for_marker(watched: &WatchedChild, path: &Path, what: &str, diagnose: &d
     let deadline = Instant::now() + MARKER_BUDGET;
     while !path.exists() {
         if let Some(status) = watched.poll_exit() {
-            panic!(
-                "the run exited ({}) before reaching {what}; output:\n{}",
-                watched.exit_note(status),
-                diagnose()
-            );
+            let note = watched.exit_note(status);
+            let output = diagnose();
+            watched.finish();
+            panic!("the run exited ({note}) before reaching {what}; output:\n{output}");
         }
         if watched.gone() {
             let reaped = watched.reap_bounded(REAP_BUDGET);
+            let evidence = watched.wait_evidence();
+            let output = diagnose();
+            watched.finish();
             panic!(
-                "the run is gone ({}) before reaching {what} (run exit after SIGKILL: {reaped:?}); output:\n{}",
-                watched.wait_evidence(),
-                diagnose()
+                "the run is gone ({evidence}) before reaching {what} (run exit after SIGKILL: {reaped:?}); output:\n{output}"
             );
         }
         if Instant::now() >= deadline {
             let reaped = watched.reap_bounded(REAP_BUDGET);
+            let output = diagnose();
+            watched.finish();
             panic!(
-                "the run never reached {what} (run exit after SIGKILL: {reaped:?}); output:\n{}",
-                diagnose()
+                "the run never reached {what} (run exit after SIGKILL: {reaped:?}); output:\n{output}"
             );
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -266,10 +321,9 @@ fn wait_for_marker(watched: &WatchedChild, path: &Path, what: &str, diagnose: &d
 }
 
 fn interrupt(watched: &WatchedChild) {
-    let pid = watched.pid().expect("the acceptance run is already gone");
-    // SAFETY: the pid belongs to a child this test spawned and has not yet reaped.
-    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) };
-    assert_eq!(result, 0);
+    // Signal under the handle lock with an exited/gone guard, so a reaped pid
+    // can never be recycled into an unrelated process's SIGINT.
+    watched.signal_interrupt();
 }
 
 /// How a run's wait ended: a real status, or a definitively gone child whose
@@ -356,10 +410,18 @@ fn abort_stuck(watched: &WatchedChild, diagnose: &dyn Fn() -> String, why: &str)
 /// Bounded drain of a finished run's piped stderr. Unlike `read_to_string`,
 /// this never blocks to EOF: a surviving grandchild can hold the pipe open
 /// after the run exits, so reads stop at the first moment with no data or at
-/// the drain budget, whichever comes first.
+/// the drain budget, whichever comes first. Drained text accumulates on the
+/// guard, so repeated diagnoses share output instead of losing it after the
+/// one-shot handle is taken.
 fn drain_stderr(watched: &WatchedChild) -> String {
+    // Reuse the one-shot handle: after it is taken, return what earlier
+    // drains already collected.
     let Some(mut stderr) = watched.take_stderr() else {
-        return String::new();
+        return watched
+            .stderr_text
+            .lock()
+            .map(|text| text.clone())
+            .unwrap_or_default();
     };
     // SAFETY: the descriptor is the live read end of the run's stderr pipe.
     unsafe {
@@ -393,7 +455,12 @@ fn drain_stderr(watched: &WatchedChild) -> String {
             break;
         }
     }
-    String::from_utf8_lossy(&bytes).into_owned()
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if let Ok(mut cached) = watched.stderr_text.lock() {
+        cached.push_str(&text);
+        return cached.clone();
+    }
+    text
 }
 
 /// Drive the acceptance scenario: interrupt the main sleep so cleanup starts,
@@ -441,7 +508,8 @@ fn double_interrupt(
 }
 
 fn check_aborted_at_once(status: ExitStatus, elapsed: Duration, stderr: &str, finished: &Path) {
-    // Status 130 like any interrupt; the point is it arrives at once instead of
+    // Status 128+SIGINT (130) here because both probes send SIGINT; other
+    // signals map to 128+N. The point is it arrives at once instead of
     // after the 5 s cleanup budget or the 30 s cleanup sleep. Four seconds is
     // strictly under both, mirroring the 4 s bound for a 5 s budget in
     // `lane_b_drain_signals.rs`.
@@ -844,6 +912,39 @@ fn externally_reaped_child_surfaces_gone_without_burning_the_reap_budget() {
     assert!(
         wait_start.elapsed() < Duration::from_secs(2),
         "a gone child must not burn the 10 s exit budget"
+    );
+    assert_eq!(
+        watched.last_kill_errno.load(Ordering::SeqCst),
+        0,
+        "no signal may go out once the child is gone"
+    );
+    watched.finish();
+}
+
+#[test]
+fn gone_child_refuses_sigint_without_signalling_a_recycled_pid() {
+    // A gone child must refuse SIGINT instead of signalling its recycled pid.
+    let child = Command::new("sh")
+        .args(["-c", "exit 3"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id() as libc::pid_t;
+    let watched = WatchedChild::spawn(child);
+    // SAFETY: pid is the live child this test spawned; the blocking wait
+    // reaps it once and no other thread waits on it.
+    let mut status = 0;
+    let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
+    assert_eq!(reaped, pid, "reaping the probe child");
+    assert!(watched.poll_exit().is_none());
+    assert!(watched.gone());
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        watched.signal_interrupt();
+    }));
+    assert!(
+        refused.is_err(),
+        "SIGINT to a gone child must refuse, not signal a recycled pid"
     );
     assert_eq!(
         watched.last_kill_errno.load(Ordering::SeqCst),

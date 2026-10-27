@@ -6,8 +6,9 @@
 //! `CRASH_SEED`. `CRASH_TRIALS` sets the number of random kills per mode (nightly raises it).
 //!
 //! Run with: `cargo test --features failpoints --test crash_consistency`
-#![cfg(all(unix, feature = "failpoints"))]
+#![cfg(feature = "failpoints")]
 
+use sha2::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 const STEPS: usize = 6;
 /// Checkpoint writes injected per point and mode.
 const FAILED_CALLS: usize = 6;
-const POINTS: [&str; 15] = [
+const POINTS: [&str; 20] = [
     "checkpoint.atomic",
     "checkpoint.atomic.write",
     "checkpoint.atomic.sync",
@@ -34,6 +35,11 @@ const POINTS: [&str; 15] = [
     "checkpoint.graph.write",
     "checkpoint.graph.sync",
     "checkpoint.elements.write",
+    "checkpoint.elements.truncate",
+    "checkpoint.elements.sync",
+    "checkpoint.elements.reset.truncate",
+    "checkpoint.elements.reset.sync",
+    "checkpoint.blob_gc.remove",
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -41,6 +47,7 @@ enum Mode {
     Sequential,
     Jobs,
     Graph,
+    Elements,
 }
 
 impl Mode {
@@ -49,6 +56,7 @@ impl Mode {
             Mode::Sequential => "sequential",
             Mode::Jobs => "jobs",
             Mode::Graph => "graph",
+            Mode::Elements => "elements",
         }
     }
 
@@ -73,6 +81,11 @@ impl Mode {
                 \x20 bind second.value to third.text with capacity 1 lossless\n\
                 end graph\n"
                 .to_owned(),
+            Mode::Elements => "for each item in [\"a\", \"b\"]\n\
+                \x20 run ctrl.count with text item\n\
+                for each item in [\"c\", \"d\"]\n\
+                \x20 run ctrl.count with text item\n"
+                .to_owned(),
         }
     }
 }
@@ -86,30 +99,56 @@ struct Fixture {
     log: PathBuf,
 }
 
-/// `ctrl.count` appends each run to the log and echoes its text. The script runs under
-/// `/bin/sh`; the manifest is the same contract the other checkpoint tests use.
+/// `ctrl.count` appends each run to the log and echoes its text. Unix uses `/bin/sh`;
+/// Windows uses a generated `.cmd` applet so the same crash suite runs on both systems.
 fn write_count_applet(manifests: &Path, log: &Path) {
-    let script = manifests.with_file_name("count.sh");
-    fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\necho run >> '{}'\nprintf '%s\\n' \"$1\"\n",
-            log.display()
-        ),
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    #[cfg(unix)]
+    let (binary, arguments) = {
+        let script = manifests.with_file_name("count.sh");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho run >> '{}'\nprintf '%s\\n' \"$1\"\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        (
+            "/bin/sh",
+            vec![
+                serde_json::json!({"literal": script.to_string_lossy()}),
+                serde_json::json!({"parameter": "text"}),
+            ],
+        )
+    };
+    #[cfg(windows)]
+    let (binary, arguments) = {
+        let script = manifests.with_file_name("count.cmd");
+        let log = log.to_string_lossy().replace('"', "\"\"");
+        fs::write(
+            &script,
+            format!("@echo off\r\n>>\"{log}\" echo run\r\necho %~1\r\n"),
+        )
+        .unwrap();
+        (
+            "cmd.exe",
+            vec![
+                serde_json::json!({"literal": "/D"}),
+                serde_json::json!({"literal": "/C"}),
+                serde_json::json!({"literal": script.to_string_lossy()}),
+                serde_json::json!({"parameter": "text"}),
+            ],
+        )
+    };
     let manifest = serde_json::json!({
         "name": "ctrl.count",
-        "binary": "/bin/sh",
+        "binary": binary,
         "accepts_stdin": false,
         "cacheable": false,
         "parameters": {"text": {"type": "string", "required": true}},
-        "arguments": [
-            {"literal": script.to_string_lossy()},
-            {"parameter": "text"}
-        ],
+        "arguments": arguments,
         "contract": {
             "version": 1,
             "backend": "command",
@@ -220,6 +259,7 @@ fn expected_runs(mode: Mode) -> usize {
     match mode {
         Mode::Sequential | Mode::Jobs => STEPS,
         Mode::Graph => 3,
+        Mode::Elements => 4,
     }
 }
 
@@ -358,6 +398,60 @@ fn atomic_and_append_boundaries_survive_abort_and_torn_write_actions() {
 }
 
 #[test]
+fn silently_lost_atomic_and_append_writes_recover_or_refuse_clearly() {
+    let (expected, _) = baseline(Mode::Sequential);
+    for point in ["checkpoint.atomic.write", "checkpoint.append.write"] {
+        let fixture = fixture(Mode::Sequential);
+        let _ = checkpointed_run(&fixture)
+            .env("EXECUTE_FAILPOINT", format!("{point}:1:lost"))
+            .output()
+            .unwrap();
+        check_resume(&fixture, &expected, &format!("{point}:lost"));
+    }
+}
+
+#[test]
+fn blob_gc_abort_preserves_recovery_and_later_collection() {
+    for action in ["abort", "partial:3"] {
+        let fixture = fixture(Mode::Sequential);
+        assert!(checkpointed_run(&fixture).status().unwrap().success());
+        let orphan = format!("{:x}", sha2::Sha256::digest(b"orphan blob"));
+        let blob_path = fixture.checkpoint.join("blobs").join(orphan);
+        fs::create_dir_all(blob_path.parent().unwrap()).unwrap();
+        fs::write(&blob_path, b"orphan blob").unwrap();
+
+        let output = execute(&[
+            "resume".as_ref(),
+            fixture.program.as_os_str(),
+            "--checkpoint".as_ref(),
+            fixture.checkpoint.as_os_str(),
+        ])
+        .env(
+            "EXECUTE_FAILPOINT",
+            format!("checkpoint.blob_gc.remove:1:{action}"),
+        )
+        .output()
+        .unwrap();
+        assert!(
+            !output.status.success(),
+            "blob GC failpoint {action} was not reached"
+        );
+        assert!(blob_path.is_file(), "aborted collection removed the orphan");
+
+        let resumed = resume(&fixture);
+        assert!(
+            resumed.status.success(),
+            "recovery after GC {action} failed: {}",
+            String::from_utf8_lossy(&resumed.stderr)
+        );
+        assert!(
+            !blob_path.exists(),
+            "orphan blob was not collected on retry"
+        );
+    }
+}
+
+#[test]
 fn sequential_runs_killed_at_random_points_resume_to_the_uninterrupted_run() {
     kill_at_random_points(Mode::Sequential);
 }
@@ -373,6 +467,31 @@ fn graph_runs_killed_at_random_points_resume_to_the_uninterrupted_run() {
 }
 
 #[test]
+fn element_log_boundaries_survive_abort_and_torn_write_actions() {
+    let (expected, _) = baseline(Mode::Elements);
+    for point in [
+        "checkpoint.elements.reset.truncate",
+        "checkpoint.elements.reset.sync",
+        "checkpoint.elements.truncate",
+        "checkpoint.elements.write",
+        "checkpoint.elements.sync",
+    ] {
+        for action in ["abort", "partial:3"] {
+            let fixture = fixture(Mode::Elements);
+            let output = checkpointed_run(&fixture)
+                .env("EXECUTE_FAILPOINT", format!("{point}:1:{action}"))
+                .output()
+                .unwrap();
+            assert!(
+                !output.status.success(),
+                "{point}:{action} did not terminate the checkpointed run"
+            );
+            check_resume(&fixture, &expected, &format!("{point}:{action}"));
+        }
+    }
+}
+
+#[test]
 fn sequential_runs_with_failed_checkpoint_writes_resume_or_refuse_clearly() {
     fail_writes(Mode::Sequential);
 }
@@ -385,4 +504,9 @@ fn job_runs_with_failed_checkpoint_writes_resume_or_refuse_clearly() {
 #[test]
 fn graph_runs_with_failed_checkpoint_writes_resume_or_refuse_clearly() {
     fail_writes(Mode::Graph);
+}
+
+#[test]
+fn element_runs_with_failed_checkpoint_writes_resume_or_refuse_clearly() {
+    fail_writes(Mode::Elements);
 }

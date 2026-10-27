@@ -2303,9 +2303,8 @@ fn atomic_write_with(
             Ok(mut file) => {
                 let write_result = write_and_sync(&mut file, bytes);
                 #[cfg(feature = "failpoints")]
-                let write_result = write_result.and_then(|()| {
-                    crate::failpoint::hit("checkpoint.atomic.synced")
-                });
+                let write_result =
+                    write_result.and_then(|()| crate::failpoint::hit("checkpoint.atomic.synced"));
                 if let Err(error) = write_result {
                     // Close before unlinking so cleanup also works on Windows.
                     drop(file);

@@ -1,5 +1,6 @@
 //! Test-only fault injection for checkpoint durability tests. Configure one failure with
-//! `EXECUTE_FAILPOINT=NAME:N:ACTION`, where ACTION is `error`, `abort`, or `partial:BYTES`.
+//! `EXECUTE_FAILPOINT=NAME:N:ACTION`, where ACTION is `error`, `abort`, `lost`, or
+//! `partial:BYTES`. `lost` models a filesystem that silently drops a write.
 //! The older `NAME:N` spelling remains an alias for `error`.
 
 use std::fs::File;
@@ -11,6 +12,7 @@ use std::sync::OnceLock;
 enum Action {
     Error,
     Abort,
+    Lost,
     Partial(usize),
 }
 
@@ -32,6 +34,7 @@ fn plan() -> Option<&'static Plan> {
         let action = match parts.next().unwrap_or("error") {
             "error" => Action::Error,
             "abort" => Action::Abort,
+            "lost" => Action::Lost,
             tail if tail.starts_with("partial:") => {
                 Action::Partial(tail.strip_prefix("partial:")?.parse().ok()?)
             }
@@ -51,8 +54,7 @@ fn action(point: &str) -> Option<Action> {
     if configured.point != point {
         return None;
     }
-    (CALLS.fetch_add(1, Ordering::SeqCst) + 1 == configured.nth)
-        .then_some(configured.action)
+    (CALLS.fetch_add(1, Ordering::SeqCst) + 1 == configured.nth).then_some(configured.action)
 }
 
 /// Inject a fault at a non-write boundary. A partial-write action at such a boundary
@@ -61,6 +63,7 @@ pub(crate) fn hit(point: &str) -> io::Result<()> {
     match action(point) {
         Some(Action::Error) => Err(io::Error::other(format!("injected failure at {point}"))),
         Some(Action::Abort | Action::Partial(_)) => std::process::abort(),
+        Some(Action::Lost) => Ok(()),
         None => Ok(()),
     }
 }
@@ -70,6 +73,7 @@ pub(crate) fn write_all(point: &str, file: &mut File, bytes: &[u8]) -> io::Resul
     match action(point) {
         Some(Action::Error) => Err(io::Error::other(format!("injected failure at {point}"))),
         Some(Action::Abort) => std::process::abort(),
+        Some(Action::Lost) => Ok(()),
         Some(Action::Partial(count)) => {
             let _ = file.write_all(&bytes[..count.min(bytes.len())]);
             std::process::abort()

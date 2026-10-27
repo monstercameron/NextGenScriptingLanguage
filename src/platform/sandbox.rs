@@ -88,7 +88,7 @@ pub(crate) fn preflight(grant: &AppletGrant, binary: &Path, cwd: &Path) -> Resul
 }
 
 #[cfg(target_os = "linux")]
-type ProbeKey = (PathBuf, AppletGrant, PathBuf, PathBuf, String);
+type ProbeKey = (PathBuf, AppletGrant, PathBuf, PathBuf, Vec<u8>);
 
 #[cfg(target_os = "linux")]
 type ProbeCache = Vec<ProbeKey>;
@@ -152,7 +152,7 @@ fn cache_successful_probe(
         grant.clone(),
         binary.to_path_buf(),
         cwd.to_path_buf(),
-        identity.clone(),
+        identity,
     );
     ACTIVE_PROBE_CACHE.with(|active| {
         let mut active = active.borrow_mut();
@@ -178,48 +178,72 @@ fn remember_successful_probe(
 }
 
 #[cfg(target_os = "linux")]
-fn execution_identity(bwrap: &Path) -> Option<String> {
+fn push_identity_field(identity: &mut Vec<u8>, tag: u8, value: &[u8]) -> Option<()> {
+    let length = u32::try_from(value.len()).ok()?;
+    identity.push(tag);
+    identity.extend_from_slice(&length.to_be_bytes());
+    identity.extend_from_slice(value);
+    Some(())
+}
+
+#[cfg(target_os = "linux")]
+fn execution_identity(bwrap: &Path) -> Option<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::MetadataExt;
 
-    let mut identity = String::new();
-    for namespace in ["user", "pid", "mnt", "net", "ipc", "uts"] {
+    // Each field has a stable tag and length prefix. This keeps identities
+    // injective without formatting paths and numeric metadata into text.
+    let mut identity = Vec::with_capacity(512);
+    for (tag, namespace) in [
+        (0x01, "user"),
+        (0x02, "pid"),
+        (0x03, "mnt"),
+        (0x04, "net"),
+        (0x05, "ipc"),
+        (0x06, "uts"),
+    ] {
         let path = Path::new("/proc/thread-self/ns").join(namespace);
         let namespace_id = std::fs::read_link(path).ok()?;
-        identity.push_str(&format!(" {namespace}={}", namespace_id.display()));
+        push_identity_field(&mut identity, tag, namespace_id.as_os_str().as_bytes())?;
     }
-    {
-        let metadata = std::fs::metadata(bwrap).ok()?;
-        use std::fmt::Write as _;
-        let _ = write!(
-            identity,
-            " bwrap={}:{}:{}:{}:{}:{}",
-            metadata.dev(),
-            metadata.ino(),
-            metadata.len(),
-            metadata.ctime(),
-            metadata.ctime_nsec(),
-            metadata.mode()
-        );
-    }
+
+    let metadata = std::fs::metadata(bwrap).ok()?;
+    push_identity_field(&mut identity, 0x10, &metadata.dev().to_be_bytes())?;
+    push_identity_field(&mut identity, 0x11, &metadata.ino().to_be_bytes())?;
+    push_identity_field(&mut identity, 0x12, &metadata.len().to_be_bytes())?;
+    push_identity_field(&mut identity, 0x13, &metadata.ctime().to_be_bytes())?;
+    push_identity_field(&mut identity, 0x14, &metadata.ctime_nsec().to_be_bytes())?;
+    push_identity_field(&mut identity, 0x15, &metadata.mode().to_be_bytes())?;
+
     let status = std::fs::read_to_string("/proc/thread-self/status").ok()?;
-    let mut identity_fields = 0;
-    for line in status.lines().filter(|line| {
-        line.starts_with("Uid:")
-            || line.starts_with("Gid:")
-            || line.starts_with("Groups:")
-            || line.starts_with("CapEff:")
-            || line.starts_with("CapPrm:")
-            || line.starts_with("CapBnd:")
-            || line.starts_with("CapInh:")
-            || line.starts_with("CapAmb:")
-            || line.starts_with("NoNewPrivs:")
-            || line.starts_with("Seccomp:")
-    }) {
-        identity.push(' ');
-        identity.push_str(line);
-        identity_fields += 1;
+    let status_fields = [
+        (0x20, "Uid:"),
+        (0x21, "Gid:"),
+        (0x22, "Groups:"),
+        (0x23, "CapEff:"),
+        (0x24, "CapPrm:"),
+        (0x25, "CapBnd:"),
+        (0x26, "CapInh:"),
+        (0x27, "CapAmb:"),
+        (0x28, "NoNewPrivs:"),
+        (0x29, "Seccomp:"),
+    ];
+    let mut seen = [false; 10];
+    for line in status.lines() {
+        let Some((index, (tag, _))) = status_fields
+            .iter()
+            .enumerate()
+            .find(|(_, (_, prefix))| line.starts_with(prefix))
+        else {
+            continue;
+        };
+        // Duplicate or malformed proc status identities must bypass caching.
+        if std::mem::replace(&mut seen[index], true) {
+            return None;
+        }
+        push_identity_field(&mut identity, *tag, line.as_bytes())?;
     }
-    (identity_fields == 10).then_some(identity)
+    seen.into_iter().all(|field| field).then_some(identity)
 }
 
 #[cfg(any(target_os = "macos", all(test, target_os = "linux")))]
@@ -1138,6 +1162,37 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn execution_identity_fields_keep_tags_and_boundaries() {
+        let mut uid_then_gid = Vec::new();
+        push_identity_field(&mut uid_then_gid, 0x20, b"ab").unwrap();
+        push_identity_field(&mut uid_then_gid, 0x21, b"c").unwrap();
+
+        let mut differently_split = Vec::new();
+        push_identity_field(&mut differently_split, 0x20, b"a").unwrap();
+        push_identity_field(&mut differently_split, 0x21, b"bc").unwrap();
+
+        let mut different_fields = Vec::new();
+        push_identity_field(&mut different_fields, 0x21, b"ab").unwrap();
+        push_identity_field(&mut different_fields, 0x20, b"c").unwrap();
+
+        assert_ne!(uid_then_gid, differently_split);
+        assert_ne!(uid_then_gid, different_fields);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn execution_identity_is_stable_and_bypasses_cache_without_binary_metadata() {
+        let executable = std::env::current_exe().unwrap();
+        let first = execution_identity(&executable).expect("Linux proc identity is available");
+        let second = execution_identity(&executable).expect("Linux proc identity is available");
+        assert_eq!(first, second);
+        assert!(!first.is_empty());
+
+        assert!(execution_identity(Path::new("/definitely-not-an-execute-test-binary")).is_none());
+    }
+
     fn require_sandbox(grant: &AppletGrant, binary: &Path, cwd: &Path, label: &str) -> bool {
         match preflight(grant, binary, cwd) {
             Ok(()) => true,
@@ -1233,7 +1288,7 @@ mod tests {
                 current_grant.clone(),
                 binary.clone(),
                 cwd.clone(),
-                "same execution identity".to_owned(),
+                b"same execution identity".to_vec(),
             );
             remember_successful_probe(&mut cache, key, || {
                 probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1241,6 +1296,35 @@ mod tests {
             })
             .unwrap();
         }
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn probe_cache_requires_exact_execution_identity_equality() {
+        let root = tempfile::tempdir().unwrap();
+        let grant = grant_for(root.path());
+        let bwrap = PathBuf::from("/usr/bin/bwrap");
+        let binary = PathBuf::from("/usr/bin/true");
+        let cwd = root.path().to_path_buf();
+        let mut cache = ProbeCache::new();
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+
+        for identity in [b"identity-a", b"identity-a", b"identity-b", b"identity-b"] {
+            let key = (
+                bwrap.clone(),
+                grant.clone(),
+                binary.clone(),
+                cwd.clone(),
+                identity.to_vec(),
+            );
+            remember_successful_probe(&mut cache, key, || {
+                probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        }
+
         assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 

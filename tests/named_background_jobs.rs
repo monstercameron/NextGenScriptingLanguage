@@ -219,6 +219,79 @@ fn loop_collected_job_batch_must_still_be_observed_before_scope_exit() {
 
 #[cfg(unix)]
 #[test]
+fn cancelling_loop_batch_signals_all_jobs_before_joining_first() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let slow_pid = directory.path().join("slow-job.pid");
+    let fast_pid = directory.path().join("fast-job.pid");
+    let ready = directory.path().join("fast-job-ready");
+    let program = parser::parse(&format!(
+        r#"for each phase in ["slow", "fast"]
+  spawn as worker
+    run "sh" with arguments ["-c", "if [ \"$1\" = slow ]; then echo $$ > \"$2\"; trap '' TERM; while :; do sleep 0.01; done; else echo $$ > \"$3\"; touch \"$4\"; while :; do sleep 0.01; done; fi", "job", phase, {}, {}, {}]
+run "sh" with arguments ["-c", "while [ ! -f \"$1\" ]; do sleep 0.01; done", "wait", {}]
+cancel worker
+"#,
+        quote(&slow_pid.to_string_lossy()),
+        quote(&fast_pid.to_string_lossy()),
+        quote(&ready.to_string_lossy()),
+        quote(&ready.to_string_lossy()),
+    ))?;
+
+    let observed_violation = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observer_violation = std::sync::Arc::clone(&observed_violation);
+    let observer_slow_pid = slow_pid.clone();
+    let observer_fast_pid = fast_pid.clone();
+    let observer = std::thread::spawn(move || {
+        if !await_file(&observer_slow_pid) || !await_file(&observer_fast_pid) {
+            return;
+        }
+        let Ok(pid) = std::fs::read_to_string(&observer_slow_pid) else {
+            return;
+        };
+        let Ok(pid) = pid.trim().parse::<libc::pid_t>() else {
+            return;
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            // SAFETY: this probes the live PID written by the test-owned child.
+            if unsafe { libc::kill(pid, 0) } == -1 {
+                let Ok(fast_pid) = std::fs::read_to_string(&observer_fast_pid) else {
+                    observer_violation.store(true, std::sync::atomic::Ordering::Release);
+                    return;
+                };
+                let Ok(fast_pid) = fast_pid.trim().parse::<libc::pid_t>() else {
+                    observer_violation.store(true, std::sync::atomic::Ordering::Release);
+                    return;
+                };
+                // SAFETY: this probes the fast child PID written by the test-owned child.
+                if unsafe { libc::kill(fast_pid, 0) } == 0 {
+                    observer_violation.store(true, std::sync::atomic::Ordering::Release);
+                }
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+
+    let result = runtime::run(
+        &program,
+        &Registry::default(),
+        &options(directory.path(), 1024 * 1024),
+    )?;
+    assert!(result.output.is_empty());
+    observer.join().expect("cancellation observer panicked");
+    assert!(
+        !observed_violation.load(std::sync::atomic::Ordering::Acquire),
+        "a later loop job remained running while the first job was being reaped"
+    );
+    let fast_pid: libc::pid_t = std::fs::read_to_string(&fast_pid)?.trim().parse()?;
+    // SAFETY: this probes the child PID written by the test-owned fast job.
+    assert_eq!(unsafe { libc::kill(fast_pid, 0) }, -1);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn try_catch_cancels_and_reaps_jobs_owned_by_the_try_body() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let marker = directory.path().join("job-started");

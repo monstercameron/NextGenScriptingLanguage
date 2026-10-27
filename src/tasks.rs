@@ -6,17 +6,17 @@
 //! the runtime operation they supervise. Applet-specific policy and contract
 //! preflight belongs to the caller and must complete before spawning work.
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use std::any::Any;
 use std::collections::{BTreeMap, VecDeque};
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, RawFd};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::Arc;
 use std::sync::{Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -365,17 +365,46 @@ impl TaskScope {
     }
 
     /// Join a task, preserving its typed value or task error.
-    pub fn join<T>(&mut self, mut handle: TaskHandle<T>) -> Result<T> {
-        let received = handle
+    pub fn join<T>(&mut self, handle: TaskHandle<T>) -> Result<T> {
+        self.join_until(handle, None)
+    }
+
+    /// Join a task while applying the caller's current deadline. This lets a
+    /// reusable scope serve successive live nodes without retaining the first
+    /// node's deadline for later waits.
+    pub fn join_until<T>(
+        &mut self,
+        mut handle: TaskHandle<T>,
+        deadline: Option<Instant>,
+    ) -> Result<T> {
+        let receiver = handle
             .result
             .take()
-            .expect("task result receiver is present")
-            .recv()
-            .map_err(|_| anyhow!("task worker exited without a result"));
+            .expect("task result receiver is present");
+        let received = if let Some(deadline) = deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match receiver.recv_timeout(remaining) {
+                Ok(result) => Ok(result),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    self.cancel();
+                    let _ = receiver.recv();
+                    let _ = self.reap(handle.id);
+                    bail!("task group deadline exceeded; external effects may be uncertain")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    Err(anyhow!("task worker exited without a result"))
+                }
+            }
+        } else {
+            receiver
+                .recv()
+                .map_err(|_| anyhow!("task worker exited without a result"))
+        };
+        let received = received?;
         let reaped = self.reap(handle.id);
         let result = received?;
         reaped?;
-        result
+        Ok(result)
     }
 
     /// Poll a task without blocking. Its result is consumed only when ready.

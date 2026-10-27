@@ -8,7 +8,7 @@ use super::*;
 use crate::ast::{JobStage, Value};
 use crate::contracts::AppletBackend;
 use crate::tasks::{CancellationWake, TaskHandle, TaskScope};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::AtomicUsize;
@@ -304,12 +304,23 @@ impl Drop for Supervisor {
 
 impl Supervisor {
     pub(super) fn new(signals: &Signals, _output_limit: usize) -> Result<Self> {
+        Self::new_with_task_deadline(signals, signals.deadline)
+    }
+
+    /// A live Supervisor spans multiple independently timed nodes. Its task
+    /// scope must not retain the first node's deadline; live waits apply the
+    /// active node's deadline at the call site instead.
+    pub(super) fn new_for_live(signals: &Signals, _output_limit: usize) -> Result<Self> {
+        Self::new_with_task_deadline(signals, None)
+    }
+
+    fn new_with_task_deadline(signals: &Signals, task_deadline: Option<Instant>) -> Result<Self> {
         let budget = signals
             .current_job_run_budget()
             .context("background job runtime is missing its finite-run budget")?;
         let output_limit = budget.output_limit();
         Ok(Self {
-            tasks: TaskScope::new(MAX_ACTIVE_JOBS, signals.deadline)?,
+            tasks: TaskScope::new(MAX_ACTIVE_JOBS, task_deadline)?,
             jobs: BTreeMap::new(),
             scope_parents: BTreeMap::new(),
             batches: BTreeMap::new(),
@@ -398,17 +409,18 @@ impl Supervisor {
             .map(Value::List)
     }
 
-    pub(super) fn await_batch(
+    pub(super) fn await_batch_until(
         &mut self,
         parent: usize,
         name: &str,
+        deadline: Option<Instant>,
     ) -> Result<Vec<(usize, execution_result::ExecutionResult)>> {
         let scopes = self
             .batch_scopes(parent, name)
             .ok_or_else(|| anyhow!("unknown background job batch {name:?} in this scope"))?;
         let mut results = Vec::with_capacity(scopes.len());
         for scope in scopes {
-            results.push((scope, self.await_job(scope, name)?));
+            results.push((scope, self.await_job_until(scope, name, deadline)?));
         }
         if let Some(batch) = self.batches.get_mut(&(parent, name.to_owned())) {
             batch.resolved = true;
@@ -420,8 +432,33 @@ impl Supervisor {
         let scopes = self
             .batch_scopes(parent, name)
             .ok_or_else(|| anyhow!("unknown background job batch {name:?} in this scope"))?;
-        for scope in &scopes {
-            self.cancel(*scope, name)?;
+        let keys = scopes
+            .into_iter()
+            .map(|scope| (scope, name.to_owned()))
+            .collect::<Vec<_>>();
+        for key in &keys {
+            if !self.jobs.contains_key(key) {
+                bail!("unknown background job {name:?} in this scope");
+            }
+        }
+        // Signal every batch member before joining any one worker. A slow
+        // shutdown for an earlier iteration must not leave later iterations
+        // running throughout that wait.
+        for key in &keys {
+            if let Some(job) = self.jobs.get(key).filter(|job| !job.resolved) {
+                job.cancelled
+                    .store(true, std::sync::atomic::Ordering::Release);
+                job.cancel_wake.notify();
+            }
+        }
+        for key in &keys {
+            if self.jobs.get(key).is_some_and(|job| !job.resolved) {
+                self.join_job_result(key)?;
+                self.jobs
+                    .get_mut(key)
+                    .expect("validated batch job exists")
+                    .resolved = true;
+            }
         }
         if let Some(batch) = self.batches.get_mut(&(parent, name.to_owned())) {
             batch.resolved = true;
@@ -905,13 +942,14 @@ impl Supervisor {
         Ok(Value::Record(record))
     }
 
-    pub(super) fn await_job(
+    pub(super) fn await_job_until(
         &mut self,
         scope: usize,
         name: &str,
+        deadline: Option<Instant>,
     ) -> Result<execution_result::ExecutionResult> {
         let key = (scope, name.to_owned());
-        let result = self.join_job_result(&key)?;
+        let result = self.join_job_result_until(&key, deadline)?;
         self.jobs
             .get_mut(&key)
             .context("background job disappeared while awaiting")?
@@ -1058,6 +1096,14 @@ impl Supervisor {
         &mut self,
         key: &(usize, String),
     ) -> Result<execution_result::ExecutionResult> {
+        self.join_job_result_until(key, None)
+    }
+
+    fn join_job_result_until(
+        &mut self,
+        key: &(usize, String),
+        deadline: Option<Instant>,
+    ) -> Result<execution_result::ExecutionResult> {
         if let Some(result) = self.jobs.get(key).and_then(|job| job.terminal.clone()) {
             if self.jobs.get(key).is_some_and(|job| job.handle.is_none()) {
                 return Ok(result);
@@ -1068,7 +1114,7 @@ impl Supervisor {
             .get_mut(key)
             .and_then(|job| job.handle.take())
             .context("background job worker handle is missing")?;
-        let result = match self.tasks.join(handle) {
+        let result = match self.tasks.join_until(handle, deadline) {
             Ok(result) => result,
             Err(error) => execution_result::ExecutionResult::runtime_failure(
                 execution_result::ExecutionKind::UnknownError,
@@ -1345,9 +1391,11 @@ mod tests {
         }
 
         let error = supervisor.finish_scope(0).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("explicitly awaited or cancelled"));
+        assert!(
+            error
+                .to_string()
+                .contains("explicitly awaited or cancelled")
+        );
         supervisor.cancel_scope(0)?;
         supervisor.finish_scope(0)?;
         Ok(())

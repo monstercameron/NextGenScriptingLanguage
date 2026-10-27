@@ -103,7 +103,10 @@ pub(crate) fn execute_node_with_session(
         signals.begin_job_run(options.max_output_bytes)?
     };
     if supervisor.is_none() {
-        *supervisor = Some(jobs::Supervisor::new(&signals, options.max_output_bytes)?);
+        *supervisor = Some(jobs::Supervisor::new_for_live(
+            &signals,
+            options.max_output_bytes,
+        )?);
     }
     crate::capabilities::preflight(node, registry, &options.working_directory)?;
     // run_finite_state replaces this slot on success; errors publish no state.

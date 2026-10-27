@@ -122,6 +122,72 @@ fn live_job_batch_survives_a_node_boundary_until_awaited() -> Result<()> {
 }
 
 #[test]
+fn live_session_refreshes_job_deadlines_for_each_node() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let program = parser::parse(
+        "run \"sh\" with arguments [\"-c\", \"sleep 0.1\"]\nspawn as first\n  run \"sh\" with arguments [\"-c\", \"sleep 0.2; printf first\"]\nspawn as second\n  run \"printf\" with arguments [\"second\"]\nawait first\nawait second\n",
+    )?;
+    let spawn = program
+        .steps
+        .iter()
+        .position(|step| matches!(&step.kind, StepKind::SpawnJob { name, .. } if name == "first"))
+        .expect("program has a first job spawn");
+    let split = spawn + 1;
+    let first = Program {
+        definitions: program.definitions.clone(),
+        inputs: program.inputs.clone(),
+        steps: program.steps[..split].to_vec(),
+        trigger: None,
+    };
+    let second = Program {
+        definitions: program.definitions.clone(),
+        inputs: program.inputs.clone(),
+        steps: program.steps[split..].to_vec(),
+        trigger: None,
+    };
+    let source_last_uses = job_last_uses(&program.steps);
+    let first_last_uses = source_last_uses
+        .iter()
+        .filter_map(|(name, index)| (*index < split).then_some((name.clone(), *index)))
+        .collect();
+    let second_last_uses = source_last_uses
+        .into_iter()
+        .filter_map(|(name, index)| (index >= split).then_some((name, index - split)))
+        .collect();
+    let jobs = Arc::new(JobSession::new());
+    let context = NodeState {
+        cwd: directory.path().into(),
+        bindings: BTreeMap::new(),
+        data: Vec::new(),
+    };
+    let mut node_options = options(directory.path());
+    node_options.total_timeout = Some(Duration::from_millis(150));
+    let (_, state) = execute_node_with_session(
+        &first,
+        &Registry::default(),
+        &node_options,
+        context,
+        Arc::new(AtomicBool::new(false)),
+        Arc::clone(&jobs),
+        first_last_uses,
+        false,
+    )?;
+    std::thread::sleep(Duration::from_millis(180));
+    let (result, _) = execute_node_with_session(
+        &second,
+        &Registry::default(),
+        &node_options,
+        state,
+        Arc::new(AtomicBool::new(false)),
+        jobs,
+        second_last_uses,
+        true,
+    )?;
+    assert_eq!(result.output, b"second");
+    Ok(())
+}
+
+#[test]
 #[ignore = "explicit paired release measurements; no child processes"]
 #[allow(clippy::assertions_on_constants)] // Build in debug; run only in release.
 fn live_state_handoff() -> Result<()> {

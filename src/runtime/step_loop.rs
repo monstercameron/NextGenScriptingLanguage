@@ -1614,15 +1614,19 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         .copied()
                         .find(|scope| job_supervisor.batch_scopes(*scope, name).is_some());
                     let mut batch_results = if let Some(scope) = batch_scope {
-                        job_supervisor.await_batch(scope, name).with_context(|| {
-                            format!("line {}: awaiting job batch {name:?}", step.line)
-                        })?
+                        job_supervisor
+                            .await_batch_until(scope, name, signals.deadline)
+                            .with_context(|| {
+                                format!("line {}: awaiting job batch {name:?}", step.line)
+                            })?
                     } else if let Some(scope) = scope {
                         vec![(
                             scope,
-                            job_supervisor.await_job(scope, name).with_context(|| {
-                                format!("line {}: awaiting job {name:?}", step.line)
-                            })?,
+                            job_supervisor
+                                .await_job_until(scope, name, signals.deadline)
+                                .with_context(|| {
+                                    format!("line {}: awaiting job {name:?}", step.line)
+                                })?,
                         )]
                     } else {
                         Vec::new()

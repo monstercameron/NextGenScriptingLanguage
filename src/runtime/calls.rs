@@ -192,6 +192,8 @@ pub(super) struct Frame<'a> {
     pub name: &'a str,
     pub line: usize,
     pub binding: Option<&'a str>,
+    /// Native callers register returned bytes with the secret redactor.
+    #[cfg(not(target_arch = "wasm32"))]
     pub sensitive_binding: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub job_scope: usize,

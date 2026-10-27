@@ -1,4 +1,21 @@
 // Platform-independent validation, values and argv mapping. Included by both hosts.
+fn applet_has_declared_secret_environment(registry: &Registry, call: &Invocation) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        registry.resolve_call(call).ok().is_some_and(|manifest| {
+            crate::security::applet_has_declared_secret_environment(
+                registry,
+                manifest.name_for(call),
+            )
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (registry, call);
+        false
+    }
+}
+
 fn check_value(value: &Value, names: &BTreeSet<String>) -> Result<()> {
     match value {
         Value::Reference(name) if !names.contains(name) => bail!("undefined result {name:?}"),
@@ -1113,12 +1130,7 @@ fn validate_secret_arguments(program: &Program, registry: &Registry) -> Result<(
                     let consumes_secret_pipeline =
                         *connection != crate::ast::Connection::Start && pipeline_secret;
                     let declared_secret_environment =
-                        registry.resolve_call(call).ok().is_some_and(|manifest| {
-                            crate::security::applet_has_declared_secret_environment(
-                                registry,
-                                manifest.name_for(call),
-                            )
-                        });
+                        applet_has_declared_secret_environment(registry, call);
                     let sensitive_output = call.marks_sensitive_output()
                         || consumes_secret_pipeline
                         || pending_environment_secret
@@ -1202,12 +1214,7 @@ fn validate_secret_arguments(program: &Program, registry: &Registry) -> Result<(
                     for call in tasks {
                         check_call(call, step.line, program_name, &secrets)?;
                         let declared_secret_environment =
-                            registry.resolve_call(call).ok().is_some_and(|manifest| {
-                                crate::security::applet_has_declared_secret_environment(
-                                    registry,
-                                    manifest.name_for(call),
-                                )
-                            });
+                            applet_has_declared_secret_environment(registry, call);
                         if call.marks_sensitive_output() || declared_secret_environment {
                             sensitive_task = true;
                             if let Some(name) = &call.binding {
@@ -1309,6 +1316,7 @@ fn validate_secret_arguments(program: &Program, registry: &Registry) -> Result<(
 
 /// Statically known bindings that may contain secret data. Runtime-facing
 /// serializers use this conservative set to withhold derived values too.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn sensitive_binding_names(program: &Program, registry: &Registry) -> BTreeSet<String> {
     fn references(value: &Value, names: &BTreeSet<String>) -> bool {
         match value {
@@ -1336,12 +1344,7 @@ pub(crate) fn sensitive_binding_names(program: &Program, registry: &Registry) ->
             match &step.kind {
                 StepKind::Invoke { call, connection } => {
                     let declared_environment_secret =
-                        registry.resolve_call(call).ok().is_some_and(|manifest| {
-                            crate::security::applet_has_declared_secret_environment(
-                                registry,
-                                manifest.name_for(call),
-                            )
-                        });
+                        applet_has_declared_secret_environment(registry, call);
                     if call.marks_sensitive_output()
                         || (*connection != crate::ast::Connection::Start && pipeline_secret)
                         || pending_environment_secret
@@ -1390,12 +1393,7 @@ pub(crate) fn sensitive_binding_names(program: &Program, registry: &Registry) ->
                         || pending_environment_secret
                         || tasks.iter().any(|call| {
                             call.marks_sensitive_output()
-                                || registry.resolve_call(call).ok().is_some_and(|manifest| {
-                                    crate::security::applet_has_declared_secret_environment(
-                                        registry,
-                                        manifest.name_for(call),
-                                    )
-                                })
+                                || applet_has_declared_secret_environment(registry, call)
                         });
                     if each_secret {
                         if let Some(each) = each {
@@ -1409,14 +1407,7 @@ pub(crate) fn sensitive_binding_names(program: &Program, registry: &Registry) ->
                                 .iter()
                                 .filter(|call| {
                                     call.marks_sensitive_output()
-                                        || registry.resolve_call(call).ok().is_some_and(
-                                            |manifest| {
-                                                crate::security::applet_has_declared_secret_environment(
-                                                    registry,
-                                                    manifest.name_for(call),
-                                                )
-                                            },
-                                        )
+                                        || applet_has_declared_secret_environment(registry, call)
                                 })
                                 .filter_map(|call| call.binding.clone()),
                         );

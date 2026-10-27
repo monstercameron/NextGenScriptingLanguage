@@ -1370,9 +1370,7 @@ fn shell_command_argument_index(executable: &str, arguments: &[Value]) -> Option
                 index += 2;
                 continue;
             }
-            let Some(flags) = argument.strip_prefix('-') else {
-                return None;
-            };
+            let flags = argument.strip_prefix('-')?;
             let chars = flags.chars().collect::<Vec<_>>();
             if chars.last() == Some(&'c')
                 && chars[..chars.len() - 1]
@@ -1727,6 +1725,7 @@ fn collect_path_literal_diagnostics(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn shell_expansion_value_fix(
     source: &str,
     program: &Program,
@@ -2509,22 +2508,21 @@ fn has_shell_expansion(value: &str) -> bool {
         && !is_backslash_escaped(bytes, 0)
         && value
             .chars()
-            .skip(1)
-            .next()
+            .nth(1)
             .is_some_and(|ch| ch.is_alphanumeric() || ch == '/')
     {
         return true;
     }
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'$' && !is_backslash_escaped(bytes, index) {
-            if bytes
+        if bytes[index] == b'$'
+            && !is_backslash_escaped(bytes, index)
+            && (bytes
                 .get(index + 1)
                 .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
-                || matches!(bytes.get(index + 1), Some(b'{') | Some(b'('))
-            {
-                return true;
-            }
+                || matches!(bytes.get(index + 1), Some(b'{') | Some(b'(')))
+        {
+            return true;
         }
         if bytes[index] == b'`' && !is_backslash_escaped(bytes, index) {
             return true;
@@ -2584,7 +2582,7 @@ pub fn resolve_executable_diagnostics(
         );
         let applet_suggestion = crate::suggest::closest(
             &call.operation,
-            registry.applet_names().into_iter(),
+            registry.applet_names(),
         );
         let start = line_starts.start(line);
         let end = source[start..]
@@ -5413,7 +5411,7 @@ mod tests {
             "arguments": [{ "literal": "custom-operation" }]
         })
         .to_string();
-        let custom = Registry::from_sources(&[custom_command.clone()]).unwrap();
+        let custom = Registry::from_sources(std::slice::from_ref(&custom_command)).unwrap();
         assert!(!analyze_source(source, &custom)
             .iter()
             .any(|diagnostic| diagnostic.code == "applet.parameter.constraint"));
@@ -5576,7 +5574,7 @@ mod tests {
             "arguments": [{ "parameter": "pointer" }]
         })
         .to_string();
-        let custom = Registry::from_sources(&[custom_command.clone()]).unwrap();
+        let custom = Registry::from_sources(std::slice::from_ref(&custom_command)).unwrap();
         let malformed =
             "run json.keys with document {\"a\":1} and pointer \"not-a-pointer\" as result\n";
         assert!(

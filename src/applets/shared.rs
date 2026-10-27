@@ -216,6 +216,7 @@ pub(super) fn json_equal(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::applets::ExecutionBudgetExceeded;

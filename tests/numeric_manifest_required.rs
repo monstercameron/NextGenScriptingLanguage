@@ -5,7 +5,9 @@ use std::{fs, process::Command};
 fn numeric_checks_require_operands_and_valid_runs_keep_optional_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("case.program");
-    let cases: Vec<(&str, Vec<(&str, &str, Value)>)> = vec![
+    type Argument = (&'static str, &'static str, Value);
+    type Case = (&'static str, Vec<Argument>);
+    let cases: Vec<Case> = vec![
         ("abs", vec![("value", "-3", json!(-3))]),
         ("ceil", vec![("value", "3", json!(3))]),
         ("floor", vec![("value", "3", json!(3))]),

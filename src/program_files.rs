@@ -394,11 +394,9 @@ impl Loader<'_> {
                 let replaying = replay_only;
                 #[cfg(not(feature = "lsp"))]
                 let replaying = snapshot.replay_only;
-                if !replaying {
-                    if snapshot.sources.contains_key(&canonical) {
-                        std::sync::Arc::make_mut(&mut snapshot.requests)
-                            .insert(path.to_path_buf(), canonical.clone());
-                    }
+                if !replaying && snapshot.sources.contains_key(&canonical) {
+                    std::sync::Arc::make_mut(&mut snapshot.requests)
+                        .insert(path.to_path_buf(), canonical.clone());
                 }
             }
             return Ok(key);
@@ -448,7 +446,7 @@ impl Loader<'_> {
             .as_ref()
             .map(|(_, source)| source.as_str())
             .or(overlay.copied())
-            .or_else(|| disk_source.as_deref())
+            .or(disk_source.as_deref())
             .expect("a source is available from replay, overlay, or disk");
         if let Some(snapshot) = self.snapshot {
             let mut snapshot = snapshot.borrow_mut();

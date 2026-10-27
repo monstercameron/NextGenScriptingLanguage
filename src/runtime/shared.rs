@@ -341,6 +341,7 @@ pub(crate) fn preflight_executables(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn executable_suggestion(binary: &str, cwd: &Path) -> Option<String> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut names = std::collections::BTreeSet::<String>::new();
@@ -355,9 +356,9 @@ fn executable_suggestion(binary: &str, cwd: &Path) -> Option<String> {
         };
         for entry in entries.flatten() {
             let file_name = entry.file_name();
-            let executable = entry.metadata().is_ok_and(|metadata| {
-                metadata.is_file() && crate::platform::executable(&metadata)
-            });
+            let executable = entry
+                .metadata()
+                .is_ok_and(|metadata| metadata.is_file() && crate::platform::executable(&metadata));
             if executable {
                 if let Some(name) = executable_candidate_name(&file_name) {
                     names.insert(name);
@@ -368,6 +369,7 @@ fn executable_suggestion(binary: &str, cwd: &Path) -> Option<String> {
     crate::suggest::closest(binary, names.iter().map(String::as_str)).map(str::to_owned)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn executable_candidate_name(file_name: &std::ffi::OsStr) -> Option<String> {
     let name = file_name.to_str()?;
     if cfg!(windows) {
@@ -2046,7 +2048,7 @@ fn validate_range(
                         // contracts can make this a statically known scalar or
                         // JSON value, which lets later conditions and JSON
                         // selections be checked before any command runs.
-                        let kind = polymorphic_output_kind(&manifest, call, &flow.types)
+                        let kind = polymorphic_output_kind(manifest, call, &flow.types)
                             .or_else(|| manifest.output_kind())
                             .unwrap_or(crate::ast::InputType::Text);
                         flow.bind_type(name, kind)?;

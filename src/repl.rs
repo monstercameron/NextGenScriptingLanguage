@@ -170,18 +170,20 @@ impl Observer for SessionObserver {
 }
 
 /// An interactive session over one registry and working directory.
+type SessionHistoryEntry = (
+    String,
+    Vec<SessionStep>,
+    BTreeMap<String, &'static str>,
+    Vec<u8>,
+);
+
 pub struct Session<'a> {
     registry: &'a Registry,
     working_directory: std::path::PathBuf,
     source: String,
     steps: Vec<SessionStep>,
     observer: Arc<SessionObserver>,
-    history: Vec<(
-        String,
-        Vec<SessionStep>,
-        BTreeMap<String, &'static str>,
-        Vec<u8>,
-    )>,
+    history: Vec<SessionHistoryEntry>,
     machine_protocol: bool,
     binding_types: BTreeMap<String, &'static str>,
     last_output: Vec<u8>,

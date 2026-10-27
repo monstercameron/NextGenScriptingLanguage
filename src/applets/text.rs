@@ -426,8 +426,7 @@ pub(super) fn shape(
                     return Err(invalid("args.fill must have positive display width"));
                 }
                 let mut padding = String::new();
-                if fill_width > 0 {
-                    let full_fills = padding_width / fill_width;
+                if let Some(full_fills) = padding_width.checked_div(fill_width) {
                     let remainder = padding_width % fill_width;
                     if full_fills
                         .checked_mul(fill.len())

@@ -1156,6 +1156,14 @@ impl DecisionRecorder {
         records.push_back(decision.clone());
         decision
     }
+
+    /// How many decisions have ever been recorded through this recorder. The
+    /// snapshot above is a bounded window; this counter is the lifetime total,
+    /// so a persisted audit can state its truncation honestly even after the
+    /// window has dropped the prefix.
+    pub fn total(&self) -> u64 {
+        self.sequence.load(Ordering::Relaxed)
+    }
 }
 
 /// Record a policy authorization outcome without including dynamic values.
@@ -1184,6 +1192,13 @@ pub fn record_policy_decision(
 /// Read the current task's bounded decision log.
 pub fn policy_decisions(registry: &Registry) -> Vec<PolicyDecision> {
     registry.host_state::<DecisionRecorder>().snapshot()
+}
+
+/// Lifetime total of recorded policy decisions, including ones the bounded
+/// window has already dropped. A persisted audit reports this total next to
+/// the decisions it kept, so truncation is explicit rather than silent.
+pub fn policy_decision_total(registry: &Registry) -> u64 {
+    registry.host_state::<DecisionRecorder>().total()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

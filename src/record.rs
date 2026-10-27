@@ -8,7 +8,13 @@
 //!   its hash, redacted inputs, timing, the final result and output hash, the
 //!   limits that applied, the policy in force (execution mode and which policies
 //!   were configured, never policy contents), and the bounded policy-decision
-//!   audit: what effects were allowed or denied and why.
+//!   audit: what effects were allowed or denied and why. Each kept decision
+//!   carries a link in a hash chain headed by `audit_head`; `show-run`
+//!   re-verifies the links, the sequence order and the truncation accounting
+//!   before presenting the audit. The chain is unanchored (it lives in the
+//!   same file it protects): it evidences edits made without recomputing it,
+//!   not a same-user forger who rewrites the audit and the head together.
+//!   Whole-record tamper evidence belongs to the record-integrity work.
 //! - `program.program`: a copy of the program as it ran.
 //! - `trace.jsonl`: one JSON object per applet group, in execution order, with the
 //!   resolved argv, status, declared outcome, wall time, and the stdout and stderr
@@ -140,9 +146,66 @@ fn prepare_plan(redactor: &SecretRedactor, plan: &str) -> (String, String) {
 /// How many of the in-memory policy decisions the run record keeps. Decisions
 /// are safe by construction (bounded identifiers and canonical origins only, no
 /// payloads or secrets), and the tail is kept so the most recent decision --
-/// usually the one that failed the run -- survives. The total is stored
-/// alongside, so a truncated audit is explicit rather than silent.
+/// usually the one that failed the run -- survives. The lifetime total is
+/// stored alongside, so a truncated audit is explicit rather than silent.
 pub const MAX_AUDIT_DECISIONS: usize = crate::security::MAX_PERSISTED_DECISIONS;
+
+/// Domain string for the audit hash chain. A head is only meaningful next to
+/// the algorithm that made it; changing this string retires old heads.
+const AUDIT_CHAIN_DOMAIN: &str = "execute.policy-audit/1";
+
+/// Genesis head: the chain over zero persisted decisions. An empty audit
+/// stores this head with a zero total.
+fn audit_genesis() -> String {
+    sha256_hex(AUDIT_CHAIN_DOMAIN.as_bytes())
+}
+
+fn push_audit_field(encoding: &mut Vec<u8>, text: &str) {
+    encoding.extend_from_slice(&(text.len() as u64).to_le_bytes());
+    encoding.extend_from_slice(text.as_bytes());
+}
+
+/// Length-prefixed encoding of one audit link: the previous head plus the
+/// exact persisted fields of one decision, in a fixed order. Length prefixes
+/// (not separators) keep the encoding injective whatever the field contents
+/// hold. The link covers only the decision's own fields, never `audit_hash`
+/// itself. Everything it covers is public by construction (bounded
+/// identifiers, canonical origins, enum codes), so the chain hash cannot
+/// confirm a guess at a secret.
+fn audit_link_encoding(previous_head_hex: &str, decision: &Json) -> Vec<u8> {
+    let mut encoding = Vec::new();
+    push_audit_field(&mut encoding, previous_head_hex);
+    push_audit_field(
+        &mut encoding,
+        &decision
+            .get("sequence")
+            .and_then(Json::as_u64)
+            .map(|sequence| sequence.to_string())
+            .unwrap_or_default(),
+    );
+    for name in ["subject", "action", "risk", "outcome", "reason"] {
+        push_audit_field(
+            &mut encoding,
+            decision
+                .get(name)
+                .and_then(Json::as_str)
+                .unwrap_or_default(),
+        );
+    }
+    push_audit_field(
+        &mut encoding,
+        decision
+            .get("scope_origin")
+            .and_then(Json::as_str)
+            .unwrap_or_default(),
+    );
+    encoding
+}
+
+/// Link one persisted decision onto the chain headed by `previous_head_hex`.
+fn audit_link(previous_head_hex: &str, decision: &Json) -> String {
+    sha256_hex(&audit_link_encoding(previous_head_hex, decision))
+}
 
 /// The policy in force for a run: the execution mode and which policies were
 /// configured. Policy contents (grants, paths, digests) are never recorded;
@@ -169,17 +232,153 @@ fn policy_context_json(registry: &Registry) -> Json {
 }
 
 /// The bounded durable audit of policy/effect decisions: the most recent
-/// decisions, with the total seen and whether the tail was cut.
-fn decision_audit_json(registry: &Registry) -> (Json, usize, bool) {
-    let decisions = security::policy_decisions(registry);
-    let total = decisions.len();
-    let start = total.saturating_sub(MAX_AUDIT_DECISIONS);
+/// decisions, each linked onto a hash chain, with the lifetime total, whether
+/// the tail was cut, and the head of the chain. The total comes from the
+/// recorder's counter, not the bounded window, so it stays honest even after
+/// the window has dropped the prefix.
+fn decision_audit_json(registry: &Registry) -> (Json, u64, bool, String) {
+    let mut decisions = security::policy_decisions(registry);
+    // Sequence numbers are assigned before the recorder's queue lock is taken,
+    // so concurrent pushes can land out of order. The audit persists sequence
+    // order, which is what verification checks for contiguity.
+    decisions.sort_by_key(|decision| decision.sequence);
+    let total = security::policy_decision_total(registry);
+    let start = decisions.len().saturating_sub(MAX_AUDIT_DECISIONS);
+    let mut head = audit_genesis();
     let items = decisions[start..]
         .iter()
-        .map(|decision| serde_json::to_value(decision).unwrap_or(Json::Null))
+        .map(|decision| {
+            let mut value = serde_json::to_value(decision).unwrap_or(Json::Null);
+            head = audit_link(&head, &value);
+            value["audit_hash"] = Json::String(head.clone());
+            value
+        })
         .collect::<Vec<_>>();
-    let truncated = total > items.len();
-    (Json::Array(items), total, truncated)
+    let truncated = total > items.len() as u64;
+    (Json::Array(items), total, truncated, head)
+}
+
+/// What verification of a persisted decision audit concluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuditVerification {
+    /// No `decisions` key at all: a record written before the audit existed.
+    PreAudit,
+    /// Decisions with no chain head: written between the bounded audit and the
+    /// chained audit. Shown, but explicitly not verified.
+    UnchainedLegacy,
+    /// A chained audit whose links, order, count and truncation flag all check.
+    Verified { approved: usize, denied: usize },
+}
+
+/// Verify the persisted decision audit in a `run.json` document.
+///
+/// The checks catch a decision edited in place (link mismatch), a decision
+/// removed from the middle (sequence gap), a reordered audit (same sequences,
+/// wrong order), a dropped prefix or suffix (first/last sequence against the
+/// total), and a truncation flag that disagrees with the total. A record that
+/// fails any check is reported, not presented as trustworthy.
+///
+/// Trust boundary: the chain is unanchored — it lives in the same file it
+/// protects — so it evidences edits made without recomputing it (mistakes,
+/// corruption, naive tampering), not a same-user editor who rewrites the
+/// decisions, the total and the head together (threat-model A4). Whole-record
+/// tamper evidence, which would also cover that forger, belongs to the
+/// record-integrity work (issue #414), not to this chain.
+fn verify_decision_audit(run: &Json) -> Result<AuditVerification> {
+    let Some(decisions_value) = run.get("decisions") else {
+        return Ok(AuditVerification::PreAudit);
+    };
+    let Some(decisions) = decisions_value.as_array() else {
+        bail!("policy audit is not an array; the record may have been modified after the run");
+    };
+    let Some(head) = run.get("audit_head").and_then(Json::as_str) else {
+        return Ok(AuditVerification::UnchainedLegacy);
+    };
+    let Some(total) = run.get("decision_count").and_then(Json::as_u64) else {
+        bail!(
+            "policy audit has no decision total; the record may have been modified after the run"
+        );
+    };
+    let Some(truncated) = run.get("decisions_truncated").and_then(Json::as_bool) else {
+        bail!(
+            "policy audit has no truncation flag; the record may have been modified after the run"
+        );
+    };
+    if decisions.len() > MAX_AUDIT_DECISIONS {
+        bail!(
+            "policy audit keeps {} decisions, past the {MAX_AUDIT_DECISIONS}-decision bound; the record may have been modified after the run",
+            decisions.len()
+        );
+    }
+    if truncated != (total > decisions.len() as u64) {
+        bail!(
+            "policy audit truncation flag disagrees with its total ({total}) and kept decisions ({}); the record may have been modified after the run",
+            decisions.len()
+        );
+    }
+    if decisions.is_empty() {
+        if total != 0 {
+            bail!("policy audit kept no decisions but claims a total of {total}; the record may have been modified after the run");
+        }
+        if head != audit_genesis() {
+            bail!("policy audit head does not match an empty audit; the record may have been modified after the run");
+        }
+        return Ok(AuditVerification::Verified {
+            approved: 0,
+            denied: 0,
+        });
+    }
+    let sequences = decisions
+        .iter()
+        .map(|decision| decision.get("sequence").and_then(Json::as_u64))
+        .collect::<Option<Vec<_>>>();
+    let Some(sequences) = sequences else {
+        bail!("policy audit has a decision without a sequence number; the record may have been modified after the run");
+    };
+    let first_expected = total
+        .checked_sub(decisions.len() as u64)
+        .and_then(|first| first.checked_add(1));
+    let Some(first_expected) = first_expected else {
+        bail!("policy audit total ({total}) is below its kept decisions ({}); the record may have been modified after the run", decisions.len());
+    };
+    let expected: Vec<u64> = (first_expected..=total).collect();
+    let mut ordered = sequences.clone();
+    ordered.sort_unstable();
+    if ordered != expected {
+        bail!(
+            "policy audit sequences run {first_expected}..={total} with a gap; a decision was removed after the run"
+        );
+    }
+    if sequences != expected {
+        bail!("policy audit decisions are out of sequence order; the audit was reordered after the run");
+    }
+    let mut running = audit_genesis();
+    for decision in decisions {
+        let Some(stored) = decision.get("audit_hash").and_then(Json::as_str) else {
+            bail!("policy audit decision #{} has no chain link; the record may have been modified after the run", decision.get("sequence").and_then(Json::as_u64).unwrap_or(0));
+        };
+        running = audit_link(&running, decision);
+        if stored != running {
+            bail!(
+                "policy audit decision #{} does not match its chain link; it was modified after the run",
+                decision.get("sequence").and_then(Json::as_u64).unwrap_or(0)
+            );
+        }
+    }
+    if head != running {
+        bail!(
+            "policy audit head does not match its decisions; the audit was modified after the run"
+        );
+    }
+    let approved = decisions
+        .iter()
+        .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("approved"))
+        .count();
+    let denied = decisions
+        .iter()
+        .filter(|decision| decision.get("outcome").and_then(Json::as_str) == Some("denied"))
+        .count();
+    Ok(AuditVerification::Verified { approved, denied })
 }
 
 /// Whether the data-flow persistence policy lets output with these labels be kept
@@ -321,7 +520,7 @@ impl Recorder {
         // Snapshot after the persistence checks above, so the record's own
         // persistence decisions are part of the audit too.
         let policy = policy_context_json(&self.registry);
-        let (decisions, decision_count, decisions_truncated) =
+        let (decisions, decision_count, decisions_truncated, audit_head) =
             decision_audit_json(&self.registry);
         let document = json!({
             "protocol": PROTOCOL,
@@ -350,6 +549,7 @@ impl Recorder {
             "decisions": decisions,
             "decision_count": decision_count,
             "decisions_truncated": decisions_truncated,
+            "audit_head": audit_head,
             "limits": {
                 "loop_iterations_max": state.loop_limit,
                 "loop_iterations_scope": state.loop_scope.map(|scope| match scope {
@@ -927,6 +1127,11 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
         .get("decisions_truncated")
         .and_then(Json::as_bool)
         .unwrap_or(false);
+    // Verify before presenting: a tampered audit is reported, never printed
+    // as if it were the run's own. Legacy records without a chain stay
+    // readable but are labeled unverified (see below).
+    let audit = verify_decision_audit(&record.run)?;
+    let audit_verified = matches!(audit, AuditVerification::Verified { .. });
     if as_json {
         let document = json!({
             "protocol": "execute.show-run/1",
@@ -944,6 +1149,8 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
             "decisions": decisions,
             "decision_count": decision_count,
             "decisions_truncated": decisions_truncated,
+            "audit_head": record.run.get("audit_head").cloned().unwrap_or(Json::Null),
+            "audit_verified": audit_verified,
         });
         return Ok(serde_json::to_string_pretty(&document)? + "\n");
     }
@@ -982,6 +1189,11 @@ pub fn show_run(directory: &Path, as_json: bool) -> Result<String> {
         decision_count,
         decisions_truncated,
     ));
+    if audit == AuditVerification::UnchainedLegacy {
+        text.push_str(
+            "note: this decision audit predates chaining; edits after the run are not detectable (re-record for a verifiable audit)\n",
+        );
+    }
     if record.run["truncated"].as_bool().unwrap_or(false) {
         text.push_str(
             "note: the record reached a size limit; some trace or output data was not kept\n",
@@ -1563,6 +1775,13 @@ mod policy_audit_tests {
         assert_eq!(document["policy"]["execution_mode"], "trusted");
         assert_eq!(document["policy"]["capability_policy"], "absent");
         assert_eq!(document["policy"]["data_flow_policy"], "absent");
+        // The policy context names only presence, never contents: no paths,
+        // grants, digests or other policy material may reach the record.
+        let policy = document["policy"].as_object().unwrap();
+        assert_eq!(policy.len(), 3, "{policy:?}");
+        for (_, value) in policy {
+            assert!(value.is_string(), "{policy:?}");
+        }
         // The only decisions are the record's own persistence checks; the
         // baseline above is what states that no confinement applied.
         let decisions = document["decisions"].as_array().unwrap();
@@ -1572,6 +1791,22 @@ mod policy_audit_tests {
             decisions.len() as u64
         );
         assert_eq!(document["decisions_truncated"], false);
+        // The baseline audit is chained: every kept decision links into the
+        // stored head.
+        assert!(
+            document["audit_head"]
+                .as_str()
+                .is_some_and(|head| !head.is_empty()),
+            "{document}"
+        );
+        for decision in decisions {
+            assert!(
+                decision["audit_hash"]
+                    .as_str()
+                    .is_some_and(|link| !link.is_empty()),
+                "{decision}"
+            );
+        }
 
         let text = show_run(directory.path(), false).unwrap();
         assert!(
@@ -1582,6 +1817,8 @@ mod policy_audit_tests {
         let report: Value =
             serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
         assert_eq!(report["policy"]["execution_mode"], "trusted");
+        assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["audit_head"], document["audit_head"]);
     }
 
     #[test]
@@ -1645,15 +1882,15 @@ mod policy_audit_tests {
 
         let report: Value =
             serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
-        assert!(
-            report["decisions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|decision| {
-                    decision["subject"] == "audit.denied" && decision["outcome"] == "denied"
-                })
-        );
+        assert!(report["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|decision| {
+                decision["subject"] == "audit.denied" && decision["outcome"] == "denied"
+            }));
+        // The persisted audit verifies: links, order and count all check.
+        assert_eq!(report["audit_verified"], true);
     }
 
     #[test]
@@ -1688,23 +1925,31 @@ mod policy_audit_tests {
             })
             .unwrap();
 
-        let total = security::policy_decisions(&registry).len();
+        let total = security::policy_decision_total(&registry);
         let document = run_document(&directory);
         let decisions = document["decisions"].as_array().unwrap();
         assert_eq!(decisions.len(), MAX_AUDIT_DECISIONS);
-        assert_eq!(document["decision_count"].as_u64().unwrap(), total as u64);
+        assert_eq!(document["decision_count"].as_u64().unwrap(), total);
         assert_eq!(document["decisions_truncated"], true);
         // The tail is kept: the newest sequence numbers survive.
         let first = decisions.first().unwrap()["sequence"].as_u64().unwrap();
         let last = decisions.last().unwrap()["sequence"].as_u64().unwrap();
         assert!(last > first);
-        assert_eq!(last, total as u64);
+        assert_eq!(last, total);
+        assert_eq!(first, total - MAX_AUDIT_DECISIONS as u64 + 1);
         // The bounded audit keeps run.json within its size limit.
         let bytes = std::fs::read(directory.path().join(super::RUN_FILE)).unwrap();
         assert!(bytes.len() < MAX_RUN_BYTES, "{}", bytes.len());
 
         let text = show_run(directory.path(), false).unwrap();
         assert!(text.contains("most recent"), "{text}");
+
+        // A genuinely truncated audit still verifies: the total accounts for
+        // the dropped prefix.
+        let report: Value =
+            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+        assert_eq!(report["audit_verified"], true);
+        assert_eq!(report["decision_count"], total);
     }
 
     #[test]
@@ -1755,6 +2000,11 @@ mod policy_audit_tests {
         }
         let record = StoredRecord::open(directory.path()).unwrap();
         assert_eq!(record.run["decisions"][0]["subject"], "unknown");
+        // Scrubbing happens before chaining, so the audit over the scrubbed
+        // identifiers still verifies.
+        let report: Value =
+            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+        assert_eq!(report["audit_verified"], true);
     }
 
     #[test]
@@ -1777,5 +2027,175 @@ mod policy_audit_tests {
         assert_eq!(report["decisions"], json!([]));
         assert_eq!(report["decision_count"], 0);
         assert_eq!(report["decisions_truncated"], false);
+    }
+
+    /// A record shaped like the first bounded audit (decisions but no chain)
+    /// stays readable, but `show-run` labels it unverified instead of implying
+    /// checks that never ran.
+    #[test]
+    fn show_run_labels_an_unchained_audit_unverified() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = crate::manifest::Registry::default();
+        finished_recorder(&directory, &registry);
+
+        let mut document = run_document(&directory);
+        for decision in document["decisions"].as_array_mut().unwrap() {
+            decision.as_object_mut().unwrap().remove("audit_hash");
+        }
+        document.as_object_mut().unwrap().remove("audit_head");
+        std::fs::write(
+            directory.path().join(super::RUN_FILE),
+            serde_json::to_string_pretty(&document).unwrap(),
+        )
+        .unwrap();
+
+        let text = show_run(directory.path(), false).unwrap();
+        assert!(text.contains("predates chaining"), "{text}");
+
+        let report: Value =
+            serde_json::from_str(&show_run(directory.path(), true).unwrap()).unwrap();
+        assert_eq!(report["audit_verified"], false);
+        assert_eq!(report["audit_head"], Value::Null);
+        assert!(!report["decisions"].as_array().unwrap().is_empty());
+    }
+
+    /// Build a finished record with two caller decisions plus the record's
+    /// own persistence checks, then hand back its parsed `run.json`.
+    fn audited_document(directory: &tempfile::TempDir) -> Value {
+        let registry = crate::manifest::Registry::default();
+        let recorder = Recorder::start(RecordStart {
+            directory: directory.path(),
+            program_source: b"run text.concat with parts []",
+            plan: "plan",
+            inputs: json!({}),
+            registry: &registry,
+        })
+        .unwrap();
+        for (subject, outcome, reason) in [
+            (
+                "audit.first",
+                PolicyDecisionOutcome::Approved,
+                PolicyDecisionReason::PolicyMatched,
+            ),
+            (
+                "audit.second",
+                PolicyDecisionOutcome::Denied,
+                PolicyDecisionReason::CapabilityNotGranted,
+            ),
+        ] {
+            security::record_policy_decision(
+                &registry,
+                subject,
+                "effect:text.transform",
+                None,
+                PolicyRisk::Low,
+                outcome,
+                reason,
+            );
+        }
+        recorder
+            .finish(&RunSummary {
+                ok: true,
+                exit_status: Some(0),
+                error: None,
+                output: Vec::new(),
+            })
+            .unwrap();
+        run_document(directory)
+    }
+
+    fn rewrite_run_document(directory: &tempfile::TempDir, document: &Value) {
+        std::fs::write(
+            directory.path().join(super::RUN_FILE),
+            serde_json::to_string_pretty(document).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn edited_decision_breaks_its_chain_link() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        document["decisions"][0]["outcome"] = json!("denied");
+        rewrite_run_document(&directory, &document);
+
+        let error = show_run(directory.path(), false).unwrap_err();
+        assert!(error.to_string().contains("modified"), "{error:?}");
+        let error = show_run(directory.path(), true).unwrap_err();
+        assert!(error.to_string().contains("modified"), "{error:?}");
+    }
+
+    #[test]
+    fn deleted_decision_leaves_a_sequence_gap() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        let kept = document["decisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != 1)
+            .map(|(_, decision)| decision.clone())
+            .collect::<Vec<_>>();
+        document["decisions"] = Value::Array(kept.clone());
+        // Repair the accounting so the sequence gap is what fails.
+        document["decision_count"] = json!(kept.len());
+        rewrite_run_document(&directory, &document);
+
+        let error = show_run(directory.path(), false).unwrap_err();
+        assert!(error.to_string().contains("removed"), "{error:?}");
+    }
+
+    #[test]
+    fn dropped_suffix_with_a_fixed_total_still_fails_on_the_head() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        let mut kept = document["decisions"].as_array().unwrap().clone();
+        kept.pop();
+        document["decisions"] = Value::Array(kept.clone());
+        // Repair the accounting so only the head still binds the dropped tail.
+        document["decision_count"] = json!(kept.len());
+        document["decisions_truncated"] = json!(false);
+        rewrite_run_document(&directory, &document);
+
+        let error = show_run(directory.path(), false).unwrap_err();
+        assert!(error.to_string().contains("head"), "{error:?}");
+    }
+
+    #[test]
+    fn rewritten_head_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        document["audit_head"] = json!("0".repeat(64));
+        rewrite_run_document(&directory, &document);
+
+        let error = show_run(directory.path(), false).unwrap_err();
+        assert!(error.to_string().contains("head"), "{error:?}");
+    }
+
+    #[test]
+    fn reordered_decisions_are_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        document["decisions"].as_array_mut().unwrap().swap(0, 1);
+        rewrite_run_document(&directory, &document);
+
+        let error = show_run(directory.path(), false).unwrap_err();
+        assert!(error.to_string().contains("reordered"), "{error:?}");
+    }
+
+    #[test]
+    fn truncation_flag_that_disagrees_with_the_total_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = audited_document(&directory);
+        // More decisions are kept than the flag admits: flip the flag while
+        // the total still exceeds the kept decisions.
+        let kept_len = document["decisions"].as_array().unwrap().len();
+        document["decision_count"] = json!(kept_len + 5);
+        document["decisions_truncated"] = json!(false);
+        rewrite_run_document(&directory, &document);
+
+        let error = show_run(directory.path(), false).unwrap_err();
+        assert!(error.to_string().contains("truncation flag"), "{error:?}");
     }
 }

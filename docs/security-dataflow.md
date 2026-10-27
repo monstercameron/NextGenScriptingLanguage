@@ -146,5 +146,13 @@ The policy decision history is bounded and records identifiers, action, origin,
 risk and outcome, not request payloads or secret values. `execute run
 --record` persists that audit into the run record with the policy in force, so
 grants and denials stay reviewable after the run; `execute show-run` prints
-them. A run with no policy records that no confinement applied.
+them. A run with no policy records that no confinement applied. Each kept
+decision carries a link in a hash chain headed by the record's `audit_head`,
+and `show-run` re-verifies the links, the sequence order and the truncation
+accounting before printing: an edited, deleted or reordered decision, or a
+truncation flag that disagrees with the total, is reported instead of shown.
+The chain is unanchored -- it lives in the same file it protects -- so it
+evidences edits made without recomputing it (mistakes, corruption, naive
+tampering), not a same-user editor who rewrites the audit and the head
+together. Whole-record tamper evidence is separate record-integrity work.
 

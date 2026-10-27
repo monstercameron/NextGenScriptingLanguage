@@ -15,6 +15,15 @@ original version labels.
   and JSON output. The audit keeps the most recent 256 decisions with an
   explicit total and truncation flag.
 
+- The run-record policy audit is hash-chained and verified. Each kept decision
+  links into the record's `audit_head`, and `execute show-run` re-verifies the
+  links, the sequence order and the truncation accounting before printing: an
+  edited, deleted or reordered decision, or a truncation flag that disagrees
+  with the total, fails instead of showing. Records from the first bounded
+  audit stay readable but are labeled unverified. The chain evidences naive
+  edits and corruption, not a same-user forger who recomputes it;
+  whole-record tamper evidence remains separate record-integrity work.
+
 - Applet records can now validate arbitrary property names with per-value
   schemas and property-count bounds. Object-only applet inputs reject known
   non-object values during checking while retaining dynamic object keys.

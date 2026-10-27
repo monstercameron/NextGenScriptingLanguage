@@ -243,6 +243,11 @@ pub(super) type CommandCheck<'a> =
     dyn FnMut(&crate::ast::Invocation, bool, &BTreeMap<String, Value>) -> Result<bool> + 'a;
 
 impl LoopStack {
+    #[cfg(target_arch = "wasm32")]
+    pub fn depth(&self) -> usize {
+        self.frames.len()
+    }
+
     pub fn with_limit(limit: usize) -> Self {
         Self::with_policy(limit, false)
     }
@@ -427,7 +432,6 @@ impl LoopStack {
 
     /// Remove nested loop frames crossed by a lexical transfer. Each popped
     /// frame restores the names that existed before that loop was entered.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn unwind_to(
         &mut self,
         depth: usize,

@@ -64,4 +64,80 @@ mod tests {
         assert!(!response.files.contains_key("/workspace/marker.txt"));
         assert!(!response.written_files.contains("/workspace/marker.txt"));
     }
+
+    #[test]
+    fn reusable_call_captures_failed_applet_status_and_continues() {
+        let mut session = BrowserSession::default();
+        let response = session.handle(Request {
+            action: "run".into(),
+            source: r#"define a program named failing
+  run "false"
+  run "printf" with arguments ["unreachable"]
+run program failing and keep status as status
+then "printf" with arguments ["%s:continued", status]
+"#
+            .into(),
+            ..Request::default()
+        });
+
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(response.stdout, "1:continued");
+    }
+
+    #[test]
+    fn reusable_call_status_capture_unwinds_nested_calls() {
+        let mut session = BrowserSession::default();
+        let response = session.handle(Request {
+            action: "run".into(),
+            source: r#"define a program named failing
+  run "false"
+  run "printf" with arguments ["unreachable leaf"]
+define a program named wrapper
+  run program failing
+  run "printf" with arguments ["unreachable wrapper"]
+run program wrapper and keep status as status
+then "printf" with arguments ["%s:continued", status]
+"#
+            .into(),
+            ..Request::default()
+        });
+
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(response.stdout, "1:continued");
+    }
+
+    #[test]
+    fn repeated_status_captured_calls_clear_their_loop_frames() {
+        let mut session = BrowserSession::default();
+        let response = session.handle(Request {
+            action: "run".into(),
+            source: r#"define a program named failing
+  repeat 1 times
+    run "false"
+repeat 2 times
+  run program failing and keep status as status
+  run "printf" with arguments ["%s", status]
+"#
+            .into(),
+            ..Request::default()
+        });
+
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(response.stdout, "11");
+    }
+
+    #[test]
+    fn reusable_call_explicit_exit_status_is_rejected_in_browser() {
+        let mut session = BrowserSession::default();
+        let response = session.handle(Request {
+            action: "run".into(),
+            source: "define a program named exiting\n  exit with status 3\nrun program exiting and keep status as status\n".into(),
+            ..Request::default()
+        });
+
+        assert!(!response.ok);
+        assert!(response
+            .error
+            .contains("browser host does not support exit with status"));
+    }
 }

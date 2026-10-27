@@ -307,6 +307,7 @@ impl BrowserSession {
         let mut bindings = crate::inputs::resolve(&program.inputs, &supplied, false)?;
         let mut cwd = PathBuf::from(&self.cwd);
         let mut frames: Vec<calls::Frame<'_>> = Vec::new();
+        let mut call_end_indices = Vec::new();
         let mut loops = loops::LoopStack::default();
         let mut data = Vec::new();
         let mut stdin = Some(request.stdin.as_bytes().to_vec());
@@ -380,21 +381,28 @@ impl BrowserSession {
                         call,
                         inputs,
                         connection,
-                        ..
+                        end,
                     } => {
                         let child = calls::bind(call, inputs, &bindings)?;
                         frames.push(calls::Frame {
                             name: &call.operation,
                             line: step.line,
                             binding: call.binding.as_deref(),
+                            status_binding: call.status_binding.as_deref(),
+                            exit_status: None,
+                            loop_depth: loops.depth(),
                             bindings: std::mem::replace(&mut bindings, child),
                             cwd: crate::working_dir::WorkingDirectory::plain(cwd.clone()),
                         });
+                        call_end_indices.push(index + end - 1);
                         if *connection == Connection::Start {
                             data.clear();
                         }
                     }
                     StepKind::EndCall => {
+                        call_end_indices
+                            .pop()
+                            .context("program return without call")?;
                         let frame = frames.pop().context("program return without call")?;
                         if frame.binding.is_some() {
                             program_stdout = false;
@@ -402,6 +410,12 @@ impl BrowserSession {
                         bindings = frame.bindings;
                         cwd = frame.cwd.path().to_path_buf();
                         bind_text(frame.binding, &data, &mut bindings)?;
+                        if let Some(name) = frame.status_binding {
+                            bindings.insert(
+                                name.to_owned(),
+                                Value::Integer(frame.exit_status.unwrap_or(0)),
+                            );
+                        }
                         response.push_trace(|| serde_json::json!({"line":frame.line,"operation":"return","program":frame.name}));
                     }
                     StepKind::Read { path, binding } => {
@@ -525,7 +539,19 @@ impl BrowserSession {
                             }
                         };
                         let outcome = manifest.outcome_for(status);
-                        if outcome.kind != OutcomeKind::Success && call.status_binding.is_none() {
+                        let captured_call = if outcome.kind != OutcomeKind::Success
+                            && call.status_binding.is_none()
+                        {
+                            frames
+                                .iter()
+                                .rposition(|frame| frame.status_binding.is_some())
+                        } else {
+                            None
+                        };
+                        if outcome.kind != OutcomeKind::Success
+                            && call.status_binding.is_none()
+                            && captured_call.is_none()
+                        {
                             bail!(
                                 "applet {:?} produced {:?} outcome (status {status})",
                                 manifest.name_for(call),
@@ -560,6 +586,17 @@ impl BrowserSession {
                             data.clear();
                         }
                         response.push_trace(|| serde_json::json!({"line":step.line,"operation":binary,"argv":argv,"input_bytes":input_bytes,"output_bytes":output_bytes,"cache_hit":hit,"status":status}));
+                        if let Some(capture_index) = captured_call {
+                            frames[capture_index].exit_status = Some(i64::from(status));
+                            loops.unwind_to(frames[capture_index].loop_depth, &mut bindings)?;
+                            while frames.len() > capture_index + 1 {
+                                let frame = frames.pop().expect("frame depth checked");
+                                call_end_indices.pop();
+                                bindings = frame.bindings;
+                                cwd = frame.cwd.path().to_path_buf();
+                            }
+                            jump = Some(call_end_indices[capture_index]);
+                        }
                     }
                 }
                 if data.len() > LIMIT {

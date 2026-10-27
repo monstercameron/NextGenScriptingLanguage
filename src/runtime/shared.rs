@@ -2174,6 +2174,17 @@ fn validate_range(
             if let Some(name) = &call.binding {
                 flow.bind_type(name, crate::ast::InputType::Text)?;
             }
+            binding(
+                &call.status_binding,
+                &mut flow.names,
+                allow_rebinding || flow.loop_depth > 0,
+            )?;
+            if let Some(name) = &call.status_binding {
+                if call.binding.as_ref() == Some(name) {
+                    bail!("program output and status require distinct binding names");
+                }
+                flow.bind_type(name, crate::ast::InputType::Integer)?;
+            }
             flow.has_data = child.has_data;
             flow.stdout_unavailable = child.stdout_unavailable;
             flow.started = true;
@@ -3263,9 +3274,22 @@ pub fn explain_with_inputs(
                 "call program {:?}; explicit inputs {}; local scope",
                 call.operation,
                 if call.marks_sensitive_output() {
-                    "[withheld]".to_owned()
+                    format!(
+                        "[withheld]{}",
+                        call.status_binding
+                            .as_ref()
+                            .map(|name| format!(" and keep status as {name}"))
+                            .unwrap_or_default()
+                    )
                 } else {
-                    describe_parameters(&call.parameters)
+                    format!(
+                        "{}{}",
+                        describe_parameters(&call.parameters),
+                        call.status_binding
+                            .as_ref()
+                            .map(|name| format!(" and keep status as {name}"))
+                            .unwrap_or_default()
+                    )
                 }
             ),
             StepKind::EndCall => "return program output; restore caller scope and cwd".into(),

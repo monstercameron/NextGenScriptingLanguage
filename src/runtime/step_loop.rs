@@ -323,6 +323,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     let mut retry_failures: Option<(usize, u32)> = None;
     let mut index = 0;
     let mut call_frames: Vec<calls::Frame<'_>> = Vec::new();
+    // The target call depth for a captured native failure bubbling through
+    // nested calls. EndCall markers restore each lexical environment in turn.
+    let mut pending_status_unwind: Option<(usize, usize)> = None;
     let mut bound_call_depths = Vec::new();
     let mut loop_frames = loops::LoopStack::with_policy(
         options.max_loop_iterations,
@@ -793,6 +796,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         line: step.line,
                         binding: call.binding.as_deref(),
                         sensitive_binding: sensitive_call,
+                        status_binding: call.status_binding.as_deref(),
+                        exit_status: None,
                         job_scope,
                         bindings: std::mem::replace(&mut bindings, child),
                         cwd: cwd.duplicate()?,
@@ -832,6 +837,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     workflow_environment_sensitive = workflow_environment_sensitive_scopes
                         .pop()
                         .context("program environment sensitivity scope was not saved")?;
+                    if let Some(name) = frame.status_binding {
+                        bindings.insert(
+                            name.to_owned(),
+                            Value::Integer(frame.exit_status.unwrap_or(0)),
+                        );
+                    }
                     if let Some(name) = frame.binding {
                         let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                             options.max_output_bytes,
@@ -870,6 +881,28 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         signals,
                         || serde_json::json!({"event":"program_return", "program":frame.name, "line":frame.line}),
                     )?;
+                    if let Some((target_depth, _)) =
+                        pending_status_unwind.filter(|(_, end_marker)| *end_marker == index)
+                    {
+                        if call_frames.len() >= target_depth {
+                            // Return one enclosing call at a time so its EndCall restores
+                            // cwd, workflow environment, sensitive state, and local bindings.
+                            let target = control_state.current_call()?;
+                            pending_status_unwind = Some((target_depth, target.end_marker));
+                            let action = control_state.transfer(
+                                control_flow::TransferKind::CallStatus,
+                                target.end_marker,
+                                control_flow::UnwindTo::new(target.call_depth, target.loop_depth),
+                            )?;
+                            match apply_control_action(action, control_context!())? {
+                                AppliedControl::Continue => jump_to = Some(target.end_marker),
+                                AppliedControl::Jump(target) => jump_to = Some(target),
+                                AppliedControl::Rethrow(error) => return Err(error),
+                            }
+                        } else {
+                            pending_status_unwind = None;
+                        }
+                    }
                 }
                 StepKind::BreakLoop => {
                     let target = control_state.current_loop()?;
@@ -921,30 +954,55 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let exit = program_exit(&step.kind, &bindings)
                         .with_context(|| format!("line {}", step.line))?
                         .context("exit handler received a non-exit step")?;
-                    lazy_event(options.trace, signals, || match &exit.message {
-                        Some(message) => {
-                            serde_json::json!({"event":"fail","line":step.line,"status":exit.status,"message_bytes":message.len()})
+                    let scoped_call_exit =
+                        matches!(step.kind, StepKind::Exit { .. }) && !call_frames.is_empty();
+                    if scoped_call_exit {
+                        let frame = call_frames.last_mut().expect("checked above");
+                        // `exit with status` inside a reusable program ends that call.
+                        // Its finally blocks and call-local jobs still unwind normally.
+                        job_supervisor
+                            .cancel_scope(frame.job_scope)
+                            .with_context(|| {
+                                format!(
+                                    "line {}: cancelling jobs before reusable-program exit",
+                                    step.line
+                                )
+                            })?;
+                        frame.exit_status = Some(i64::from(exit.status));
+                        let target = control_state.current_call()?;
+                        let action = control_state.transfer(
+                            control_flow::TransferKind::CallStatus,
+                            target.end_marker,
+                            control_flow::UnwindTo::new(target.call_depth, target.loop_depth),
+                        )?;
+                        match apply_control_action(action, control_context!())? {
+                            AppliedControl::Continue => jump_to = Some(target.end_marker),
+                            AppliedControl::Jump(target) => jump_to = Some(target),
+                            AppliedControl::Rethrow(error) => control_rethrow = Some(error),
                         }
-                        None => {
-                            serde_json::json!({"event":"exit","line":step.line,"status":exit.status})
+                    } else {
+                        lazy_event(options.trace, signals, || match &exit.message {
+                            Some(message) => {
+                                serde_json::json!({"event":"fail","line":step.line,"status":exit.status,"message_bytes":message.len()})
+                            }
+                            None => {
+                                serde_json::json!({"event":"exit","line":step.line,"status":exit.status})
+                            }
+                        })?;
+                        // `fail with message` and top-level exits remain run-scoped.
+                        let action = control_state.transfer(
+                            control_flow::TransferKind::Exit,
+                            program.steps.len(),
+                            control_flow::UnwindTo::new(0, 0),
+                        )?;
+                        if !matches!(action, control_flow::ControlAction::Continue { .. }) {
+                            control_state.set_exit(exit);
                         }
-                    })?;
-                    // Like return, the transfer unwinds crossed finally blocks and
-                    // call scopes. Unlike an error it is not caught, and it reaches
-                    // the end of the run instead of a loop or call boundary.
-                    let action = control_state.transfer(
-                        control_flow::TransferKind::Exit,
-                        program.steps.len(),
-                        control_flow::UnwindTo::new(0, 0),
-                    )?;
-                    // A cancelled cleanup ignores the transfer; then nothing exits.
-                    if !matches!(action, control_flow::ControlAction::Continue { .. }) {
-                        control_state.set_exit(exit);
-                    }
-                    match apply_control_action(action, control_context!())? {
-                        AppliedControl::Continue => {}
-                        AppliedControl::Jump(target) => jump_to = Some(target),
-                        AppliedControl::Rethrow(error) => control_rethrow = Some(error),
+                        match apply_control_action(action, control_context!())? {
+                            AppliedControl::Continue => {}
+                            AppliedControl::Jump(target) => jump_to = Some(target),
+                            AppliedControl::Rethrow(error) => control_rethrow = Some(error),
+                        }
                     }
                 }
                 StepKind::Try {
@@ -992,7 +1050,15 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     // `Try.end` is a relative offset to the instruction after
                     // EndTry, so the runtime marker uses the same half-open
                     // boundary convention.
-                    let action = control_state.end_try(index + 1)?;
+                    let status_capture_depth = call_frames
+                        .iter()
+                        .rposition(|frame| frame.status_binding.is_some())
+                        .map(|index| index + 1);
+                    let action = if let Some(call_depth) = status_capture_depth {
+                        control_state.end_try_for_call(index + 1, call_depth)?
+                    } else {
+                        control_state.end_try(index + 1)?
+                    };
                     match apply_control_action(action, control_context!())? {
                         AppliedControl::Continue => {}
                         AppliedControl::Jump(target) => jump_to = Some(target),
@@ -2339,7 +2405,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         }
         // A declared retry runs the command again from its first marker. The journal
         // node stays open, because the step has not completed.
-        let execution = match execution {
+        let mut execution = match execution {
             Err(error) if control_rethrow.is_none() => {
                 match plan_retry(program, index, &error, registry, &mut retry_failures)? {
                     RetryPlan::NotDeclared => Err(error),
@@ -2388,20 +2454,43 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 other
             }
         };
-        if let Some(error) = control_rethrow {
-            if let Some(journal) = journal.as_deref_mut() {
-                if !journal.persistence_failed() {
-                    journal.fail(
-                        &format!("{error:#}"),
-                        parent_signals.cancelled.load(Ordering::Relaxed)
-                            || is_timeout_error(&error)
-                            || journal_uncertain,
-                    )?;
+        if let Some(error) = control_rethrow.take() {
+            if error
+                .downcast_ref::<CommandFailed>()
+                .and_then(|failure| failure.status.code())
+                .is_some()
+                && call_frames
+                    .iter()
+                    .any(|frame| frame.status_binding.is_some())
+            {
+                // A failure returned from finally/cleanup may reach this path
+                // without an in-flight statement error; feed it through the
+                // same status boundary as a direct native failure.
+                execution = Err(error);
+            } else {
+                if let Some(journal) = journal.as_deref_mut() {
+                    if !journal.persistence_failed() {
+                        journal.fail(
+                            &format!("{error:#}"),
+                            parent_signals.cancelled.load(Ordering::Relaxed)
+                                || is_timeout_error(&error)
+                                || journal_uncertain,
+                        )?;
+                    }
                 }
+                return Err(error);
             }
-            return Err(error);
         }
         if let Err(error) = execution {
+            let status_capture_depth = error
+                .downcast_ref::<CommandFailed>()
+                .and_then(|failure| failure.status.code())
+                .and_then(|_| {
+                    call_frames
+                        .iter()
+                        .rposition(|frame| frame.status_binding.is_some())
+                })
+                .map(|index| index + 1);
             let error = call_frames.iter().rev().fold(error, |error, frame| {
                 error.context(format!(
                     "program {:?}, called at line {}",
@@ -2409,7 +2498,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                 ))
             });
             let cancellation = !was_cleanup && parent_signals.cancelled.load(Ordering::Relaxed);
-            let action = control_state.fail(error, cancellation)?;
+            let action = if let Some(call_depth) = status_capture_depth {
+                control_state.fail_for_call(error, cancellation, call_depth)?
+            } else {
+                control_state.fail(error, cancellation)?
+            };
             match apply_control_action(action, control_context!())? {
                 AppliedControl::Continue => {}
                 AppliedControl::Jump(target) => {
@@ -2419,6 +2512,38 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         journal_suspended = true;
                     }
                     jump_to = Some(target);
+                }
+                AppliedControl::Rethrow(error)
+                    if error
+                        .downcast_ref::<CommandFailed>()
+                        .and_then(|failure| failure.status.code())
+                        .is_some()
+                        && status_capture_depth.is_some() =>
+                {
+                    let status = i64::from(
+                        error
+                            .downcast_ref::<CommandFailed>()
+                            .and_then(|failure| failure.status.code())
+                            .expect("guard checked status"),
+                    );
+                    let capture_index = call_frames
+                        .iter()
+                        .rposition(|frame| frame.status_binding.is_some())
+                        .expect("guard checked a status-bound frame");
+                    call_frames[capture_index].exit_status = Some(status);
+                    let target_depth = capture_index + 1;
+                    let target = control_state.current_call()?;
+                    pending_status_unwind = Some((target_depth, target.end_marker));
+                    let action = control_state.transfer(
+                        control_flow::TransferKind::CallStatus,
+                        target.end_marker,
+                        control_flow::UnwindTo::new(target.call_depth, target.loop_depth),
+                    )?;
+                    match apply_control_action(action, control_context!())? {
+                        AppliedControl::Continue => jump_to = Some(target.end_marker),
+                        AppliedControl::Jump(target) => jump_to = Some(target),
+                        AppliedControl::Rethrow(error) => return Err(error),
+                    }
                 }
                 AppliedControl::Rethrow(error) if depth == 0 && journal.is_none() => {
                     // Cleanup that overran its budget after every statement completed

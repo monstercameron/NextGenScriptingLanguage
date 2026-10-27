@@ -30,7 +30,7 @@ use crate::ast::{
 use crate::manifest::{Builtin, Registry};
 use crate::privilege::is_privileged_invocation;
 use anyhow::Result;
-use serde_json::{json, Value as Json};
+use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Protocol identifier of the `--json` object.
@@ -122,6 +122,7 @@ struct Row {
     retry: Option<Json>,
     program_stdout: Option<&'static str>,
     binding: Option<String>,
+    status_binding: Option<String>,
 }
 
 impl Row {
@@ -171,6 +172,7 @@ impl Row {
             "retry": self.retry,
             "program_stdout": self.program_stdout.unwrap_or("none"),
             "binding": self.binding,
+            "status_binding": self.status_binding,
         });
         if legacy {
             row["argv"] = json!(self.legacy_argv);
@@ -1331,6 +1333,7 @@ impl Walker<'_> {
     fn call_program(&mut self, line: usize, call: &Invocation, scope: Option<&str>) {
         let name = call.operation.clone();
         let mut row = Row::plain(line, "call_program", scope);
+        row.status_binding = call.status_binding.clone();
         // A file call is shown relative to the file that makes it: the innermost called
         // file on the stack, or the top-level program when the call is in that program.
         let caller = self

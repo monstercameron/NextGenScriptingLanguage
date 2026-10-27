@@ -685,6 +685,16 @@ fn called_definitions_are_walked_and_their_undeclared_steps_count() {
 }
 
 #[test]
+fn reusable_call_status_binding_appears_on_the_call_row() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "define a program named inner\n  run \"false\"\nrun program inner and keep status as status\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let calls = rows_of_kind(&object, "call_program");
+    assert_eq!(calls.len(), 1, "{object}");
+    assert_eq!(calls[0]["status_binding"], "status", "{object}");
+}
+
+#[test]
 fn recursive_definition_is_never_reported_as_fully_declared() {
     let directory = tempfile::tempdir().unwrap();
     let source = "define a program named again\n  run program again\nrun program again\n";

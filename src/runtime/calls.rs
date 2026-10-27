@@ -63,10 +63,8 @@ pub(super) fn validate_arguments(
     if call.discard_stderr {
         bail!("program calls cannot use `and discard stderr`");
     }
-    if call.direct || call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
-        bail!(
-            "program calls cannot be direct binaries, cached or capture native status or execution results"
-        );
+    if call.direct || call.cache || call.result_binding.is_some() {
+        bail!("program calls cannot be direct binaries, cached or capture execution results");
     }
     crate::inputs::validate(inputs)?;
     // Keep tiny schemas on a linear lookup, as inputs::validated_specs does.
@@ -195,6 +193,10 @@ pub(super) struct Frame<'a> {
     /// Native callers register returned bytes with the secret redactor.
     #[cfg(not(target_arch = "wasm32"))]
     pub sensitive_binding: bool,
+    pub status_binding: Option<&'a str>,
+    pub exit_status: Option<i64>,
+    #[cfg(target_arch = "wasm32")]
+    pub loop_depth: usize,
     #[cfg(not(target_arch = "wasm32"))]
     pub job_scope: usize,
     pub bindings: BTreeMap<String, Value>,

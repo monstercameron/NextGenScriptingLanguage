@@ -1,6 +1,6 @@
 //! Runtime state for lexical loop/call exits and `try` cleanup.
 use super::ProgramExit;
-use anyhow::{anyhow, bail, Context, Error, Result};
+use anyhow::{Context, Error, Result, anyhow, bail};
 use std::time::{Duration, Instant};
 
 const CLEANUP_STEP_BUDGET: usize = 16_384;
@@ -30,6 +30,9 @@ pub(crate) enum TransferKind {
     Break,
     Continue,
     Return,
+    /// Ends a reusable call because its caller captures native status, without
+    /// cancelling a run exit pending in an enclosing cleanup block.
+    CallStatus,
     /// Unwinds to the end of the finite run. The pending exit record supplies
     /// the status. Unlike an error, it is never caught.
     Exit,
@@ -324,6 +327,25 @@ impl RuntimeState {
     }
 
     pub(crate) fn end_try(&mut self, marker: usize) -> Result<ControlAction> {
+        self.end_try_before_call(marker, None)
+    }
+
+    /// Complete a try inside a call that captures native status. If its pending
+    /// error came from a failed native command, leave caller-level catches active
+    /// so the call can convert that failure into its completion status.
+    pub(crate) fn end_try_for_call(
+        &mut self,
+        marker: usize,
+        call_depth: usize,
+    ) -> Result<ControlAction> {
+        self.end_try_before_call(marker, Some(call_depth))
+    }
+
+    fn end_try_before_call(
+        &mut self,
+        marker: usize,
+        minimum_call_depth: Option<usize>,
+    ) -> Result<ControlAction> {
         let frame = self
             .tries
             .pop()
@@ -340,7 +362,21 @@ impl RuntimeState {
                 error,
                 cancellation,
             }) => {
-                let action = self.fail(error, cancellation)?;
+                let action = if minimum_call_depth.is_some_and(|_| {
+                    error
+                        .downcast_ref::<super::CommandFailed>()
+                        .and_then(|failure| failure.status.code())
+                        .is_some()
+                }) {
+                    self.fail_before_call(
+                        error,
+                        cancellation,
+                        minimum_call_depth.expect("checked above"),
+                        true,
+                    )?
+                } else {
+                    self.fail(error, cancellation)?
+                };
                 Ok(Self::with_drops(action, drops))
             }
             Some(PendingExit::Transfer {
@@ -367,7 +403,7 @@ impl RuntimeState {
     ) -> Result<ControlAction> {
         // A break, continue or return that replaces a pending exit (for example
         // from finally) cancels it; the exit transfer itself keeps its record.
-        if kind != TransferKind::Exit {
+        if !matches!(kind, TransferKind::Exit | TransferKind::CallStatus) {
             self.exit = None;
         }
         loop {
@@ -444,9 +480,33 @@ impl RuntimeState {
         }
     }
 
-    pub(crate) fn fail(&mut self, error: Error, mut cancellation: bool) -> Result<ControlAction> {
+    pub(crate) fn fail(&mut self, error: Error, cancellation: bool) -> Result<ControlAction> {
+        self.fail_before_call(error, cancellation, 0, false)
+    }
+
+    /// Route a native error through tries created within the status-capturing
+    /// call, but do not expose it to a caller's catch block. The call captures
+    /// the native status after its own cleanup has completed.
+    pub(crate) fn fail_for_call(
+        &mut self,
+        error: Error,
+        cancellation: bool,
+        call_depth: usize,
+    ) -> Result<ControlAction> {
+        self.fail_before_call(error, cancellation, call_depth, true)
+    }
+
+    fn fail_before_call(
+        &mut self,
+        error: Error,
+        mut cancellation: bool,
+        minimum_call_depth: usize,
+        preserve_exit: bool,
+    ) -> Result<ControlAction> {
         // An error or cancellation supersedes a pending explicit exit.
-        self.exit = None;
+        if !preserve_exit {
+            self.exit = None;
+        }
         let mut error = error;
         let mut drop_bindings = Vec::new();
         loop {
@@ -454,6 +514,12 @@ impl RuntimeState {
                 self.reset_cleanup_if_idle();
                 return Ok(ControlAction::Rethrow(error));
             };
+            if frame.call_depth < minimum_call_depth {
+                // This try belongs to the caller, outside the reusable call that
+                // captures status. Keep its scope active while returning normally.
+                self.reset_cleanup_if_idle();
+                return Ok(ControlAction::Rethrow(error));
+            }
             match frame.phase {
                 TryPhase::Body if !cancellation => {
                     if let Some((marker, binding)) = &frame.catch {

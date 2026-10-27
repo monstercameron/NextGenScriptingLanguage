@@ -1746,8 +1746,8 @@ pub(crate) fn parse_line(tokens: &[Token<'_>]) -> Result<StepKind> {
             call.operation = name.to_owned();
         }
         forbid_retry(&call, "a program call")?;
-        if call.cache || call.status_binding.is_some() || call.result_binding.is_some() {
-            bail!("program calls cannot cache or capture native status or execution results");
+        if call.cache || call.result_binding.is_some() {
+            bail!("program calls cannot cache or capture execution results");
         }
         return Ok(StepKind::CallProgram {
             call,

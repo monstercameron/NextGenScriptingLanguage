@@ -344,7 +344,7 @@ Which modifiers may follow each statement. A `yes` cell is accepted by the parse
 | `run NAME` (manifest applet) | yes | yes | yes | yes, after `as NAME` | no | yes, when the manifest declares it |
 | `then` | yes | yes | yes | yes, after `as NAME` | no | no |
 | `pipe to` | yes, on the group's final stage (see note) | no | no | yes, after `as NAME` | no | no |
-| `run program NAME` (reusable) | yes | no | no | no | no | no |
+| `run program NAME` (reusable) | yes | yes | no | no | no | no |
 | `take` | no | no | no | no | no | no |
 | `every`, `on schedule`, `listen to` | no | no | no | no | no | no |
 
@@ -353,6 +353,12 @@ stdout, to NAME. A group with a binding does not stream to the terminal, and a l
 statement can read NAME. `pipe to` stages cannot capture status or results. The test
 `pipe_to_as_binds_the_terminal_stage_output_and_runs` checks this against the real
 binary.
+
+Reusable calls can keep their completion status with
+`run program NAME and keep status as NAME`. Normal completion and `return` report
+status 0; `exit with status N` inside a reusable body ends only that call and
+reports N. A failing native command in a call reports its native exit status when
+the call captures status, then the caller continues.
 
 ## Run options outside the grammar
 

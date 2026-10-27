@@ -8,6 +8,9 @@ Both hosts share the AST, parser, input types, JSON helpers, manifest mapping,
 validation, conditions and reusable-program rules. The browser supplies a finite
 execution loop, virtual filesystem and bounded Rust applet ports. Native pipes,
 services, model calls, TUI rendering and live IPC remain in the native host.
+Reusable-program calls can capture a failed applet's status and continue in the
+caller. `exit with status` and `fail with message` remain unsupported in browser
+program bodies and are rejected before execution.
 
 The ABI uses `allocate`, `execute` and `release` with owned byte buffers. Requests
 and responses are JSON. The module has no host imports; the JS bridge must consume

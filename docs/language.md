@@ -562,7 +562,9 @@ not make external effects reversible or exactly once.
 
 ### Explicit exit and failure
 
-`exit with status <value>` ends the finite run with that process status. The
+`exit with status <value>` ends the finite run with that process status. Inside
+a reusable program call it ends only that call, and the status can be captured
+with `and keep status as name`. The
 value is an integer literal from 0 to 255 or an integer binding; a binding is
 range-checked when it runs, before the exit takes effect. `fail with message
 <value> [and status <value>]` writes the text to stderr followed by a newline
@@ -578,8 +580,8 @@ fail with message "no records" and status 3
 ```
 
 Both steps are valid in finite programs, including inside `if`, `repeat`, `for`
-and `while` bodies, `try` blocks and reusable programs. Inside a reusable
-program they end the whole run, not just that call. Services and listeners
+and `while` bodies, `try` blocks and reusable programs. `fail with message`
+still ends the whole run when used inside a reusable program. Services and listeners
 reject them during validation, because a handler failure is per record and an
 exit would end the whole service. Imported program modules reject them as well,
 since a module runs as one applet inside its caller.
@@ -850,8 +852,11 @@ Successful return restores the caller's cwd. Native commands and file writes
 inside a body still have real side effects, and caller privileges are inherited.
 Timeouts remain per native group/capture, not a deadline for the entire call.
 Cancellation is shared. Native failures retain their typed error and call
-context. Call-level native status capture and caching are unsupported; explicit
-status handling and declared pure applet caches work inside the body.
+context. `and keep status as name` captures the call's completion status: zero on
+normal completion or `return`, the status from `exit with status` in the body, or
+the failing native command's status. A captured nonzero status ends the call and
+lets its caller continue. Call-level caching and execution-result capture are
+unsupported; declared pure applet caches work inside the body.
 
 Each complete call is one checkpoint/live execution node, including nested
 calls. Completed checkpoints pin expanded body semantics, arguments, input

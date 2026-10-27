@@ -120,7 +120,7 @@ fn malformed_calls_and_unused_bodies_fail_before_any_effect() {
         "run program task with count true",
         "run program task with count 2 and unknown 3",
         "run program task with count 2 and cache",
-        "run program task with count 2 and keep status as code",
+        "run program task with count 2 and keep result as execution",
         "run program task with count 2\npipe to \"cat\"",
         "run program task with count 2\nthen \"printf\" with arguments [count]",
     ] {
@@ -133,6 +133,57 @@ fn malformed_calls_and_unused_bodies_fail_before_any_effect() {
     for bad in ["define a program named unused\n  run missing_catalog_entry\n", "define a program named unused\n  run \"printf\" with arguments [unknown]\n", "define a program named unused\n  accept x as text\n  take integer at \"\" from true as invalid\n"] {
         let source=format!("{bad}run \"printf\" with arguments [\"effect\"]\nthen save to \"forbidden\"\n");let result=parser::parse(&source).and_then(|p|runtime::run(&p,&Registry::default(),&options(dir.path())).map(|_|()));assert!(result.is_err());assert!(!dir.path().join("forbidden").exists());
     }
+}
+
+#[test]
+fn reusable_calls_capture_native_and_explicit_exit_statuses_and_continue() {
+    let dir = tempfile::tempdir().unwrap();
+    let success = run(
+        dir.path(),
+        "define a program named p\n  run \"true\"\nrun program p and keep status as s\nthen \"printf\" with arguments [\"%s:continued\", s]\n",
+    );
+    assert_eq!(success.output, b"0:continued");
+
+    let native = run(
+        dir.path(),
+        "define a program named p\n  run \"false\"\nrun program p and keep status as s\nthen \"printf\" with arguments [\"%s:continued\", s]\n",
+    );
+    assert_eq!(native.output, b"1:continued");
+
+    let nested = run(
+        dir.path(),
+        "define a program named leaf\n  run \"false\"\ndefine a program named middle\n  run program leaf\nrun program middle and keep status as s\nthen \"printf\" with arguments [\"%s:continued\", s]\n",
+    );
+    assert_eq!(nested.output, b"1:continued");
+
+    let caller_try = run(
+        dir.path(),
+        "define a program named p\n  run \"false\"\ntry\n  run program p and keep status as s\ncatch failure\n  use value \"caught\"\n  then save to \"caught\"\nfinally\n  run \"printf\" with arguments [\"finished\"]\n  then save to \"finally\"\nrun \"printf\" with arguments [\"continued\"]\n",
+    );
+    assert_eq!(caller_try.output, b"continued");
+    assert_eq!(fs::read(dir.path().join("finally")).unwrap(), b"finished");
+    assert!(!dir.path().join("caught").exists());
+
+    let cleanup_helper = run(
+        dir.path(),
+        "define a program named cleanup\n  use value \"helper\"\n  then save to \"helper-ran\"\ndefine a program named leaf\n  try\n    run \"false\"\n  finally\n    run program cleanup\n    run \"printf\" with arguments [\"final\"]\ndefine a program named middle\n  run program leaf\nrun program middle as output and keep status as s\nthen \"printf\" with arguments [\"%s:%s\", s, output]\n",
+    );
+    assert_eq!(cleanup_helper.output, b"1:final");
+    assert_eq!(fs::read(dir.path().join("helper-ran")).unwrap(), b"helper");
+
+    let explicit = run(
+        dir.path(),
+        "define a program named p\n  exit with status 3\nrun program p and keep status as s\nthen \"printf\" with arguments [\"%s:continued\", s]\n",
+    );
+    assert_eq!(explicit.output, b"3:continued");
+    assert_eq!(explicit.exit, None);
+
+    let pending_exit = run(
+        dir.path(),
+        "define a program named p\n  run \"false\"\ntry\n  exit with status 7\nfinally\n  run program p and keep status as s\n  run \"printf\" with arguments [\"%s:continued\", s]\n",
+    );
+    assert_eq!(pending_exit.output, b"1:continued");
+    assert_eq!(pending_exit.exit.unwrap().status, 7);
 }
 
 #[test]

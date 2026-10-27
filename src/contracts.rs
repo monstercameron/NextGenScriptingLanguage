@@ -1564,8 +1564,8 @@ impl OutputSchema {
             &self.fields,
             &self.required,
             self.enum_values.as_deref(),
-            None,
             false,
+            None,
             false,
             None,
         );
@@ -1835,6 +1835,7 @@ fn schema_json(
                         &schema.required,
                         schema.enum_values.as_deref(),
                         schema.single_line,
+                        schema.pattern,
                         schema.nullable,
                         schema.minimum.as_ref(),
                     )
@@ -1943,9 +1944,6 @@ fn validate_json_value(
                 }
                 if nonempty && (text.trim().is_empty() || text.contains('\0')) {
                     bail!("text value must be nonempty");
-                }
-                if single_line && (text.contains('\n') || text.contains('\r')) {
-                    bail!("text value must not contain a carriage return or line feed");
                 }
                 validate_string_pattern(pattern, text)?;
             }

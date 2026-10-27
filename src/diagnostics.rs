@@ -5298,29 +5298,47 @@ mod tests {
     fn nested_string_patterns_are_directional_compatibility_refinements() {
         let text = |pattern| ValueSchema {
             kind: OutputType::Text,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             nullable: false,
             items: None,
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
             pattern,
         };
         let record = |mode| ValueSchema {
             kind: OutputType::Record,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             nullable: false,
             items: None,
             fields: BTreeMap::from([("mode".into(), mode)]),
             required: vec!["mode".into()],
             enum_values: None,
+            single_line: false,
             pattern: None,
         };
         let list = |item| ValueSchema {
             kind: OutputType::List,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             nullable: false,
             items: Some(Box::new(item)),
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: None,
+            single_line: false,
             pattern: None,
         };
 
@@ -5333,21 +5351,33 @@ mod tests {
         assert!(!schemas_compatible(&octal, &hex));
         let octal_enum = list(record(ValueSchema {
             kind: OutputType::Text,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             nullable: false,
             items: None,
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: Some(vec!["0644".into(), "0755".into()]),
+            single_line: false,
             pattern: None,
         }));
         assert!(schemas_compatible(&octal_enum, &octal));
         let invalid_octal_enum = list(record(ValueSchema {
             kind: OutputType::Text,
+            scalar_only: false,
+            additional_properties: None,
+            min_properties: None,
+            max_properties: None,
+            nonempty: false,
             nullable: false,
             items: None,
             fields: BTreeMap::new(),
             required: Vec::new(),
             enum_values: Some(vec!["8888".into()]),
+            single_line: false,
             pattern: None,
         }));
         assert!(!schemas_compatible(&invalid_octal_enum, &octal));

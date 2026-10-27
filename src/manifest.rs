@@ -4785,80 +4785,6 @@ mod tests {
             direct: false,
             discard_stderr: false,
             parameters: BTreeMap::from([("text".into(), Value::Reference("dynamic".into()))]),
-    fn shipped_mode_and_hex_patterns_validate_literals_and_defer_references() {
-        let mode = parse_manifest(include_str!("../manifests/core.fs_ensure_file.json")).unwrap();
-        let hex = parse_manifest(include_str!("../manifests/core.color_parse_rgb.json")).unwrap();
-        assert_eq!(
-            mode.contract()["parameters_schema"]["properties"]["mode"]["pattern"],
-            "^[0-7]{1,4}$"
-        );
-        assert_eq!(
-            hex.contract()["parameters_schema"]["properties"]["default_hex"]["pattern"],
-            "^#?[0-9A-Fa-f]{6}$"
-        );
-
-        let mode_values = |value: Value| {
-            BTreeMap::from([
-                ("path".into(), Value::String("/tmp/file".into())),
-                ("content".into(), Value::String("x".into())),
-                ("mode".into(), value),
-            ])
-        };
-        let validates_literals = |manifest: &Manifest, parameters: BTreeMap<String, Value>| {
-            manifest.validate(&Invocation {
-                operation: manifest.name.clone(),
-                direct: false,
-                discard_stderr: false,
-                parameters,
-                binding: None,
-                cache: false,
-                status_binding: None,
-                result_binding: None,
-                retry: None,
-            })
-        };
-        for valid in ["0", "0644", "7777"] {
-            let supplied = mode_values(Value::String(valid.into()));
-            assert!(
-                validates_literals(&mode, supplied.clone()).is_ok(),
-                "{valid}"
-            );
-            assert!(mode.build_arguments(&supplied).is_ok(), "{valid}");
-        }
-        for invalid in ["", "8888", "00000", " 644", "６４４"] {
-            let supplied = mode_values(Value::String(invalid.into()));
-            assert!(
-                validates_literals(&mode, supplied.clone()).is_err(),
-                "{invalid:?}"
-            );
-            assert!(mode.build_arguments(&supplied).is_err(), "{invalid:?}");
-        }
-        for valid in ["12aB34", "#12aB34", "ABCDEF", "#abcdef"] {
-            let supplied = BTreeMap::from([("default_hex".into(), Value::String(valid.into()))]);
-            assert!(
-                validates_literals(&hex, supplied.clone()).is_ok(),
-                "{valid}"
-            );
-            assert!(hex.build_arguments(&supplied).is_ok(), "{valid}");
-        }
-        for invalid in ["", "#", "zzzzzz", "##12345", "12345", "1234567"] {
-            let supplied = BTreeMap::from([("default_hex".into(), Value::String(invalid.into()))]);
-            assert!(
-                validates_literals(&hex, supplied.clone()).is_err(),
-                "{invalid:?}"
-            );
-            assert!(hex.build_arguments(&supplied).is_err(), "{invalid:?}");
-        }
-
-        let dynamic_mode = Invocation {
-            operation: mode.name.clone(),
-            direct: false,
-            discard_stderr: false,
-            parameters: BTreeMap::from([
-                ("path".into(), Value::String("/tmp/file".into())),
-                ("content".into(), Value::String("x".into())),
-                ("mode".into(), Value::Reference("runtime_mode".into())),
-            ]),
             binding: None,
             cache: false,
             status_binding: None,
@@ -4979,14 +4905,6 @@ mod tests {
             parameters: BTreeMap::from([(
                 "values".into(),
                 Value::Record(BTreeMap::from([("question".into(), value)])),
-        assert!(mode.validate(&dynamic_mode).is_ok());
-        let dynamic_hex = Invocation {
-            operation: hex.name.clone(),
-            direct: false,
-            discard_stderr: false,
-            parameters: BTreeMap::from([(
-                "default_hex".into(),
-                Value::Reference("runtime_color".into()),
             )]),
             binding: None,
             cache: false,
@@ -5019,17 +4937,6 @@ mod tests {
             r#"{"name":"scalar","binary":"echo","parameters":{"value":{"type":"scalar"}},"arguments":[]}"#,
         )
         .is_err());
-        assert!(hex.validate(&dynamic_hex).is_ok());
-    }
-
-    #[test]
-    fn arbitrary_shadow_manifests_keep_unrestricted_string_parameters() {
-        let custom = parse_manifest(
-            r#"{"name":"fs.ensure_file","binary":"custom-helper","parameters":{"mode":{"type":"string"}},"arguments":[{"parameter":"mode"}]}"#,
-        )
-        .unwrap();
-        let supplied = BTreeMap::from([("mode".into(), Value::String("custom-format".into()))]);
-        assert!(custom.build_arguments(&supplied).is_ok());
     }
 
     #[test]
@@ -6209,5 +6116,114 @@ mod first_token_rule_tests {
         assert!(check_first_token("arguments", &spec, &text("exec,")).is_err());
         assert!(check_first_token("arguments", &spec, &text("unknown")).is_err());
         assert!(check_first_token("arguments", &spec, &text(" exec")).is_err());
+    }
+
+    #[test]
+    fn shipped_mode_and_hex_patterns_validate_literals_and_defer_references() {
+        let mode = parse_manifest(include_str!("../manifests/core.fs_ensure_file.json")).unwrap();
+        let hex = parse_manifest(include_str!("../manifests/core.color_parse_rgb.json")).unwrap();
+        assert_eq!(
+            mode.contract()["parameters_schema"]["properties"]["mode"]["pattern"],
+            "^[0-7]{1,4}$"
+        );
+        assert_eq!(
+            hex.contract()["parameters_schema"]["properties"]["default_hex"]["pattern"],
+            "^#?[0-9A-Fa-f]{6}$"
+        );
+
+        let mode_values = |value: Value| {
+            BTreeMap::from([
+                ("path".into(), Value::String("/tmp/file".into())),
+                ("content".into(), Value::String("x".into())),
+                ("mode".into(), value),
+            ])
+        };
+        let validates_literals = |manifest: &Manifest, parameters: BTreeMap<String, Value>| {
+            manifest.validate(&Invocation {
+                operation: manifest.name.clone(),
+                direct: false,
+                discard_stderr: false,
+                parameters,
+                binding: None,
+                cache: false,
+                status_binding: None,
+                result_binding: None,
+                retry: None,
+            })
+        };
+        for valid in ["0", "0644", "7777"] {
+            let supplied = mode_values(Value::String(valid.into()));
+            assert!(
+                validates_literals(&mode, supplied.clone()).is_ok(),
+                "{valid}"
+            );
+            assert!(mode.build_arguments(&supplied).is_ok(), "{valid}");
+        }
+        for invalid in ["", "8888", "00000", " 644", "６４４"] {
+            let supplied = mode_values(Value::String(invalid.into()));
+            assert!(
+                validates_literals(&mode, supplied.clone()).is_err(),
+                "{invalid:?}"
+            );
+            assert!(mode.build_arguments(&supplied).is_err(), "{invalid:?}");
+        }
+        for valid in ["12aB34", "#12aB34", "ABCDEF", "#abcdef"] {
+            let supplied = BTreeMap::from([("default_hex".into(), Value::String(valid.into()))]);
+            assert!(
+                validates_literals(&hex, supplied.clone()).is_ok(),
+                "{valid}"
+            );
+            assert!(hex.build_arguments(&supplied).is_ok(), "{valid}");
+        }
+        for invalid in ["", "#", "zzzzzz", "##12345", "12345", "1234567"] {
+            let supplied = BTreeMap::from([("default_hex".into(), Value::String(invalid.into()))]);
+            assert!(
+                validates_literals(&hex, supplied.clone()).is_err(),
+                "{invalid:?}"
+            );
+            assert!(hex.build_arguments(&supplied).is_err(), "{invalid:?}");
+        }
+
+        let dynamic_mode = Invocation {
+            operation: mode.name.clone(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::from([
+                ("path".into(), Value::String("/tmp/file".into())),
+                ("content".into(), Value::String("x".into())),
+                ("mode".into(), Value::Reference("runtime_mode".into())),
+            ]),
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        };
+        assert!(mode.validate(&dynamic_mode).is_ok());
+        let dynamic_hex = Invocation {
+            operation: hex.name.clone(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::from([(
+                "default_hex".into(),
+                Value::Reference("runtime_color".into()),
+            )]),
+            binding: None,
+            cache: false,
+            status_binding: None,
+            result_binding: None,
+            retry: None,
+        };
+        assert!(hex.validate(&dynamic_hex).is_ok());
+    }
+
+    #[test]
+    fn arbitrary_shadow_manifests_keep_unrestricted_string_parameters() {
+        let custom = parse_manifest(
+            r#"{"name":"fs.ensure_file","binary":"custom-helper","parameters":{"mode":{"type":"string"}},"arguments":[{"parameter":"mode"}]}"#,
+        )
+        .unwrap();
+        let supplied = BTreeMap::from([("mode".into(), Value::String("custom-format".into()))]);
+        assert!(custom.build_arguments(&supplied).is_ok());
     }
 }

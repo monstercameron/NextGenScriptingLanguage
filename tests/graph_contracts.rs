@@ -66,6 +66,7 @@ fn leaf(kind: OutputType) -> ValueSchema {
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
+        pattern: None,
     }
 }
 
@@ -171,6 +172,7 @@ fn required_inputs_and_record_items_are_validated_recursively() {
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: Some(Box::new(item)),
+        pattern: None,
     };
     assert!(list.validate().is_ok());
     let invalid = ValueSchema {
@@ -187,6 +189,7 @@ fn required_inputs_and_record_items_are_validated_recursively() {
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
+        pattern: None,
     };
     assert!(invalid.validate().is_err());
 

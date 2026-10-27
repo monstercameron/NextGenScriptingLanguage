@@ -613,6 +613,7 @@ fn remote_transport_failure_through_runtime_keeps_unknown_status_and_certainty()
                     items: None,
                     fields: BTreeMap::new(),
                     required: Vec::new(),
+                    pattern: None,
                 },
                 delivery: PortDelivery::Single,
                 sensitivity: Default::default(),

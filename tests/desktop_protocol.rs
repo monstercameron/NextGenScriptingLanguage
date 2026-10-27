@@ -33,6 +33,7 @@ fn leaf(kind: OutputType) -> ValueSchema {
         items: None,
         fields: BTreeMap::new(),
         required: Vec::new(),
+        pattern: None,
     }
 }
 
@@ -51,6 +52,7 @@ fn record(fields: BTreeMap<String, ValueSchema>, required: &[&str]) -> ValueSche
         items: None,
         fields,
         required: required.iter().map(|item| (*item).to_owned()).collect(),
+        pattern: None,
     }
 }
 

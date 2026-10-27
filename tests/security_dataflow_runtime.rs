@@ -48,6 +48,7 @@ fn text_port(sensitivity: Sensitivity) -> AppletPort {
             items: None,
             fields: BTreeMap::new(),
             required: Vec::new(),
+            pattern: None,
         },
         delivery: PortDelivery::Single,
         sensitivity,
@@ -439,6 +440,7 @@ fn retained_worker_secret_flows_through_a_later_graph_to_remote_authorization() 
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
+        pattern: None,
     });
     worker_output.sensitivity = Sensitivity::Public;
     let mut remote_input = worker_output.clone();

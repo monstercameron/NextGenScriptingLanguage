@@ -13,7 +13,8 @@
       "required": true
     },
     "mode": {
-      "type": "string"
+      "type": "string",
+      "pattern": "octal_mode"
     }
   },
   "arguments": [
@@ -78,7 +79,8 @@
         },
         "mode": {
           "schema": {
-            "type": "text"
+            "type": "text",
+            "pattern": "octal_mode"
           },
           "delivery": "single"
         }

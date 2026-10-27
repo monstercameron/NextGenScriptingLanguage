@@ -6,7 +6,8 @@
   "parameters": {
     "default_hex": {
       "type": "string",
-      "required": true
+      "required": true,
+      "pattern": "hex_color_optional_hash"
     },
     "text": {
       "type": "string"
@@ -53,7 +54,8 @@
       "inputs": {
         "default_hex": {
           "schema": {
-            "type": "text"
+            "type": "text",
+            "pattern": "hex_color_optional_hash"
           },
           "delivery": "single"
         },

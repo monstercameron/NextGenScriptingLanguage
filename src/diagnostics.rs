@@ -5224,12 +5224,14 @@ mod tests {
                     enum_values: None,
                     single_line: false,
                     minimum: None,
+                    pattern: None,
                 },
             )]),
             required: vec!["count".into()],
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         let input = ValueSchema {
             scalar_only: false,
@@ -5256,12 +5258,14 @@ mod tests {
                     enum_values: None,
                     single_line: false,
                     minimum: None,
+                    pattern: None,
                 },
             )]),
             required: vec!["count".into()],
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         assert_eq!(
             schema_mismatch_reasons(&output, &input, "stdout", "stdin"),
@@ -5285,6 +5289,7 @@ mod tests {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         let nullable = ValueSchema {
             nullable: true,
@@ -5316,6 +5321,7 @@ mod tests {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         let json = ValueSchema {
             scalar_only: false,
@@ -5417,6 +5423,7 @@ mod tests {
             enum_values,
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         let integer = schema(OutputType::Integer, None);
         let number = schema(OutputType::Number, None);

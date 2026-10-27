@@ -15,6 +15,39 @@ use std::path::PathBuf;
 
 const NONEMPTY_TEXT_WHITESPACE_PATTERN: &str =
     r"^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]*$";
+/// A small set of explicit string refinements supported by applet contracts.
+/// These are intentionally named formats rather than arbitrary regular
+/// expressions, so validation stays predictable across hosts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StringPattern {
+    OctalMode,
+    HexColorOptionalHash,
+}
+
+impl StringPattern {
+    pub fn matches(self, value: &str) -> bool {
+        match self {
+            Self::OctalMode => {
+                (1..=4).contains(&value.len())
+                    && value.bytes().all(|byte| (b'0'..=b'7').contains(&byte))
+            }
+            Self::HexColorOptionalHash => {
+                let digits = value.strip_prefix('#').unwrap_or(value);
+                digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }
+        }
+    }
+
+    /// JSON Schema projection for clients that support the standard pattern
+    /// keyword. Runtime validation uses `matches` above, not a regex engine.
+    pub fn json_schema_pattern(self) -> &'static str {
+        match self {
+            Self::OctalMode => "^[0-7]{1,4}$",
+            Self::HexColorOptionalHash => "^#?[0-9A-Fa-f]{6}$",
+        }
+    }
+}
 
 /// How a host should connect one standard stream for a manifest's native
 /// command. An omitted stream in [`StdioContract`] keeps the host's legacy
@@ -621,6 +654,10 @@ pub struct ValueSchema {
         skip_serializing_if = "Option::is_none"
     )]
     pub minimum: Option<serde_json::Number>,
+    /// A named character pattern for text values. References are type-checked
+    /// statically and the concrete pattern is checked after runtime resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<StringPattern>,
 }
 
 /// A named typed port on a versioned applet interface.
@@ -733,6 +770,7 @@ impl ValueSchema {
             &self.required,
             self.enum_values.as_deref(),
             self.single_line,
+            self.pattern,
             self.nullable,
             self.minimum.as_ref(),
             true,
@@ -752,6 +790,7 @@ impl ValueSchema {
             &self.required,
             self.enum_values.as_deref(),
             self.single_line,
+            self.pattern,
             self.nullable,
             self.minimum.as_ref(),
         )
@@ -825,6 +864,11 @@ fn schema_is_assignable(source: &ValueSchema, target: &ValueSchema) -> bool {
                         values.iter().all(|value| !value.contains(['\n', '\r']))
                     }))
                 && enum_assignable(source.enum_values.as_deref(), target.enum_values.as_deref())
+                && pattern_assignable(
+                    source.pattern,
+                    source.enum_values.as_deref(),
+                    target.pattern,
+                )
         }
         OutputType::Record => {
             // A target may declare optional fields the source never emits.
@@ -898,6 +942,20 @@ fn enum_assignable(source: Option<&[String]>, target: Option<&[String]>) -> bool
     }
 }
 
+fn pattern_assignable(
+    source: Option<StringPattern>,
+    source_enum: Option<&[String]>,
+    target: Option<StringPattern>,
+) -> bool {
+    match target {
+        None => true,
+        Some(target) if source == Some(target) => true,
+        Some(target) => {
+            source_enum.is_some_and(|values| values.iter().all(|value| target.matches(value)))
+        }
+    }
+}
+
 fn validate_enum_schema(kind: OutputType, values: Option<&[String]>) -> Result<()> {
     let Some(values) = values else {
         return Ok(());
@@ -940,6 +998,13 @@ fn validate_property_count(
     Ok(())
 }
 
+fn validate_string_pattern(pattern: Option<StringPattern>, value: &str) -> Result<()> {
+    if pattern.is_some_and(|pattern| !pattern.matches(value)) {
+        bail!("text value {value:?} does not match the declared string pattern");
+    }
+    Ok(())
+}
+
 fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
     if matches!(value, Value::Null) && schema.nullable {
         return Ok(());
@@ -956,7 +1021,7 @@ fn validate_ast_value(schema: &ValueSchema, value: &Value) -> Result<()> {
             if schema.nonempty && (text.trim().is_empty() || text.contains('\0')) {
                 bail!("text value must be nonempty");
             }
-            Ok(())
+            validate_string_pattern(schema.pattern, text)
         }
         (OutputType::Path, Value::String(path)) => {
             if path.is_empty() || path.contains('\0') {
@@ -1307,6 +1372,7 @@ impl OutputSchema {
             &self.required,
             self.enum_values.as_deref(),
             false,
+            None,
             false,
             None,
             true,
@@ -1441,6 +1507,7 @@ impl OutputSchema {
                     &self.fields,
                     &self.required,
                     self.enum_values.as_deref(),
+                    None,
                     false,
                     false,
                     None,
@@ -1497,6 +1564,7 @@ impl OutputSchema {
             &self.fields,
             &self.required,
             self.enum_values.as_deref(),
+            None,
             false,
             false,
             None,
@@ -1527,6 +1595,7 @@ fn validate_schema_parts(
     required: &[String],
     enum_values: Option<&[String]>,
     single_line: bool,
+    pattern: Option<StringPattern>,
     nullable: bool,
     minimum: Option<&serde_json::Number>,
     top_level: bool,
@@ -1581,6 +1650,12 @@ fn validate_schema_parts(
     {
         bail!("single_line text enums cannot contain carriage returns or line feeds");
     }
+    if pattern.is_some() && kind != OutputType::Text {
+        bail!("string patterns apply only to text schemas");
+    }
+    if pattern.is_some() && enum_values.is_some() {
+        bail!("text schemas cannot combine enum and pattern constraints");
+    }
     let mut unique = BTreeSet::new();
     for name in required {
         if !fields.contains_key(name) || !unique.insert(name) {
@@ -1606,6 +1681,7 @@ fn validate_schema_parts(
             &schema.required,
             schema.enum_values.as_deref(),
             schema.single_line,
+            schema.pattern,
             schema.nullable,
             schema.minimum.as_ref(),
             false,
@@ -1627,6 +1703,7 @@ fn validate_schema_parts(
             &schema.required,
             schema.enum_values.as_deref(),
             schema.single_line,
+            schema.pattern,
             schema.nullable,
             schema.minimum.as_ref(),
             false,
@@ -1648,6 +1725,7 @@ fn validate_schema_parts(
             &items.required,
             items.enum_values.as_deref(),
             items.single_line,
+            items.pattern,
             items.nullable,
             items.minimum.as_ref(),
             false,
@@ -1674,6 +1752,7 @@ fn schema_json(
     required: &[String],
     enum_values: Option<&[String]>,
     single_line: bool,
+    pattern: Option<StringPattern>,
     nullable: bool,
     minimum: Option<&serde_json::Number>,
 ) -> serde_json::Value {
@@ -1698,6 +1777,9 @@ fn schema_json(
                 });
             } else if nonempty {
                 schema["pattern"] = serde_json::json!("^[^\\u0000]*$");
+            }
+            if let Some(pattern) = pattern {
+                schema["pattern"] = serde_json::json!(pattern.json_schema_pattern());
             }
             schema
         }
@@ -1732,6 +1814,7 @@ fn schema_json(
                             &schema.required,
                             schema.enum_values.as_deref(),
                             schema.single_line,
+                            schema.pattern,
                             schema.nullable,
                             schema.minimum.as_ref(),
                         ),
@@ -1784,6 +1867,7 @@ fn schema_json(
                     &item.required,
                     item.enum_values.as_deref(),
                     item.single_line,
+                    item.pattern,
                     item.nullable,
                     item.minimum.as_ref(),
                 )
@@ -1795,7 +1879,7 @@ fn schema_json(
         schema["minimum"] = serde_json::Value::Number(minimum.clone());
     }
     if nullable && kind != OutputType::Json {
-        if enum_values.is_some() {
+        if enum_values.is_some() || pattern.is_some() {
             return serde_json::json!({"anyOf":[schema,{"type":"null"}]});
         }
         let object = schema
@@ -1829,6 +1913,7 @@ fn validate_json_value(
     required: &[String],
     enum_values: Option<&[String]>,
     single_line: bool,
+    pattern: Option<StringPattern>,
     nullable: bool,
     minimum: Option<&serde_json::Number>,
     value: &serde_json::Value,
@@ -1859,6 +1944,10 @@ fn validate_json_value(
                 if nonempty && (text.trim().is_empty() || text.contains('\0')) {
                     bail!("text value must be nonempty");
                 }
+                if single_line && (text.contains('\n') || text.contains('\r')) {
+                    bail!("text value must not contain a carriage return or line feed");
+                }
+                validate_string_pattern(pattern, text)?;
             }
         }
         OutputType::Integer => {
@@ -1921,6 +2010,7 @@ fn validate_json_value(
                         &schema.required,
                         schema.enum_values.as_deref(),
                         schema.single_line,
+                        schema.pattern,
                         schema.nullable,
                         schema.minimum.as_ref(),
                         value,
@@ -1947,6 +2037,7 @@ fn validate_json_value(
                     &item_schema.required,
                     item_schema.enum_values.as_deref(),
                     item_schema.single_line,
+                    item_schema.pattern,
                     item_schema.nullable,
                     item_schema.minimum.as_ref(),
                     value,
@@ -2399,6 +2490,7 @@ impl AppletContract {
             enum_values: output.enum_values.clone(),
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         let text_schema = || ValueSchema {
             scalar_only: false,
@@ -2414,6 +2506,7 @@ impl AppletContract {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         let integer_schema = ValueSchema {
             scalar_only: false,
@@ -2429,6 +2522,7 @@ impl AppletContract {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         let fields = BTreeMap::from([
             ("value".into(), value_schema),
@@ -2457,6 +2551,7 @@ impl AppletContract {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         })
     }
 
@@ -2645,6 +2740,51 @@ where
 mod typed_json_decode_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn named_string_patterns_validate_values_and_refine_assignability() {
+        let mode: ValueSchema = serde_json::from_value(json!({
+            "type": "text",
+            "pattern": "octal_mode"
+        }))
+        .unwrap();
+        assert!(mode.validate().is_ok());
+        for valid in ["0", "0644", "7777"] {
+            assert!(
+                mode.validate_value(&Value::String(valid.into())).is_ok(),
+                "{valid}"
+            );
+        }
+        for invalid in ["", "8888", "00000", "６４４"] {
+            assert!(
+                mode.validate_value(&Value::String(invalid.into())).is_err(),
+                "{invalid:?}"
+            );
+        }
+        assert_eq!(mode.json_schema()["pattern"], "^[0-7]{1,4}$");
+
+        let hex: ValueSchema = serde_json::from_value(json!({
+            "type": "text",
+            "pattern": "hex_color_optional_hash"
+        }))
+        .unwrap();
+        for valid in ["12aB34", "#12aB34", "ABCDEF", "#abcdef"] {
+            assert!(
+                hex.validate_value(&Value::String(valid.into())).is_ok(),
+                "{valid}"
+            );
+        }
+        for invalid in ["", "#", "zzzzzz", "##12345", "12345", "1234567"] {
+            assert!(
+                hex.validate_value(&Value::String(invalid.into())).is_err(),
+                "{invalid:?}"
+            );
+        }
+        let unconstrained: ValueSchema = serde_json::from_value(json!({"type":"text"})).unwrap();
+        assert!(mode.is_assignable_to(&unconstrained));
+        assert!(!unconstrained.is_assignable_to(&mode));
+        assert!(!mode.is_assignable_to(&hex));
+    }
 
     #[test]
     fn predecoded_json_uses_the_same_schema_validation_as_bytes() {

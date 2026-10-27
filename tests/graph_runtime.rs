@@ -42,6 +42,7 @@ fn bytes() -> ValueSchema {
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
+        pattern: None,
     }
 }
 
@@ -60,6 +61,7 @@ fn int() -> ValueSchema {
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
+        pattern: None,
     }
 }
 
@@ -140,6 +142,7 @@ fn fanout_merges_record_ports_in_order_with_lossless_bounded_queues() {
                 fields: BTreeMap::new(),
                 required: Vec::new(),
                 items: Some(Box::new(int())),
+                pattern: None,
             }),
         )]),
     ))
@@ -400,6 +403,7 @@ fn emitted_labels_preserve_secret_unknown_and_public_provenance() {
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
+        pattern: None,
     });
     secret.sensitivity = flow::contracts::Sensitivity::Secret;
     let mut declared_public_in = PortSchema::single(ValueSchema {
@@ -416,6 +420,7 @@ fn emitted_labels_preserve_secret_unknown_and_public_provenance() {
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
+        pattern: None,
     });
     declared_public_in.sensitivity = flow::contracts::Sensitivity::Unknown;
     let mut declared_public_out = declared_public_in.clone();
@@ -524,6 +529,7 @@ fn runtime_provenance_union_denies_remote_before_invocation() {
         fields: BTreeMap::new(),
         required: Vec::new(),
         items: None,
+        pattern: None,
     });
     source.sensitivity = flow::contracts::Sensitivity::Unknown;
     let mut remote_input = source.clone();

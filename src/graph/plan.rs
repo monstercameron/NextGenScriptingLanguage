@@ -76,6 +76,7 @@ pub(crate) fn value_schema_from_output(output: &OutputSchema) -> ValueSchema {
         enum_values: output.enum_values.clone(),
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 
@@ -830,6 +831,7 @@ impl GraphPlan {
                                 enum_values: None,
                                 single_line: false,
                                 minimum: None,
+                                pattern: None,
                             }),
                         )]),
                         crate::ast::ListenSource::Applet(_)
@@ -871,6 +873,7 @@ impl GraphPlan {
                                 enum_values: None,
                                 single_line: false,
                                 minimum: None,
+                                pattern: None,
                             }),
                         )]),
                     };
@@ -1620,6 +1623,7 @@ fn validate_result_event_node(
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         }
     };
     if node.events[event_port].schema != canonical_result_schema {

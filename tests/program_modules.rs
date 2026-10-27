@@ -68,6 +68,7 @@ fn record_output() -> OutputSchema {
                     items: None,
                     fields: BTreeMap::new(),
                     required: Vec::new(),
+                    pattern: None,
                 },
             ),
             (
@@ -86,6 +87,7 @@ fn record_output() -> OutputSchema {
                     items: None,
                     fields: BTreeMap::new(),
                     required: Vec::new(),
+                    pattern: None,
                 },
             ),
         ]),

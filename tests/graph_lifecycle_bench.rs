@@ -179,6 +179,7 @@ fn integer_schema() -> ValueSchema {
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 

@@ -1611,6 +1611,7 @@ mod payload_size_tests {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         }
     }
 
@@ -3344,6 +3345,7 @@ mod input_cursor_tests {
                 enum_values: None,
                 single_line: false,
                 minimum: None,
+                pattern: None,
             }),
         )]);
         node_io_with_initial(
@@ -3436,6 +3438,7 @@ mod input_cursor_tests {
                 enum_values: None,
                 single_line: false,
                 minimum: None,
+                pattern: None,
             }),
         )]);
         let mut io = node_io_with_initial(
@@ -3917,6 +3920,7 @@ mod emit_fanout_tests {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         }
     }
 

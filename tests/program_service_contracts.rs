@@ -35,6 +35,7 @@ fn integer_schema() -> ValueSchema {
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 
@@ -66,6 +67,7 @@ fn decoded_output_port_schema() -> ValueSchema {
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 
@@ -102,6 +104,7 @@ fn result_envelope_port_schema() -> ValueSchema {
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 
@@ -120,6 +123,7 @@ fn text_schema() -> ValueSchema {
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 

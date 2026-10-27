@@ -4,7 +4,7 @@ pub use crate::contracts::{
     AppletBackend, AppletContract, AppletEnvironment, AppletOutput, AppletPort, AppletPorts,
     Capability, Effect, EffectCertainty, Lifecycle, Outcome, OutcomeKind, OutcomeSpec,
     OutputEncoding, OutputSchema, OutputType, PortDelivery, ProgramModule, RemoteAuthSource,
-    RemoteEndpointConfig, Sensitivity, StdioContract, StdioDisposition, ValueSchema,
+    RemoteEndpointConfig, Sensitivity, StdioContract, StdioDisposition, StringPattern, ValueSchema,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -229,6 +229,8 @@ struct ParameterSpec {
     schema: Option<ParameterSchema>,
     #[serde(default, rename = "enum", skip_serializing_if = "Option::is_none")]
     enum_values: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pattern: Option<StringPattern>,
     #[serde(default)]
     required: bool,
     #[serde(default)]
@@ -269,6 +271,7 @@ impl From<RawParameter> for ParameterSpec {
             item_type: raw.items,
             schema: raw.schema,
             enum_values: raw.enum_values,
+            pattern: raw.pattern,
             required: raw.required,
             min_items: raw.min_items,
             min_length: raw.min_length,
@@ -933,6 +936,7 @@ impl Registry {
                     item_type: Some(ParameterType::Scalar),
                     schema: None,
                     enum_values: None,
+                    pattern: None,
                     required: false,
                     min_items: None,
                     min_length: None,
@@ -1748,6 +1752,9 @@ impl Manifest {
                 if let Some(values) = &spec.enum_values {
                     schema["enum"] = serde_json::json!(values);
                 }
+                if let Some(pattern) = spec.pattern {
+                    schema["pattern"] = serde_json::json!(pattern.json_schema_pattern());
+                }
                 if let Some(items) = spec.item_type {
                     schema["items"] = parameter_schema(items, None);
                 }
@@ -2511,6 +2518,17 @@ fn validate_value(
                 bail!("parameter {name:?} must be one of {values:?}, got {string:?}");
             }
         }
+        if let Some(pattern) = spec.pattern {
+            if !pattern.matches(string) {
+                let expected = match pattern {
+                    StringPattern::OctalMode => "1 to 4 ASCII octal digits",
+                    StringPattern::HexColorOptionalHash => {
+                        "six ASCII hexadecimal digits, optionally prefixed with #"
+                    }
+                };
+                bail!("parameter {name:?} must contain {expected}");
+            }
+        }
     }
     if let (ParameterType::Record, Value::Record(values)) = (spec.kind, value) {
         let empty_fields = BTreeMap::new();
@@ -3191,6 +3209,8 @@ struct RawParameter {
     #[serde(default, rename = "enum")]
     enum_values: Option<Vec<String>>,
     #[serde(default)]
+    pattern: Option<StringPattern>,
+    #[serde(default)]
     min_items: Option<usize>,
     #[serde(default)]
     min_length: Option<usize>,
@@ -3468,6 +3488,14 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         }
         if (spec.min_length.is_some() || spec.nonempty) && spec.kind != ParameterType::String {
             bail!("parameter {name:?}: min_length and nonempty constraints apply only to string parameters");
+        }
+        if spec.pattern.is_some() {
+            if spec.kind != ParameterType::String {
+                bail!("parameter {name:?}: pattern constraints apply only to string parameters");
+            }
+            if spec.enum_values.is_some() {
+                bail!("parameter {name:?}: enum and pattern constraints cannot be combined");
+            }
         }
         let is_list = spec.kind == ParameterType::List;
         if is_list != spec.item_type.is_some() {
@@ -4159,6 +4187,7 @@ fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         });
     }
     let mut schema = parameter_field_value_schema(
@@ -4170,6 +4199,7 @@ fn parameter_value_schema(spec: &ParameterSpec) -> Result<ValueSchema> {
         spec.nonempty,
     )?;
     schema.enum_values = spec.enum_values.clone();
+    schema.pattern = spec.pattern;
     Ok(schema)
 }
 
@@ -4266,6 +4296,7 @@ fn parameter_field_value_schema(
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     })
 }
 
@@ -4284,6 +4315,7 @@ fn output_value_schema(output: &OutputSchema) -> ValueSchema {
         enum_values: output.enum_values.clone(),
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 
@@ -4302,6 +4334,7 @@ fn leaf_value_schema(kind: OutputType) -> ValueSchema {
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 
@@ -4752,6 +4785,80 @@ mod tests {
             direct: false,
             discard_stderr: false,
             parameters: BTreeMap::from([("text".into(), Value::Reference("dynamic".into()))]),
+    fn shipped_mode_and_hex_patterns_validate_literals_and_defer_references() {
+        let mode = parse_manifest(include_str!("../manifests/core.fs_ensure_file.json")).unwrap();
+        let hex = parse_manifest(include_str!("../manifests/core.color_parse_rgb.json")).unwrap();
+        assert_eq!(
+            mode.contract()["parameters_schema"]["properties"]["mode"]["pattern"],
+            "^[0-7]{1,4}$"
+        );
+        assert_eq!(
+            hex.contract()["parameters_schema"]["properties"]["default_hex"]["pattern"],
+            "^#?[0-9A-Fa-f]{6}$"
+        );
+
+        let mode_values = |value: Value| {
+            BTreeMap::from([
+                ("path".into(), Value::String("/tmp/file".into())),
+                ("content".into(), Value::String("x".into())),
+                ("mode".into(), value),
+            ])
+        };
+        let validates_literals = |manifest: &Manifest, parameters: BTreeMap<String, Value>| {
+            manifest.validate(&Invocation {
+                operation: manifest.name.clone(),
+                direct: false,
+                discard_stderr: false,
+                parameters,
+                binding: None,
+                cache: false,
+                status_binding: None,
+                result_binding: None,
+                retry: None,
+            })
+        };
+        for valid in ["0", "0644", "7777"] {
+            let supplied = mode_values(Value::String(valid.into()));
+            assert!(
+                validates_literals(&mode, supplied.clone()).is_ok(),
+                "{valid}"
+            );
+            assert!(mode.build_arguments(&supplied).is_ok(), "{valid}");
+        }
+        for invalid in ["", "8888", "00000", " 644", "６４４"] {
+            let supplied = mode_values(Value::String(invalid.into()));
+            assert!(
+                validates_literals(&mode, supplied.clone()).is_err(),
+                "{invalid:?}"
+            );
+            assert!(mode.build_arguments(&supplied).is_err(), "{invalid:?}");
+        }
+        for valid in ["12aB34", "#12aB34", "ABCDEF", "#abcdef"] {
+            let supplied = BTreeMap::from([("default_hex".into(), Value::String(valid.into()))]);
+            assert!(
+                validates_literals(&hex, supplied.clone()).is_ok(),
+                "{valid}"
+            );
+            assert!(hex.build_arguments(&supplied).is_ok(), "{valid}");
+        }
+        for invalid in ["", "#", "zzzzzz", "##12345", "12345", "1234567"] {
+            let supplied = BTreeMap::from([("default_hex".into(), Value::String(invalid.into()))]);
+            assert!(
+                validates_literals(&hex, supplied.clone()).is_err(),
+                "{invalid:?}"
+            );
+            assert!(hex.build_arguments(&supplied).is_err(), "{invalid:?}");
+        }
+
+        let dynamic_mode = Invocation {
+            operation: mode.name.clone(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::from([
+                ("path".into(), Value::String("/tmp/file".into())),
+                ("content".into(), Value::String("x".into())),
+                ("mode".into(), Value::Reference("runtime_mode".into())),
+            ]),
             binding: None,
             cache: false,
             status_binding: None,
@@ -4872,6 +4979,14 @@ mod tests {
             parameters: BTreeMap::from([(
                 "values".into(),
                 Value::Record(BTreeMap::from([("question".into(), value)])),
+        assert!(mode.validate(&dynamic_mode).is_ok());
+        let dynamic_hex = Invocation {
+            operation: hex.name.clone(),
+            direct: false,
+            discard_stderr: false,
+            parameters: BTreeMap::from([(
+                "default_hex".into(),
+                Value::Reference("runtime_color".into()),
             )]),
             binding: None,
             cache: false,
@@ -4904,6 +5019,17 @@ mod tests {
             r#"{"name":"scalar","binary":"echo","parameters":{"value":{"type":"scalar"}},"arguments":[]}"#,
         )
         .is_err());
+        assert!(hex.validate(&dynamic_hex).is_ok());
+    }
+
+    #[test]
+    fn arbitrary_shadow_manifests_keep_unrestricted_string_parameters() {
+        let custom = parse_manifest(
+            r#"{"name":"fs.ensure_file","binary":"custom-helper","parameters":{"mode":{"type":"string"}},"arguments":[{"parameter":"mode"}]}"#,
+        )
+        .unwrap();
+        let supplied = BTreeMap::from([("mode".into(), Value::String("custom-format".into()))]);
+        assert!(custom.build_arguments(&supplied).is_ok());
     }
 
     #[test]
@@ -5981,6 +6107,7 @@ mod first_token_rule_tests {
             item_type: Some(ParameterType::String),
             schema: None,
             enum_values: None,
+            pattern: None,
             required: true,
             min_items: None,
             min_length: None,

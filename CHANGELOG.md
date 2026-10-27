@@ -16,6 +16,9 @@ original version labels.
   bounds. The bundled `fs.transaction` and `json.filter` manifests now statically
   check their operation and predicate variants while deferring unresolved
   references.
+- Applet manifests can constrain string arguments to octal modes or six-digit
+  hexadecimal colors with an optional `#`. Invalid literals fail static checking;
+  referenced values are checked after resolution.
 
 - Program inputs now support `list of integer` and `list of json`; integer list
   values are statically typed when iterated and invalid items fail before execution.

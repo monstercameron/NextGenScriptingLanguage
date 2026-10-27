@@ -511,6 +511,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     };
     let mut inputs = BTreeMap::from([("properties".into(), PortSchema::single(properties))]);
     let updates = ValueSchema {
@@ -527,6 +528,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     };
     inputs.insert("property_updates".into(), PortSchema::records(updates));
     let events = if component == "button" {
@@ -546,6 +548,7 @@ fn renderer_node(id: String, backend: &str, line: usize) -> Result<GraphNode> {
                 enum_values: None,
                 single_line: false,
                 minimum: None,
+                pattern: None,
             }),
         )])
     } else {
@@ -666,6 +669,7 @@ fn node_for_call(
                 enum_values: schema.enum_values.clone(),
                 single_line: false,
                 minimum: None,
+                pattern: None,
             })
             .unwrap_or_else(|| leaf_schema(OutputType::Bytes));
         outputs.insert(
@@ -836,6 +840,7 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
                 enum_values,
                 single_line: false,
                 minimum,
+                pattern: None,
             });
         }
         return Ok(leaf_schema(OutputType::Json));
@@ -864,6 +869,7 @@ fn value_schema_from_json_schema(value: &serde_json::Value) -> Result<ValueSchem
         enum_values,
         single_line: false,
         minimum,
+        pattern: None,
     })
 }
 
@@ -890,6 +896,7 @@ fn leaf_schema(kind: OutputType) -> ValueSchema {
         enum_values: None,
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 

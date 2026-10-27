@@ -838,7 +838,7 @@ fn schema_similarity(left: &ValueSchema, right: &ValueSchema) -> u32 {
     }
     match (left.kind, right.kind) {
         (crate::contracts::OutputType::Text, crate::contracts::OutputType::Text) => {
-            score += if left.enum_values == right.enum_values {
+            score += if left.enum_values == right.enum_values && left.pattern == right.pattern {
                 30
             } else if schemas_compatible(left, right) || schemas_compatible(right, left) {
                 20
@@ -950,6 +950,7 @@ fn schema_from_output(output: &OutputSchema) -> ValueSchema {
         enum_values: output.enum_values.clone(),
         single_line: false,
         minimum: None,
+        pattern: None,
     }
 }
 
@@ -1060,6 +1061,7 @@ mod tests {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         let integer_items = ValueSchema {
             scalar_only: false,
@@ -1379,6 +1381,7 @@ mod tests {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         };
         let wrong_input_schema = ValueSchema {
             fields: [("right".to_owned(), text_schema())].into(),
@@ -1961,6 +1964,7 @@ mod tests {
             enum_values: None,
             single_line: false,
             minimum: None,
+            pattern: None,
         }
     }
 }

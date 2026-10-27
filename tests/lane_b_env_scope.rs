@@ -267,7 +267,7 @@ fn runtime_path_binding_is_used_after_it_is_computed() {
     let tool = bin.join("lane-b-dynamic-path-tool");
     fs::write(&tool, "#!/bin/sh\nprintf 'dynamic-path-ran\\n'\n").unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
-    let source = "accept here as text from program directory\naccept oldpath as text from environment \"PATH\"\nrun \"printf\" with arguments [\"%s/fakebin:%s\", here, oldpath] as newpath\nrun \"lane-b-dynamic-path-tool\" with arguments [] and environment {\"PATH\": newpath}\n";
+    let source = "accept here as text from program directory\naccept oldpath as text from public environment \"PATH\"\nrun \"printf\" with arguments [\"%s/fakebin:%s\", here, oldpath] as newpath\nrun \"lane-b-dynamic-path-tool\" with arguments [] and environment {\"PATH\": newpath}\n";
     fs::write(directory.path().join("workflow.program"), source).unwrap();
 
     let output = execute_command()
@@ -303,12 +303,6 @@ fn runtime_path_binding_is_used_after_it_is_computed() {
         fs::canonicalize(&tool).unwrap().to_string_lossy().as_ref()
     );
     assert_eq!(invocation["resolved_path_inferred"], true, "{plan}");
-    assert!(
-        !plan
-            .to_string()
-            .contains(&std::env::var("PATH").unwrap_or_default()),
-        "the sensitive inherited PATH must not be included in explain output"
-    );
 }
 
 #[cfg(unix)]
@@ -317,18 +311,14 @@ fn explain_does_not_publish_a_path_found_only_in_sensitive_path_tail() {
     use std::os::unix::fs::PermissionsExt;
 
     let directory = tempfile::tempdir().unwrap();
-    let public_bin = directory.path().join("public-bin");
     let sensitive_bin = directory.path().join("sensitive-bin");
-    fs::create_dir(&public_bin).unwrap();
     fs::create_dir(&sensitive_bin).unwrap();
     let tool = sensitive_bin.join("lane-b-secret-path-tool");
     fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
     let inherited_path = format!("/usr/bin:/bin:{}", sensitive_bin.display());
-    let public_bin_literal =
-        serde_json::to_string(&public_bin.to_string_lossy().to_string()).unwrap();
     let source = format!(
-        "accept oldpath as text from environment \"PATH\"\nrun \"printf\" with arguments [\"%s:%s\", {public_bin_literal}, oldpath] as newpath\nuse environment {{\"PATH\": newpath}}\nrun \"lane-b-secret-path-tool\" with arguments []\n"
+        "accept oldpath as text from environment \"PATH\"\nuse environment {{\"PATH\": oldpath}}\nrun \"lane-b-secret-path-tool\" with arguments []\n"
     );
     fs::write(directory.path().join("workflow.program"), &source).unwrap();
     let explain = execute_command()
@@ -359,7 +349,7 @@ fn explain_does_not_publish_a_path_found_only_in_sensitive_path_tail() {
 
 #[cfg(unix)]
 #[test]
-fn explain_does_not_publish_path_derived_from_sensitive_printf_format() {
+fn explain_rejects_secret_environment_value_in_printf_arguments() {
     use std::os::unix::fs::PermissionsExt;
 
     let directory = tempfile::tempdir().unwrap();
@@ -381,18 +371,14 @@ fn explain_does_not_publish_path_derived_from_sensitive_printf_format() {
         .env("PATH", inherited_path)
         .output()
         .unwrap();
-    assert_eq!(explain.status.code(), Some(0), "{:?}", explain.stderr);
-    let plan: serde_json::Value = serde_json::from_slice(&explain.stdout).unwrap();
-    let invocation = plan["steps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|step| step["binary"] == "lane-b-secret-format-tool")
-        .unwrap();
-    assert!(invocation["resolved_path"].is_null(), "{plan}");
-    assert!(invocation["resolved"].is_null(), "{plan}");
-    assert!(!plan
-        .to_string()
+    assert!(!explain.status.success(), "{:?}", explain.stdout);
+    let stderr = String::from_utf8_lossy(&explain.stderr);
+    assert!(
+        stderr.contains("cannot be passed as a command argument"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(&sensitive_bin.to_string_lossy().to_string()));
+    assert!(!String::from_utf8_lossy(&explain.stdout)
         .contains(&sensitive_bin.to_string_lossy().to_string()));
 }
 
@@ -542,7 +528,7 @@ fn explain_does_not_infer_printf_after_loader_environment_taint() {
 #[test]
 fn explain_does_not_infer_a_printf_binding_with_stdout_redirected() {
     let directory = tempfile::tempdir().unwrap();
-    let source = "accept here as text from program directory\naccept oldpath as text from environment \"PATH\"\nrun \"printf\" with arguments [\"%s/fakebin:%s\", here, oldpath] as newpath and stdout to stderr\nrun \"lane-b-dynamic-path-tool\" with arguments [] and environment {\"PATH\": newpath}\n";
+    let source = "accept here as text from program directory\naccept oldpath as text from public environment \"PATH\"\nrun \"printf\" with arguments [\"%s/fakebin:%s\", here, oldpath] as newpath and stdout to stderr\nrun \"lane-b-dynamic-path-tool\" with arguments [] and environment {\"PATH\": newpath}\n";
     let explain = run_script(directory.path(), "explain", source, &["--json"]);
     if explain.status.success() {
         let plan: serde_json::Value = serde_json::from_slice(&explain.stdout).unwrap();

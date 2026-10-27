@@ -1973,7 +1973,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 std::io::stdout()
                                     .write_all(&pending)
                                     .with_context(|| format!("line {}: hand over", step.line))?;
+                                #[cfg(unix)]
                                 let code = handoff::hand_over(command)
+                                    .with_context(|| format!("line {}: hand over", step.line))?;
+                                #[cfg(windows)]
+                                let code = handoff::hand_over(command, signals)
                                     .with_context(|| format!("line {}: hand over", step.line))?;
                                 // Windows exit codes outside 0-255 cannot be represented
                                 // by a script exit and are reported as 1.

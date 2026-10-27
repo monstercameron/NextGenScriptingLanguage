@@ -16,18 +16,26 @@
       "type": "integer"
     }
   },
-  "arguments": [
-    {
-      "literal": "text.count_lines_by"
-    },
-    {
-      "literal": "--args"
-    },
-    {
-      "json_arguments": true
-    }
-  ],
   "parameter_alternatives": [
+    {
+      "message": "field must be an integer from 0 through 16777216",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "field"
+          }
+        ],
+        [
+          {
+            "test": "number_range",
+            "parameter": "field",
+            "minimum": 0,
+            "maximum": 16777216
+          }
+        ]
+      ]
+    },
     {
       "message": "text.count_lines_by delimiter must be nonempty",
       "any_of": [
@@ -38,6 +46,17 @@
           }
         ]
       ]
+    }
+  ],
+  "arguments": [
+    {
+      "literal": "text.count_lines_by"
+    },
+    {
+      "literal": "--args"
+    },
+    {
+      "json_arguments": true
     }
   ],
   "contract": {

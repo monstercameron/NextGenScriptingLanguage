@@ -83,5 +83,26 @@
     "capabilities": [
       "number.compute"
     ]
-  }
+  },
+  "parameter_alternatives": [
+    {
+      "message": "precision must be an integer from 0 through 15",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "precision"
+          }
+        ],
+        [
+          {
+            "test": "number_range",
+            "parameter": "precision",
+            "minimum": 0,
+            "maximum": 15
+          }
+        ]
+      ]
+    }
+  ]
 }

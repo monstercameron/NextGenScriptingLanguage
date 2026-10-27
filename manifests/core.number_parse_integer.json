@@ -79,5 +79,26 @@
   },
   "phrases": [
     "number parse_integer"
+  ],
+  "parameter_alternatives": [
+    {
+      "message": "base must be an integer from 2 through 36",
+      "any_of": [
+        [
+          {
+            "test": "absent",
+            "parameter": "base"
+          }
+        ],
+        [
+          {
+            "test": "number_range",
+            "parameter": "base",
+            "minimum": 2,
+            "maximum": 36
+          }
+        ]
+      ]
+    }
   ]
 }

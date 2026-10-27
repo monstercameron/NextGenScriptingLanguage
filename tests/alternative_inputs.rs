@@ -153,6 +153,115 @@ fn unknown_values_are_deferred_to_execution() {
 }
 
 #[test]
+fn optional_numeric_ranges_reject_literals_and_resolved_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "number.parse_integer",
+            "base",
+            "base must be an integer from 2 through 36",
+            "run number.parse_integer with text \"10\"",
+            2,
+            36,
+            1,
+            37,
+        ),
+        (
+            "number.parse_integer.result",
+            "base",
+            "base must be an integer from 2 through 36",
+            "run number.parse_integer.result with text \"10\"",
+            2,
+            36,
+            1,
+            37,
+        ),
+        (
+            "number.format",
+            "precision",
+            "precision must be an integer from 0 through 15",
+            "run number.format with value 1",
+            0,
+            15,
+            -1,
+            16,
+        ),
+        (
+            "number.format_size",
+            "precision",
+            "precision must be an integer from 0 through 6",
+            "run number.format_size with value 100",
+            0,
+            6,
+            -1,
+            7,
+        ),
+    ];
+
+    for (operation, parameter, message, prefix, minimum, maximum, below, above) in cases {
+        for invalid in [below, above] {
+            let source = format!("{prefix} and {parameter} {invalid}\n");
+            for command in ["check", "run"] {
+                let output = invoke(dir.path(), &source, command, &[]);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    !output.status.success() && stderr.contains(message),
+                    "{command} accepted {operation} {parameter}={invalid}: {stderr}"
+                );
+            }
+        }
+
+        // The option remains optional, and both inclusive endpoints are valid.
+        for source in [
+            format!("{prefix}\n"),
+            format!("{prefix} and {parameter} {minimum}\n"),
+            format!("{prefix} and {parameter} {maximum}\n"),
+        ] {
+            for command in ["check", "run"] {
+                let output = invoke(dir.path(), &source, command, &[]);
+                assert!(
+                    output.status.success(),
+                    "{command} rejected valid {operation} call {source:?}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+
+        // References cannot be range-checked statically, but runtime resolves
+        // their values before invoking the applet and rejects out-of-range data.
+        let dynamic_source = format!("accept option as integer\n{prefix} and {parameter} option\n");
+        for invalid in [below, above] {
+            let supplied = format!("option={invalid}");
+            let output = invoke(
+                dir.path(),
+                &dynamic_source,
+                "run",
+                &["--input", supplied.as_str()],
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success() && stderr.contains(message),
+                "runtime accepted referenced {operation} {parameter}={invalid}: {stderr}"
+            );
+        }
+        for valid in [minimum, maximum] {
+            let supplied = format!("option={valid}");
+            let output = invoke(
+                dir.path(),
+                &dynamic_source,
+                "run",
+                &["--input", supplied.as_str()],
+            );
+            assert!(
+                output.status.success(),
+                "runtime rejected referenced {operation} {parameter}={valid}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+#[test]
 fn malformed_alternative_rules_are_rejected_at_manifest_load() {
     use flow::manifest::Registry;
     use serde_json::json;

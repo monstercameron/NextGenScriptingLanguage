@@ -456,7 +456,8 @@ def gnu_time():
     if not candidate.is_file():
         return None
     result = subprocess.run([str(candidate), "--version"], capture_output=True, text=True, check=False)
-    return str(candidate) if result.returncode == 0 and "GNU time" in result.stdout else None
+    version_text = f"{result.stdout}\n{result.stderr}".casefold()
+    return str(candidate) if result.returncode == 0 and "gnu time" in version_text else None
 
 
 def binary_size(path):

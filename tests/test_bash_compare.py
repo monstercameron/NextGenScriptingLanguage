@@ -3,10 +3,12 @@ import importlib.util
 import os
 import shlex
 import shutil
+import subprocess
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,17 @@ class BashCompareContractTests(unittest.TestCase):
         self.assertTrue(Path(command[0]).is_absolute())
         manifest_index = command.index("--manifest-dir") + 1
         self.assertTrue(Path(command[manifest_index]).is_absolute())
+
+    @patch.object(Path, "is_file", return_value=True)
+    @patch.object(
+        bash_compare.subprocess,
+        "run",
+        return_value=subprocess.CompletedProcess(
+            ["/usr/bin/time", "--version"], 0, stdout="time (GNU Time) 1.9", stderr=""
+        ),
+    )
+    def test_gnu_time_detection_accepts_upstream_version_capitalization(self, _run, _is_file):
+        self.assertEqual(bash_compare.gnu_time(), "/usr/bin/time")
 
     def test_bash_and_dash_arms_match_the_independent_output_oracles(self):
         bash = shutil.which("bash")

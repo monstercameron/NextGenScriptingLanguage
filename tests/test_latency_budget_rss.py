@@ -12,6 +12,37 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from check_latency import gnu_time, run_once  # noqa: E402
+import check_latency  # noqa: E402
+
+
+class GnuTimeDetectionTests(unittest.TestCase):
+    def setUp(self):
+        check_latency.gnu_time.cache_clear()
+
+    def tearDown(self):
+        check_latency.gnu_time.cache_clear()
+
+    @patch("check_latency.sys.platform", "linux")
+    @patch("check_latency.shutil.which", return_value="/usr/bin/time")
+    @patch(
+        "check_latency.subprocess.run",
+        return_value=subprocess.CompletedProcess(
+            ["/usr/bin/time", "--version"], 0, stdout="", stderr="time (GNU Time) 1.9"
+        ),
+    )
+    def test_recognizes_gnu_time_version_case_insensitively(self, _run, _which):
+        self.assertEqual(check_latency.gnu_time(), "/usr/bin/time")
+
+    @patch("check_latency.sys.platform", "linux")
+    @patch("check_latency.shutil.which", return_value="/usr/bin/time")
+    @patch(
+        "check_latency.subprocess.run",
+        return_value=subprocess.CompletedProcess(
+            ["/usr/bin/time", "--version"], 0, stdout="custom time utility", stderr=""
+        ),
+    )
+    def test_rejects_non_gnu_time(self, _run, _which):
+        self.assertIsNone(check_latency.gnu_time())
 
 
 class LatencyTimingTests(unittest.TestCase):

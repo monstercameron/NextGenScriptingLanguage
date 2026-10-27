@@ -51,7 +51,8 @@ def gnu_time():
         )
     except OSError:
         return None
-    return candidate if version.returncode == 0 and "GNU time" in version.stdout else None
+    version_text = f"{version.stdout}\n{version.stderr}".casefold()
+    return candidate if version.returncode == 0 and "gnu time" in version_text else None
 
 
 def run_once(command, rss_command=None):

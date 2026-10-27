@@ -215,6 +215,9 @@ jobs:
           node-version: '24'
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: editors/vscode
+      - name: Verify inherited stdio remains blocking
+        if: matrix.os == 'ubuntu-24.04'
+        run: cargo test --locked --features test-fixtures --test inherited_stdio_nonblocking
       - run: make check
       - run: make unix-smoke
       - run: make proof-smoke

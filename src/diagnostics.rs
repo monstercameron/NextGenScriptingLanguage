@@ -905,9 +905,15 @@ fn collect_lint_diagnostics(
             None,
         );
     }
-    collect_path_literal_diagnostics(source, &program.steps, line_starts, diagnostics);
+    collect_path_literal_diagnostics(
+        source,
+        &program.steps,
+        Some(program),
+        line_starts,
+        diagnostics,
+    );
     for definition in program.definitions.values() {
-        collect_path_literal_diagnostics(source, &definition.steps, line_starts, diagnostics);
+        collect_path_literal_diagnostics(source, &definition.steps, None, line_starts, diagnostics);
     }
     let mut calls = Vec::new();
     collect_calls(&program.steps, &mut calls);
@@ -962,23 +968,237 @@ fn collect_lint_diagnostics(
                 if !has_shell_expansion(value) {
                     continue;
                 }
-                let span = parameter_value_span_at(source, line, "arguments", line_starts)
-                    .unwrap_or_else(|| line_starts.span(source, line));
+                let span =
+                    parameter_list_item_span_at(source, line, "arguments", index, line_starts)
+                        .unwrap_or_else(|| {
+                            parameter_value_span_at(source, line, "arguments", line_starts)
+                                .unwrap_or_else(|| line_starts.span(source, line))
+                        });
+                let fixes = shell_expansion_argument_fix(
+                    source,
+                    program,
+                    line,
+                    call,
+                    index,
+                    value,
+                    line_starts,
+                )
+                .into_iter()
+                .collect();
                 diagnostics.push(Diagnostic {
                     severity: DiagnosticSeverity::Warning,
                     code: "lint.shell_expansion_literal".into(),
                     message: format!("argument {index} contains shell expansion syntax, but Execute passes it literally; declare an environment input or format the value explicitly"),
                     span,
-                    fixes: Vec::new(),
+                    fixes,
                 });
             }
         }
     }
 }
 
+fn shell_expansion_argument_fix(
+    source: &str,
+    program: &Program,
+    line: usize,
+    call: &Invocation,
+    argument_index: usize,
+    value: &str,
+    line_starts: &LineStarts,
+) -> Option<SuggestedFix> {
+    let first = program.steps.first()?;
+    if program.trigger.is_some()
+        || !matches!(
+            &first.kind,
+            StepKind::Invoke {
+                call: first_call,
+                connection: Connection::Start,
+            } if first.line == line && first_call.operation == call.operation
+        )
+        || source.starts_with('\u{feff}')
+    {
+        return None;
+    }
+    let line_text = source.lines().nth(line.saturating_sub(1))?;
+    if line_text.trim_start() != line_text || !line_text.starts_with("run ") {
+        return None;
+    }
+    let (template, variables) = shell_variable_template(value)?;
+    let argument_span =
+        parameter_list_item_span_at(source, line, "arguments", argument_index, line_starts)?;
+    let insert_at = line_starts.start(line);
+    let insertion_span = line_starts.span_at(source, insert_at, insert_at, SpanPrecision::Token);
+    let mut declarations = Vec::new();
+    let mut values = Vec::new();
+    let mut variable_bindings = BTreeMap::new();
+    for (index, variable) in variables.iter().enumerate() {
+        let field = format!("v{index}");
+        let binding = variable_bindings
+            .entry(variable.clone())
+            .or_insert_with(|| {
+                fresh_binding_name(
+                    source,
+                    &format!("execute_{}", variable.to_ascii_lowercase()),
+                )
+            });
+        if !declarations
+            .iter()
+            .any(|decl: &String| decl.contains(binding))
+        {
+            declarations.push(format!(
+                "accept {binding} as text from environment {} with default \"\"\n",
+                serde_json::to_string(variable).ok()?
+            ));
+        }
+        values.push(format!("\"{field}\": {binding}"));
+    }
+    let values = format!("{{{}}}", values.join(", "));
+    let format_binding = fresh_binding_name(source, "execute_formatted_argument");
+    let format_line = format!(
+        "run text.format with template {} and values {values} and escape \"plain\" as {format_binding}\n",
+        serde_json::to_string(&template).ok()?
+    );
+    let insertion = format!("{}{format_line}", declarations.concat());
+    Some(SuggestedFix {
+        message: "read the environment value explicitly and format the argument",
+        edits: vec![
+            TextEdit {
+                span: argument_span,
+                replacement: format_binding,
+            },
+            TextEdit {
+                span: insertion_span,
+                replacement: insertion,
+            },
+        ],
+    })
+}
+
+fn parameter_list_item_span_at(
+    source: &str,
+    line: usize,
+    parameter: &str,
+    item_index: usize,
+    line_starts: &LineStarts,
+) -> Option<SourceSpan> {
+    let words = line_words_from_start(source, line_starts.start(line));
+    let index = find_parameter_index(&words, parameter)?.checked_add(1 + item_index)?;
+    let item = words.get(index)?;
+    item.3
+        .then(|| line_starts.span_at(source, item.1, item.2, SpanPrecision::Token))
+}
+
+fn fresh_binding_name(source: &str, base: &str) -> String {
+    let used = |candidate: &str| {
+        let mut offset = 0;
+        for raw_line in source.split_inclusive('\n') {
+            if line_words_from_start(source, offset)
+                .iter()
+                .any(|word| !word.3 && word.0 == candidate)
+            {
+                return true;
+            }
+            offset += raw_line.len();
+        }
+        false
+    };
+    if !used(base) {
+        return base.to_owned();
+    }
+    (2..)
+        .map(|suffix| format!("{base}_{suffix}"))
+        .find(|candidate| !used(candidate))
+        .unwrap_or_else(|| format!("{base}_generated"))
+}
+
+fn shell_variable_template(value: &str) -> Option<(String, Vec<String>)> {
+    if value.contains("{{") || value.contains("}}") {
+        return None;
+    }
+    let chars = value.char_indices().collect::<Vec<_>>();
+    let mut output = String::new();
+    let mut variables = Vec::new();
+    let mut cursor = 0;
+    let mut index = 0;
+    while index < chars.len() {
+        let (offset, ch) = chars[index];
+        if ch == '\\' {
+            // Backslash-escaped dollar/backtick is literal in the shell syntax
+            // this lint is intended to recognize.
+            if chars
+                .get(index + 1)
+                .is_some_and(|(_, next)| matches!(next, '$' | '`'))
+            {
+                output.push_str(&value[cursor..offset + ch.len_utf8()]);
+                let (next_offset, next) = chars[index + 1];
+                output.push(next);
+                cursor = next_offset + next.len_utf8();
+                index += 2;
+                continue;
+            }
+        }
+        if ch == '`' {
+            return None;
+        }
+        if ch != '$' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        let (variable, after) = if chars.get(index + 1).is_some_and(|(_, next)| *next == '{') {
+            let close = (index + 2..chars.len()).find(|cursor| chars[*cursor].1 == '}')?;
+            let variable = value[chars[index + 2].0..chars[close].0].to_owned();
+            (variable, close + 1)
+        } else {
+            let next = chars.get(index + 1)?.1;
+            if !(next == '_' || next.is_ascii_alphabetic()) {
+                return None;
+            }
+            let mut end = index + 2;
+            while end < chars.len() && (chars[end].1 == '_' || chars[end].1.is_ascii_alphanumeric())
+            {
+                end += 1;
+            }
+            (
+                value[offset + 1..chars.get(end).map_or(value.len(), |(offset, _)| *offset)]
+                    .to_owned(),
+                end,
+            )
+        };
+        if variable.is_empty()
+            || !variable
+                .bytes()
+                .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        {
+            return None;
+        }
+        output.push_str(&value[cursor..offset]);
+        let placeholder =
+            if let Some(existing) = variables.iter().position(|existing| existing == &variable) {
+                existing
+            } else {
+                variables.push(variable);
+                variables.len() - 1
+            };
+        output.push_str(&format!("{{{{v{placeholder}}}}}"));
+        cursor = if after > start {
+            chars.get(after).map_or(value.len(), |(offset, _)| *offset)
+        } else {
+            value.len()
+        };
+        index = after;
+    }
+    if variables.is_empty() {
+        return None;
+    }
+    output.push_str(&value[cursor..]);
+    Some((output, variables))
+}
+
 fn collect_path_literal_diagnostics(
     source: &str,
     steps: &[Step],
+    program: Option<&Program>,
     line_starts: &LineStarts,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -993,12 +1213,28 @@ fn collect_path_literal_diagnostics(
                 continue;
             }
             if matches!(value, Value::String(text) if has_shell_expansion(text)) {
+                let fixes = program
+                    .and_then(|program| match value {
+                        Value::String(text) => shell_expansion_value_fix(
+                            source,
+                            program,
+                            line,
+                            call,
+                            name,
+                            None,
+                            text,
+                            line_starts,
+                        ),
+                        _ => None,
+                    })
+                    .into_iter()
+                    .collect();
                 diagnostics.push(Diagnostic {
                     severity: DiagnosticSeverity::Warning,
                     code: "lint.shell_expansion_literal".into(),
                     message: format!("path parameter {name:?} contains shell expansion syntax, but Execute passes it literally; use an explicit environment input or format the path"),
                     span: parameter_value_span_at(source, line, name, line_starts).unwrap_or_else(|| line_starts.span(source, line)),
-                    fixes: Vec::new(),
+                    fixes,
                 });
             }
         }
@@ -1023,6 +1259,85 @@ fn collect_path_literal_diagnostics(
             });
         }
     }
+}
+
+fn shell_expansion_value_fix(
+    source: &str,
+    program: &Program,
+    line: usize,
+    call: &Invocation,
+    parameter: &str,
+    item_index: Option<usize>,
+    value: &str,
+    line_starts: &LineStarts,
+) -> Option<SuggestedFix> {
+    let first = program.steps.first()?;
+    if program.trigger.is_some()
+        || !matches!(
+            &first.kind,
+            StepKind::Invoke {
+                call: first_call,
+                connection: Connection::Start,
+            } if first.line == line && first_call.operation == call.operation
+        )
+        || source.starts_with('\u{feff}')
+    {
+        return None;
+    }
+    let line_text = source.lines().nth(line.saturating_sub(1))?;
+    if line_text.trim_start() != line_text || !line_text.starts_with("run ") {
+        return None;
+    }
+    let (template, variables) = shell_variable_template(value)?;
+    let span = match item_index {
+        Some(index) => parameter_list_item_span_at(source, line, parameter, index, line_starts)?,
+        None => parameter_value_span_at(source, line, parameter, line_starts)?,
+    };
+    let insert_at = line_starts.start(line);
+    let insertion_span = line_starts.span_at(source, insert_at, insert_at, SpanPrecision::Token);
+    let mut declarations = Vec::new();
+    let mut values = Vec::new();
+    let mut variable_bindings = BTreeMap::new();
+    for (index, variable) in variables.iter().enumerate() {
+        let field = format!("v{index}");
+        let binding = variable_bindings
+            .entry(variable.clone())
+            .or_insert_with(|| {
+                fresh_binding_name(
+                    source,
+                    &format!("execute_{}", variable.to_ascii_lowercase()),
+                )
+            });
+        if !declarations
+            .iter()
+            .any(|decl: &String| decl.contains(binding))
+        {
+            declarations.push(format!(
+                "accept {binding} as text from environment {} with default \"\"\n",
+                serde_json::to_string(variable).ok()?
+            ));
+        }
+        values.push(format!("\"{field}\": {binding}"));
+    }
+    let values = format!("{{{}}}", values.join(", "));
+    let format_binding = fresh_binding_name(source, "execute_formatted_path");
+    let format_line = format!(
+        "run text.format with template {} and values {values} and escape \"plain\" as {format_binding}\n",
+        serde_json::to_string(&template).ok()?
+    );
+    Some(SuggestedFix {
+        message: "read the environment value explicitly and format the path",
+        edits: vec![
+            TextEdit {
+                span,
+                replacement: format_binding,
+            },
+            TextEdit {
+                span: insertion_span,
+                replacement: format!("{}{format_line}", declarations.concat()),
+            },
+        ],
+    })
 }
 
 fn collect_unused_names(
@@ -1617,20 +1932,35 @@ fn collect_model_lints(
         return;
     }
     for (line, call) in calls {
-        if !call.direct
-            || !matches!(
-                call.operation.as_str(),
-                "sh" | "bash" | "zsh" | "dash" | "execute"
-            )
-        {
+        if !call.direct {
             continue;
         }
         let Some(Value::List(arguments)) = call.parameters.get("arguments") else {
             continue;
         };
-        let shell_command = arguments.windows(2).any(|pair| {
-            matches!(&pair[0], Value::String(flag) if flag == "-c")
-                && matches!(&pair[1], Value::Reference(name) if generated_text.contains(name))
+        let executable = call.operation.rsplit('/').next().unwrap_or(&call.operation);
+        let args = arguments
+            .iter()
+            .map(|argument| match argument {
+                Value::String(value) => Some(value.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let shell_command = arguments.iter().enumerate().any(|(index, argument)| {
+            if !matches!(argument, Value::String(flag) if flag == "-c")
+                || !matches!(arguments.get(index + 1), Some(Value::Reference(name)) if generated_text.contains(name))
+            {
+                return false;
+            }
+            let known_shell = |name: &str| {
+                matches!(name, "sh" | "bash" | "zsh" | "dash" | "ksh" | "fish")
+            };
+            known_shell(executable)
+                || executable == "env"
+                    && args[..index].iter().flatten().any(|name| {
+                        let name = *name;
+                        known_shell(name.rsplit('/').next().unwrap_or(name))
+                    })
         });
         if shell_command {
             diagnostics.push(Diagnostic {
@@ -1647,6 +1977,7 @@ fn collect_model_lints(
 fn has_shell_expansion(value: &str) -> bool {
     let bytes = value.as_bytes();
     if value.starts_with('~')
+        && !is_backslash_escaped(bytes, 0)
         && value
             .chars()
             .skip(1)
@@ -1657,7 +1988,7 @@ fn has_shell_expansion(value: &str) -> bool {
     }
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'$' {
+        if bytes[index] == b'$' && !is_backslash_escaped(bytes, index) {
             if bytes
                 .get(index + 1)
                 .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
@@ -1666,12 +1997,22 @@ fn has_shell_expansion(value: &str) -> bool {
                 return true;
             }
         }
-        if bytes[index] == b'`' {
+        if bytes[index] == b'`' && !is_backslash_escaped(bytes, index) {
             return true;
         }
         index += 1;
     }
     false
+}
+
+fn is_backslash_escaped(bytes: &[u8], index: usize) -> bool {
+    let mut cursor = index;
+    let mut count = 0;
+    while cursor > 0 && bytes[cursor - 1] == b'\\' {
+        count += 1;
+        cursor -= 1;
+    }
+    count % 2 == 1
 }
 
 fn is_contextual_header(tokens: &[Token<'_>]) -> bool {

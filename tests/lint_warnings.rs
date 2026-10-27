@@ -1,5 +1,20 @@
-use flow::diagnostics::{analyze_source, code_info, DiagnosticSeverity};
+use flow::diagnostics::{analyze_source, code_info, DiagnosticSeverity, SuggestedFix};
 use flow::manifest::Registry;
+
+fn apply_fix(source: &str, fix: &SuggestedFix) -> String {
+    let mut edits = fix.edits.clone();
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.span.start_byte));
+    let mut output = source.to_owned();
+    for edit in edits {
+        output.replace_range(edit.span.start_byte..edit.span.end_byte, &edit.replacement);
+    }
+    output
+}
+
+fn format_registry() -> Registry {
+    Registry::from_sources(&[include_str!("../manifests/core.text_format.json").to_owned()])
+        .unwrap()
+}
 
 #[test]
 fn shell_expansion_in_literal_arguments_warns_without_becoming_an_error() {
@@ -18,9 +33,67 @@ fn shell_expansion_in_literal_arguments_warns_without_becoming_an_error() {
 }
 
 #[test]
+fn safe_first_command_expansion_fix_declares_environment_and_formats_value() {
+    let source = "run \"echo\" with arguments [\"$HOME/x\"]\n";
+    let registry = format_registry();
+    let diagnostics = analyze_source(source, &registry);
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .expect("shell expansion warning");
+    let fix = warning.fixes.first().expect("safe fix for first run step");
+    let repaired = apply_fix(source, fix);
+    assert!(repaired.contains("from environment \"HOME\" with default \"\""));
+    assert!(repaired.contains("text.format with template \"{{v0}}/x\""));
+    assert!(!analyze_source(&repaired, &registry)
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+}
+
+#[test]
+fn shell_expansion_fix_is_withheld_when_insertion_would_change_pipeline_input() {
+    let source = "read \"input.txt\"\nthen \"echo\" with arguments [\"$HOME/x\"]\n";
+    let diagnostics = analyze_source(source, &format_registry());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .expect("shell expansion warning");
+    assert!(warning.fixes.is_empty());
+}
+
+#[test]
+fn braced_environment_expansion_gets_an_explicit_formatting_fix() {
+    let source = "run \"echo\" with arguments [\"${name}\\n\"]\n";
+    let registry = format_registry();
+    let diagnostics = analyze_source(source, &registry);
+    let fix = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .and_then(|diagnostic| diagnostic.fixes.first())
+        .expect("environment expansion fix");
+    let repaired = apply_fix(source, fix);
+    assert!(repaired.contains("from environment \"name\""));
+    assert!(repaired.contains("template \"{{v0}}\\n\""));
+    assert!(!analyze_source(&repaired, &registry)
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+}
+
+#[test]
 fn shell_free_literal_arguments_do_not_warn() {
     let diagnostics = analyze_source(
         "run \"echo\" with arguments [\"hello\", \"world\"]\n",
+        &Registry::default(),
+    );
+    assert!(!diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+}
+
+#[test]
+fn backslash_escaped_shell_marker_does_not_warn() {
+    let diagnostics = analyze_source(
+        "run \"echo\" with arguments [\"\\\\$HOME\"]\n",
         &Registry::default(),
     );
     assert!(!diagnostics
@@ -37,6 +110,35 @@ fn shell_expansion_in_path_is_also_reported() {
     assert!(diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+}
+
+#[test]
+fn safe_first_path_expansion_gets_explicit_environment_fix() {
+    let source = "run fs.read with path \"$HOME/input.txt\"\n";
+    let registry = format_registry();
+    let diagnostics = analyze_source(source, &registry);
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .expect("path expansion warning");
+    let fix = warning.fixes.first().expect("safe first-step path fix");
+    let repaired = apply_fix(source, fix);
+    assert!(repaired.contains("from environment \"HOME\""));
+    assert!(repaired.contains("text.format with template \"{{v0}}/input.txt\""));
+    assert!(!analyze_source(&repaired, &registry)
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+}
+
+#[test]
+fn path_expansion_fix_is_withheld_after_a_prior_pipeline_step() {
+    let source = "read \"input.txt\"\nthen fs.read with path \"$HOME/input.txt\"\n";
+    let diagnostics = analyze_source(source, &format_registry());
+    let warning = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "lint.shell_expansion_literal")
+        .expect("path expansion warning");
+    assert!(warning.fixes.is_empty());
 }
 
 #[test]
@@ -199,6 +301,24 @@ fn model_text_passed_to_shell_c_is_flagged_but_data_arguments_are_allowed() {
     let safe = "run llm.ask with prompt \"write something\" as generated\nrun \"printf\" with arguments [\"%s\", generated]\n";
     let safe_diagnostics = analyze_source(safe, &Registry::default());
     assert!(!safe_diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "model.text_to_command"));
+}
+
+#[test]
+fn model_text_from_extract_and_env_shell_invocation_are_flagged() {
+    let source = "run llm.extract with model model_name and instruction \"draft\" and schema schema as raw\nthen parse json as response\ntake text at \"/value\" from response as generated\nrun \"env\" with arguments [\"bash\", \"-c\", generated]\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "model.text_to_command"));
+}
+
+#[test]
+fn count_option_is_not_mistaken_for_a_shell_command_flag() {
+    let source = "run llm.ask with prompt \"write something\" as generated\nrun \"grep\" with arguments [\"-c\", generated]\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    assert!(!diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "model.text_to_command"));
 }

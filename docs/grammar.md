@@ -338,15 +338,15 @@ redirections, `then append to`, `interactively`, `hand over to`, and
 Which modifiers may follow each statement. A `yes` cell is accepted by the parser;
 `no` cells are rejected or unsupported in that context.
 
-| Statement | `as NAME` | `and keep status as` | `and keep result as` | `and discard stderr` | `and cache` |
-| --- | --- | --- | --- | --- | --- |
-| `run TEXT` (direct executable) | yes | yes | yes | yes | no |
-| `run NAME` (manifest applet) | yes | yes | yes | no | yes, when the manifest declares it |
-| `then` | yes | yes | yes | no | no |
-| `pipe to` | yes, on the group's final stage (see note) | no | no | no | no |
-| `run program NAME` (reusable) | yes | no | no | no | no |
-| `take` | no | no | no | no | no |
-| `every`, `on schedule`, `listen to` | no | no | no | no | no |
+| Statement | `as NAME` | `and keep status as` | `and keep result as` | `and keep secret` | `and discard stderr` | `and cache` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `run TEXT` (direct executable) | yes | yes | yes | yes, after `as NAME` | yes | no |
+| `run NAME` (manifest applet) | yes | yes | yes | yes, after `as NAME` | no | yes, when the manifest declares it |
+| `then` | yes | yes | yes | yes, after `as NAME` | no | no |
+| `pipe to` | yes, on the group's final stage (see note) | no | no | yes, after `as NAME` | no | no |
+| `run program NAME` (reusable) | yes | no | no | no | no | no |
+| `take` | no | no | no | no | no | no |
+| `every`, `on schedule`, `listen to` | no | no | no | no | no | no |
 
 `pipe to ... as NAME` binds the pipe group's final output, the terminal stage's
 stdout, to NAME. A group with a binding does not stream to the terminal, and a later

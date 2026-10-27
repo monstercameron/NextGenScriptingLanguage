@@ -45,6 +45,7 @@ struct PreparedTask {
     parameters: std::collections::BTreeMap<String, Value>,
     uncertain_on_error: bool,
     native_command: bool,
+    sensitive: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +80,7 @@ struct TaskRecord {
     launched_processes: usize,
     error: Option<String>,
     uncertain: bool,
+    sensitive: bool,
 }
 
 impl TaskRecord {
@@ -90,6 +92,7 @@ impl TaskRecord {
             launched_processes: 0,
             error: None,
             uncertain: false,
+            sensitive: task.sensitive,
         }
     }
 }
@@ -146,6 +149,8 @@ pub(super) struct TaskGroupRequest<'a> {
     pub(super) config: TaskGroupConfig,
     pub(super) registry: &'a Registry,
     pub(super) bindings: &'a BTreeMap<String, Value>,
+    pub(super) sensitive_items: bool,
+    pub(super) sensitive_environment: bool,
     pub(super) options: &'a RunOptions,
     pub(super) cancelled: Arc<AtomicBool>,
     pub(super) draining: Arc<std::sync::atomic::AtomicU8>,
@@ -224,13 +229,14 @@ pub(super) fn preflight_group(
             .iter()
             .map(|(name, value)| Ok((name.clone(), super::resolve(value, bindings)?)))
             .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
-        let resolved = Invocation {
+        let mut resolved = Invocation {
             operation: task.operation.clone(),
             direct: false,
             discard_stderr: false,
             parameters,
             binding: None,
             cache: false,
+            sensitive_binding: task.marks_sensitive_output(),
             status_binding: None,
             result_binding: None,
             retry: None,
@@ -238,6 +244,10 @@ pub(super) fn preflight_group(
         let manifest = registry
             .resolve_call(&resolved)
             .with_context(|| format!("task {id:?}"))?;
+        resolved.sensitive_binding |= crate::security::applet_has_declared_secret_environment(
+            registry,
+            manifest.name_for(&resolved),
+        );
         manifest
             .validate(&resolved)
             .with_context(|| format!("task {id:?}"))?;
@@ -272,6 +282,8 @@ pub(super) fn run_group(
         config,
         registry,
         bindings,
+        sensitive_items: _,
+        sensitive_environment,
         options,
         cancelled,
         draining,
@@ -306,12 +318,19 @@ pub(super) fn run_group(
     .into_iter()
     .map(|(id, call)| {
         let manifest = registry.resolve_call(&call)?;
+        let sensitive = call.marks_sensitive_output()
+            || sensitive_environment
+            || crate::security::applet_has_declared_secret_environment(
+                registry,
+                manifest.name_for(&call),
+            );
         Ok(PreparedTask {
             id,
             applet: manifest.name.clone(),
             parameters: call.parameters,
             uncertain_on_error: manifest.uncertain_on_failure,
             native_command: manifest.execution_backend() == AppletBackend::Command,
+            sensitive,
         })
     })
     .collect::<Result<Vec<_>>>()?;
@@ -339,6 +358,7 @@ pub(super) fn run_group(
             launched_processes: 0,
             error: None,
             uncertain: false,
+            sensitive: record.sensitive,
         })
         .collect::<Vec<_>>();
     ensure_encoded_limit(
@@ -510,6 +530,15 @@ pub(super) fn run_group(
         }
         match completion.result {
             Ok(result) => {
+                if let Err(error) = register_task_result(&secret_redactor, task.sensitive, &result)
+                {
+                    let message =
+                        format!("could not safely redact sensitive task output: {error:#}");
+                    records[index].state = TaskState::Failed;
+                    records[index].error = Some(message.clone());
+                    first_failure = Some((index, message, None, true));
+                    break;
+                }
                 total_output_bytes = total_output_bytes
                     .checked_add(result.output.len())
                     .and_then(|total| total.checked_add(result.stderr.len()))
@@ -557,13 +586,18 @@ pub(super) fn run_group(
                 } else {
                     TaskState::Failed
                 };
-                records[index].error = Some(format!("{error:#}"));
+                let error_text = register_task_error(&secret_redactor, task.sensitive, &error)
+                    .unwrap_or_else(|_| {
+                        "sensitive task failure was withheld because redaction could not be secured"
+                            .into()
+                    });
+                records[index].error = Some(error_text.clone());
                 let uncertain = task_error_uncertain(&error, task.uncertain_on_error);
                 records[index].uncertain = uncertain;
                 if mode == TaskGroupMode::Join {
                     first_failure = Some((
                         index,
-                        format!("applet invocation failed: {error:#}"),
+                        format!("applet invocation failed: {error_text}"),
                         None,
                         uncertain,
                     ));
@@ -606,6 +640,7 @@ pub(super) fn run_group(
                 &mut records,
                 &prepared,
                 &mut total_output_bytes,
+                &secret_redactor,
             );
         }
         for record in &mut records {
@@ -726,6 +761,8 @@ pub(super) fn run_each(
         config,
         registry,
         bindings,
+        sensitive_items,
+        sensitive_environment,
         options,
         cancelled,
         draining,
@@ -771,13 +808,14 @@ pub(super) fn run_each(
             .map(|(name, value)| Ok((name.clone(), super::resolve(value, &scoped)?)))
             .collect::<Result<BTreeMap<_, _>>>()
             .with_context(|| format!("element {index}"))?;
-        let call = Invocation {
+        let mut call = Invocation {
             operation: template.operation.clone(),
             direct: template.direct,
             discard_stderr: false,
             parameters,
             binding: None,
             cache: false,
+            sensitive_binding: template.marks_sensitive_output(),
             status_binding: None,
             result_binding: None,
             retry: None,
@@ -785,6 +823,12 @@ pub(super) fn run_each(
         let manifest = registry
             .resolve_call(&call)
             .with_context(|| format!("element {index}"))?;
+        call.sensitive_binding |= sensitive_items
+            || sensitive_environment
+            || crate::security::applet_has_declared_secret_environment(
+                registry,
+                manifest.name_for(&call),
+            );
         manifest
             .validate(&call)
             .with_context(|| format!("element {index}"))?;
@@ -802,6 +846,7 @@ pub(super) fn run_each(
             parameters: BTreeMap::new(),
             uncertain_on_error: manifest.uncertain_on_failure,
             native_command: manifest.execution_backend() == AppletBackend::Command,
+            sensitive: call.marks_sensitive_output(),
         });
         calls.push(call);
     }
@@ -866,6 +911,7 @@ pub(super) fn run_each(
             launched_processes: outcome.launched_processes,
             error: None,
             uncertain: outcome.uncertain,
+            sensitive: prepared[index].sensitive,
         };
     }
     // Restored outputs count against this run's limit before new effects start.
@@ -1045,6 +1091,7 @@ pub(super) fn run_each(
             &mut records,
             &prepared,
             &mut total_output_bytes,
+            &secret_redactor,
         );
         if records[index]
             .error
@@ -1062,7 +1109,9 @@ pub(super) fn run_each(
         {
             stopped = Some((
                 index,
-                format!("parallel for each element exceeded its output limit of {max_output_bytes} bytes"),
+                format!(
+                    "parallel for each element exceeded its output limit of {max_output_bytes} bytes"
+                ),
             ));
         }
         if let Some(sink) = sink.as_deref_mut() {
@@ -1106,6 +1155,7 @@ pub(super) fn run_each(
                 &mut records,
                 &prepared,
                 &mut total_output_bytes,
+                &secret_redactor,
             );
         }
         for (slot, record) in records.iter_mut().enumerate() {
@@ -1234,12 +1284,23 @@ fn update_record(
     records: &mut [TaskRecord],
     tasks: &[PreparedTask],
     total_output_bytes: &mut usize,
+    secret_redactor: &crate::security::SecretRedactor,
 ) {
     let Some(record) = records.get_mut(index) else {
         return;
     };
     match result {
         Ok(result) => {
+            if register_task_result(secret_redactor, record.sensitive, &result).is_err() {
+                record.state = TaskState::Failed;
+                record.error = Some(
+                    "sensitive task output was withheld because redaction could not be secured"
+                        .into(),
+                );
+                record.uncertain = true;
+                record.launched_processes = launched_processes;
+                return;
+            }
             *total_output_bytes = total_output_bytes
                 .checked_add(result.output.len())
                 .and_then(|total| total.checked_add(result.stderr.len()))
@@ -1259,18 +1320,114 @@ fn update_record(
             } else {
                 TaskState::Failed
             };
-            record.error = Some(format!("{error:#}"));
+            record.error = Some(
+                register_task_error(secret_redactor, record.sensitive, &error).unwrap_or_else(
+                    |_| {
+                        "sensitive task failure was withheld because redaction could not be secured"
+                            .into()
+                    },
+                ),
+            );
             record.uncertain = task_error_uncertain(&error, tasks[index].uncertain_on_error);
             record.launched_processes = launched_processes;
         }
     }
 }
 
+fn register_secret_value(redactor: &crate::security::SecretRedactor, value: &Value) -> Result<()> {
+    match value {
+        Value::String(value) => {
+            redactor
+                .register(value.as_bytes())
+                .map_err(|error| anyhow!("registering sensitive value: {error}"))?;
+        }
+        Value::Integer(value) => {
+            redactor
+                .register(value.to_string().as_bytes())
+                .map_err(|error| anyhow!("registering sensitive value: {error}"))?;
+        }
+        Value::Number(value) => {
+            redactor
+                .register(value.to_string().as_bytes())
+                .map_err(|error| anyhow!("registering sensitive value: {error}"))?;
+        }
+        Value::List(values) => {
+            for value in values {
+                register_secret_value(redactor, value)?;
+            }
+        }
+        Value::Record(values) => {
+            for (key, value) in values {
+                redactor
+                    .register(key.as_bytes())
+                    .map_err(|error| anyhow!("registering sensitive value key: {error}"))?;
+                register_secret_value(redactor, value)?;
+            }
+        }
+        Value::Bool(_) | Value::Null | Value::Reference(_) => {}
+    }
+    Ok(())
+}
+
+fn register_task_result(
+    redactor: &crate::security::SecretRedactor,
+    sensitive: bool,
+    result: &AppletInvocationResult,
+) -> Result<()> {
+    if !sensitive {
+        return Ok(());
+    }
+    redactor
+        .register(&result.output)
+        .map_err(|error| anyhow!("registering sensitive task output: {error}"))?;
+    redactor
+        .register(&result.stderr)
+        .map_err(|error| anyhow!("registering sensitive task stderr: {error}"))?;
+    if let Some(value) = &result.value {
+        register_secret_value(redactor, value)?;
+    }
+    Ok(())
+}
+
+fn register_task_error(
+    redactor: &crate::security::SecretRedactor,
+    sensitive: bool,
+    error: &anyhow::Error,
+) -> Result<String> {
+    let text = format!("{error:#}");
+    if !sensitive {
+        return Ok(text);
+    }
+    let result = super::execution_result::result_for_error(error);
+    for output in [result.stdout.as_deref(), result.stderr.as_deref()]
+        .into_iter()
+        .flatten()
+        .chain(result.message.as_deref().map(str::as_bytes))
+        .chain(
+            result
+                .stages
+                .iter()
+                .filter_map(|stage| stage.stderr.as_deref()),
+        )
+    {
+        redactor
+            .register(output)
+            .map_err(|error| anyhow!("registering sensitive task failure bytes: {error}"))?;
+    }
+    if let Some(value) = &result.value {
+        register_secret_value(redactor, value)?;
+    }
+    redactor
+        .register(text.as_bytes())
+        .map_err(|error| anyhow!("registering sensitive task failure: {error}"))?;
+    Ok(text)
+}
+
 fn group_value(
     mode: TaskGroupMode,
     records: &[TaskRecord],
     winner: Option<usize>,
-    secret_redactor: &crate::security::SecretRedactor,
+    _secret_redactor: &crate::security::SecretRedactor,
 ) -> Value {
     let mut group = std::collections::BTreeMap::from([
         (
@@ -1282,12 +1439,7 @@ fn group_value(
         ),
         (
             "tasks".into(),
-            Value::List(
-                records
-                    .iter()
-                    .map(|record| task_value(record, secret_redactor, false))
-                    .collect(),
-            ),
+            Value::List(records.iter().map(task_value_raw).collect()),
         ),
     ]);
     if let Some(index) = winner {
@@ -1333,7 +1485,8 @@ fn task_value(
                 ("u8_array", byte_array(bytes))
             }
         };
-        let (output_encoding, output) = encode(&result.output);
+        let redacted_output = secret_redactor.redact_bytes(&result.output);
+        let (output_encoding, output) = encode(&redacted_output);
         fields.insert(
             "output_encoding".into(),
             Value::String(output_encoding.into()),
@@ -1348,6 +1501,40 @@ fn task_value(
         // Keep the raw bytes on AppletInvocationResult for callers that need
         // exact diagnostics; only the task-group presentation is redacted.
         fields.insert("stderr".into(), stderr);
+        if let Some(value) = &result.value {
+            fields.insert("value".into(), redact_value(secret_redactor, value));
+        }
+    }
+    Value::Record(fields)
+}
+
+/// Preserve true values in the language binding. Observer and error paths use
+/// `task_value`, which redacts serialized presentations; the enclosing group
+/// binding is itself withheld when any member is sensitive.
+fn task_value_raw(record: &TaskRecord) -> Value {
+    let mut fields = std::collections::BTreeMap::from([
+        ("id".into(), Value::String(record.id.clone())),
+        ("state".into(), Value::String(record.state.as_str().into())),
+        ("uncertain".into(), Value::Bool(record.uncertain)),
+        (
+            "launched_processes".into(),
+            Value::Integer(i64::try_from(record.launched_processes).unwrap_or(i64::MAX)),
+        ),
+    ]);
+    if let Some(error) = &record.error {
+        fields.insert("error".into(), Value::String(error.clone()));
+    }
+    if let Some(result) = &record.invocation {
+        fields.insert("status".into(), Value::Integer(i64::from(result.status)));
+        fields.insert("outcome".into(), Value::String(result.outcome.name.clone()));
+        fields.insert(
+            "outcome_kind".into(),
+            Value::String(result.outcome.kind.as_str().into()),
+        );
+        fields.insert("output_encoding".into(), Value::String("u8_array".into()));
+        fields.insert("output".into(), byte_array(&result.output));
+        fields.insert("stderr_encoding".into(), Value::String("u8_array".into()));
+        fields.insert("stderr".into(), byte_array(&result.stderr));
         if let Some(value) = &result.value {
             fields.insert("value".into(), value.clone());
         }
@@ -1405,6 +1592,48 @@ fn each_task_value(
         }
     }
     Value::Record(fields)
+}
+
+fn redact_value(redactor: &crate::security::SecretRedactor, value: &Value) -> Value {
+    match value {
+        Value::String(value) => Value::String(redactor.redact_text(value)),
+        Value::Integer(value) => {
+            let text = value.to_string();
+            if redactor.redact_text(&text) == text {
+                Value::Integer(*value)
+            } else {
+                withheld_value()
+            }
+        }
+        Value::Number(value) => {
+            let text = value.to_string();
+            if redactor.redact_text(&text) == text {
+                Value::Number(value.clone())
+            } else {
+                withheld_value()
+            }
+        }
+        Value::List(values) => Value::List(
+            values
+                .iter()
+                .map(|value| redact_value(redactor, value))
+                .collect(),
+        ),
+        Value::Record(values) => Value::Record(
+            values
+                .iter()
+                .map(|(key, value)| (redactor.redact_text(key), redact_value(redactor, value)))
+                .collect(),
+        ),
+        Value::Bool(_) | Value::Null | Value::Reference(_) => value.clone(),
+    }
+}
+
+fn withheld_value() -> Value {
+    Value::Record(BTreeMap::from([(
+        "withheld".into(),
+        Value::String("secret".into()),
+    )]))
 }
 
 fn byte_array(bytes: &[u8]) -> Value {
@@ -1530,6 +1759,7 @@ mod cancellation_tests {
             parameters: BTreeMap::new(),
             uncertain_on_error: false,
             native_command: false,
+            sensitive: false,
         }];
         let mut records = vec![TaskRecord::pending(&tasks[0])];
         let mut total_output_bytes = 0;
@@ -1542,6 +1772,7 @@ mod cancellation_tests {
             &mut records,
             &tasks,
             &mut total_output_bytes,
+            &crate::security::SecretRedactor::default(),
         );
 
         assert_eq!(records[0].state, TaskState::Cancelled);

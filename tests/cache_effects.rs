@@ -60,6 +60,7 @@ fn graph_replay_requires_a_declared_read_only_contract() {
         parameters: BTreeMap::new(),
         binding: None,
         cache: false,
+        sensitive_binding: false,
         status_binding: None,
         result_binding: None,
         retry: None,

@@ -291,6 +291,7 @@ fn listener_source_cannot_silently_drop_the_stderr_modifier() {
             parameters: BTreeMap::new(),
             binding: None,
             cache: false,
+            sensitive_binding: false,
             status_binding: None,
             result_binding: None,
             retry: None,

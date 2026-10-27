@@ -61,7 +61,7 @@ fn service_generate_forwards_private_answers_file_by_path() {
     let program = work.path().join("service.program");
     fs::write(
         &program,
-        "accept token as text from secret prompt \"Access token?\"\nevery 5 minutes\n  run \"echo\" with arguments [token]\n",
+        "accept token as text from secret prompt \"Access token?\"\nevery 5 minutes\n  use value token\n",
     )
     .unwrap();
     let answers = work.path().join("answers.json");

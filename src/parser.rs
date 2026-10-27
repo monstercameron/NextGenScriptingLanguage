@@ -735,7 +735,10 @@ pub(crate) fn take_language_version(statements: &mut Vec<LogicalLine>) -> Result
         || !words[1].bytes().all(|byte| byte.is_ascii_digit())
         || (words[1].len() > 1 && words[1].starts_with('0'))
     {
-        bail!("line {}: malformed language version marker; expected `execute <ASCII digits>` as the first statement", first.number);
+        bail!(
+            "line {}: malformed language version marker; expected `execute <ASCII digits>` as the first statement",
+            first.number
+        );
     }
     let declared = words[1].parse::<u32>().map_err(|_| {
         anyhow!(
@@ -1157,7 +1160,9 @@ fn parse_flag_spelling(
 fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
     let name = parse_binding_identifier(tokens.get(1), "input name")?;
     if !word_is(tokens.get(2), "as") {
-        bail!("expected `accept <name> as <text|integer|boolean|list of text|list of integer|list of json|json>`");
+        bail!(
+            "expected `accept <name> as <text|integer|boolean|list of text|list of integer|list of json|json>`"
+        );
     }
     let (kind, mut cursor) = match tokens.get(3) {
         Some(Token::Word("text")) => (InputType::Text, 4),
@@ -1179,7 +1184,9 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         {
             (InputType::JsonList, 6)
         }
-        _ => bail!("input type must be text, integer, boolean, list of text, list of integer, list of json, or json"),
+        _ => bail!(
+            "input type must be text, integer, boolean, list of text, list of integer, list of json, or json"
+        ),
     };
     let choices = if word_is(tokens.get(cursor), "one") && word_is(tokens.get(cursor + 1), "of") {
         if kind != InputType::Text {
@@ -1311,7 +1318,9 @@ fn parse_input(tokens: &[Token<'_>], line: usize) -> Result<InputDeclaration> {
         Some(InputSource::ProgramDirectory | InputSource::ProgramPath)
     ) && default.is_some()
     {
-        bail!("program location inputs take their value from the program file and cannot declare a default");
+        bail!(
+            "program location inputs take their value from the program file and cannot declare a default"
+        );
     }
     if let (Some(choices), Some(Value::String(value))) = (&choices, &default) {
         if !choices.contains(value) {
@@ -1509,7 +1518,10 @@ fn parse_trigger_header<'source>(
     })?;
     let event_tokens = event.tokens(token_arena);
     if event.indent != 0 || !word_is(event_tokens.first(), "whenever") {
-        bail!("line {}: expected unindented listener event header `whenever a line arrives as <binding>`", event.number);
+        bail!(
+            "line {}: expected unindented listener event header `whenever a line arrives as <binding>`",
+            event.number
+        );
     }
     if event_tokens.len() != 6
         || !word_is(event_tokens.get(1), "a")
@@ -1803,8 +1815,14 @@ fn parse_take_json(tokens: &[Token<'_>]) -> Result<StepKind> {
         Some(Token::Word("integer")) => (InputType::Integer, 2),
         Some(Token::Word("boolean")) => (InputType::Boolean, 2),
         Some(Token::Word("json")) => (InputType::Json, 2),
-        Some(Token::Word("list")) if word_is(tokens.get(2), "of") && word_is(tokens.get(3), "text") => (InputType::TextList, 4),
-        _ => bail!("expected `take <text|integer|boolean|list of text|json> at <quoted pointer> from <value> as <name>`"),
+        Some(Token::Word("list"))
+            if word_is(tokens.get(2), "of") && word_is(tokens.get(3), "text") =>
+        {
+            (InputType::TextList, 4)
+        }
+        _ => bail!(
+            "expected `take <text|integer|boolean|list of text|json> at <quoted pointer> from <value> as <name>`"
+        ),
     };
     if !word_is(tokens.get(cursor), "at") {
         bail!("expected at before JSON pointer");
@@ -2243,7 +2261,9 @@ fn parse_process_handoff(tokens: &[Token<'_>]) -> Result<Option<Vec<StepKind>>> 
         bail!("`{verb}` applies to one native command with no redirection, stdin, or environment");
     };
     if steps.len() != 1 || *connection != Connection::Start || !call.direct {
-        bail!("`{verb}` applies to one fresh native command with no redirection, stdin, or environment");
+        bail!(
+            "`{verb}` applies to one fresh native command with no redirection, stdin, or environment"
+        );
     }
     forbid_retry(call, "a hand-over or detached command")?;
     if call.binding.is_some()
@@ -2400,6 +2420,12 @@ fn is_result_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
         && word_is(tokens.get(cursor + 2), "result")
 }
 
+fn is_sensitive_suffix(tokens: &[Token<'_>], cursor: usize) -> bool {
+    word_is(tokens.get(cursor), "and")
+        && word_is(tokens.get(cursor + 1), "keep")
+        && word_is(tokens.get(cursor + 2), "secret")
+}
+
 #[derive(Default)]
 struct InvocationLayout {
     parameters: BTreeMap<String, Range<usize>>,
@@ -2446,6 +2472,7 @@ fn parse_invocation_with_layout(
                     || (direct && is_discard_stderr_suffix(tokens, cursor))
                     || is_status_suffix(tokens, cursor)
                     || is_result_suffix(tokens, cursor)
+                    || is_sensitive_suffix(tokens, cursor)
                     || is_retry_suffix(tokens, cursor))
             {
                 break;
@@ -2508,6 +2535,7 @@ fn parse_invocation_with_layout(
                 || (direct && is_discard_stderr_suffix(tokens, cursor))
                 || is_status_suffix(tokens, cursor)
                 || is_result_suffix(tokens, cursor)
+                || is_sensitive_suffix(tokens, cursor)
                 || is_retry_suffix(tokens, cursor);
             if word_is(tokens.get(cursor), "and") && !blocked {
                 cursor += 1;
@@ -2558,6 +2586,15 @@ fn parse_invocation_with_layout(
     } else {
         None
     };
+    let sensitive_binding = if is_sensitive_suffix(tokens, cursor) {
+        cursor += 3;
+        if binding.is_none() {
+            bail!("`and keep secret` requires a named output binding");
+        }
+        true
+    } else {
+        false
+    };
     let cache = if word_is(tokens.get(cursor), "and")
         && word_is(tokens.get(cursor + 1), "cache")
         && cursor + 2 == tokens.len()
@@ -2584,7 +2621,9 @@ fn parse_invocation_with_layout(
             bail!("`and retry` applies to a `run` command, not `then` or `pipe to`");
         }
         if cache || status_binding.is_some() || result_binding.is_some() {
-            bail!("`and retry` cannot be combined with `and cache`, `and keep status`, or `and keep result`");
+            bail!(
+                "`and retry` cannot be combined with `and cache`, `and keep status`, or `and keep result`"
+            );
         }
     }
     ensure_end(tokens, cursor)?;
@@ -2597,6 +2636,7 @@ fn parse_invocation_with_layout(
             parameters,
             binding,
             cache,
+            sensitive_binding,
             status_binding,
             result_binding,
             retry,
@@ -3075,6 +3115,19 @@ mod tests {
             panic!();
         };
         assert!(!call.discard_stderr);
+    }
+
+    #[test]
+    fn parses_secret_output_modifier_only_with_a_named_binding() {
+        let program =
+            parse("run \"pass\" with arguments [\"show\", \"api\"] as token and keep secret\n")
+                .unwrap();
+        let StepKind::Invoke { call, .. } = &program.steps[0].kind else {
+            panic!();
+        };
+        assert_eq!(call.binding.as_deref(), Some("token"));
+        assert!(call.sensitive_binding);
+        assert!(parse("run \"pass\" and keep secret\n").is_err());
     }
 
     #[test]
@@ -3662,7 +3715,10 @@ mod tests {
             let program = parse(source).unwrap();
             assert!(program.trigger.is_some());
             assert!(matches!(program.steps[0].kind, StepKind::Loop { .. }));
-            assert!(matches!(program.steps.last().unwrap().kind, StepKind::EndLoop { .. }));
+            assert!(matches!(
+                program.steps.last().unwrap().kind,
+                StepKind::EndLoop { .. }
+            ));
         }
     }
 }

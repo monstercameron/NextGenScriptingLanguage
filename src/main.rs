@@ -38,6 +38,46 @@ struct FiniteCheckSnapshot {
     registry: Registry,
 }
 
+#[derive(Debug)]
+struct RedactedRuntimeDiagnostic {
+    message: String,
+    status: Option<i32>,
+    code: &'static str,
+    category: &'static str,
+    closed_stdout: bool,
+}
+
+impl std::fmt::Display for RedactedRuntimeDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RedactedRuntimeDiagnostic {}
+
+fn redact_runtime_error(registry: &Registry, error: anyhow::Error) -> anyhow::Error {
+    let closed_stdout = is_closed_stdout(&error);
+    let (code, category) = flow::agent::errors::classify(&error);
+    let status = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<runtime::CommandFailed>()
+            .map(|failure| {
+                failure
+                    .status
+                    .code()
+                    .unwrap_or_else(|| signal_status(&failure.status))
+            })
+    });
+    let message = flow::security::secret_redactor(registry).redact_text(&format!("{error:#}"));
+    anyhow::Error::new(RedactedRuntimeDiagnostic {
+        message,
+        status,
+        code,
+        category,
+        closed_stdout,
+    })
+}
+
 #[cfg(any(not(feature = "screens"), not(feature = "graph")))]
 fn strip_source_comment(line: &str) -> &str {
     let mut quoted = false;
@@ -150,7 +190,11 @@ fn main() {
 /// Print a failed run's diagnostic and return its exit status. The normal entry point and
 /// a forwarded run in a daemon child both use it.
 fn report_error(error: &anyhow::Error) -> i32 {
-    if is_closed_stdout(error) {
+    if is_closed_stdout(error)
+        || error
+            .downcast_ref::<RedactedRuntimeDiagnostic>()
+            .is_some_and(|diagnostic| diagnostic.closed_stdout)
+    {
         // The reader went away; stop quietly without a diagnostic.
         return STDOUT_CLOSED_EXIT;
     }
@@ -159,24 +203,46 @@ fn report_error(error: &anyhow::Error) -> i32 {
     let interrupted = runtime::interrupt_exit_code();
     let status = interrupted.unwrap_or_else(|| {
         error
-            .downcast_ref::<runtime::CommandFailed>()
-            .map(|failure| {
-                failure
-                    .status
-                    .code()
-                    .unwrap_or_else(|| signal_status(&failure.status))
-            })
-            .filter(|status| {
-                if cfg!(windows) {
-                    *status != 0
-                } else {
-                    (1..=255).contains(status)
-                }
+            .downcast_ref::<RedactedRuntimeDiagnostic>()
+            .and_then(|diagnostic| diagnostic.status)
+            .or_else(|| {
+                error
+                    .downcast_ref::<runtime::CommandFailed>()
+                    .map(|failure| {
+                        failure
+                            .status
+                            .code()
+                            .unwrap_or_else(|| signal_status(&failure.status))
+                    })
+                    .filter(|status| {
+                        if cfg!(windows) {
+                            *status != 0
+                        } else {
+                            (1..=255).contains(status)
+                        }
+                    })
             })
             .unwrap_or(1)
     });
     if flow::agent::errors::enabled() {
-        flow::agent::errors::write_stderr(error, interrupted.is_some(), status);
+        if let Some(diagnostic) = error.downcast_ref::<RedactedRuntimeDiagnostic>() {
+            let (code, category) = interrupted
+                .map_or((diagnostic.code, diagnostic.category), |_| {
+                    ("interrupted", "signal")
+                });
+            let mut line = serde_json::json!({
+                "protocol": flow::agent::errors::PROTOCOL,
+                "code": code,
+                "category": category,
+                "message": diagnostic.message,
+                "exit_code": status,
+            })
+            .to_string();
+            line.push('\n');
+            runtime::write_diagnostic(line.as_bytes());
+        } else {
+            flow::agent::errors::write_stderr(error, interrupted.is_some(), status);
+        }
     } else {
         runtime::write_diagnostic(
             format!(
@@ -521,7 +587,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
     }
     if arguments.first().is_some_and(|a| a == "model") {
         #[cfg(not(feature = "model"))]
-        bail!("`model` requires the model feature; rebuild with --features model (or --features full)");
+        bail!(
+            "`model` requires the model feature; rebuild with --features model (or --features full)"
+        );
         #[cfg(feature = "model")]
         {
             #[cfg(unix)]
@@ -543,7 +611,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
         #[cfg(feature = "agent-advisory")]
         std::process::exit(flow::agent::checkpoint::cli(&arguments[1..])?);
         #[cfg(not(feature = "agent-advisory"))]
-        bail!("`checkpoint` requires the agent-advisory feature; rebuild with --features agent-advisory");
+        bail!(
+            "`checkpoint` requires the agent-advisory feature; rebuild with --features agent-advisory"
+        );
     }
     if arguments.first().is_some_and(|a| a == "help") {
         std::process::exit(flow::agent::help::cli(&arguments[1..])?);
@@ -675,7 +745,9 @@ fn execute_arguments(arguments: Vec<String>) -> Result<()> {
             // check, after the authoritative load's own error.
             result?;
             if data_flow_warning {
-                eprintln!("warning[data_flow_policy_not_configured]: --capability-policy grants applet capabilities only; without --data-flow-policy, remote egress and persistence are not protected by data-flow grants");
+                eprintln!(
+                    "warning[data_flow_policy_not_configured]: --capability-policy grants applet capabilities only; without --data-flow-policy, remote egress and persistence are not protected by data-flow grants"
+                );
             }
             for diagnostic in static_diagnostics.iter().filter(|diagnostic| {
                 diagnostic.severity == flow::diagnostics::DiagnosticSeverity::Warning
@@ -890,7 +962,9 @@ fn enforce_policy_header(
     {
         let _ = (program, registry, path);
         if declares_policy_header(source) {
-            bail!("this build cannot enforce the program's execute-policy header; rebuild with the agent-advisory feature");
+            bail!(
+                "this build cannot enforce the program's execute-policy header; rebuild with the agent-advisory feature"
+            );
         }
         Ok(())
     }
@@ -981,7 +1055,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
             && !args.what_if
             && declares_policy_header(&source)
         {
-            bail!("execute-policy headers are not enforced for graphs yet; remove the header or express the work as a program");
+            bail!(
+                "execute-policy headers are not enforced for graphs yet; remove the header or express the work as a program"
+            );
         }
         // A capability policy decides which environment variables a graph may read,
         // before any input is resolved.
@@ -1378,7 +1454,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                     &options,
                     args.max_record_bytes,
                     &mut emit,
-                )?;
+                )
+                .map_err(|error| redact_runtime_error(&registry, error))?;
                 Ok(())
             }
             _ => unreachable!("argument parser only accepts supported commands"),
@@ -1501,7 +1578,11 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
         #[cfg(not(feature = "live"))]
         bail!(
             "run --control{} needs the live control endpoint, and this build has none; use the full build",
-            if args.break_at.is_empty() { "" } else { " --break-at" }
+            if args.break_at.is_empty() {
+                ""
+            } else {
+                " --break-at"
+            }
         );
     }
     let schedule_options = schedule_options(&args)?;
@@ -1601,7 +1682,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
     }
     #[cfg(not(feature = "agent-advisory"))]
     if args.what_if || args.confirm.is_some() {
-        bail!("--what-if and --confirm require the agent-advisory feature; rebuild with --features agent-advisory");
+        bail!(
+            "--what-if and --confirm require the agent-advisory feature; rebuild with --features agent-advisory"
+        );
     }
 
     match args.command {
@@ -1681,7 +1764,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 }
                 #[cfg(not(feature = "agent-advisory"))]
                 {
-                    bail!("explain --json effect gates require the agent-advisory feature; rebuild with --features agent-advisory")
+                    bail!(
+                        "explain --json effect gates require the agent-advisory feature; rebuild with --features agent-advisory"
+                    )
                 }
             }
         }
@@ -1742,7 +1827,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 // A timer activation runs the handler now; the schedule is not re-armed.
                 let mut body = program.clone();
                 body.trigger = None;
-                let result = runtime::run(&body, &registry, &options)?;
+                let result = runtime::run(&body, &registry, &options)
+                    .map_err(|error| redact_runtime_error(&registry, error))?;
                 io::stdout()
                     .write_all(&result.output)
                     .context("could not write workflow output")?;
@@ -1753,6 +1839,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         .flush()
                         .context("could not write workflow output")?;
                     if let Some(message) = &exit.message {
+                        let message =
+                            flow::security::secret_redactor(&registry).redact_text(message);
                         runtime::write_diagnostic(format!("{message}\n").as_bytes());
                     }
                     std::process::exit(i32::from(exit.status));
@@ -1783,11 +1871,13 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                 if let Some(checkpoint) = checkpoint.as_ref() {
                     runtime::run_service_checkpointed_with_schedule_options(
                         &program, &registry, &options, &limits, checkpoint, &schedule, &mut emit,
-                    )?;
+                    )
+                    .map_err(|error| redact_runtime_error(&registry, error))?;
                 } else {
                     runtime::run_service_with_schedule_options(
                         &program, &registry, &options, &limits, &schedule, emit,
-                    )?;
+                    )
+                    .map_err(|error| redact_runtime_error(&registry, error))?;
                 }
             } else {
                 #[cfg(feature = "records")]
@@ -1800,7 +1890,9 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         &program.inputs,
                         &options.inputs,
                     )?;
-                    record_cli::run_recorded(directory, &args.file, &program, &registry, &options)?
+                    flow::record::register_sensitive_program(&registry, &program)?;
+                    record_cli::run_recorded(directory, &args.file, &program, &registry, &options)
+                        .map_err(|error| redact_runtime_error(&registry, error))?
                 } else {
                     // Uncaptured stdout streams to this terminal as it is produced.
                     runtime::with_streamed_stdout(|| {
@@ -1814,12 +1906,15 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                                 args.drain_timeout.unwrap_or(runtime::DEFAULT_DRAIN_TIMEOUT),
                             )
                         }
-                    })?
+                    })
+                    .map_err(|error| redact_runtime_error(&registry, error))?
                 };
                 #[cfg(not(feature = "records"))]
                 let result = {
                     if args.record_dir.is_some() {
-                        bail!("--record requires the records feature; rebuild with --features records");
+                        bail!(
+                            "--record requires the records feature; rebuild with --features records"
+                        );
                     }
                     runtime::with_streamed_stdout(|| {
                         if let Some(checkpoint) = checkpoint.as_ref() {
@@ -1832,7 +1927,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                                 args.drain_timeout.unwrap_or(runtime::DEFAULT_DRAIN_TIMEOUT),
                             )
                         }
-                    })?
+                    })
+                    .map_err(|error| redact_runtime_error(&registry, error))?
                 };
                 io::stdout()
                     .write_all(&result.output)
@@ -1844,6 +1940,8 @@ fn execute_workflow(args: Args, finite_check_snapshot: Option<FiniteCheckSnapsho
                         .flush()
                         .context("could not write workflow output")?;
                     if let Some(message) = &exit.message {
+                        let message =
+                            flow::security::secret_redactor(&registry).redact_text(message);
                         runtime::write_diagnostic(format!("{message}\n").as_bytes());
                     }
                     std::process::exit(i32::from(exit.status));
@@ -2701,7 +2799,7 @@ fn write_compiled_script_atomically(path: &Path, contents: &[u8]) -> Result<()> 
             Err(error) => {
                 return Err(error).with_context(|| {
                     format!("creating temporary output beside {}", path.display())
-                })
+                });
             }
         }
     }
@@ -3283,7 +3381,10 @@ fn signal_status(status: &std::process::ExitStatus) -> i32 {
 
 #[cfg(test)]
 mod startup_path_tests {
-    use super::{default_manifest_candidates, manifest_candidates, parse_os_arguments};
+    use super::{
+        default_manifest_candidates, manifest_candidates, parse_os_arguments, redact_runtime_error,
+        RedactedRuntimeDiagnostic,
+    };
     use std::path::{Component, Path};
 
     #[test]
@@ -3328,5 +3429,22 @@ mod startup_path_tests {
             error.to_string(),
             "argument 1 is not valid UTF-8; use a percent-encoded file:// URI for non-UTF-8 workflow paths"
         );
+    }
+
+    #[test]
+    fn redacted_runtime_errors_keep_broken_pipe_and_safe_message() {
+        let registry = flow::manifest::Registry::default();
+        flow::security::secret_redactor(&registry)
+            .register(b"PIPE-SECRET-CANARY")
+            .unwrap();
+        let error = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "PIPE-SECRET-CANARY",
+        ));
+        let wrapped = redact_runtime_error(&registry, error);
+        let diagnostic = wrapped.downcast_ref::<RedactedRuntimeDiagnostic>().unwrap();
+        assert!(diagnostic.closed_stdout);
+        assert!(diagnostic.message.contains("[REDACTED]"));
+        assert!(!diagnostic.message.contains("PIPE-SECRET-CANARY"));
     }
 }

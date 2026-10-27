@@ -526,10 +526,13 @@ fn direct_arguments_are_reviewed_and_change_fingerprint() {
 }
 
 #[test]
-fn sensitive_nested_argument_matches_the_review_settings_marker() {
+fn secret_prompt_input_remains_in_review_settings_without_argv_expansion() {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join("tool.program"),
-        "accept token as text from secret prompt \"Token?\"\nrun \"printf\" with arguments [\"%s\", token]\n").unwrap();
+    std::fs::write(
+        directory.path().join("tool.program"),
+        "accept token as text from secret prompt \"Token?\"\nuse value token\n",
+    )
+    .unwrap();
     let output = execute(
         directory.path(),
         &[
@@ -546,11 +549,8 @@ fn sensitive_nested_argument_matches_the_review_settings_marker() {
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private-canary-462"));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        report["plan"]["steps"][0]["argv"][1],
-        report["settings"]["inputs"][0]["value"]
-    );
-    assert_eq!(report["plan"]["steps"][0]["argv"][1]["sensitive"], true);
+    assert_eq!(report["plan"]["steps"][0]["kind"], "use_value");
+    assert!(report["plan"]["steps"][0]["argv"].is_null());
 }
 
 #[test]

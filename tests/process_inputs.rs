@@ -24,7 +24,7 @@ fn success(output: Output) -> Output {
 #[test]
 fn environment_and_positional_values_are_typed_and_named_overrides_win() {
     let directory = tempfile::tempdir().unwrap();
-    let source = "accept root as text from environment \"EXECUTE_TEST_ROOT\" with default \"fallback\"\naccept count as integer from argument 1 with default 2\nrun \"printf\" with arguments [\"%s|%s\", root, count]\n";
+    let source = "accept root as text from environment \"EXECUTE_TEST_ROOT\" with default \"fallback\"\naccept count as integer from argument 1 with default 2\nrun \"sh\" with arguments [\"-c\", \"printf '%s|%s' \\\"$EXECUTE_TEST_ROOT\\\" \\\"$1\\\"\", \"sh\", count] and environment {\"EXECUTE_TEST_ROOT\": root}\n";
     let output = success(
         command(source, directory.path())
             .env("EXECUTE_TEST_ROOT", "a path; $(touch forbidden)")
@@ -195,7 +195,8 @@ fn process_input_headers_reject_ambiguous_or_invalid_sources() {
 #[test]
 fn checkpoint_environment_values_are_refused_before_any_journal_is_written() {
     let directory = tempfile::tempdir().unwrap();
-    let source = "accept value as text from environment \"EXECUTE_CHECKPOINT_VALUE\"\nrun \"printf\" with arguments [\"%s\", value]\n";
+    let source =
+        "accept value as text from environment \"EXECUTE_CHECKPOINT_VALUE\"\nuse value value\n";
     let output = command(source, directory.path())
         .env("EXECUTE_CHECKPOINT_VALUE", "first")
         .args(["--checkpoint", "checkpoint"])

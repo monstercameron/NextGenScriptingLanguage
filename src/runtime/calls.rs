@@ -192,6 +192,7 @@ pub(super) struct Frame<'a> {
     pub name: &'a str,
     pub line: usize,
     pub binding: Option<&'a str>,
+    pub sensitive_binding: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub job_scope: usize,
     pub bindings: BTreeMap<String, Value>,
@@ -263,6 +264,7 @@ pub(super) fn preflight(
                     .collect(),
                 binding: call.binding.clone(),
                 cache: call.cache,
+                sensitive_binding: call.sensitive_binding,
                 status_binding: call.status_binding.clone(),
                 result_binding: call.result_binding.clone(),
                 retry: None,
@@ -714,6 +716,7 @@ mod tests {
                         .collect(),
                     binding: call.binding.clone(),
                     cache: call.cache,
+                    sensitive_binding: call.sensitive_binding,
                     status_binding: call.status_binding.clone(),
                     result_binding: call.result_binding.clone(),
                     retry: None,

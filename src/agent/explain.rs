@@ -1086,10 +1086,20 @@ impl Walker<'_> {
         let empty = BTreeMap::new();
         let empty_literals = BTreeMap::new();
         let known = if scope.is_none() { &self.known } else { &empty };
+        let sensitive_output = call.marks_sensitive_output();
         let parameters: BTreeMap<String, Json> = call
             .parameters
             .iter()
-            .map(|(name, value)| (name.clone(), display_value(value, known)))
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    if sensitive_output {
+                        json!({"withheld":"secret"})
+                    } else {
+                        display_value(value, known)
+                    },
+                )
+            })
             .collect();
         row.argv = Some(Vec::new());
         if !call.direct {
@@ -1163,7 +1173,7 @@ impl Walker<'_> {
             self.rows.push(row);
             return;
         };
-        row.legacy_argv = if call.parameters.values().any(has_reference) {
+        row.legacy_argv = if sensitive_output || call.parameters.values().any(has_reference) {
             None
         } else {
             manifest.build_arguments(&call.parameters).ok()
@@ -1224,7 +1234,10 @@ impl Walker<'_> {
             .iter()
             .map(|(name, value)| resolve_static(value, literals).map(|value| (name.clone(), value)))
             .collect();
-        let rendered = resolved.and_then(|values| manifest.build_arguments(&values).ok());
+        let rendered = (!sensitive_output)
+            .then_some(resolved)
+            .flatten()
+            .and_then(|values| manifest.build_arguments(&values).ok());
         row.argv = Some(
             rendered
                 .map(|args| args.into_iter().map(Json::String).collect())

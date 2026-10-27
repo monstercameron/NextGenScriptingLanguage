@@ -515,6 +515,17 @@ fn dispatch(
             }
         }
         let plan = validate(&doc, &registry, max_bytes, mode == Mode::Run)?;
+        for input in plan
+            .program
+            .inputs
+            .iter()
+            .filter(|input| crate::ast::is_sensitive(input))
+        {
+            if let Some(value) = doc.bindings.get(&input.name) {
+                crate::record::register_sensitive_value(&registry, &state::argument(value))?;
+            }
+        }
+        crate::record::register_sensitive_program(&registry, &plan.program)?;
         if plan.screen.is_some()
             && !opts.headless
             && (!std::io::stdin().is_terminal() || !std::io::stdout().is_terminal())
@@ -526,6 +537,8 @@ fn dispatch(
         let initial_input = doc.input.clone();
         let state = State {
             doc,
+            redactor: crate::security::secret_redactor(&registry),
+            registry: registry.clone(),
             plan,
             revision: 0,
             running: !opts.paused,
@@ -908,7 +921,7 @@ fn run_outcome(shared: &Shared) -> Option<RunEnd> {
             output: Some(state.last_output.clone()),
             diagnostic: record
                 .and_then(|exit| exit.message)
-                .map(|message| format!("{message}\n")),
+                .map(|message| format!("{}\n", state.redactor.redact_text(&message))),
         }),
         "failed" => {
             let error = state
@@ -918,7 +931,7 @@ fn run_outcome(shared: &Shared) -> Option<RunEnd> {
             Some(RunEnd {
                 status: record.map_or(1, |exit| exit.status),
                 output: None,
-                diagnostic: Some(format!("execute: {error}\n")),
+                diagnostic: Some(format!("execute: {}\n", state.redactor.redact_text(&error))),
             })
         }
         _ => None,

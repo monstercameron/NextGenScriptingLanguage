@@ -51,6 +51,19 @@ fn normalize_environment_variable(name: &str) -> String {
     }
 }
 
+fn value_references_sensitive(value: &Value, sensitive: &BTreeSet<String>) -> bool {
+    match value {
+        Value::Reference(name) => sensitive.contains(name),
+        Value::List(values) => values
+            .iter()
+            .any(|value| value_references_sensitive(value, sensitive)),
+        Value::Record(values) => values
+            .values()
+            .any(|value| value_references_sensitive(value, sensitive)),
+        _ => false,
+    }
+}
+
 // Precompute each name's last possible source-level use once. Job operations
 // cannot occur directly in loops; repeated calls have fresh job scopes. Names in
 // nested scopes can only delay cleanup.
@@ -218,6 +231,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         state_source,
         state_out,
     } = start;
+    // Literal components of explicitly secret-producing calls must be masked
+    // before their invocation trace or any dynamic binding can be observed.
+    crate::record::register_sensitive_program(registry, program)?;
+    let sensitive_bindings = crate::runtime::sensitive_binding_names(program, registry);
     // Nested finite module and task calls share one admission/output budget.
     // The last returning lexical run drops the slot, so repeated service
     // handlers begin with a fresh per-run budget while sharing their Signals.
@@ -270,6 +287,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     // Raw captures from `then capture bytes as NAME`, kept apart from text bindings.
     let mut byte_bindings: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut data = initial_input;
+    let mut pipeline_sensitive = false;
     // Set by a `Redirect` step and consumed by the very next `Invoke`.
     let mut pending_redirect: Option<PendingRedirect> = None;
     // Set by an `Environment` step and consumed by the next command.
@@ -278,6 +296,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
     // scope. Calls inherit them and restore their caller's overlay on return.
     let mut workflow_env = crate::capabilities::CommandEnvOverlay::default();
     let mut workflow_env_scopes = Vec::new();
+    let mut pending_environment_sensitive = false;
+    let mut workflow_environment_sensitive = false;
+    let mut workflow_environment_sensitive_scopes = Vec::new();
     let mut pending_handoff = false;
     let mut pending_process: Option<handoff::ProcessRequest> = None;
     // Detached launches started in this run, bounded by handoff::MAX_DETACHED_LAUNCHES.
@@ -381,6 +402,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
         )?;
     }
     merge_declared_inputs(program, options, &mut bindings)?;
+    // Inputs are merged only after the initial state has been assembled. Register
+    // their resolved values before any workflow step can emit a diagnostic or
+    // persist a derived value.
+    for input in program
+        .inputs
+        .iter()
+        .filter(|input| crate::ast::is_sensitive(input))
+    {
+        if let Some(value) = bindings.get(&input.name) {
+            crate::record::register_sensitive_value(registry, value)?;
+        }
+    }
     if preflight_context {
         preflight_inputs_with_loop_limit(
             program,
@@ -738,6 +771,18 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     end,
                 } => {
                     workflow_env_scopes.push(workflow_env.clone());
+                    workflow_environment_sensitive_scopes.push(workflow_environment_sensitive);
+                    if *connection == Connection::Start {
+                        pipeline_sensitive = false;
+                    }
+                    let sensitive_call = call.marks_sensitive_output()
+                        || (*connection != Connection::Start && pipeline_sensitive)
+                        || pending_environment_sensitive
+                        || workflow_environment_sensitive
+                        || call
+                            .binding
+                            .as_ref()
+                            .is_some_and(|name| sensitive_bindings.contains(name));
                     let child = calls::bind(call, inputs, &bindings).with_context(|| {
                         format!("program {:?}, called at line {}", call.operation, step.line)
                     })?;
@@ -747,6 +792,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         name: &call.operation,
                         line: step.line,
                         binding: call.binding.as_deref(),
+                        sensitive_binding: sensitive_call,
                         job_scope,
                         bindings: std::mem::replace(&mut bindings, child),
                         cwd: cwd.duplicate()?,
@@ -757,6 +803,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     if *connection == Connection::Start {
                         data = Input::Empty;
                     }
+                    pipeline_sensitive = sensitive_call;
+                    pending_environment_sensitive = false;
                     lazy_event(
                         options.trace,
                         signals,
@@ -781,12 +829,32 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     workflow_env = workflow_env_scopes
                         .pop()
                         .context("program environment scope was not saved")?;
+                    workflow_environment_sensitive = workflow_environment_sensitive_scopes
+                        .pop()
+                        .context("program environment sensitivity scope was not saved")?;
                     if let Some(name) = frame.binding {
                         let bytes = std::mem::replace(&mut data, Input::Empty).materialize(
                             options.max_output_bytes,
                             signals,
                             options.command_timeout,
                         )?;
+                        if frame.sensitive_binding {
+                            let redactor = crate::security::secret_redactor(registry);
+                            redactor.register(&bytes).map_err(|_| {
+                                anyhow!(
+                                    "line {}: could not register sensitive program output",
+                                    frame.line
+                                )
+                            })?;
+                            if bytes.ends_with(b"\n") {
+                                redactor.register(&bytes[..bytes.len() - 1]).map_err(|_| {
+                                    anyhow!(
+                                        "line {}: could not register sensitive program output",
+                                        frame.line
+                                    )
+                                })?;
+                            }
+                        }
                         bindings.insert(
                             name.to_owned(),
                             Value::String(
@@ -795,6 +863,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             ),
                         );
                         data = Input::Bytes(bytes);
+                        pipeline_sensitive = frame.sensitive_binding;
                     }
                     lazy_event(
                         options.trace,
@@ -950,11 +1019,25 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     })?;
                 }
                 StepKind::UseValue { source } => {
-                    data = Input::Bytes(text_value_bytes(source, &bindings, step.line)?);
+                    pipeline_sensitive = value_references_sensitive(source, &sensitive_bindings);
+                    let bytes = text_value_bytes(source, &bindings, step.line)?;
+                    if pipeline_sensitive {
+                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                    }
+                    data = Input::Bytes(bytes);
                 }
                 StepKind::BindValue { source, binding } => {
                     let value = resolve(source, &bindings)?;
-                    data = Input::Bytes(bound_value_bytes(&value, options.max_output_bytes)?);
+                    let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
+                    pipeline_sensitive = sensitive_bindings.contains(binding) || sensitive_source;
+                    if sensitive_bindings.contains(binding) || sensitive_source {
+                        crate::record::register_sensitive_value(registry, &value)?;
+                    }
+                    let bytes = bound_value_bytes(&value, options.max_output_bytes)?;
+                    if sensitive_bindings.contains(binding) || sensitive_source {
+                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                    }
+                    data = Input::Bytes(bytes);
                     bindings.insert(binding.clone(), value);
                 }
                 StepKind::CaptureBytes { binding } => {
@@ -963,6 +1046,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         signals,
                         options.command_timeout,
                     )?;
+                    if sensitive_bindings.contains(binding) {
+                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                    }
+                    pipeline_sensitive |= sensitive_bindings.contains(binding);
                     byte_bindings.insert(binding.clone(), bytes.clone());
                     data = Input::Bytes(bytes);
                 }
@@ -973,11 +1060,20 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             step.line
                         )
                     })?;
+                    pipeline_sensitive = sensitive_bindings.contains(binding);
                     data = Input::Bytes(bytes);
                 }
                 StepKind::Read { binding, .. }
                 | StepKind::ReadStdin { binding }
                 | StepKind::ReadCallInput { binding } => {
+                    match &step.kind {
+                        StepKind::ReadCallInput { .. } => {
+                            if let Some(binding) = binding {
+                                pipeline_sensitive |= sensitive_bindings.contains(binding);
+                            }
+                        }
+                        _ => pipeline_sensitive = false,
+                    }
                     data = match &step.kind {
                         StepKind::Read { path, .. } => {
                             let path = path_value(path, &bindings, &cwd)?;
@@ -1021,6 +1117,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                     .context("named results must be UTF-8 text")?,
                             ),
                         );
+                        if sensitive_bindings.contains(name) {
+                            crate::record::register_sensitive_value(
+                                registry,
+                                bindings.get(name).expect("just inserted sensitive binding"),
+                            )?;
+                        }
+                        pipeline_sensitive |= sensitive_bindings.contains(name);
                         data = Input::Bytes(bytes);
                     }
                 }
@@ -1032,6 +1135,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     )?;
                     let value = crate::structured::parse(&bytes)
                         .with_context(|| format!("line {}", step.line))?;
+                    if sensitive_bindings.contains(binding) {
+                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                        crate::record::register_sensitive_value(registry, &value)?;
+                    }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
                         options.trace,
@@ -1050,6 +1157,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let value = crate::structured::take(pointer, &source, *kind, step.line)
                         .with_context(|| format!("line {}", step.line))?;
                     let value = value.clone();
+                    if sensitive_bindings.contains(binding) {
+                        crate::record::register_sensitive_value(registry, &value)?;
+                    }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
                         options.trace,
@@ -1071,6 +1181,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let value = crate::structured::take(&pointer, &source, *kind, step.line)
                         .with_context(|| format!("line {}", step.line))?
                         .clone();
+                    if sensitive_bindings.contains(binding) {
+                        crate::record::register_sensitive_value(registry, &value)?;
+                    }
                     bindings.insert(binding.clone(), value);
                     lazy_event(
                         options.trace,
@@ -1079,9 +1192,14 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     )?;
                 }
                 StepKind::EncodeJson { source } => {
+                    let sensitive_source = value_references_sensitive(source, &sensitive_bindings);
+                    pipeline_sensitive = sensitive_source;
                     let source = structured_source(source, &bindings)?;
                     let bytes = crate::structured::encode(&source, options.max_output_bytes)
                         .with_context(|| format!("line {}", step.line))?;
+                    if sensitive_source {
+                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                    }
                     lazy_event(
                         options.trace,
                         signals,
@@ -1117,6 +1235,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         config,
                                         registry,
                                         bindings: &bindings,
+                                        sensitive_items: value_references_sensitive(
+                                            &each.values,
+                                            &sensitive_bindings,
+                                        ),
+                                        sensitive_environment: workflow_environment_sensitive,
                                         options,
                                         cancelled: Arc::clone(&signals.cancelled),
                                         draining: Arc::clone(&signals.drain),
@@ -1137,6 +1260,11 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                         config,
                                         registry,
                                         bindings: &bindings,
+                                        sensitive_items: value_references_sensitive(
+                                            &each.values,
+                                            &sensitive_bindings,
+                                        ),
+                                        sensitive_environment: workflow_environment_sensitive,
                                         options,
                                         cancelled: Arc::clone(&signals.cancelled),
                                         draining: Arc::clone(&signals.drain),
@@ -1156,6 +1284,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 config,
                                 registry,
                                 bindings: &bindings,
+                                sensitive_items: false,
+                                sensitive_environment: workflow_environment_sensitive,
                                 options,
                                 cancelled: Arc::clone(&signals.cancelled),
                                 draining: Arc::clone(&signals.drain),
@@ -1222,7 +1352,12 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         crate::structured::encode(&value, output_limit)
                             .with_context(|| format!("line {}: task group output", step.line))?
                     };
+                    if sensitive_bindings.contains(binding) {
+                        crate::record::register_sensitive_value(registry, &value)?;
+                        crate::record::register_sensitive_bytes(registry, &bytes)?;
+                    }
                     bindings.insert(binding.clone(), value);
+                    pipeline_sensitive = sensitive_bindings.contains(binding);
                     lazy_event(
                         options.trace,
                         signals,
@@ -1456,6 +1591,9 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     unset,
                     workflow_scope,
                 } => {
+                    let environment_sensitive = set
+                        .values()
+                        .any(|value| value_references_sensitive(value, &sensitive_bindings));
                     let mut overlay = crate::capabilities::CommandEnvOverlay {
                         set: BTreeMap::new(),
                         unset: unset
@@ -1484,8 +1622,10 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     }
                     if *workflow_scope {
                         merge_environment_overlay(&mut workflow_env, overlay);
+                        workflow_environment_sensitive |= environment_sensitive;
                     } else {
                         pending_env = Some(overlay);
+                        pending_environment_sensitive = environment_sensitive;
                     }
                 }
                 StepKind::Redirect { target, path } => {
@@ -1556,6 +1696,22 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                     let handoff = std::mem::take(&mut pending_handoff);
                     let process = pending_process.take();
                     let manifest = registry.resolve_call(call)?;
+                    if *connection == Connection::Start {
+                        pipeline_sensitive = false;
+                    }
+                    let consumes_sensitive_pipeline = *connection != Connection::Start
+                        && manifest.accepts_stdin
+                        && pipeline_sensitive;
+                    let declared_secret_environment =
+                        crate::security::applet_has_declared_secret_environment(
+                            registry,
+                            manifest.name_for(call),
+                        );
+                    let mut group_sensitive = call.marks_sensitive_output()
+                        || consumes_sensitive_pipeline
+                        || pending_environment_sensitive
+                        || workflow_environment_sensitive
+                        || declared_secret_environment;
                     if handoff
                         && (manifest.execution_backend() != AppletBackend::Command || call.cache)
                     {
@@ -1652,6 +1808,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             bail!("line {}: cd requires a directory", step.line);
                         }
                         data = Input::Empty;
+                        pipeline_sensitive = false;
+                        pending_environment_sensitive = false;
                     } else {
                         let input = if *connection != Connection::Start && manifest.accepts_stdin {
                             std::mem::replace(&mut data, Input::Empty)
@@ -1671,6 +1829,13 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 calls.push((call, registry.resolve_call(call)?, next.line));
                             }
                         }
+                        group_sensitive |= calls.iter().any(|(stage, stage_manifest, _)| {
+                            stage.marks_sensitive_output()
+                                || crate::security::applet_has_declared_secret_environment(
+                                    registry,
+                                    stage_manifest.name_for(stage),
+                                )
+                        });
                         if calls.len() > 1
                             && calls.iter().any(|(stage, _, _)| stage.retry.is_some())
                         {
@@ -1681,6 +1846,29 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         }
                         let output_call = calls.last().expect("invocation group is nonempty").0;
                         let output_manifest = calls.last().expect("invocation group is nonempty").1;
+                        let sensitive_terminal_output = group_sensitive
+                            || output_call
+                                .binding
+                                .as_ref()
+                                .is_some_and(|name| sensitive_bindings.contains(name))
+                            || output_call
+                                .result_binding
+                                .as_ref()
+                                .is_some_and(|name| sensitive_bindings.contains(name));
+                        let mut sensitive_output_call = output_call.clone();
+                        if sensitive_terminal_output {
+                            sensitive_output_call.sensitive_binding = true;
+                        }
+                        let mut calls_for_execution = calls
+                            .iter()
+                            .map(|(call, manifest, line)| (*call, *manifest, *line))
+                            .collect::<Vec<_>>();
+                        if sensitive_terminal_output {
+                            let terminal = calls_for_execution
+                                .last_mut()
+                                .expect("invocation group is nonempty");
+                            terminal.0 = &sensitive_output_call;
+                        }
                         let (mut bytes, status, stdout_captured, stages, typed_json) = if call.cache
                         {
                             let input = input.materialize(
@@ -1804,7 +1992,7 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                             };
                             let run_uncached = || {
                                 execute_call_group(GroupRequest {
-                                    calls: &calls,
+                                    calls: &calls_for_execution,
                                     input: Input::Bytes(input),
                                     prepared_first_call: Some((executable, argv)),
                                     bindings: &bindings,
@@ -1901,17 +2089,17 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                                 }
                                 _ => None,
                             };
-                            let _stderr = ForceStderrCapture::enter(redirect.as_ref().is_some_and(
-                                |pending| {
+                            let _stderr = ForceStderrCapture::enter(
+                                redirect.as_ref().is_some_and(|pending| {
                                     pending.captures_stderr()
                                         || (stream.is_none()
                                             && pending.target
                                                 != crate::ast::RedirectTarget::StdoutToStderr)
-                                },
-                            ));
+                                }) || sensitive_terminal_output,
+                            );
                             let stream_scope = StreamScope::enter(stream);
                             let completed = execute_call_group(GroupRequest {
-                                calls: &calls,
+                                calls: &calls_for_execution,
                                 input,
                                 prepared_first_call: None,
                                 bindings: &bindings,
@@ -1996,6 +2184,31 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         // A streamed step's stdout went to the terminal rather than into the
                         // result, so its execution record reports no captured output.
                         let reported_stdout_captured = stdout_captured && !streamed;
+                        let sensitive_output = output_call
+                            .binding
+                            .as_ref()
+                            .is_some_and(|name| sensitive_bindings.contains(name))
+                            || output_call
+                                .result_binding
+                                .as_ref()
+                                .is_some_and(|name| sensitive_bindings.contains(name));
+                        if sensitive_output {
+                            crate::record::register_sensitive_bytes(registry, &bytes)?;
+                            if let Some(stderr) = stderr {
+                                crate::record::register_sensitive_bytes(registry, stderr)?;
+                            }
+                            for stage_stderr in
+                                stages.iter().filter_map(|stage| stage.stderr.as_deref())
+                            {
+                                crate::record::register_sensitive_bytes(registry, stage_stderr)?;
+                            }
+                            if let Some(value) = typed_json.as_ref() {
+                                crate::record::register_sensitive_value(
+                                    registry,
+                                    &crate::structured::from_json(value.clone()),
+                                )?;
+                            }
+                        }
                         let output_value = if let Some(name) = &output_call.binding {
                             bind_call_output(
                                 name,
@@ -2112,6 +2325,8 @@ pub(super) fn run_finite_state(run: FiniteRun<'_>, start: FiniteStart<'_>) -> Re
                         } else {
                             data = Input::Bytes(bytes);
                         }
+                        pipeline_sensitive = sensitive_terminal_output;
+                        pending_environment_sensitive = false;
                     }
                 }
             }

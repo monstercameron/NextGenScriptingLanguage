@@ -71,7 +71,9 @@ fn secret_names(args: &Map<String, Value>, output: &Value) -> Result<Vec<String>
             }
             Ok(selected.into_iter().collect())
         }
-        _ => Err(invalid("env.load secret must be a boolean or a list of names")),
+        _ => Err(invalid(
+            "env.load secret must be a boolean or a list of names",
+        )),
     }
 }
 

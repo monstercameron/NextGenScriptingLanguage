@@ -164,12 +164,13 @@ fn a_successful_run_records_each_step_output_by_hash() {
 }
 
 #[test]
+#[cfg(unix)]
 fn sensitive_prompt_values_are_redacted_everywhere_in_the_record() {
     let work = tempfile::tempdir().unwrap();
     let canary = "CANARY-SECRET-12345";
     fs::write(
         work.path().join("secret.program"),
-        "accept token as text from secret prompt \"Access token?\"\nrun printf with message token\n",
+        "accept token as text from secret prompt \"Access token?\"\nuse value token\nthen \"cat\"\n",
     )
     .unwrap();
     let answers = work.path().join("answers.json");
@@ -196,12 +197,13 @@ fn sensitive_prompt_values_are_redacted_everywhere_in_the_record() {
 }
 
 #[test]
+#[cfg(unix)]
 fn sensitive_environment_values_are_redacted_everywhere_in_the_record() {
     let work = tempfile::tempdir().unwrap();
     let canary = "CANARY-ENV-777";
     fs::write(
         work.path().join("environment.program"),
-        "accept key as text from environment \"API_KEY\"\nrun printf with message key\n",
+        "accept key as text from environment \"API_KEY\"\nuse value key\nthen \"cat\"\n",
     )
     .unwrap();
     let record = work.path().join("record");
@@ -219,6 +221,236 @@ fn sensitive_environment_values_are_redacted_everywhere_in_the_record() {
     assert!(record.join("trace.jsonl").is_file());
     for (_, bytes) in files_under(&record) {
         assert!(!String::from_utf8_lossy(&bytes).contains(canary));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn runtime_marked_output_is_withheld_from_the_entire_record() {
+    let work = tempfile::tempdir().unwrap();
+    let canary = "CANARY-RUNTIME-SECRET-991";
+    fs::write(
+        work.path().join("secret.program"),
+        "run \"sh\" with arguments [\"-c\", \"printf '%s' \\\"$RUNTIME_SECRET\\\"\"] as token and keep secret\nuse value token\nthen \"wc\" with arguments [\"-c\"]\nrun \"sh\" with arguments [\"-c\", \"test -n \\\"$TOKEN\\\"\"] and environment {\"TOKEN\": token}\n",
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(work.path())
+        .args([
+            "run",
+            "secret.program",
+            "--record",
+            record.to_str().unwrap(),
+            "--manifest-dir",
+        ])
+        .arg(manifests())
+        .env("RUNTIME_SECRET", canary)
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    for (_, bytes) in files_under(&record) {
+        assert!(!String::from_utf8_lossy(&bytes).contains(canary));
+    }
+
+    fs::write(
+        work.path().join("argv.program"),
+        "run \"sh\" with arguments [\"-c\", \"printf '%s' \\\"$RUNTIME_SECRET\\\"\"] as token and keep secret\nrun printf with message token\n",
+    )
+    .unwrap();
+    let check = execute(
+        work.path(),
+        &[
+            "check",
+            "argv.program",
+            "--manifest-dir",
+            manifests().to_str().unwrap(),
+        ],
+    );
+    assert!(!check.status.success());
+    assert!(
+        String::from_utf8_lossy(&check.stderr).contains("cannot be passed as a command argument")
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn secret_reusable_program_results_withhold_inner_outputs_from_the_record() {
+    let work = tempfile::tempdir().unwrap();
+    let canary = "CANARY-NESTED-SECRET-315";
+    fs::write(work.path().join("credential.txt"), canary).unwrap();
+    fs::write(
+        work.path().join("secret.program"),
+        "define a program named reveal\n  run printf with message \"CANARY-NESTED-SOURCE-315\"\n  run \"cat\" with arguments [\"credential.txt\"]\nrun program reveal as token and keep secret\nuse value token\n",
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(work.path())
+        .args(["run", "secret.program", "--record"])
+        .arg(&record)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    for (path, bytes) in files_under(&record) {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(canary)
+                && !String::from_utf8_lossy(&bytes).contains("CANARY-NESTED-SOURCE-315"),
+            "nested secret appeared in {}",
+            path.display()
+        );
+    }
+    let trace = fs::read_to_string(record.join("trace.jsonl")).unwrap();
+    assert!(trace.contains("\"withheld\":\"policy\""), "{trace}");
+}
+
+#[test]
+#[cfg(unix)]
+fn task_group_secret_output_is_redacted_from_every_record_file() {
+    let work = tempfile::tempdir().unwrap();
+    let canary = "CANARY-TASK-GROUP-OUTPUT-315";
+    fs::write(
+        work.path().join("secret.program"),
+        format!(
+            "parallel at most 1 as results\n  run printf with message \"{canary}\" as token and keep secret\nrun printf with message \"done\"\n"
+        ),
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(work.path())
+        .args(["run", "secret.program", "--record"])
+        .arg(&record)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    for (path, bytes) in files_under(&record) {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(canary),
+            "task-group secret appeared in {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn declared_secret_input_floor_withholds_transformed_output_from_records() {
+    let work = tempfile::tempdir().unwrap();
+    let canary = "CANARY-DECLARED-SECRET-DERIVATION-315";
+    let prefix = "CANARY-DECLARED";
+    fs::write(
+        work.path().join("secret.program"),
+        "accept token as text from secret prompt \"Token?\"\nuse value token\nrun \"sh\" with arguments [\"-c\", \"read value; printf %.15s \\\"$value\\\"\"]\n",
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(work.path())
+        .args(["run", "secret.program", "--record"])
+        .arg(&record)
+        .arg("--input")
+        .arg(format!("token={canary}"))
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    for (path, bytes) in files_under(&record) {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(prefix),
+            "derived secret appeared in {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn marked_reusable_call_scans_embedded_task_invocation_source() {
+    let work = tempfile::tempdir().unwrap();
+    let canary = "CANARY-EMBEDDED-TASK-SOURCE-315";
+    fs::write(
+        work.path().join("secret.program"),
+        format!(
+            "define a program named worker\n  parallel at most 1 as results\n    run printf with message \"{canary}\" as token\nrun program worker as result and keep secret\nuse value result\n"
+        ),
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(work.path())
+        .args(["run", "secret.program", "--record"])
+        .arg(&record)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    for (path, bytes) in files_under(&record) {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(canary),
+            "embedded source secret appeared in {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn parallel_each_secret_items_are_redacted_from_every_record_file() {
+    let work = tempfile::tempdir().unwrap();
+    let canary = "CANARY-PARALLEL-EACH-ITEM-315";
+    fs::write(
+        work.path().join("secret.program"),
+        "accept tokens as json from environment \"RUNTIME_TOKENS\"\nparallel for each item in tokens at most 1 as results\n  run number.add with left 1 and right 2\nrun printf with message \"done\"\n",
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .current_dir(work.path())
+        .args(["run", "secret.program", "--record"])
+        .arg(&record)
+        .arg("--manifest-dir")
+        .arg(manifests())
+        .env("RUNTIME_TOKENS", format!("[\"{canary}\"]"))
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    for (path, bytes) in files_under(&record) {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(canary),
+            "parallel-each secret appeared in {}",
+            path.display()
+        );
     }
 }
 
@@ -387,6 +619,44 @@ fn declared_secret_environment_values_never_appear_in_the_record() {
     );
     assert_eq!(secret_step["stderr"]["tail"], "");
     assert_eq!(document["terminal"]["withheld"], "policy");
+}
+
+#[test]
+fn successful_secret_pipeline_redacts_earlier_stage_stderr_from_the_record() {
+    let work = tempfile::tempdir().unwrap();
+    let canary = "PIPELINE-STDERR-CANARY-315";
+    fs::write(
+        work.path().join("secret.program"),
+        format!(
+            "accept token as text from secret prompt \"Token?\"\nuse value token\npipe to \"sh\" with arguments [\"-c\", \"head -c 16 >&2; cat\"]\npipe to \"cat\" as echoed\n"
+        ),
+    )
+    .unwrap();
+    let record = work.path().join("record");
+    let run = execute(
+        work.path(),
+        &[
+            "run",
+            "secret.program",
+            "--input",
+            &format!("token={canary}"),
+            "--record",
+            record.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let fragment = &canary[..16];
+    for (path, bytes) in files_under(&record) {
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(fragment),
+            "secret fragment appeared in {}",
+            path.display()
+        );
+    }
 }
 
 #[cfg(feature = "records")]

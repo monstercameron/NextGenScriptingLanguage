@@ -80,6 +80,7 @@ to that component; they are separate from top-level CLI input declarations.
 | `as name` | Name a finite UTF-8 stdout result, including its trailing newline. |
 | `and keep status as code` | Bind an external command's exit code as an integer. |
 | `and keep result as execution` | Bind an execution record with outcome, captured bytes and actual pipeline stage metadata. |
+| `and keep secret` | Mark the named output binding as secret before traces and records observe it. |
 | `and cache` | Reuse a declared deterministic finite transformation by content. |
 | `read "path"` | Builtin file input without launching a `cat` process. |
 | `read from stdin` | Read inherited stdin in a finite program; native stages consume it directly. |
@@ -93,10 +94,16 @@ to that component; they are separate from top-level CLI input declarations.
 Parameters use `with name value and name value`. Values are strings, integers,
 booleans, references, or lists such as `["-l", "-a"]`. Manifests define allowed
 parameters and types. There is no shell interpolation or command substitution.
-`true` and `false` are boolean literals and cannot name results. `as name` binds stdout text; `and keep status as name` binds an integer; `and keep result as name` binds a JSON execution record.
+`true` and `false` are boolean literals and cannot name results. `as name` binds stdout text; `and keep status as name` binds an integer; `and keep result as name` binds a JSON execution record. Add `and keep secret` after `as name` to label the output as secret when it is created.
 Text does not implicitly become an integer, boolean, or list parameter.
 Lists of string arguments may contain named text results. `as name` precedes
 `and cache` when both are used.
+
+A secret binding is withheld from run records, traces, execution-result values,
+live snapshots and explain output. It cannot be passed as an invocation argument,
+which would put it in argv; use `use value NAME` to feed stdin or `and environment`
+to pass it through a command environment. A checkpointed run containing a secret
+binding is refused before it starts.
 
 Quoted direct native invocations may add `and discard stderr` after an optional
 `as name` binding and before `and keep status/result as name`. It connects only

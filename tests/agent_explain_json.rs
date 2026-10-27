@@ -229,6 +229,25 @@ fn listener_producer_is_an_invocation_row() {
 }
 
 #[test]
+fn explain_withholds_literals_from_an_explicitly_secret_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let canary = "CANARY-EXPLAIN-SECRET-315";
+    let output = explain(
+        directory.path(),
+        &format!("run \"printf\" with arguments [\"%s\", \"{canary}\"] as token and keep secret\n"),
+        &["--json"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!text.contains(canary));
+    assert!(text.contains("withheld"), "{text}");
+}
+
+#[test]
 fn program_module_body_effects_are_expanded() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = directory.path().join("manifests");
@@ -1109,25 +1128,23 @@ fn direct_arguments_are_visible() {
 }
 
 #[test]
-fn sensitive_inputs_use_the_same_keyed_marker_in_parameters_and_argv() {
+fn sensitive_inputs_are_not_expanded_into_invocation_argv() {
     let directory = tempfile::tempdir().unwrap();
     let output = explain(
         directory.path(),
-        "accept token as text from secret prompt \"Token?\"\nrun plain.helper with text token\n",
+        "accept token as text from secret prompt \"Token?\"\nuse value token\n",
         &["--json", "--input", "token=private-canary-462"],
     );
     let object = plan(&output);
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private-canary-462"));
-    let row = &object["steps"][0];
-    assert_eq!(row["argv"][2], row["parameters"]["text"]);
-    assert_eq!(row["argv"][2]["sensitive"], true);
-    assert_eq!(row["argv"][2]["hmac_sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(object["steps"][0]["kind"], "use_value");
+    assert!(object["steps"][0]["argv"].is_null());
 }
 
 #[test]
 fn nested_sensitive_and_unresolved_inputs_remain_safe() {
     let directory = tempfile::tempdir().unwrap();
-    let source = "accept token as text from secret prompt \"Token?\"\naccept name as text\nrun nested.helper with data {\"items\": [token, name]}\n";
+    let source = "accept token as text from secret prompt \"Token?\"\naccept name as text\nuse value token\n";
     let output = explain(
         directory.path(),
         source,
@@ -1135,18 +1152,14 @@ fn nested_sensitive_and_unresolved_inputs_remain_safe() {
     );
     let object = plan(&output);
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private-canary-462"));
-    let row = &object["steps"][0];
-    let items = &row["parameters"]["data"]["record"]["items"];
-    assert_eq!(items[0]["sensitive"], true);
-    assert_eq!(items[1], serde_json::json!({"ref":"name"}));
-    assert_eq!(row["argv"][0]["json_parameter"]["record"]["items"], *items);
+    assert_eq!(object["steps"][0]["kind"], "use_value");
+    assert!(object["steps"][0]["argv"].is_null());
 }
 
 #[test]
 fn runtime_binding_remains_an_unresolved_reference() {
     let directory = tempfile::tempdir().unwrap();
-    let source =
-        "accept name as text\nuse value \"changed\" as generated\nrun plain.helper with text generated\n";
+    let source = "accept name as text\nuse value \"changed\" as generated\nrun plain.helper with text generated\n";
     let object = plan(&explain(
         directory.path(),
         source,
@@ -1170,8 +1183,7 @@ fn runtime_binding_remains_an_unresolved_reference() {
 fn sensitive_explain_creates_a_private_review_key() {
     let directory = tempfile::tempdir().unwrap();
     let manifests = write_manifests(directory.path());
-    let source =
-        "accept token as text from secret prompt \"Token?\"\nrun plain.helper with text token\n";
+    let source = "accept token as text from secret prompt \"Token?\"\nuse value token\n";
     std::fs::write(directory.path().join("plan.program"), source).unwrap();
     let state = directory.path().join("state");
     let output = Command::new(env!("CARGO_BIN_EXE_execute"))

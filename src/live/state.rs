@@ -512,6 +512,8 @@ pub(crate) struct ExitRecord {
 
 pub(crate) struct State {
     pub doc: Document,
+    pub redactor: Arc<crate::security::SecretRedactor>,
+    pub registry: Registry,
     /// Set by a run-mode program's `exit with`/`fail with`, or by a failed command.
     pub exit: Option<ExitRecord>,
     /// Breakpoints and the statement a run is paused before.
@@ -552,10 +554,18 @@ impl State {
         self.events.push_back(json!({"revision":self.revision,"event":event,"cursor":self.doc.cursor,"status":self.status}));
     }
     fn runtime(&self, output: bool) -> Json {
-        let mut value = json!({"pid":std::process::id(),"execute_version":env!("CARGO_PKG_VERSION"),"status":self.status,"running":self.running,"in_flight":self.in_flight,"active_node":self.active,"effects_may_be_incomplete":self.uncertain,"error":self.error,"runs_completed":self.runs,"nodes_completed":self.nodes,"completed_native_launches":self.launches,"cache_hits":self.cache_hits,"producer_done":self.producer_done,"producer_error":self.producer_error,"frame":self.ui_frame,"ui_applied_revision":self.ui_applied_revision,"ui_errors":self.ui_errors});
+        let error = self
+            .error
+            .as_deref()
+            .map(|text| self.redactor.redact_text(text));
+        let producer_error = self
+            .producer_error
+            .as_deref()
+            .map(|text| self.redactor.redact_text(text));
+        let mut value = json!({"pid":std::process::id(),"execute_version":env!("CARGO_PKG_VERSION"),"status":self.status,"running":self.running,"in_flight":self.in_flight,"active_node":self.active,"effects_may_be_incomplete":self.uncertain,"error":error,"runs_completed":self.runs,"nodes_completed":self.nodes,"completed_native_launches":self.launches,"cache_hits":self.cache_hits,"producer_done":self.producer_done,"producer_error":producer_error,"frame":self.ui_frame,"ui_applied_revision":self.ui_applied_revision,"ui_errors":self.ui_errors});
         value["debug"] = self.debug.json();
         if output {
-            value["last_output"] = json!(self.last_output);
+            value["last_output"] = self.last_output_json();
         }
         value
     }
@@ -565,19 +575,26 @@ impl State {
     /// The names of the program's secret prompt inputs. Their answers are withheld from
     /// every read, as records withhold them.
     pub(crate) fn secret_names(&self) -> Vec<String> {
-        self.plan
-            .program
-            .inputs
-            .iter()
-            .filter(|input| crate::ast::is_sensitive(input))
-            .map(|input| input.name.clone())
+        crate::runtime::sensitive_binding_names(&self.plan.program, &self.registry)
+            .into_iter()
             .collect()
+    }
+    fn last_output_json(&self) -> Json {
+        if self.secret_names().is_empty() {
+            json!(self.last_output)
+        } else {
+            withheld_marker()
+        }
     }
     /// The state document with every secret answer replaced by the withheld marker.
     fn masked_document(&self) -> Json {
         let mut value = serde_json::to_value(&self.doc).unwrap_or(Json::Null);
+        value["source"] = json!(self.redactor.redact_text(&self.doc.source));
         let masked = withhold_secret_bindings(&self.doc.bindings, &self.secret_names());
         value["bindings"] = json!(masked);
+        if !self.secret_names().is_empty() {
+            value["input"] = withheld_marker();
+        }
         value
     }
     fn ack(&self) -> Json {
@@ -591,7 +608,7 @@ impl State {
         let (value, offset) = match parts[0].as_str() {
             "runtime" => {
                 if parts.get(1).is_some_and(|part| part == "last_output") {
-                    (json!(self.last_output), 2)
+                    (self.last_output_json(), 2)
                 } else {
                     (self.runtime(parts.len() == 1), 1)
                 }
@@ -628,7 +645,14 @@ impl State {
             ),
             "user" => (json!(self.doc.user), 1),
             "inbox" => (json!(self.doc.inbox), 1),
-            "input" => (json!(self.doc.input), 1),
+            "input" => (
+                if self.secret_names().is_empty() {
+                    json!(self.doc.input)
+                } else {
+                    withheld_marker()
+                },
+                1,
+            ),
             "ui" => {
                 return self
                     .doc
@@ -637,7 +661,7 @@ impl State {
                     .cloned()
                     .ok_or_else(|| fail("not_found", "path does not exist"));
             }
-            "source" => (json!(self.doc.source), 1),
+            "source" => (json!(self.redactor.redact_text(&self.doc.source)), 1),
             "cwd" => (json!(self.doc.cwd), 1),
             "cursor" => (json!(self.doc.cursor), 1),
             _ => return Err(fail("not_found", "path does not exist")),
@@ -1167,6 +1191,12 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                 &state.doc.bindings,
                 &state.secret_names(),
             );
+            let redacted_source = state.redactor.redact_text(&state.doc.source);
+            if candidate.source == redacted_source {
+                // A read-modify-write of the visible redacted source must not
+                // replace the stored program with its redacted presentation.
+                candidate.source.clone_from(&state.doc.source);
+            }
             if candidate.source != state.doc.source {
                 let plan = Plan::parse(&candidate.source)?;
                 candidate.ui = if let Some(screen) = &plan.screen {
@@ -1185,6 +1215,17 @@ pub(crate) fn request(shared: &Shared, request: Request) -> Result<Json> {
                 shared.max_bytes,
                 shared.run_mode,
             )?;
+            for input in plan
+                .program
+                .inputs
+                .iter()
+                .filter(|input| crate::ast::is_sensitive(input))
+            {
+                if let Some(value) = candidate.bindings.get(&input.name) {
+                    crate::record::register_sensitive_value(&shared.registry, &argument(value))?;
+                }
+            }
+            crate::record::register_sensitive_program(&shared.registry, &plan.program)?;
             if plan.screen.is_some() && !shared.headless {
                 use std::io::IsTerminal;
                 if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {

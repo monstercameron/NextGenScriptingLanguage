@@ -34,6 +34,10 @@ pub struct Invocation {
     pub parameters: BTreeMap<String, Value>,
     pub binding: Option<String>,
     pub cache: bool,
+    /// `and keep secret` marks the named output binding sensitive before any
+    /// observer can record the command result.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sensitive_binding: bool,
     /// Explicitly retain a native exit code, including ordinary nonzero exits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_binding: Option<String>,
@@ -70,6 +74,20 @@ fn is_false(value: &bool) -> bool {
 impl Invocation {
     pub(crate) fn program_stdout_unbound(&self) -> bool {
         self.binding.is_none() && self.result_binding.is_none() && self.status_binding.is_none()
+    }
+
+    /// Whether this invocation explicitly produces a sensitive binding.
+    pub(crate) fn marks_sensitive_output(&self) -> bool {
+        let env_load_secret = matches!(self.operation.as_str(), "env.load" | "env load")
+            && self
+                .parameters
+                .get("secret")
+                .is_some_and(|selection| match selection {
+                    Value::Bool(false) => false,
+                    Value::List(values) if values.is_empty() => false,
+                    _ => true,
+                });
+        self.sensitive_binding || env_load_secret
     }
 }
 

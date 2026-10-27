@@ -2989,6 +2989,36 @@ fn execute_call_group_unobserved(group: GroupRequest<'_>) -> Result<GroupOutput>
         launched,
         signals,
     } = group;
+    let output = execute_call_group_unobserved_inner(GroupRequest {
+        registry,
+        calls,
+        input,
+        prepared_first_call,
+        bindings,
+        cwd,
+        options,
+        launched,
+        signals,
+    });
+    match &output {
+        Ok(output) => register_sensitive_group_output(registry, calls, bindings, output)?,
+        Err(error) => register_sensitive_group_failure(registry, calls, error)?,
+    }
+    output
+}
+
+fn execute_call_group_unobserved_inner(group: GroupRequest<'_>) -> Result<GroupOutput> {
+    let GroupRequest {
+        registry,
+        calls,
+        input,
+        prepared_first_call,
+        bindings,
+        cwd,
+        options,
+        launched,
+        signals,
+    } = group;
     let Some((call, manifest, line)) = calls.first().copied() else {
         bail!("cannot execute an empty applet group");
     };
@@ -3099,6 +3129,121 @@ fn execute_call_group_unobserved(group: GroupRequest<'_>) -> Result<GroupOutput>
             result
         }
     }
+}
+
+fn register_sensitive_group_output(
+    registry: &Registry,
+    calls: &[(&Invocation, &Manifest, usize)],
+    bindings: &BTreeMap<String, Value>,
+    output: &GroupOutput,
+) -> Result<()> {
+    // Only the terminal pipeline stage may bind output; in-process env.load
+    // cannot join a native pipeline, so every valid sensitive binding is last.
+    let Some((call, manifest, line)) = calls.last().copied() else {
+        return Ok(());
+    };
+    let sensitive_group = calls.iter().any(|(call, manifest, _)| {
+        call.sensitive_binding
+            || call.marks_sensitive_output()
+            || crate::security::applet_has_declared_secret_environment(
+                registry,
+                manifest.name_for(call),
+            )
+    });
+    if !sensitive_group {
+        return Ok(());
+    }
+    if call.marks_sensitive_output() && manifest.name_for(call) == "env.load" {
+        let arguments = resolved_json_arguments(call, manifest, bindings)?;
+        let output_json = output
+            .typed_json
+            .clone()
+            .or_else(|| serde_json::from_slice(&output.bytes).ok())
+            .ok_or_else(|| anyhow!("line {line}: could not register env.load secret values"))?;
+        let values =
+            crate::applets::secret_values(manifest.name_for(call), &arguments, &output_json)
+                .map_err(|_| anyhow!("line {line}: could not register env.load secret values"))?;
+        let redactor = crate::security::secret_redactor(registry);
+        for value in values {
+            redactor
+                .register(value.as_bytes())
+                .map_err(|_| anyhow!("line {line}: could not register env.load secret values"))?;
+        }
+        return Ok(());
+    }
+    let redactor = crate::security::secret_redactor(registry);
+    for bytes in std::iter::once(output.bytes.as_slice())
+        .chain(std::iter::once(output.diagnostic.as_slice()))
+        .chain(
+            output
+                .stages
+                .iter()
+                .filter_map(|stage| stage.stderr.as_deref()),
+        )
+    {
+        redactor
+            .register(bytes)
+            .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
+        if bytes.ends_with(b"\n") {
+            redactor
+                .register(&bytes[..bytes.len() - 1])
+                .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
+        }
+    }
+    if let Some(value) = &output.typed_json {
+        crate::record::register_sensitive_value(
+            registry,
+            &crate::structured::from_json(value.clone()),
+        )?;
+    }
+    Ok(())
+}
+
+fn register_sensitive_group_failure(
+    registry: &Registry,
+    calls: &[(&Invocation, &Manifest, usize)],
+    error: &anyhow::Error,
+) -> Result<()> {
+    let Some((_, _, line)) = calls.last().copied() else {
+        return Ok(());
+    };
+    let sensitive_call = calls.iter().any(|(call, manifest, _)| {
+        call.sensitive_binding
+            || call.marks_sensitive_output()
+            || crate::security::applet_has_declared_secret_environment(
+                registry,
+                manifest.name_for(call),
+            )
+    });
+    if !sensitive_call {
+        return Ok(());
+    }
+    let result = execution_result::result_for_error(error);
+    let redactor = crate::security::secret_redactor(registry);
+    for output in [result.stdout.as_deref(), result.stderr.as_deref()]
+        .into_iter()
+        .flatten()
+        .chain(result.message.as_deref().map(str::as_bytes))
+        .chain(
+            result
+                .stages
+                .iter()
+                .filter_map(|stage| stage.stderr.as_deref()),
+        )
+    {
+        redactor
+            .register(output)
+            .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
+        if output.ends_with(b"\n") {
+            redactor
+                .register(&output[..output.len() - 1])
+                .map_err(|_| anyhow!("line {line}: could not register sensitive command output"))?;
+        }
+    }
+    if let Some(value) = &result.value {
+        crate::record::register_sensitive_value(registry, value)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "remote")]
@@ -3402,6 +3547,9 @@ fn append_invocation_sensitivities(
     worker_pool: Option<&worker_backend::WorkerPool>,
 ) -> Result<()> {
     let manifest = registry.resolve_call(call)?;
+    if call.marks_sensitive_output() {
+        sensitivities.insert(crate::contracts::Sensitivity::Secret);
+    }
     append_manifest_sensitivities(call, manifest, registry, cwd, sensitivities, worker_pool)
 }
 
@@ -3500,9 +3648,20 @@ pub(crate) fn workflow_sensitivity_floor(
     worker_pool: Option<&worker_backend::WorkerPool>,
 ) -> Result<crate::security::SensitivitySet> {
     let mut sensitivities = crate::security::SensitivitySet::empty();
+    if program.inputs.iter().any(crate::ast::is_sensitive)
+        || program
+            .definitions
+            .values()
+            .any(|definition| definition.inputs.iter().any(crate::ast::is_sensitive))
+    {
+        sensitivities.insert(crate::contracts::Sensitivity::Secret);
+    }
     for step in &program.steps {
         match &step.kind {
             StepKind::Invoke { call, .. } => {
+                if call.marks_sensitive_output() {
+                    sensitivities.insert(crate::contracts::Sensitivity::Secret);
+                }
                 let manifest = registry.resolve_call(call)?;
                 if manifest.builtin.is_none() {
                     append_manifest_sensitivities(
@@ -3513,6 +3672,11 @@ pub(crate) fn workflow_sensitivity_floor(
                         &mut sensitivities,
                         worker_pool,
                     )?;
+                }
+            }
+            StepKind::CallProgram { call, .. } => {
+                if call.marks_sensitive_output() {
+                    sensitivities.insert(crate::contracts::Sensitivity::Secret);
                 }
             }
             StepKind::TaskGroup { tasks, .. } => {
@@ -3550,10 +3714,9 @@ pub(crate) fn workflow_sensitivity_floor(
                     worker_pool,
                 )?;
             }
-            // Reusable calls are expanded into the step sequence before the
-            // runtime; scanning its actual Invoke steps avoids unused defs.
-            StepKind::CallProgram { .. }
-            | StepKind::Loop { .. }
+            // Reusable call bodies are expanded into the sequence; their
+            // marked call bindings above add the secret persistence floor.
+            StepKind::Loop { .. }
             | StepKind::EndLoop { .. }
             | StepKind::If { .. }
             | StepKind::Otherwise { .. }
@@ -3645,6 +3808,7 @@ pub fn invoke_applet(
         parameters,
         binding: None,
         cache: false,
+        sensitive_binding: false,
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
         retry: None,
@@ -3683,6 +3847,7 @@ pub fn invoke_applet_with_module_session(
         parameters: parameters.clone(),
         binding: None,
         cache: false,
+        sensitive_binding: false,
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
         retry: None,
@@ -3772,6 +3937,7 @@ pub(crate) fn invoke_call_with_context(
         parameters,
         binding: None,
         cache: false,
+        sensitive_binding: false,
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
         retry: None,
@@ -4262,6 +4428,7 @@ mod argv_construction_tests {
             parameters: BTreeMap::from([("text".into(), Value::String("literal".into()))]),
             binding: None,
             cache: false,
+            sensitive_binding: false,
             status_binding: None,
             result_binding: None,
             retry: None,
@@ -5210,6 +5377,7 @@ mod resolved_json_argument_tests {
             parameters,
             binding: None,
             cache: false,
+            sensitive_binding: false,
             status_binding: None,
             result_binding: None,
             retry: None,
@@ -5577,6 +5745,8 @@ mod drain_tests {
                 registry: &registry,
                 bindings: &BTreeMap::new(),
                 environment: None,
+                sensitive_items: false,
+                sensitive_environment: false,
                 options: &options(directory.path()),
                 cancelled: Arc::clone(&signals.cancelled),
                 draining: Arc::new(AtomicU8::new(crate::platform::DRAIN_IDLE)),
@@ -5643,6 +5813,8 @@ mod drain_tests {
                 registry: &registry,
                 bindings: &BTreeMap::new(),
                 environment: None,
+                sensitive_items: false,
+                sensitive_environment: false,
                 options: &options(directory.path()),
                 cancelled: Arc::clone(&signals.cancelled),
                 draining: Arc::new(AtomicU8::new(crate::platform::DRAIN_REQUESTED)),

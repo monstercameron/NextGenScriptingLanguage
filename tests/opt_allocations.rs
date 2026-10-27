@@ -170,6 +170,7 @@ fn report_release_allocation_counts() {
         parameters,
         binding: None,
         cache: false,
+        sensitive_binding: false,
         status_binding: None,
         result_binding: None,
         retry: None,

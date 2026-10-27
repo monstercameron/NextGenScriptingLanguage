@@ -163,7 +163,7 @@ fn region_changes_directory(registry: &Registry, steps: &[crate::ast::Step]) -> 
             StepKind::Invoke { call, .. }
                 if registry.resolve_call(call)?.builtin == Some(Builtin::Cd) =>
             {
-                return Ok(true)
+                return Ok(true);
             }
             _ => {}
         }
@@ -899,6 +899,7 @@ pub(super) fn has_job_operations(program: &Program) -> bool {
 /// Validate the complete script before launching any command or saving files.
 pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
     validate_discard_stderr_usage(program)?;
+    validate_secret_arguments(program, registry)?;
     crate::inputs::validate(&program.inputs)?;
     let has_jobs = has_job_operations(program);
     #[cfg(target_arch = "wasm32")]
@@ -923,12 +924,16 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
     validate_worker_support(program, registry)?;
     #[cfg(target_arch = "wasm32")]
     if program.trigger.is_some() {
-        bail!("browser host supports finite programs; use the native runtime for schedules and listeners");
+        bail!(
+            "browser host supports finite programs; use the native runtime for schedules and listeners"
+        );
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(trigger) = &program.trigger {
         if has_jobs {
-            bail!("native background jobs are supported only in finite programs; services and listeners have separate lifetimes");
+            bail!(
+                "native background jobs are supported only in finite programs; services and listeners have separate lifetimes"
+            );
         }
         let (setup, body) = service::split_program(program);
         if let Some(step) = body
@@ -958,7 +963,10 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
             .iter()
             .find(|step| matches!(step.kind, StepKind::ReadStdin { .. }))
         {
-            bail!("line {}: read from stdin is for finite programs; use listen to stdin for service records", step.line);
+            bail!(
+                "line {}: read from stdin is for finite programs; use listen to stdin for service records",
+                step.line
+            );
         }
         validate_finite(&setup, registry, None)?;
         for step in &setup.steps {
@@ -1028,6 +1036,466 @@ pub fn validate(program: &Program, registry: &Registry) -> Result<()> {
         };
     }
     validate_finite(program, registry, None)
+}
+
+/// Secret bindings may be delivered through stdin or a command environment,
+/// but a value in an invocation parameter becomes an argv value. Reject that
+/// flow before execution, where process listings and applet diagnostics could
+/// expose it.
+fn validate_secret_arguments(program: &Program, registry: &Registry) -> Result<()> {
+    fn references(value: &Value, secrets: &BTreeSet<String>) -> Option<String> {
+        match value {
+            Value::Reference(name) if secrets.contains(name) => Some(name.clone()),
+            Value::List(values) => values.iter().find_map(|value| references(value, secrets)),
+            Value::Record(values) => values.values().find_map(|value| references(value, secrets)),
+            _ => None,
+        }
+    }
+
+    fn check_call(
+        call: &Invocation,
+        line: usize,
+        program_name: Option<&str>,
+        secrets: &BTreeSet<String>,
+    ) -> Result<()> {
+        if let Some(name) = call
+            .parameters
+            .values()
+            .find_map(|value| references(value, secrets))
+        {
+            let context =
+                program_name.map_or_else(String::new, |name| format!("program {name:?}, "));
+            bail!(
+                "{context}line {line}: secret binding {name:?} cannot be passed as a command argument; use stdin or `and environment`"
+            );
+        }
+        Ok(())
+    }
+
+    let scopes = std::iter::once((None, &program.inputs, program.steps.as_slice())).chain(
+        program.definitions.iter().map(|(name, definition)| {
+            (
+                Some(name.as_str()),
+                &definition.inputs,
+                definition.steps.as_slice(),
+            )
+        }),
+    );
+    for (program_name, inputs, steps) in scopes {
+        let mut secrets = inputs
+            .iter()
+            .filter(|input| crate::ast::is_sensitive(input))
+            .map(|input| input.name.clone())
+            .collect::<BTreeSet<_>>();
+        let mut pipeline_secret = false;
+        let mut pending_environment_secret = false;
+        let mut workflow_environment_secret = false;
+        let mut workflow_environment_scopes = Vec::new();
+        for step in steps {
+            match &step.kind {
+                StepKind::Invoke { call, connection } => {
+                    if call.marks_sensitive_output() && call.binding.is_none() {
+                        bail!(
+                            "line {}: sensitive output requires a named binding",
+                            step.line
+                        );
+                    }
+                    if call.marks_sensitive_output() && call.cache {
+                        bail!("line {}: sensitive output cannot be cached", step.line);
+                    }
+                    if call.marks_sensitive_output() && call.result_binding.is_some() {
+                        bail!(
+                            "line {}: sensitive output cannot be retained as an execution result",
+                            step.line
+                        );
+                    }
+                    check_call(call, step.line, program_name, &secrets)?;
+                    let consumes_secret_pipeline =
+                        *connection != crate::ast::Connection::Start && pipeline_secret;
+                    let declared_secret_environment =
+                        registry.resolve_call(call).ok().is_some_and(|manifest| {
+                            crate::security::applet_has_declared_secret_environment(
+                                registry,
+                                manifest.name_for(call),
+                            )
+                        });
+                    let sensitive_output = call.marks_sensitive_output()
+                        || consumes_secret_pipeline
+                        || pending_environment_secret
+                        || workflow_environment_secret
+                        || declared_secret_environment;
+                    if sensitive_output && call.cache {
+                        bail!("line {}: secret-derived output cannot be cached", step.line);
+                    }
+                    if sensitive_output && call.result_binding.is_some() {
+                        bail!(
+                            "line {}: secret-derived output cannot be retained as an execution result",
+                            step.line
+                        );
+                    }
+                    if sensitive_output {
+                        pipeline_secret = true;
+                        if let Some(name) = &call.binding {
+                            secrets.insert(name.clone());
+                        }
+                        secrets.extend(call.result_binding.clone());
+                    } else if *connection == crate::ast::Connection::Start {
+                        pipeline_secret = false;
+                    }
+                    pending_environment_secret = false;
+                }
+                StepKind::CallProgram {
+                    call, connection, ..
+                } => {
+                    workflow_environment_scopes.push(workflow_environment_secret);
+                    if call.marks_sensitive_output() && call.binding.is_none() {
+                        bail!(
+                            "line {}: sensitive output requires a named binding",
+                            step.line
+                        );
+                    }
+                    if call.marks_sensitive_output() && call.cache {
+                        bail!("line {}: sensitive output cannot be cached", step.line);
+                    }
+                    if call.marks_sensitive_output() && call.result_binding.is_some() {
+                        bail!(
+                            "line {}: sensitive output cannot be retained as an execution result",
+                            step.line
+                        );
+                    }
+                    check_call(call, step.line, program_name, &secrets)?;
+                    let consumes_secret_pipeline =
+                        *connection != crate::ast::Connection::Start && pipeline_secret;
+                    if call.marks_sensitive_output()
+                        || consumes_secret_pipeline
+                        || pending_environment_secret
+                        || workflow_environment_secret
+                    {
+                        pipeline_secret = true;
+                        secrets.extend(call.binding.clone());
+                        secrets.extend(call.result_binding.clone());
+                    } else if *connection == crate::ast::Connection::Start {
+                        pipeline_secret = false;
+                    }
+                    pending_environment_secret = false;
+                }
+                StepKind::EndCall => {
+                    workflow_environment_secret =
+                        workflow_environment_scopes.pop().unwrap_or(false);
+                }
+                StepKind::TaskGroup {
+                    tasks,
+                    binding,
+                    each,
+                    ..
+                } => {
+                    let mut sensitive_task =
+                        workflow_environment_secret || pending_environment_secret;
+                    let sensitive_items = each
+                        .as_ref()
+                        .is_some_and(|each| references(&each.values, &secrets).is_some());
+                    if sensitive_items {
+                        if let Some(each) = each {
+                            secrets.insert(each.binding.clone());
+                        }
+                    }
+                    for call in tasks {
+                        check_call(call, step.line, program_name, &secrets)?;
+                        let declared_secret_environment =
+                            registry.resolve_call(call).ok().is_some_and(|manifest| {
+                                crate::security::applet_has_declared_secret_environment(
+                                    registry,
+                                    manifest.name_for(call),
+                                )
+                            });
+                        if call.marks_sensitive_output() || declared_secret_environment {
+                            sensitive_task = true;
+                            if let Some(name) = &call.binding {
+                                secrets.insert(name.clone());
+                            }
+                        }
+                    }
+                    if sensitive_task || sensitive_items {
+                        secrets.insert(binding.clone());
+                        pipeline_secret = true;
+                    } else {
+                        pipeline_secret = false;
+                    }
+                }
+                StepKind::SpawnJob { stages, .. } => {
+                    for stage in stages {
+                        check_call(&stage.call, stage.line, program_name, &secrets)?;
+                    }
+                }
+                StepKind::IfCommand { call, .. }
+                | StepKind::Loop {
+                    kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                    ..
+                } => check_call(call, step.line, program_name, &secrets)?,
+                StepKind::TakeJson {
+                    source, binding, ..
+                }
+                | StepKind::TakeJsonDynamic {
+                    source, binding, ..
+                } => {
+                    if references(source, &secrets).is_some() {
+                        secrets.insert(binding.clone());
+                    }
+                }
+                StepKind::UseValue { source } | StepKind::EncodeJson { source } => {
+                    pipeline_secret = references(source, &secrets).is_some();
+                }
+                StepKind::BindValue { source, binding } => {
+                    let secret_source = references(source, &secrets).is_some();
+                    if secret_source {
+                        secrets.insert(binding.clone());
+                    }
+                    pipeline_secret = secret_source;
+                }
+                StepKind::Read { .. } | StepKind::ReadStdin { .. } => {
+                    pipeline_secret = false;
+                }
+                StepKind::UseBytes { binding } => {
+                    pipeline_secret |= secrets.contains(binding);
+                }
+                StepKind::Environment {
+                    set,
+                    workflow_scope,
+                    ..
+                } => {
+                    let environment_secret = set
+                        .values()
+                        .any(|value| references(value, &secrets).is_some());
+                    if *workflow_scope {
+                        workflow_environment_secret |= environment_secret;
+                    } else {
+                        pending_environment_secret = environment_secret;
+                    }
+                }
+                StepKind::CaptureBytes { binding } => {
+                    if pipeline_secret {
+                        secrets.insert(binding.clone());
+                    }
+                }
+                StepKind::ReadCallInput { binding } => {
+                    if pipeline_secret {
+                        if let Some(binding) = binding {
+                            secrets.insert(binding.clone());
+                        }
+                    }
+                }
+                StepKind::ParseJson { binding } => {
+                    if pipeline_secret {
+                        secrets.insert(binding.clone());
+                    }
+                }
+                StepKind::Loop {
+                    kind: crate::ast::LoopKind::ForEach { binding, values },
+                    ..
+                } => {
+                    if references(values, &secrets).is_some() {
+                        secrets.insert(binding.clone());
+                    }
+                }
+                StepKind::Catch { binding, .. } if !secrets.is_empty() || pipeline_secret => {
+                    secrets.insert(binding.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Statically known bindings that may contain secret data. Runtime-facing
+/// serializers use this conservative set to withhold derived values too.
+pub(crate) fn sensitive_binding_names(program: &Program, registry: &Registry) -> BTreeSet<String> {
+    fn references(value: &Value, names: &BTreeSet<String>) -> bool {
+        match value {
+            Value::Reference(name) => names.contains(name),
+            Value::List(values) => values.iter().any(|value| references(value, names)),
+            Value::Record(values) => values.values().any(|value| references(value, names)),
+            _ => false,
+        }
+    }
+    fn scope(
+        inputs: &[crate::ast::InputDeclaration],
+        steps: &[crate::ast::Step],
+        registry: &Registry,
+    ) -> BTreeSet<String> {
+        let mut names = inputs
+            .iter()
+            .filter(|input| crate::ast::is_sensitive(input))
+            .map(|input| input.name.clone())
+            .collect::<BTreeSet<_>>();
+        let mut pipeline_secret = false;
+        let mut pending_environment_secret = false;
+        let mut workflow_environment_secret = false;
+        let mut workflow_environment_scopes = Vec::new();
+        for step in steps {
+            match &step.kind {
+                StepKind::Invoke { call, connection } => {
+                    let declared_environment_secret =
+                        registry.resolve_call(call).ok().is_some_and(|manifest| {
+                            crate::security::applet_has_declared_secret_environment(
+                                registry,
+                                manifest.name_for(call),
+                            )
+                        });
+                    if call.marks_sensitive_output()
+                        || (*connection != crate::ast::Connection::Start && pipeline_secret)
+                        || pending_environment_secret
+                        || workflow_environment_secret
+                        || declared_environment_secret
+                    {
+                        pipeline_secret = true;
+                        names.extend(call.binding.clone());
+                        names.extend(call.result_binding.clone());
+                    } else if *connection == crate::ast::Connection::Start {
+                        pipeline_secret = false;
+                    }
+                    pending_environment_secret = false;
+                }
+                StepKind::CallProgram {
+                    call, connection, ..
+                } => {
+                    workflow_environment_scopes.push(workflow_environment_secret);
+                    if call.marks_sensitive_output()
+                        || (*connection != crate::ast::Connection::Start && pipeline_secret)
+                        || pending_environment_secret
+                        || workflow_environment_secret
+                    {
+                        pipeline_secret = true;
+                        names.extend(call.binding.clone());
+                        names.extend(call.result_binding.clone());
+                    } else if *connection == crate::ast::Connection::Start {
+                        pipeline_secret = false;
+                    }
+                    pending_environment_secret = false;
+                }
+                StepKind::EndCall => {
+                    workflow_environment_secret =
+                        workflow_environment_scopes.pop().unwrap_or(false);
+                }
+                StepKind::TaskGroup {
+                    tasks,
+                    binding,
+                    each,
+                    ..
+                } => {
+                    let each_secret = each
+                        .as_ref()
+                        .is_some_and(|each| references(&each.values, &names));
+                    let task_secret = workflow_environment_secret
+                        || pending_environment_secret
+                        || tasks.iter().any(|call| {
+                            call.marks_sensitive_output()
+                                || registry.resolve_call(call).ok().is_some_and(|manifest| {
+                                    crate::security::applet_has_declared_secret_environment(
+                                        registry,
+                                        manifest.name_for(call),
+                                    )
+                                })
+                        });
+                    if each_secret {
+                        if let Some(each) = each {
+                            names.insert(each.binding.clone());
+                        }
+                    }
+                    if task_secret || each_secret {
+                        names.insert(binding.clone());
+                        names.extend(
+                            tasks
+                                .iter()
+                                .filter(|call| {
+                                    call.marks_sensitive_output()
+                                        || registry.resolve_call(call).ok().is_some_and(
+                                            |manifest| {
+                                                crate::security::applet_has_declared_secret_environment(
+                                                    registry,
+                                                    manifest.name_for(call),
+                                                )
+                                            },
+                                        )
+                                })
+                                .filter_map(|call| call.binding.clone()),
+                        );
+                        pipeline_secret = true;
+                    } else {
+                        pipeline_secret = false;
+                    }
+                }
+                StepKind::SpawnJob { stages, .. } => names.extend(
+                    stages
+                        .iter()
+                        .filter(|stage| stage.call.marks_sensitive_output())
+                        .filter_map(|stage| stage.call.binding.clone()),
+                ),
+                StepKind::IfCommand { call, .. }
+                | StepKind::Loop {
+                    kind: crate::ast::LoopKind::WhileCommand { call, .. },
+                    ..
+                } if call.marks_sensitive_output() => names.extend(call.binding.clone()),
+                StepKind::TakeJson {
+                    source, binding, ..
+                }
+                | StepKind::TakeJsonDynamic {
+                    source, binding, ..
+                } if references(source, &names) => {
+                    names.insert(binding.clone());
+                }
+                StepKind::BindValue { source, binding } => {
+                    let secret_source = references(source, &names);
+                    if secret_source {
+                        names.insert(binding.clone());
+                    }
+                    pipeline_secret = secret_source;
+                }
+                StepKind::Loop {
+                    kind: crate::ast::LoopKind::ForEach { binding, values },
+                    ..
+                } if references(values, &names) => {
+                    names.insert(binding.clone());
+                }
+                StepKind::UseValue { source } | StepKind::EncodeJson { source } => {
+                    pipeline_secret = references(source, &names)
+                }
+                StepKind::Environment {
+                    set,
+                    workflow_scope,
+                    ..
+                } => {
+                    let environment_secret = set.values().any(|value| references(value, &names));
+                    if *workflow_scope {
+                        workflow_environment_secret |= environment_secret;
+                    } else {
+                        pending_environment_secret = environment_secret;
+                    }
+                }
+                StepKind::UseBytes { binding } => pipeline_secret = names.contains(binding),
+                StepKind::Read { .. } | StepKind::ReadStdin { .. } => pipeline_secret = false,
+                StepKind::CaptureBytes { binding } if pipeline_secret => {
+                    names.insert(binding.clone());
+                }
+                StepKind::ReadCallInput { binding } if pipeline_secret => {
+                    names.extend(binding.clone());
+                }
+                StepKind::ParseJson { binding } if pipeline_secret => {
+                    names.insert(binding.clone());
+                }
+                StepKind::Catch { binding, .. } if !names.is_empty() || pipeline_secret => {
+                    names.insert(binding.clone());
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+    let mut names = scope(&program.inputs, &program.steps, registry);
+    for definition in program.definitions.values() {
+        names.extend(scope(&definition.inputs, &definition.steps, registry));
+    }
+    names
 }
 
 /// Validate the AST-level stderr modifier before any catalog lookup or other
@@ -1700,7 +2168,11 @@ fn validate_range(
                 format!("program {:?}, called at line {}", call.operation, step.line)
             })?;
             if !child.unresolved_jobs.is_empty() {
-                bail!("line {}: every background job in reusable program {:?} must be awaited or cancelled before return", step.line, call.operation);
+                bail!(
+                    "line {}: every background job in reusable program {:?} must be awaited or cancelled before return",
+                    step.line,
+                    call.operation
+                );
             }
             binding(
                 &call.binding,
@@ -2005,7 +2477,9 @@ fn validate_range(
                         check_path(path, &flow.names)?;
                     }
                     if allow_rebinding && matches!(step.kind, StepKind::ReadStdin { .. }) {
-                        bail!("managed programs use /input or listen to stdin via the inbox, not read from stdin");
+                        bail!(
+                            "managed programs use /input or listen to stdin via the inbox, not read from stdin"
+                        );
                     }
                     binding(
                         name,
@@ -2136,7 +2610,9 @@ fn validate_range(
                             || template.status_binding.is_some()
                             || template.result_binding.is_some()
                         {
-                            bail!("the parallel for each command cannot bind output, status or result, discard stderr, or use `and cache`");
+                            bail!(
+                                "the parallel for each command cannot bind output, status or result, discard stderr, or use `and cache`"
+                            );
                         }
                         let manifest = registry.resolve_call(template)?;
                         if manifest.builtin.is_some() {
@@ -2158,7 +2634,9 @@ fn validate_range(
                             || task.status_binding.is_some()
                             || task.result_binding.is_some()
                         {
-                            bail!("task groups require named, uncached applet calls without status or result bindings");
+                            bail!(
+                                "task groups require named, uncached applet calls without status or result bindings"
+                            );
                         }
                         let task_name = task
                             .binding
@@ -2205,7 +2683,10 @@ fn validate_range(
                             || call.status_binding.is_some()
                             || call.result_binding.is_some()
                         {
-                            bail!("line {}: background pipeline stages cannot bind output, status, or result, or use `and cache`", stage.line);
+                            bail!(
+                                "line {}: background pipeline stages cannot bind output, status, or result, or use `and cache`",
+                                stage.line
+                            );
                         }
                         let manifest = registry.resolve_call(call).with_context(|| {
                             format!("line {}: resolving background stage", stage.line)
@@ -2218,7 +2699,10 @@ fn validate_range(
                         }
                         if manifest.execution_backend() != crate::contracts::AppletBackend::Command
                         {
-                            bail!("line {}: background pipelines require native command applets or quoted direct executables", stage.line);
+                            bail!(
+                                "line {}: background pipelines require native command applets or quoted direct executables",
+                                stage.line
+                            );
                         }
                         manifest
                             .validate_with_types(call, &flow.types)
@@ -2240,14 +2724,20 @@ fn validate_range(
                                     mode != crate::contracts::StdioDisposition::Capture
                                 }))
                             {
-                                bail!("line {}: background pipelines require captured stdout and stderr", stage.line);
+                                bail!(
+                                    "line {}: background pipelines require captured stdout and stderr",
+                                    stage.line
+                                );
                             }
                             if stage_index + 1 < stages.len()
                                 && stdio.stdout.is_some_and(|mode| {
                                     mode != crate::contracts::StdioDisposition::Capture
                                 })
                             {
-                                bail!("line {}: only the final background pipeline stage can discard or inherit stdout", stage.line);
+                                bail!(
+                                    "line {}: only the final background pipeline stage can discard or inherit stdout",
+                                    stage.line
+                                );
                             }
                         }
                         for value in call.parameters.values() {
@@ -2332,7 +2822,10 @@ fn validate_range(
                         && manifest.accepts_stdin
                         && flow.stdout_unavailable
                     {
-                        bail!("line {}: then cannot consume stdout explicitly discarded or inherited by the preceding applet", step.line);
+                        bail!(
+                            "line {}: then cannot consume stdout explicitly discarded or inherited by the preceding applet",
+                            step.line
+                        );
                     }
                     #[cfg(not(target_arch = "wasm32"))]
                     if manifest.execution_backend() != crate::contracts::AppletBackend::Command
@@ -2392,7 +2885,9 @@ fn validate_range(
                     }
                     if manifest.builtin == Some(Builtin::Cd) {
                         if *connection == Connection::Pipe || pipe_in_steps(steps, index + 1) {
-                            bail!("cd changes the program directory and cannot belong to a pipe group");
+                            bail!(
+                                "cd changes the program directory and cannot belong to a pipe group"
+                            );
                         }
                         if call.binding.is_some() {
                             bail!("cd has no output to name");
@@ -2449,7 +2944,9 @@ fn validate_range(
                             || *connection == Connection::Pipe
                             || pipe_in_steps(steps, index + 1)
                         {
-                            bail!("status capture requires a single uncached command outside a pipe group");
+                            bail!(
+                                "status capture requires a single uncached command outside a pipe group"
+                            );
                         }
                         if call.status_binding == call.binding {
                             bail!("output and status require distinct binding names");
@@ -2460,10 +2957,14 @@ fn validate_range(
                             bail!("execution result capture requires an applet invocation");
                         }
                         if call.cache {
-                            bail!("execution result capture cannot use `and cache` because cached calls do not retain pipeline stages");
+                            bail!(
+                                "execution result capture cannot use `and cache` because cached calls do not retain pipeline stages"
+                            );
                         }
                         if pipe_in_steps(steps, index + 1) {
-                            bail!("execution result capture must name the terminal call in a pipe group");
+                            bail!(
+                                "execution result capture must name the terminal call in a pipe group"
+                            );
                         }
                         if call.binding.as_ref() == Some(name) {
                             bail!("output and execution result require distinct binding names");
@@ -2483,7 +2984,9 @@ fn validate_range(
                         }
                     }
                     if call.binding.is_some() && pipe_in_steps(steps, index + 1) {
-                        bail!("name results at the end of a pipe group; intermediate naming requires buffering");
+                        bail!(
+                            "name results at the end of a pipe group; intermediate naming requires buffering"
+                        );
                     }
                     let terminal_call = !pipe_in_steps(steps, index + 1);
                     let terminal_stdout_captured = !terminal_call
@@ -2498,7 +3001,10 @@ fn validate_range(
                             || call.cache
                             || (manifest.output_kind().is_some() && call.result_binding.is_none()))
                     {
-                        bail!("line {}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output", step.line);
+                        bail!(
+                            "line {}: discarded or inherited stdout cannot be bound, cached, or decoded as a typed output",
+                            step.line
+                        );
                     }
                     binding(
                         &call.binding,
@@ -2608,7 +3114,9 @@ fn validate_range(
                         bail!("redirection must immediately precede one native command");
                     };
                     if *connection == Connection::Pipe || pipe_in_steps(steps, index + 2) {
-                        bail!("redirection applies to a single command; it cannot feed or precede a pipe to stage");
+                        bail!(
+                            "redirection applies to a single command; it cannot feed or precede a pipe to stage"
+                        );
                     }
                     if call.discard_stderr || call.cache {
                         bail!("redirection cannot be combined with discard stderr or cache");
@@ -2617,7 +3125,9 @@ fn validate_range(
                         || (call.binding.is_some()
                             && *target == crate::ast::RedirectTarget::StdoutToStderr)
                     {
-                        bail!("redirected stdout is pipeline data; it cannot be bound with `keep result`, or with `as` for stdout to stderr");
+                        bail!(
+                            "redirected stdout is pipeline data; it cannot be bound with `keep result`, or with `as` for stdout to stderr"
+                        );
                     }
                     if registry.resolve_call(call)?.builtin.is_some() {
                         bail!("a builtin cannot be redirected");
@@ -2697,12 +3207,16 @@ pub fn explain_with_inputs(
                 ..
             } => {
                 let manifest = registry.resolve_call(call)?;
-                let argv = match arguments_for_call(call, manifest, &known) {
-                    Ok(args) => format!("{args:?}"),
-                    Err(_) => format!(
-                        "parameters {} (resolve program inputs at runtime)",
-                        describe_parameters(&call.parameters)
-                    ),
+                let argv = if call.marks_sensitive_output() {
+                    "[withheld]".to_owned()
+                } else {
+                    match arguments_for_call(call, manifest, &known) {
+                        Ok(args) => format!("{args:?}"),
+                        Err(_) => format!(
+                            "parameters {} (resolve program inputs at runtime)",
+                            describe_parameters(&call.parameters)
+                        ),
+                    }
                 };
                 format!(
                     "listen to {:?} argv={}; UTF-8 lines as {binding}",
@@ -2757,7 +3271,11 @@ pub fn explain_with_inputs(
             StepKind::CallProgram { call, .. } => format!(
                 "call program {:?}; explicit inputs {}; local scope",
                 call.operation,
-                describe_parameters(&call.parameters)
+                if call.marks_sensitive_output() {
+                    "[withheld]".to_owned()
+                } else {
+                    describe_parameters(&call.parameters)
+                }
             ),
             StepKind::EndCall => "return program output; restore caller scope and cwd".into(),
             StepKind::BreakLoop => "break the innermost loop; restore its outer bindings".into(),
@@ -2945,16 +3463,14 @@ pub fn explain_with_inputs(
                 describe_path(path, &known)
             ),
             StepKind::Redirect { target, path } => {
-                let destination = path
-                    .as_ref()
-                    .map(|path| describe_path(path, &known));
+                let destination = path.as_ref().map(|path| describe_path(path, &known));
                 match (target, destination) {
-                    (crate::ast::RedirectTarget::StderrFile, Some(path)) => format!(
-                        "next command's stderr replaces file {path}; stdout is unchanged"
-                    ),
-                    (crate::ast::RedirectTarget::StderrAppend, Some(path)) => format!(
-                        "next command's stderr appends to file {path}; stdout is unchanged"
-                    ),
+                    (crate::ast::RedirectTarget::StderrFile, Some(path)) => {
+                        format!("next command's stderr replaces file {path}; stdout is unchanged")
+                    }
+                    (crate::ast::RedirectTarget::StderrAppend, Some(path)) => {
+                        format!("next command's stderr appends to file {path}; stdout is unchanged")
+                    }
                     (crate::ast::RedirectTarget::StderrMerged, _) => {
                         "next command's stderr follows its stdout in the pipeline value".into()
                     }
@@ -2963,12 +3479,16 @@ pub fn explain_with_inputs(
             }
             StepKind::Invoke { call, connection } => {
                 let manifest = registry.resolve_call(call)?;
-                let argv = match arguments_for_call(call, manifest, &known) {
-                    Ok(argv) => format!("{argv:?}"),
-                    Err(_) => format!(
-                        "parameters {} (resolve named results at runtime)",
-                        describe_parameters(&call.parameters)
-                    ),
+                let argv = if call.marks_sensitive_output() {
+                    "[withheld]".to_owned()
+                } else {
+                    match arguments_for_call(call, manifest, &known) {
+                        Ok(argv) => format!("{argv:?}"),
+                        Err(_) => format!(
+                            "parameters {} (resolve named results at runtime)",
+                            describe_parameters(&call.parameters)
+                        ),
+                    }
                 };
                 format!(
                     "{connection:?}: {:?} argv={argv}{}{}{}{}{}{}",
@@ -3011,12 +3531,8 @@ pub fn explain_with_inputs(
                         )),
                     )
                 }) + match crate::privilege::classify(manifest.binary_for(call)) {
-                    crate::privilege::Privilege::Elevator => {
-                        " [privileged: elevator]"
-                    }
-                    crate::privilege::Privilege::Wrapper => {
-                        " [wrapper: may run another program]"
-                    }
+                    crate::privilege::Privilege::Elevator => " [privileged: elevator]",
+                    crate::privilege::Privilege::Wrapper => " [wrapper: may run another program]",
                     crate::privilege::Privilege::Standard => "",
                 }
             }

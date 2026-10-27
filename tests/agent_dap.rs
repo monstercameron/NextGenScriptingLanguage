@@ -279,7 +279,7 @@ fn secret_prompt_bindings_are_withheld_from_dap_variables() {
     let program = directory.path().join("secret.program");
     std::fs::write(
         &program,
-        "accept token as text from secret prompt \"Token?\"\nrun printf with message token\n",
+        "accept token as text from secret prompt \"Token?\"\nuse value token\n",
     )
     .unwrap();
     let mut client = Client::start();
@@ -309,6 +309,166 @@ fn secret_prompt_bindings_are_withheld_from_dap_variables() {
     );
     assert!(!variables.to_string().contains("CANARY-DAP-TOKEN"));
     client.request("continue", json!({"threadId": 1}));
+    client.event("exited");
+    client.request("disconnect", json!({}));
+    assert!(wait_for_exit(&mut client.child, Duration::from_secs(10)).success());
+}
+
+#[test]
+fn secret_pipeline_derived_bindings_are_withheld_from_dap_variables() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("secret.program");
+    let canary = "CANARY-DAP-PIPELINE-315";
+    std::fs::write(
+        &program,
+        "accept token as text from secret prompt \"Token?\"\nuse value token\nthen \"cat\" as echoed\nrun printf with message \"continue\"\n",
+    )
+    .unwrap();
+    let mut client = Client::start();
+    client.request("initialize", json!({"adapterID": "execute"}));
+    client.event("initialized");
+    let launched = client.request(
+        "launch",
+        json!({"program": program, "cwd": directory.path(), "inputs": {"token": canary}}),
+    );
+    assert_eq!(launched["success"], true, "{launched}");
+    client.request(
+        "setBreakpoints",
+        json!({"source": {"path": program}, "breakpoints": [{"line": 4}]}),
+    );
+    client.request("configurationDone", json!({}));
+    let stopped = client
+        .wait(|message| message["type"] == "event" && message["event"] == "stopped")
+        .unwrap_or_else(|| panic!("no stopped event; queued messages: {:?}", client.pending));
+    assert_eq!(stopped["body"]["reason"], "breakpoint");
+    let scopes = client.request("scopes", json!({"frameId": 1}));
+    let reference = scopes["body"]["scopes"][0]["variablesReference"].clone();
+    let variables = client.request("variables", json!({"variablesReference": reference}));
+    assert!(variables.to_string().contains("echoed"), "{variables}");
+    assert!(variables.to_string().contains("withheld"), "{variables}");
+    assert!(!variables.to_string().contains(canary));
+    client.request("continue", json!({"threadId": 1}));
+    client.event("exited");
+    client.request("disconnect", json!({}));
+    assert!(wait_for_exit(&mut client.child, Duration::from_secs(10)).success());
+}
+
+#[test]
+fn caught_secret_failure_records_are_withheld_from_dap_variables() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("secret.program");
+    let canary = "CANARY-CAUGHT-FAILURE-315";
+    std::fs::write(
+        &program,
+        "accept token as text from secret prompt \"Token?\"\ntry\n  use value token\n  then \"sh\" with arguments [\"-c\", \"head -c 12 >&2; exit 1\"]\ncatch failure\n  run printf with message \"continue\"\n",
+    )
+    .unwrap();
+    let mut client = Client::start();
+    client.request("initialize", json!({"adapterID": "execute"}));
+    client.event("initialized");
+    let launched = client.request(
+        "launch",
+        json!({"program": program, "cwd": directory.path(), "inputs": {"token": canary}}),
+    );
+    assert_eq!(launched["success"], true, "{launched}");
+    client.request(
+        "setBreakpoints",
+        json!({"source": {"path": program}, "breakpoints": [{"line": 6}]}),
+    );
+    client.request("configurationDone", json!({}));
+    let stopped = client
+        .wait(|message| message["type"] == "event" && message["event"] == "stopped")
+        .unwrap_or_else(|| panic!("no stopped event; queued messages: {:?}", client.pending));
+    assert_eq!(stopped["body"]["reason"], "breakpoint");
+    let scopes = client.request("scopes", json!({"frameId": 1}));
+    let reference = scopes["body"]["scopes"][0]["variablesReference"].clone();
+    let variables = client.request("variables", json!({"variablesReference": reference}));
+    assert!(variables.to_string().contains("failure"), "{variables}");
+    assert!(variables.to_string().contains("withheld"), "{variables}");
+    assert!(!variables.to_string().contains(&canary[..12]));
+    client.request("continue", json!({"threadId": 1}));
+    client.event("exited");
+    client.request("disconnect", json!({}));
+    assert!(wait_for_exit(&mut client.child, Duration::from_secs(10)).success());
+}
+
+#[test]
+fn secret_reusable_program_results_are_withheld_from_dap_variables() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("secret.program");
+    let canary = "CANARY-NESTED-DAP-315";
+    std::fs::write(directory.path().join("credential.txt"), canary).unwrap();
+    std::fs::write(
+        &program,
+        "define a program named reveal\n  run printf with message \"CANARY-NESTED-DAP-SOURCE-315\"\n  run \"cat\" with arguments [\"credential.txt\"]\nrun program reveal as token and keep secret\nuse value token\n",
+    )
+    .unwrap();
+    let mut client = Client::start();
+    client.request("initialize", json!({"adapterID": "execute"}));
+    client.event("initialized");
+    let launched = client.request(
+        "launch",
+        json!({"program": program, "cwd": directory.path()}),
+    );
+    assert_eq!(launched["success"], true, "{launched}");
+    client.request(
+        "setBreakpoints",
+        json!({"source": {"path": program}, "breakpoints": [{"line": 5}]}),
+    );
+    client.request("configurationDone", json!({}));
+    let stopped = client
+        .wait(|message| message["type"] == "event" && message["event"] == "stopped")
+        .unwrap_or_else(|| panic!("no stopped event; queued messages: {:?}", client.pending));
+    assert_eq!(stopped["body"]["reason"], "breakpoint");
+    let scopes = client.request("scopes", json!({"frameId": 1}));
+    let reference = scopes["body"]["scopes"][0]["variablesReference"].clone();
+    let variables = client.request("variables", json!({"variablesReference": reference}));
+    assert_eq!(variables["body"]["variables"][0]["name"], "token");
+    assert_eq!(
+        variables["body"]["variables"][0]["value"],
+        "{\"withheld\":\"secret\"}"
+    );
+    assert!(!variables.to_string().contains(canary));
+    assert!(!variables
+        .to_string()
+        .contains("CANARY-NESTED-DAP-SOURCE-315"));
+    client.request("continue", json!({"threadId": 1}));
+    client.event("exited");
+    client.request("disconnect", json!({}));
+    assert!(wait_for_exit(&mut client.child, Duration::from_secs(10)).success());
+}
+
+#[test]
+fn secret_task_group_aggregate_is_withheld_from_dap_variables() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = directory.path().join("secret.program");
+    let canary = "CANARY-TASK-DAP-315";
+    std::fs::write(
+        &program,
+        format!("parallel at most 1 as results\n  run printf with message \"{canary}\" as token and keep secret\nrun printf with message \"done\"\n"),
+    )
+    .unwrap();
+    let mut client = Client::start();
+    client.request("initialize", json!({"adapterID":"execute"}));
+    client.event("initialized");
+    let launched = client.request("launch", json!({"program":program,"cwd":directory.path()}));
+    assert_eq!(launched["success"], true, "{launched}");
+    client.request(
+        "setBreakpoints",
+        json!({"source":{"path":program},"breakpoints":[{"line":3}]}),
+    );
+    client.request("configurationDone", json!({}));
+    let stopped = client
+        .wait(|message| message["type"] == "event" && message["event"] == "stopped")
+        .unwrap_or_else(|| panic!("no stopped event; queued messages: {:?}", client.pending));
+    assert_eq!(stopped["body"]["reason"], "breakpoint");
+    let scopes = client.request("scopes", json!({"frameId":1}));
+    let reference = scopes["body"]["scopes"][0]["variablesReference"].clone();
+    let variables = client.request("variables", json!({"variablesReference":reference}));
+    assert!(variables.to_string().contains("results"), "{variables}");
+    assert!(variables.to_string().contains("withheld"), "{variables}");
+    assert!(!variables.to_string().contains(canary));
+    client.request("continue", json!({"threadId":1}));
     client.event("exited");
     client.request("disconnect", json!({}));
     assert!(wait_for_exit(&mut client.child, Duration::from_secs(10)).success());

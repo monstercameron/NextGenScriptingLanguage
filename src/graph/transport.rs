@@ -2697,6 +2697,7 @@ fn invoke_for_graph(
         parameters: parameters.clone(),
         binding: None,
         cache: false,
+        sensitive_binding: false,
         status_binding: Some("__flow_internal_status".to_owned()),
         result_binding: None,
         retry: None,

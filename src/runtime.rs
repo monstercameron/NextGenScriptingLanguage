@@ -6221,10 +6221,40 @@ mod drain_tests {
     fn installed_handlers_record_into_their_own_run() {
         // End to end through real OS delivery: a SIGINT addressed to this
         // process lands in the owning run's slot and the CLI fallback, while
-        // an overlapping run without handlers stays clean.
-        let _serial = crate::platform::CANCEL_SIGNAL_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // an overlapping run without handlers stays clean. Real delivery runs
+        // in a child test process (see the invariant on
+        // `CANCEL_SIGNAL_TEST_LOCK`) so the broadcast cannot reach handlers
+        // installed by parallel tests in this process; the parent installs no
+        // handlers and touches no fallback state.
+        const HELPER_ENV: &str = "EXECUTE_TEST_INSTALLED_HANDLERS_CHILD";
+        const TEST_NAME: &str =
+            "runtime::drain_tests::installed_handlers_record_into_their_own_run";
+        if std::env::var_os(HELPER_ENV).is_none() {
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("current test executable"),
+            )
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env(HELPER_ENV, "1")
+            .output()
+            .expect("starting installed-handlers child");
+            assert!(
+                output.status.success(),
+                "installed-handlers child failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        // Child process: the only place a real signal is raised for this test.
+        // The `Drop` guard clears the process-wide fallback even when an
+        // assertion below panics; the child then exits, so no fallback state
+        // can leak into parallel tests in the parent process.
+        struct ClearFallbackOnDrop;
+        impl Drop for ClearFallbackOnDrop {
+            fn drop(&mut self) {
+                crate::platform::clear_cancel_signal();
+            }
+        }
+        let _fallback_guard = ClearFallbackOnDrop;
         crate::platform::clear_cancel_signal();
         let signals = Signals::register_with_deadline(None).unwrap();
         let other =
@@ -6245,7 +6275,6 @@ mod drain_tests {
         assert_eq!(crate::platform::cancel_exit_code(), Some(130));
         assert_eq!(other.cancel_exit_code(), None);
         drop(signals);
-        crate::platform::clear_cancel_signal();
     }
 
     #[cfg(unix)]

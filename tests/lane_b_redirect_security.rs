@@ -1,7 +1,9 @@
 //! Redirection and append are persistence writes. Under a capability policy they
 //! are refused before any effect unless the target has a write grant, and a
 //! redirect target that is a link is refused rather than followed.
-use flow::capabilities::{preflight, AppletGrant, CapabilityPolicy, FilesystemGrant, HostGrant};
+#[cfg(unix)]
+use flow::capabilities::HostGrant;
+use flow::capabilities::{preflight, AppletGrant, CapabilityPolicy, FilesystemGrant};
 use flow::manifest::Registry;
 use flow::{parser, runtime};
 use std::collections::{BTreeMap, BTreeSet};

@@ -61,7 +61,7 @@ live = ["screens"]
 # The language server behind `execute lsp`: editor completions, hovers, and diagnostics.
 lsp = ["dep:url"]
 # The model helper and the remote backend share the HTTP client, so each enables it.
-model = ["dep:ureq"]
+model = ["dep:ureq", "dep:url"]
 remote = ["dep:ureq", "dep:mio", "dep:url"]
 # Quickshell desktop renderer nodes and the DAP adapter. Lean builds refuse both with a clear error.
 desktop = ["screens", "graph"]
@@ -235,6 +235,10 @@ required-features = ["model"]
 
 [[test]]
 name = "models"
+required-features = ["model"]
+
+[[test]]
+name = "repl_json"
 required-features = ["model"]
 
 [[test]]

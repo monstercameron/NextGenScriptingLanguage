@@ -14,7 +14,7 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-FEATURES = ("graph", "screens", "records", "tooling", "module-tools", "agent-advisory")
+FEATURES = ("graph", "screens", "records", "tooling", "module-tools", "agent-advisory", "model")
 
 
 class FeatureMatrixTests(unittest.TestCase):

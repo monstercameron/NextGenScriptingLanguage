@@ -46,6 +46,7 @@ jobs:
                       "--no-default-features --features tooling" \
                       "--no-default-features --features module-tools" \
                       "--no-default-features --features agent-advisory" \
+                      "--no-default-features --features model" \
                       ""; do
             echo "::group::cargo clippy $args"
             # shellcheck disable=SC2086

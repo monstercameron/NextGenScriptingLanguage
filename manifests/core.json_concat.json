@@ -5,10 +5,12 @@
   "accepts_stdin": false,
   "parameters": {
     "left": {
-      "type": "json"
+      "type": "json",
+      "required": true
     },
     "right": {
-      "type": "json"
+      "type": "json",
+      "required": true
     }
   },
   "arguments": [

@@ -6,11 +6,12 @@
   "parameters": {
     "document": {
       "type": "json",
-      "required": false
+      "required": true
     },
     "keys": {
       "type": "list",
-      "items": "string"
+      "items": "string",
+      "required": true
     }
   },
   "arguments": [

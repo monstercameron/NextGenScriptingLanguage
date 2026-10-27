@@ -430,12 +430,18 @@ helper executable.
 | `csv.parse`, `csv.stringify` | Parse UTF-8 RFC 4180-style CSV into a typed `{headers, rows}` string table or emit its deterministic CRLF form. Headers are optional; duplicate headers, ragged rows, malformed quoting, invalid UTF-8 and non-string cells fail. These are bounded finite transforms, not streaming operations. |
 | `json.get`, `json.set` | Select or replace a value using RFC 6901 JSON Pointer. `get` reports a missing target with status 1; `set` can add an object member, replace an array item or append at the array end, but does not create missing parents. |
 | `json.map`, `json.filter` | Project one JSON Pointer from each selected array item, or keep items matching up to 32 ANDed predicates, including `exists`, `equals`, `not_equals` and `type`. A missing projection or selected target reports absence; malformed pointers, predicates and wrong value types fail validation. |
+| `json.has`, `json.delete` | Test a JSON Pointer or remove its target. `json.has` defaults an omitted path to the root. `json.delete` requires a path and refuses the root. |
+| `json.sort_by`, `json.unique_by`, `json.group_by` | Sort, deduplicate, or group array items by a JSON Pointer key. An omitted `pointer` defaults to the empty pointer, selecting each item itself; explicit non-string or malformed pointers fail. |
 | `fs.read`, `fs.snapshot` | Read a regular UTF-8 file up to 16 MiB and return `{content,content_hash,snapshot,symlink,mode}`. The content hash is SHA-256 of file bytes; the snapshot also binds path, link/target identity and metadata. Missing files have the explicit absence outcome. |
 | `fs.write_atomic` | Require the expected SHA-256 or `"missing"`, then atomically replace one file. It requires explicit `preserve`, `reject` or `replace` symlink policy and `preserve`, `private` or `exact` permission policy; an optional stable advisory lock path has a 30-second default and 300-second maximum timeout. |
 | `fs.transaction` | Apply a bounded journaled batch of expected-hash writes or removals to existing regular files. It is a command applet with explicit recovery, not a multi-file atomic-visibility guarantee. |
 | `fs.transaction.recover` | Complete or roll back a retained transaction journal if every target still matches its recorded before or after state, including a requested absent state. A third state is a manual-recovery conflict. |
 | `jsonc.set`, `jsonc.remove` | Apply a root-property update to JSONC with line/block comments and trailing commas, with at most 256 levels of nesting. `set` replaces the last active duplicate or inserts the key; `remove` removes every active duplicate. Keys in comments and nested objects are ignored. Both return a typed receipt with path, content hash, snapshot and whether content changed. Malformed input fails before mutation. |
 | `jsonc.edit_content` | Apply the same bounded root-property set/remove logic to supplied JSONC text or UTF-8 stdin and return updated text. It is a pure transformation and never writes a file. |
+
+JSON applets whose manifests do not accept stdin require `document` in workflows.
+The in-process applet API can still read a document from its input bytes when
+`document` is omitted. Stdin-capable manifests accept a piped document.
 
 Every text parser strips one leading UTF-8 BOM. Duplicate JSON object keys are
 refused everywhere. `json.filter` compares numeric values by value (so `1`,

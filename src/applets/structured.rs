@@ -362,7 +362,7 @@ pub(super) fn has(
     context: &ExecutionContext<'_>,
 ) -> Result<Value, AppletError> {
     let document = document(args, input, context)?;
-    let pointer = parse_pointer(required_string(args, "path")?)?;
+    let pointer = parse_pointer(optional_pointer(args, "path")?)?;
     Ok(Value::Bool(lookup(&document, &pointer)?.is_some()))
 }
 
@@ -638,7 +638,7 @@ pub(super) fn group_by(
     if array.len() > MAX_JSON_ITEMS {
         return Err(invalid("JSON array exceeds the 100000 item limit"));
     }
-    let pointer = parse_pointer(required_string(args, "pointer")?)?;
+    let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     let mut groups: std::collections::BTreeMap<String, Vec<Value>> =
         std::collections::BTreeMap::new();
     for (index, item) in array.iter().enumerate() {
@@ -666,7 +666,7 @@ pub(super) fn unique_by(
     if array.len() > MAX_JSON_ITEMS {
         return Err(invalid("JSON array exceeds the 100000 item limit"));
     }
-    let pointer = parse_pointer(required_string(args, "pointer")?)?;
+    let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     let mut seen = std::collections::BTreeSet::new();
     let mut output = Vec::new();
     for (index, item) in array.iter().enumerate() {
@@ -708,7 +708,7 @@ pub(super) fn sort_by(
     if array.len() > MAX_JSON_ITEMS {
         return Err(invalid("JSON array exceeds the 100000 item limit"));
     }
-    let pointer = parse_pointer(required_string(args, "pointer")?)?;
+    let pointer = parse_pointer(optional_pointer(args, "pointer")?)?;
     let numeric = args
         .get("numeric")
         .and_then(Value::as_bool)

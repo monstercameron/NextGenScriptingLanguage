@@ -5,10 +5,12 @@
   "accepts_stdin": false,
   "parameters": {
     "document": {
-      "type": "json"
+      "type": "json",
+      "required": true
     },
     "renames": {
-      "type": "json"
+      "type": "json",
+      "required": true
     }
   },
   "arguments": [

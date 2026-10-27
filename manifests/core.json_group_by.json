@@ -5,7 +5,8 @@
   "accepts_stdin": false,
   "parameters": {
     "document": {
-      "type": "json"
+      "type": "json",
+      "required": true
     },
     "pointer": {
       "type": "string"

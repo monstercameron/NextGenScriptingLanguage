@@ -6,11 +6,11 @@
   "parameters": {
     "left": {
       "type": "json",
-      "required": false
+      "required": true
     },
     "right": {
       "type": "json",
-      "required": false
+      "required": true
     }
   },
   "arguments": [

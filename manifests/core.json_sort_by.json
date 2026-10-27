@@ -10,7 +10,7 @@
     },
     "document": {
       "type": "json",
-      "required": false
+      "required": true
     },
     "numeric": {
       "type": "boolean",

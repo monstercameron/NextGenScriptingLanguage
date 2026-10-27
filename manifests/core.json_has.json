@@ -6,7 +6,7 @@
   "parameters": {
     "document": {
       "type": "json",
-      "required": false
+      "required": true
     },
     "path": {
       "type": "string",

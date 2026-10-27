@@ -19,6 +19,12 @@ fn write_manifests(directory: &Path) -> PathBuf {
         "arguments": [{ "literal": "--version" }, { "when_present": "text", "append": [{ "literal": "--text" }, { "parameter": "text" }] }]
     });
     std::fs::write(manifests.join("plain.helper.json"), plain.to_string()).unwrap();
+    let nested = serde_json::json!({
+        "name": "nested.helper", "binary": HELPER, "accepts_stdin": false,
+        "parameters": {"data": {"type": "json", "required": true}},
+        "arguments": [{"json_parameter": "data"}]
+    });
+    std::fs::write(manifests.join("nested.helper.json"), nested.to_string()).unwrap();
     // A contract that declares a loopback network effect and a write effect.
     let declared = serde_json::json!({
         "name": "net.helper",
@@ -99,7 +105,7 @@ fn json_plan_has_one_row_per_invocation_with_resolved_argv_and_declared_effects(
         &["--json"],
     );
     let object = plan(&output);
-    assert_eq!(object["protocol"], "execute.explain/1");
+    assert_eq!(object["protocol"], "execute.explain/2");
     let steps = object["steps"].as_array().unwrap();
     assert_eq!(steps.len(), 2, "{steps:?}");
 
@@ -206,7 +212,7 @@ fn program_module_body_effects_are_expanded() {
 }
 
 #[test]
-fn argv_is_withheld_when_a_parameter_is_a_runtime_value() {
+fn argv_shows_unresolved_and_supplied_input_values() {
     let directory = tempfile::tempdir().unwrap();
     let output = explain(
         directory.path(),
@@ -219,9 +225,22 @@ fn argv_is_withheld_when_a_parameter_is_a_runtime_value() {
         .iter()
         .find(|row| row["applet"] == "plain.helper")
         .expect("plain.helper row");
-    assert!(
-        invocation["argv"].is_null(),
-        "argv must not be guessed: {invocation}"
+    assert_eq!(
+        invocation["argv"],
+        serde_json::json!(["--version", "--text", {"ref":"message"}])
+    );
+    assert_eq!(
+        invocation["parameters"]["text"],
+        serde_json::json!({"ref":"message"})
+    );
+    let supplied = plan(&explain(
+        directory.path(),
+        "accept message as text\nrun plain.helper with text message\n",
+        &["--json", "--input", "message=hello"],
+    ));
+    assert_eq!(
+        supplied["steps"][0]["argv"],
+        serde_json::json!(["--version", "--text", "hello"])
     );
 }
 
@@ -868,4 +887,186 @@ fn a_privileged_invocation_is_marked_in_the_row_and_the_summary() {
     assert_eq!(invocation["privileged"], true, "{object}");
     assert_eq!(object["summary"]["privileged"], true);
     assert_eq!(object["summary"]["privileged_invocations"], 1);
+}
+
+#[test]
+fn direct_arguments_are_visible() {
+    let directory = tempfile::tempdir().unwrap();
+    let object = plan(&explain(
+        directory.path(),
+        "run \"rm\" with arguments [\"-rf\", \"/home\"]\n",
+        &["--json"],
+    ));
+    assert_eq!(
+        object["steps"][0]["argv"],
+        serde_json::json!(["-rf", "/home"])
+    );
+}
+
+#[test]
+fn sensitive_inputs_use_the_same_keyed_marker_in_parameters_and_argv() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = explain(
+        directory.path(),
+        "accept token as text from secret prompt \"Token?\"\nrun plain.helper with text token\n",
+        &["--json", "--input", "token=private-canary-462"],
+    );
+    let object = plan(&output);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-canary-462"));
+    let row = &object["steps"][0];
+    assert_eq!(row["argv"][2], row["parameters"]["text"]);
+    assert_eq!(row["argv"][2]["sensitive"], true);
+    assert_eq!(row["argv"][2]["hmac_sha256"].as_str().unwrap().len(), 64);
+}
+
+#[test]
+fn nested_sensitive_and_unresolved_inputs_remain_safe() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "accept token as text from secret prompt \"Token?\"\naccept name as text\nrun nested.helper with data {\"items\": [token, name]}\n";
+    let output = explain(
+        directory.path(),
+        source,
+        &["--json", "--input", "token=private-canary-462"],
+    );
+    let object = plan(&output);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-canary-462"));
+    let row = &object["steps"][0];
+    let items = &row["parameters"]["data"]["record"]["items"];
+    assert_eq!(items[0]["sensitive"], true);
+    assert_eq!(items[1], serde_json::json!({"ref":"name"}));
+    assert_eq!(row["argv"][0]["json_parameter"]["record"]["items"], *items);
+}
+
+#[test]
+fn runtime_binding_remains_an_unresolved_reference() {
+    let directory = tempfile::tempdir().unwrap();
+    let source =
+        "accept name as text\nuse value \"changed\" as generated\nrun plain.helper with text generated\n";
+    let object = plan(&explain(
+        directory.path(),
+        source,
+        &["--json", "--input", "name=original"],
+    ));
+    let row = object["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "invoke")
+        .unwrap();
+    assert_eq!(
+        row["parameters"]["text"],
+        serde_json::json!({"ref":"generated"})
+    );
+    assert_eq!(row["argv"][2], serde_json::json!({"ref":"generated"}));
+}
+
+#[cfg(unix)]
+#[test]
+fn sensitive_explain_creates_a_private_review_key() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = write_manifests(directory.path());
+    let source =
+        "accept token as text from secret prompt \"Token?\"\nrun plain.helper with text token\n";
+    std::fs::write(directory.path().join("plan.program"), source).unwrap();
+    let state = directory.path().join("state");
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args([
+            "explain",
+            "plan.program",
+            "--json",
+            "--input",
+            "token=private-canary-462",
+            "--manifest-dir",
+        ])
+        .arg(manifests)
+        .current_dir(directory.path())
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let key = state.join("execute/what-if.key");
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::fs::metadata(key).unwrap().permissions().mode() & 0o077,
+        0
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-canary-462"));
+}
+
+#[test]
+fn literal_record_keys_cannot_be_confused_with_markers() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = "run nested.helper with data {\"ref\": \"ordinary\", \"sensitive\": true, \"record\": {\"ref\": \"inner\"}}\n";
+    let object = plan(&explain(directory.path(), source, &["--json"]));
+    let row = &object["steps"][0];
+    assert_eq!(
+        row["parameters"]["data"],
+        serde_json::json!({"record":{"ref":"ordinary","sensitive":true,"record":{"record":{"ref":"inner"}}}})
+    );
+    let actual: Value = serde_json::from_str(
+        row["argv"][0]
+            .as_str()
+            .expect("fully resolved native JSON argument"),
+    )
+    .unwrap();
+    assert_eq!(
+        actual,
+        serde_json::json!({"ref":"ordinary","sensitive":true,"record":{"ref":"inner"}})
+    );
+}
+
+#[test]
+fn optional_arguments_are_emitted_only_when_present_even_with_unresolved_values() {
+    let directory = tempfile::tempdir().unwrap();
+    let absent = plan(&explain(
+        directory.path(),
+        "run plain.helper\n",
+        &["--json"],
+    ));
+    assert_eq!(absent["steps"][0]["argv"], serde_json::json!(["--version"]));
+    assert_eq!(absent["steps"][0]["parameters"], serde_json::json!({}));
+    let unresolved = plan(&explain(
+        directory.path(),
+        "accept name as text\nrun plain.helper with text name\n",
+        &["--json"],
+    ));
+    assert_eq!(
+        unresolved["steps"][0]["argv"],
+        serde_json::json!(["--version", "--text", {"ref":"name"}])
+    );
+    let literal = plan(&explain(
+        directory.path(),
+        "run plain.helper with text \"x\"\n",
+        &["--json"],
+    ));
+    assert_eq!(
+        literal["steps"][0]["argv"],
+        serde_json::json!(["--version", "--text", "x"])
+    );
+}
+
+#[test]
+fn resolved_json_input_with_marker_keys_is_a_literal_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = explain(
+        directory.path(),
+        "accept payload as json\nrun nested.helper with data payload\n",
+        &[
+            "--json",
+            "--input",
+            "payload={\"ref\":\"x\",\"sensitive\":true}",
+        ],
+    );
+    let object = plan(&output);
+    let row = &object["steps"][0];
+    assert_eq!(
+        row["parameters"]["data"],
+        serde_json::json!({"record":{"ref":"x","sensitive":true}})
+    );
+    let native: Value = serde_json::from_str(row["argv"][0].as_str().unwrap()).unwrap();
+    assert_eq!(native, serde_json::json!({"ref":"x","sensitive":true}));
 }

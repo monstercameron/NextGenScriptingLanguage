@@ -34,12 +34,66 @@ fn matches_type(instance: &Value, kind: &str) -> bool {
 
 /// Collect every violation, so a failure names all of them at once.
 fn violations(schema: &Value, instance: &Value, path: &str, errors: &mut Vec<String>) {
+    violations_inner(schema, schema, instance, path, errors);
+}
+
+fn violations_inner(
+    root: &Value,
+    schema: &Value,
+    instance: &Value,
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        let target = root
+            .pointer(reference.strip_prefix('#').expect("local schema reference"))
+            .expect("valid schema reference");
+        violations_inner(root, target, instance, path, errors);
+    }
+    if let Some(branches) = schema.get("allOf").and_then(Value::as_array) {
+        for branch in branches {
+            violations_inner(root, branch, instance, path, errors);
+        }
+    }
+    if let Some(condition) = schema.get("if") {
+        let mut conditional_errors = Vec::new();
+        violations_inner(root, condition, instance, path, &mut conditional_errors);
+        if conditional_errors.is_empty() {
+            if let Some(then) = schema.get("then") {
+                violations_inner(root, then, instance, path, errors);
+            }
+        } else if let Some(otherwise) = schema.get("else") {
+            violations_inner(root, otherwise, instance, path, errors);
+        }
+    }
+    if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
+        if !branches.iter().any(|branch| {
+            let mut e = Vec::new();
+            violations_inner(root, branch, instance, path, &mut e);
+            e.is_empty()
+        }) {
+            errors.push(format!("{path}: no anyOf branch matches"));
+        }
+    }
+    if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
+        if pattern == "^[0-9a-f]{64}$"
+            && instance.as_str().is_some_and(|s| {
+                s.len() != 64
+                    || !s
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+        {
+            errors.push(format!("{path}: invalid HMAC"));
+        }
+    }
+
     if let Some(branches) = schema.get("oneOf").and_then(Value::as_array) {
         let matching = branches
             .iter()
             .filter(|branch| {
                 let mut branch_errors = Vec::new();
-                violations(branch, instance, path, &mut branch_errors);
+                violations_inner(root, branch, instance, path, &mut branch_errors);
                 branch_errors.is_empty()
             })
             .count();
@@ -104,16 +158,24 @@ fn violations(schema: &Value, instance: &Value, path: &str, errors: &mut Vec<Str
             let closed = schema.get("additionalProperties") == Some(&Value::Bool(false));
             for (key, value) in map {
                 match properties.and_then(|known| known.get(key)) {
-                    Some(sub) => violations(sub, value, &format!("{path}/{key}"), errors),
+                    Some(sub) => {
+                        violations_inner(root, sub, value, &format!("{path}/{key}"), errors)
+                    }
                     None if closed => errors.push(format!("{path}: unexpected property {key}")),
-                    None => {}
+                    None => {
+                        if let Some(sub) =
+                            schema.get("additionalProperties").filter(|s| s.is_object())
+                        {
+                            violations_inner(root, sub, value, &format!("{path}/{key}"), errors);
+                        }
+                    }
                 }
             }
         }
         Value::Array(items) => {
             if let Some(item_schema) = schema.get("items") {
                 for (index, item) in items.iter().enumerate() {
-                    violations(item_schema, item, &format!("{path}/{index}"), errors);
+                    violations_inner(root, item_schema, item, &format!("{path}/{index}"), errors);
                 }
             }
         }
@@ -275,7 +337,7 @@ run program inner\n";
         String::from_utf8_lossy(&output.stderr)
     );
     let object: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_conforms("docs/schemas/explain.v1.schema.json", &object);
+    assert_conforms("docs/schemas/explain.v2.schema.json", &object);
 
     for (field, value) in [
         ("program_stdout", json!(true)),
@@ -284,24 +346,49 @@ run program inner\n";
     ] {
         let mut damaged = object.clone();
         damaged["steps"][0][field] = value;
-        assert_rejects("docs/schemas/explain.v1.schema.json", &damaged);
+        assert_rejects("docs/schemas/explain.v2.schema.json", &damaged);
     }
+    let invoke_index = object["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|row| row["kind"] == "invoke")
+        .unwrap();
+    let mut templates = object.clone();
+    templates["steps"][invoke_index]["argv"] = json!([
+        {"ref":"later"},
+        {"sensitive":true,"hmac_sha256":"a".repeat(64)},
+        {"json_parameter":{"record":{"items":[{"ref":"later"}]}}},
+        {"json_arguments":{"text":{"ref":"later"}}},
+        {"prefix":"--file=","value":{"ref":"later"}},
+        {"unresolved_applet":"missing","parameters":{"text":{"ref":"later"}}}
+    ]);
+    assert_conforms("docs/schemas/explain.v2.schema.json", &templates);
+    let mut bad_marker = templates.clone();
+    bad_marker["steps"][invoke_index]["argv"][1]["hmac_sha256"] = json!("bad");
+    assert_rejects("docs/schemas/explain.v2.schema.json", &bad_marker);
+    let mut null_argv = object.clone();
+    null_argv["steps"][invoke_index]["argv"] = Value::Null;
+    assert_rejects("docs/schemas/explain.v2.schema.json", &null_argv);
+    let mut malformed_argv = object.clone();
+    malformed_argv["steps"][invoke_index]["argv"] = json!([{"ref": 7}]);
+    assert_rejects("docs/schemas/explain.v2.schema.json", &malformed_argv);
     let mut damaged = object.clone();
     damaged["execution_mode"] = json!("unchecked");
-    assert_rejects("docs/schemas/explain.v1.schema.json", &damaged);
+    assert_rejects("docs/schemas/explain.v2.schema.json", &damaged);
 
     let mut without_undeclared = object.clone();
     without_undeclared["steps"][0]
         .as_object_mut()
         .unwrap()
         .remove("undeclared");
-    assert_rejects("docs/schemas/explain.v1.schema.json", &without_undeclared);
+    assert_rejects("docs/schemas/explain.v2.schema.json", &without_undeclared);
     let mut unknown_effect_type = object.clone();
     unknown_effect_type["summary"]["effects_declared"] = json!("yes");
-    assert_rejects("docs/schemas/explain.v1.schema.json", &unknown_effect_type);
+    assert_rejects("docs/schemas/explain.v2.schema.json", &unknown_effect_type);
     let mut extra_summary = object;
     extra_summary["summary"]["surprise"] = json!(1);
-    assert_rejects("docs/schemas/explain.v1.schema.json", &extra_summary);
+    assert_rejects("docs/schemas/explain.v2.schema.json", &extra_summary);
 }
 
 #[test]
@@ -311,4 +398,104 @@ fn published_check_schema_accepts_real_check_output() {
     let output = run_execute(directory.path(), &["check", "ok.program", "--json"]);
     let object: Value = serde_json::from_slice(&output.stdout).expect("check --json object");
     assert_conforms("docs/check-result.schema.json", &object);
+}
+
+#[test]
+fn every_explainable_example_matches_the_published_schema() {
+    fn visit(dir: &Path, files: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(&path, files);
+            } else if path.extension().is_some_and(|ext| ext == "program") {
+                files.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    visit(&project().join("examples"), &mut files);
+    files.sort();
+    let schema = load_schema("docs/schemas/explain.v2.schema.json");
+    let mut explained = 0;
+    let mut skipped = Vec::new();
+    for path in files {
+        let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+            .arg("explain")
+            .arg(&path)
+            .arg("--json")
+            .arg("--manifest-dir")
+            .arg(project().join("manifests"))
+            .current_dir(project())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr);
+            // Screen, graph and stream programs have a separate CLI surface.
+            // This module caller also requires a separately installed manifest.
+            let unsupported_kind = error.contains("explain --json applies only to finite programs");
+            let external_module = path.ends_with("examples/modules/caller.program")
+                && error.contains("unknown applet \"examples.records.report\"");
+            assert!(
+                unsupported_kind || external_module,
+                "{} failed to explain: {error}",
+                path.display()
+            );
+            skipped.push(path);
+            continue;
+        }
+        let value: Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let mut errors = Vec::new();
+        violations(&schema, &value, "", &mut errors);
+        assert!(errors.is_empty(), "{}: {errors:#?}", path.display());
+        explained += 1;
+    }
+    assert!(
+        explained >= 100,
+        "only {explained} examples explained; {} could not be explained",
+        skipped.len()
+    );
+    eprintln!(
+        "validated {explained} explain plans; {} examples produced no plan",
+        skipped.len()
+    );
+}
+
+#[test]
+fn legacy_v1_consumer_accepts_opt_in_explain_output() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("plan.program"),
+        "accept name as text\nrun \"printf\" with arguments [name]\nrun plain.helper with text name\nrun plain.helper with text \"literal\"\n").unwrap();
+    let output = run_execute(
+        directory.path(),
+        &[
+            "explain",
+            "plan.program",
+            "--json",
+            "--explain-version",
+            "1",
+            "--input",
+            "name=alice",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let plan: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(plan["protocol"], "execute.explain/1");
+    assert!(plan["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|step| step.get("parameters").is_none()));
+    assert!(plan["steps"][0]["argv"].is_null());
+    assert!(plan["steps"][1]["argv"].is_null());
+    assert_eq!(
+        plan["steps"][2]["argv"],
+        json!(["--version", "--text", "literal"])
+    );
+    assert_conforms("docs/schemas/explain.v1.schema.json", &plan);
 }

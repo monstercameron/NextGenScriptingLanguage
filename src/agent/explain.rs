@@ -34,7 +34,8 @@ use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Protocol identifier of the `--json` object.
-pub const PROTOCOL: &str = "execute.explain/1";
+pub const PROTOCOL: &str = "execute.explain/2";
+pub const LEGACY_PROTOCOL: &str = "execute.explain/1";
 
 /// Environment names known to be inert: they change locale, time zone, or
 /// terminal presentation, not what program runs or what it loads. Anything not
@@ -77,7 +78,9 @@ struct Row {
     builtin: Option<bool>,
     process: Option<bool>,
     resolved_path: Option<String>,
-    argv: Option<Vec<String>>,
+    argv: Option<Vec<Json>>,
+    legacy_argv: Option<Vec<String>>,
+    parameters: Option<Json>,
     effects: Option<Vec<String>>,
     capabilities: Option<Vec<String>>,
     writes: Option<bool>,
@@ -112,8 +115,8 @@ impl Row {
         }
     }
 
-    fn to_json(&self) -> Json {
-        json!({
+    fn to_json(&self, legacy: bool) -> Json {
+        let mut row = json!({
             "id": self.id,
             "line": self.line,
             "kind": self.kind,
@@ -125,6 +128,7 @@ impl Row {
             "process": self.process,
             "resolved_path": self.resolved_path,
             "argv": self.argv,
+            "parameters": self.parameters,
             "effects": self.effects,
             "capabilities": self.capabilities,
             "writes": self.writes,
@@ -143,7 +147,12 @@ impl Row {
             "retry": self.retry,
             "program_stdout": self.program_stdout.unwrap_or("none"),
             "binding": self.binding,
-        })
+        });
+        if legacy {
+            row["argv"] = json!(self.legacy_argv);
+            row.as_object_mut().unwrap().remove("parameters");
+        }
+        row
     }
 }
 
@@ -172,8 +181,66 @@ fn flag_entry(input: &InputDeclaration) -> Option<Json> {
 /// Build the explain object for a parsed program. `program_path` is shown as
 /// given. The caller validates the program first.
 pub fn explain_json(program: &Program, registry: &Registry, program_path: &str) -> Result<Json> {
+    explain_json_with_inputs(program, registry, program_path, &BTreeMap::new())
+}
+
+/// Describe supplied inputs while keeping sensitive values keyed and private.
+pub fn explain_json_with_inputs(
+    program: &Program,
+    registry: &Registry,
+    program_path: &str,
+    inputs: &BTreeMap<String, Value>,
+) -> Result<Json> {
+    explain_json_version(program, registry, program_path, inputs, false)
+}
+
+/// Original v1 shape, including its intentionally incomplete argv.
+pub fn explain_json_v1(program: &Program, registry: &Registry, program_path: &str) -> Result<Json> {
+    explain_json_version(program, registry, program_path, &BTreeMap::new(), true)
+}
+
+fn explain_json_version(
+    program: &Program,
+    registry: &Registry,
+    program_path: &str,
+    inputs: &BTreeMap<String, Value>,
+    legacy: bool,
+) -> Result<Json> {
+    let mut known = BTreeMap::new();
+    let mut known_literals = BTreeMap::new();
+    for declaration in program.inputs.iter().filter(|_| !legacy) {
+        let resolved = crate::inputs::resolve(
+            std::slice::from_ref(declaration),
+            &inputs
+                .iter()
+                .filter(|(name, _)| *name == &declaration.name)
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+            false,
+        )
+        .ok();
+        let value = resolved
+            .as_ref()
+            .and_then(|values| values.get(&declaration.name));
+        if let Some(value) = value {
+            let shown = if crate::ast::is_sensitive(declaration) {
+                let key = crate::agent::what_if_key::load_or_create()?;
+                let mut message = declaration.name.as_bytes().to_vec();
+                message.push(0);
+                message.extend(serde_json::to_vec(&crate::inputs::literal_json(value)?)?);
+                let digest = crate::agent::what_if_key::hmac_sha256(&key, &message);
+                json!({"sensitive": true, "hmac_sha256": digest.iter().map(|b| format!("{b:02x}")).collect::<String>()})
+            } else {
+                known_literals.insert(declaration.name.clone(), value.clone());
+                encode_literal(crate::inputs::literal_json(value)?)
+            };
+            known.insert(declaration.name.clone(), shown);
+        }
+    }
     let mut walker = Walker {
         registry,
+        known,
+        known_literals,
         definitions: &program.definitions,
         rows: Vec::new(),
         stack: Vec::new(),
@@ -195,7 +262,7 @@ pub fn explain_json(program: &Program, registry: &Registry, program_path: &str) 
         walker.invocation(*line, "listen_source", call, None, true);
     }
     walker.steps(&program.steps, None);
-    let mut plan = summary_object(program_path, &walker.rows);
+    let mut plan = summary_object(program_path, &walker.rows, legacy);
     plan["inputs"] = program.inputs.iter().map(input_summary).collect();
     plan["flags"] = program.inputs.iter().filter_map(flag_entry).collect();
     Ok(plan)
@@ -220,6 +287,8 @@ fn input_summary(input: &crate::ast::InputDeclaration) -> Json {
 }
 
 struct Walker<'a> {
+    known: BTreeMap<String, Json>,
+    known_literals: BTreeMap<String, Value>,
     registry: &'a Registry,
     definitions: &'a BTreeMap<String, ReusableProgram>,
     rows: Vec<Row>,
@@ -276,6 +345,36 @@ impl Walker<'_> {
                     self.step(step.line, &step.kind, scope);
                     index += 1;
                 }
+            }
+            // Any runtime binding may shadow an input. Stop substituting inputs
+            // after such a step rather than claiming a stale value in the plan.
+            let may_bind = match &step.kind {
+                StepKind::BindValue { .. }
+                | StepKind::CaptureBytes { .. }
+                | StepKind::Read { .. }
+                | StepKind::ReadStdin { .. }
+                | StepKind::ReadCallInput { .. }
+                | StepKind::ParseJson { .. }
+                | StepKind::TakeJson { .. }
+                | StepKind::TakeJsonDynamic { .. }
+                | StepKind::TempScope { .. }
+                | StepKind::Catch { .. }
+                | StepKind::TaskGroup { .. }
+                | StepKind::SpawnJob { .. }
+                | StepKind::InspectJob { .. }
+                | StepKind::AwaitJob { .. }
+                | StepKind::Loop { .. }
+                | StepKind::CallProgram { .. } => true,
+                StepKind::Invoke { call, .. } | StepKind::IfCommand { call, .. } => {
+                    call.binding.is_some()
+                        || call.status_binding.is_some()
+                        || call.result_binding.is_some()
+                }
+                _ => false,
+            };
+            if may_bind {
+                self.known.clear();
+                self.known_literals.clear();
             }
             // Rows from a nested body already carry their own ids; this step's rows take its id.
             for row in &mut self.rows[before..] {
@@ -571,7 +670,30 @@ impl Walker<'_> {
                 "idempotent": idempotent,
             })
         });
+        let empty = BTreeMap::new();
+        let empty_literals = BTreeMap::new();
+        let known = if scope.is_none() { &self.known } else { &empty };
+        let parameters: BTreeMap<String, Json> = call
+            .parameters
+            .iter()
+            .map(|(name, value)| (name.clone(), display_value(value, known)))
+            .collect();
+        row.argv = Some(Vec::new());
+        if !call.direct {
+            row.parameters = Some(json!(parameters));
+        }
         if call.direct {
+            row.argv = Some(match parameters.get("arguments") {
+                Some(Json::Array(items)) => items
+                    .iter()
+                    .map(|item| match item {
+                        Json::Bool(_) | Json::Number(_) => Json::String(item.to_string()),
+                        _ => item.clone(),
+                    })
+                    .collect(),
+                Some(value) => vec![value.clone()],
+                None => vec![],
+            });
             // A quoted executable bypasses the catalog, so its effects are unknown.
             row.binary = Some(call.operation.clone());
             row.process = Some(true);
@@ -586,11 +708,19 @@ impl Walker<'_> {
             return;
         }
         let Ok(manifest) = self.registry.resolve_call(call) else {
+            row.argv = Some(vec![
+                json!({"unresolved_applet": call.operation, "parameters": parameters}),
+            ]);
             row.applet = Some(call.operation.clone());
             row.resolved = Some(false);
             row.undeclared = true;
             self.rows.push(row);
             return;
+        };
+        row.legacy_argv = if call.parameters.values().any(has_reference) {
+            None
+        } else {
+            manifest.build_arguments(&call.parameters).ok()
         };
         row.resolved = Some(true);
         row.applet = Some(manifest.name_for(call).to_owned());
@@ -605,11 +735,24 @@ impl Walker<'_> {
                         | crate::contracts::AppletBackend::Remote
                 ),
         );
-        row.argv = if call.parameters.values().any(has_reference) {
-            None
+        // When every parameter is known and public, use the same manifest
+        // renderer as execution (including path expansion and JSON arguments).
+        let literals = if scope.is_none() {
+            &self.known_literals
         } else {
-            manifest.build_arguments(&call.parameters).ok()
+            &empty_literals
         };
+        let resolved: Option<BTreeMap<String, Value>> = call
+            .parameters
+            .iter()
+            .map(|(name, value)| resolve_static(value, literals).map(|value| (name.clone(), value)))
+            .collect();
+        let rendered = resolved.and_then(|values| manifest.build_arguments(&values).ok());
+        row.argv = Some(
+            rendered
+                .map(|args| args.into_iter().map(Json::String).collect())
+                .unwrap_or_else(|| manifest.explain_arguments(&parameters)),
+        );
         // The builtin `cd` changes the working directory for later steps.
         // Detect the builtin the way the runtime does: by its manifest field, not
         // by name. A destination that is not a literal leaves the folder unknown.
@@ -738,6 +881,53 @@ impl Walker<'_> {
     }
 }
 
+// Keep literal records structurally distinct from references and secret markers.
+fn encode_literal(value: Json) -> Json {
+    match value {
+        Json::Array(items) => Json::Array(items.into_iter().map(encode_literal).collect()),
+        Json::Object(fields) => {
+            json!({"record": fields.into_iter().map(|(key, value)| (key, encode_literal(value))).collect::<serde_json::Map<String, Json>>() })
+        }
+        scalar => scalar,
+    }
+}
+
+fn resolve_static(value: &Value, known: &BTreeMap<String, Value>) -> Option<Value> {
+    match value {
+        Value::Reference(name) => known.get(name).cloned(),
+        Value::List(items) => items
+            .iter()
+            .map(|v| resolve_static(v, known))
+            .collect::<Option<Vec<_>>>()
+            .map(Value::List),
+        Value::Record(fields) => fields
+            .iter()
+            .map(|(k, v)| resolve_static(v, known).map(|v| (k.clone(), v)))
+            .collect::<Option<BTreeMap<_, _>>>()
+            .map(Value::Record),
+        literal => Some(literal.clone()),
+    }
+}
+
+fn display_value(value: &Value, known: &BTreeMap<String, Json>) -> Json {
+    match value {
+        Value::Reference(name) => known
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| json!({"ref": name})),
+        Value::List(items) => Json::Array(
+            items
+                .iter()
+                .map(|item| display_value(item, known))
+                .collect(),
+        ),
+        Value::Record(fields) => {
+            json!({"record": fields.iter().map(|(name, value)| (name.clone(), display_value(value, known))).collect::<serde_json::Map<String, Json>>() })
+        }
+        _ => crate::inputs::literal_json(value).unwrap_or(Json::Null),
+    }
+}
+
 /// True for an environment name that can change which program runs or loads.
 fn is_sensitive_name(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
@@ -817,7 +1007,7 @@ fn row_privileged(row: &Row) -> bool {
     row.invocation && row.binary.as_deref().is_none_or(is_privileged_invocation)
 }
 
-fn summary_object(program_path: &str, rows: &[Row]) -> Json {
+fn summary_object(program_path: &str, rows: &[Row], legacy: bool) -> Json {
     let mut executables = BTreeSet::new();
     let mut write_effects = BTreeSet::new();
     let mut write_paths = Vec::new();
@@ -879,9 +1069,9 @@ fn summary_object(program_path: &str, rows: &[Row]) -> Json {
             }
         }
     }
-    let steps: Vec<Json> = rows.iter().map(Row::to_json).collect();
+    let steps: Vec<Json> = rows.iter().map(|row| row.to_json(legacy)).collect();
     json!({
-        "protocol": PROTOCOL,
+        "protocol": if legacy { LEGACY_PROTOCOL } else { PROTOCOL },
         "language_version": crate::parser::LANGUAGE_VERSION,
         "program": program_path,
         "steps": steps,

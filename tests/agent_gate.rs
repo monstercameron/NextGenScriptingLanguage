@@ -215,7 +215,7 @@ fn a_plain_explain_without_allow_stays_advisory_and_exits_zero() {
     let output = gate(directory.path(), "run plain.helper\n", &["--json"]);
     assert_eq!(output.status.code(), Some(0));
     let object: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(object["protocol"], "execute.explain/1");
+    assert_eq!(object["protocol"], "execute.explain/2");
 }
 
 fn violation_categories(object: &Value) -> Vec<String> {

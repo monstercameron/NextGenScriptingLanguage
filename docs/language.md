@@ -1473,8 +1473,8 @@ effect. The header grants nothing at run time: enforcement stays with the capabi
 policy.
 
 **What-if and confirm.** `execute run FILE --what-if` prints the plan the run would
-execute, as the explain JSON, with its fingerprint (`execute.what_if/1`) and the
-settings the fingerprint covers. It runs nothing and writes nothing. `execute run FILE
+execute, as the explain JSON, with its fingerprint (`execute.what_if/2`) and the
+settings the fingerprint covers. It runs no program; when sensitive inputs are present it may create the private review key described below. `execute run FILE
 --confirm FINGERPRINT` runs only when the current fingerprint equals the one given.
 Otherwise it stops before any effect with `plan changed since --what-if`. The
 fingerprint is a SHA-256 over the explain plan and these settings: the resolved input
@@ -1898,3 +1898,7 @@ process supervision, not a sandbox: a command that escapes its group with `setsi
 can retain descriptors or survive, and arbitrary applets have the user's host
 permissions. Only execute trusted scripts and manifests.
 
+
+The default machine-readable `explain --json` emits `execute.explain/2`; `run --what-if` emits `execute.what_if/2` with that plan. The v2 schema is `docs/schemas/explain.v2.schema.json`. Consumers of the original closed `execute.explain/1` schema can select `--explain-version 1` with `explain --json` or `run --what-if`. Legacy plans omit direct argv and unresolved arguments, so migrate reviewers to v2 to inspect them. A legacy what-if emits `execute.what_if/1`; pass the same `--explain-version 1` to `run --confirm`, since protocol versions produce different fingerprints.
+
+Version 2 `explain --json` and `run --what-if` include an `argv` array for each invocation and a `parameters` object for named applets. Values known from inputs are shown; unresolved runtime bindings appear as `{"ref":"name"}`. Sensitive environment and secret-prompt inputs are represented by a keyed HMAC marker. The first such `explain --json` or what-if review creates a private per-user what-if key if one does not already exist (`$XDG_STATE_HOME/execute/what-if.key`, or `~/.local/state/execute/what-if.key` on Unix; `%LOCALAPPDATA%/execute/what-if.key` on Windows). Literal JSON records in parameters and structured templates are encoded as `{"record":{...}}` recursively, so a literal field named `ref` or `sensitive` cannot be mistaken for a marker. Some manifest argument forms use structured template entries when their final native argument cannot yet be rendered. The plan is static: bindings produced during execution and called-program inputs may remain unresolved.

@@ -261,7 +261,7 @@ or a bounded model decision.
 
 [`examples/demo/theme-refresh.program`](examples/demo/theme-refresh.program) renders
 theme templates, swaps the current-theme link and reloads the compositor. The header
-declares the effects it may have; `explain --json` shows every step before it runs.
+declares the effects it may have; `explain --json` shows every step before it runs. Its default `execute.explain/2` output includes argument templates; existing v1 consumers can use `--explain-version 1`. What-if reviews use v2 by default; select the same version when confirming.
 
 ```
 # execute-policy: allow writes process undeclared

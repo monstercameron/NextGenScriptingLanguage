@@ -53,8 +53,8 @@ fn what_if_prints_the_plan_and_a_fingerprint_and_runs_nothing() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("tool.program"), SOURCE).unwrap();
     let report = what_if(directory.path());
-    assert_eq!(report["protocol"], "execute.what_if/1");
-    assert_eq!(report["plan"]["protocol"], "execute.explain/1");
+    assert_eq!(report["protocol"], "execute.what_if/2");
+    assert_eq!(report["plan"]["protocol"], "execute.explain/2");
     let fp = fingerprint(&report);
     assert_eq!(fp.len(), 64, "a SHA-256 hex digest");
     assert!(fp.bytes().all(|byte| byte.is_ascii_hexdigit()));
@@ -136,4 +136,83 @@ fn what_if_and_confirm_are_accepted_only_for_run() {
         assert!(!output.status.success(), "{arguments:?} must be rejected");
         assert!(output.stdout.is_empty(), "{arguments:?} printed output");
     }
+}
+
+#[test]
+fn direct_arguments_are_reviewed_and_change_fingerprint() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("tool.program");
+    std::fs::write(&path, "run \"rm\" with arguments [\"-f\", \"a.txt\"]\n").unwrap();
+    let first = what_if(directory.path());
+    std::fs::write(&path, "run \"rm\" with arguments [\"-rf\", \"/home\"]\n").unwrap();
+    let second = what_if(directory.path());
+    assert_eq!(
+        first["plan"]["steps"][0]["argv"],
+        serde_json::json!(["-f", "a.txt"])
+    );
+    assert_eq!(
+        second["plan"]["steps"][0]["argv"],
+        serde_json::json!(["-rf", "/home"])
+    );
+    assert_ne!(fingerprint(&first), fingerprint(&second));
+}
+
+#[test]
+fn sensitive_nested_argument_matches_the_review_settings_marker() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("tool.program"),
+        "accept token as text from secret prompt \"Token?\"\nrun \"printf\" with arguments [\"%s\", token]\n").unwrap();
+    let output = execute(
+        directory.path(),
+        &[
+            "tool.program",
+            "--what-if",
+            "--input",
+            "token=private-canary-462",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-canary-462"));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["plan"]["steps"][0]["argv"][1],
+        report["settings"]["inputs"][0]["value"]
+    );
+    assert_eq!(report["plan"]["steps"][0]["argv"][1]["sensitive"], true);
+}
+
+#[test]
+fn review_versions_have_distinct_fingerprints_and_confirmation_requires_same_version() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("tool.program"), SOURCE).unwrap();
+    let v2 = what_if(directory.path());
+    let output = execute(
+        directory.path(),
+        &["tool.program", "--what-if", "--explain-version", "1"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let v1: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(v1["protocol"], "execute.what_if/1");
+    assert_eq!(v1["plan"]["protocol"], "execute.explain/1");
+    assert_ne!(fingerprint(&v1), fingerprint(&v2));
+    let fp = fingerprint(&v1);
+    let wrong_version = execute(directory.path(), &["tool.program", "--confirm", &fp]);
+    assert!(!wrong_version.status.success());
+    let same_version = execute(
+        directory.path(),
+        &["tool.program", "--confirm", &fp, "--explain-version", "1"],
+    );
+    assert!(
+        same_version.status.success(),
+        "{}",
+        String::from_utf8_lossy(&same_version.stderr)
+    );
 }

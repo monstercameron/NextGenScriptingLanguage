@@ -1,0 +1,645 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://execute.invalid/schemas/explain.v2.schema.json",
+  "title": "Execute explain plan, protocol execute.explain/2",
+  "description": "Output of `execute explain FILE --json`. Nothing is executed. A null effects or undeclared:true row cannot be treated as harmless; summary.effects_declared is true only when no row is undeclared. Paths, escapes_cwd, and folder tracking are advisory static analysis, not containment guarantees; enforcement is the capability policy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol",
+    "program",
+    "steps",
+    "summary"
+  ],
+  "properties": {
+    "protocol": {
+      "const": "execute.explain/2"
+    },
+    "language_version": {
+      "const": 1
+    },
+    "program": {
+      "type": "string"
+    },
+    "execution_mode": {
+      "enum": [
+        "trusted",
+        "untrusted"
+      ]
+    },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "name",
+          "alias",
+          "input",
+          "type",
+          "default",
+          "description"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "flag",
+              "option"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "alias": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "input": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "default": {},
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "type",
+          "required",
+          "line"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "prompt": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "question",
+              "secret"
+            ],
+            "properties": {
+              "question": {
+                "type": "string"
+              },
+              "secret": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "line",
+          "kind",
+          "scope",
+          "direct",
+          "applet",
+          "binary",
+          "builtin",
+          "process",
+          "resolved_path",
+          "argv",
+          "parameters",
+          "effects",
+          "capabilities",
+          "writes",
+          "network",
+          "reads",
+          "cwd_change",
+          "modifies_next_invocation",
+          "environment_sensitive",
+          "environment_tainted",
+          "path",
+          "path_is_runtime",
+          "escapes_cwd",
+          "resolved",
+          "undeclared",
+          "privileged",
+          "retry",
+          "binding",
+          "program_stdout"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "invoke",
+                    "if_command",
+                    "while_command",
+                    "task_group",
+                    "spawn_job",
+                    "listen_source"
+                  ]
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            "then": {
+              "properties": {
+                "argv": {
+                  "type": "array"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "argv": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "kind": {
+            "type": "string"
+          },
+          "binding": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "program_stdout": {
+            "enum": [
+              "none",
+              "stream",
+              "unbound_final_value"
+            ]
+          },
+          "enforcement": {
+            "enum": [
+              "refused",
+              "os_sandbox_required",
+              "declared_only",
+              "host_managed"
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "direct": {
+            "type": "boolean"
+          },
+          "applet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "binary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "builtin": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "process": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "resolved_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "argv": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/argv_item"
+            }
+          },
+          "parameters": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/$defs/parameters"
+              }
+            ]
+          },
+          "effects": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "capabilities": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "writes": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "network": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "reads": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "cwd_change": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "modifies_next_invocation": {
+            "type": "boolean"
+          },
+          "environment_sensitive": {
+            "type": "boolean"
+          },
+          "environment_tainted": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path_is_runtime": {
+            "type": "boolean"
+          },
+          "escapes_cwd": {
+            "type": "boolean"
+          },
+          "resolved": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "undeclared": {
+            "type": "boolean"
+          },
+          "privileged": {
+            "type": "boolean"
+          },
+          "retry": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "attempts",
+              "backoff_ms",
+              "doubling",
+              "even_if_uncertain",
+              "idempotent"
+            ],
+            "properties": {
+              "attempts": {
+                "type": "integer",
+                "minimum": 2
+              },
+              "backoff_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "doubling": {
+                "type": "boolean"
+              },
+              "even_if_uncertain": {
+                "type": "boolean"
+              },
+              "idempotent": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "invocations",
+        "executables",
+        "writes",
+        "write_effects",
+        "write_paths",
+        "runtime_write_paths",
+        "escaping_write_paths",
+        "network",
+        "reads",
+        "cwd_changes",
+        "modifies_next_invocation",
+        "environment_tainted_invocations",
+        "undeclared_invocations",
+        "effects_declared",
+        "privileged",
+        "privileged_invocations"
+      ],
+      "properties": {
+        "invocations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "executables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "writes": {
+          "type": "boolean"
+        },
+        "write_effects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "write_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runtime_write_paths": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "escaping_write_paths": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "network": {
+          "type": "boolean"
+        },
+        "reads": {
+          "type": "boolean"
+        },
+        "cwd_changes": {
+          "type": "boolean"
+        },
+        "modifies_next_invocation": {
+          "type": "boolean"
+        },
+        "environment_tainted_invocations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "undeclared_invocations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "effects_declared": {
+          "type": "boolean"
+        },
+        "privileged": {
+          "type": "boolean"
+        },
+        "privileged_invocations": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "$defs": {
+    "value": {
+      "anyOf": [
+        {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/value"
+          }
+        },
+        {
+          "$ref": "#/$defs/ref"
+        },
+        {
+          "$ref": "#/$defs/sensitive"
+        },
+        {
+          "$ref": "#/$defs/record"
+        }
+      ]
+    },
+    "ref": {
+      "type": "object",
+      "required": [
+        "ref"
+      ],
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sensitive": {
+      "type": "object",
+      "required": [
+        "sensitive",
+        "hmac_sha256"
+      ],
+      "properties": {
+        "sensitive": {
+          "const": true
+        },
+        "hmac_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/value"
+      }
+    },
+    "argv_item": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ref"
+        },
+        {
+          "$ref": "#/$defs/sensitive"
+        },
+        {
+          "type": "object",
+          "required": [
+            "json_parameter"
+          ],
+          "properties": {
+            "json_parameter": {
+              "$ref": "#/$defs/value"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "json_arguments"
+          ],
+          "properties": {
+            "json_arguments": {
+              "$ref": "#/$defs/parameters"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "prefix",
+            "value"
+          ],
+          "properties": {
+            "prefix": {
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/value"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "unresolved_applet",
+            "parameters"
+          ],
+          "properties": {
+            "unresolved_applet": {
+              "type": "string"
+            },
+            "parameters": {
+              "$ref": "#/$defs/parameters"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "record": {
+      "type": "object",
+      "required": [
+        "record"
+      ],
+      "properties": {
+        "record": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/value"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

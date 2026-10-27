@@ -13,6 +13,7 @@ pub(crate) struct Args {
     /// leading `--help` is data for the program rather than a help request.
     pub(crate) program_arguments_literal: bool,
     pub(crate) json: bool,
+    pub(crate) explain_version: Option<u8>,
     /// Categories approved with `explain --json --allow`. Empty means no gate.
     pub(crate) allow: Vec<String>,
     /// `run --what-if`: print the plan and its fingerprint, and run nothing.

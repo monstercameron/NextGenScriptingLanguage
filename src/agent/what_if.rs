@@ -21,7 +21,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Protocol identifier of the `--what-if` object.
-pub const PROTOCOL: &str = "execute.what_if/1";
+pub const PROTOCOL: &str = "execute.what_if/2";
 
 /// What a review covers besides the explain plan: the settings the run would use.
 pub struct RunSettings<'a> {
@@ -298,7 +298,7 @@ pub fn fingerprint(plan: &Value, context: &RunSettings<'_>) -> Result<(String, V
 /// settings it covers.
 pub fn report(program_path: &str, fingerprint: &str, plan: Value, settings: Value) -> Value {
     json!({
-        "protocol": PROTOCOL,
+        "protocol": if plan["protocol"] == crate::agent::explain::LEGACY_PROTOCOL { "execute.what_if/1" } else { PROTOCOL },
         "program": program_path,
         "fingerprint": fingerprint,
         "plan": plan,

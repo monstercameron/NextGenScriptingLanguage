@@ -1332,6 +1332,69 @@ impl Manifest {
     }
 
     /// Validate resolved values and produce the exact argv vector for the child.
+    /// Render the native argument template without resolving runtime bindings.
+    pub fn explain_arguments(
+        &self,
+        values: &BTreeMap<String, serde_json::Value>,
+    ) -> Vec<serde_json::Value> {
+        fn render(
+            nodes: &[ArgumentNode],
+            values: &BTreeMap<String, serde_json::Value>,
+            out: &mut Vec<serde_json::Value>,
+        ) {
+            use serde_json::{json, Value as J};
+            fn scalar(value: &J) -> J {
+                match value {
+                    J::String(_) | J::Object(_) => value.clone(),
+                    _ => J::String(value.to_string()),
+                }
+            }
+            for node in nodes {
+                match node {
+                    ArgumentNode::Literal { literal } => out.push(json!(literal)),
+                    ArgumentNode::Parameter { parameter } => {
+                        if let Some(v) = values.get(parameter) {
+                            out.push(scalar(v));
+                        }
+                    }
+                    ArgumentNode::Spread { spread } => {
+                        if let Some(v) = values.get(spread) {
+                            match v {
+                                J::Array(items) => out.extend(items.iter().map(scalar)),
+                                _ => out.push(v.clone()),
+                            }
+                        }
+                    }
+                    ArgumentNode::JsonParameter { json_parameter } => {
+                        if let Some(v) = values.get(json_parameter) {
+                            out.push(json!({"json_parameter": v}));
+                        }
+                    }
+                    ArgumentNode::JsonArguments => out.push(json!({"json_arguments": values})),
+                    ArgumentNode::PrefixedParameter { prefix, parameter } => {
+                        if let Some(v) = values.get(parameter) {
+                            match v.as_str() {
+                                Some(s) => out.push(json!(format!("{prefix}{s}"))),
+                                None => out.push(json!({"prefix": prefix, "value": v})),
+                            }
+                        }
+                    }
+                    ArgumentNode::WhenPresent {
+                        when_present,
+                        append,
+                    } => {
+                        if values.contains_key(when_present) {
+                            render(append, values, out);
+                        }
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        render(&self.arguments, values, &mut out);
+        out
+    }
+
     pub fn build_arguments(&self, values: &BTreeMap<String, Value>) -> Result<Vec<String>> {
         let values = self.home_expanded_values(values)?;
         self.validate_argument_values(values.as_ref())?;

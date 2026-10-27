@@ -30,6 +30,7 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
 
     let mut file = None;
     let mut json = false;
+    let mut explain_version = None;
     #[cfg(feature = "agent-advisory")]
     let mut allow = Vec::new();
     #[cfg(not(feature = "agent-advisory"))]
@@ -98,6 +99,18 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
                     bail!("--json may be specified only once");
                 }
                 json = true;
+            }
+            "--explain-version" if command == "explain" || command == "run" => {
+                if explain_version.is_some() {
+                    bail!("--explain-version may be specified only once");
+                }
+                let version =
+                    take_option_value(arguments, &mut index, "--explain-version", "1 or 2")?;
+                explain_version = Some(match version.as_str() {
+                    "1" => 1,
+                    "2" => 2,
+                    _ => bail!("--explain-version accepts 1 or 2"),
+                });
             }
             "--policy-header" if command == "explain" => {
                 if policy_header {
@@ -432,12 +445,18 @@ pub(crate) fn parse_args(arguments: &[String]) -> Result<Option<Args>> {
     if !break_at.is_empty() && !control {
         bail!("--break-at requires --control");
     }
+    if explain_version.is_some()
+        && !(command == "explain" && json || command == "run" && (what_if || confirm.is_some()))
+    {
+        bail!("--explain-version requires explain --json, run --what-if, or run --confirm");
+    }
     Ok(Some(Args {
         inputs,
         answers,
         program_arguments,
         program_arguments_literal,
         json,
+        explain_version,
         allow,
         what_if,
         confirm,

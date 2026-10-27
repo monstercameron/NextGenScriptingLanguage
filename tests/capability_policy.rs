@@ -416,12 +416,16 @@ fn applet_environment_overlay_is_child_scoped_and_policy_checked() {
         &flow::working_dir::WorkingDirectory::plain("."),
     )
     .unwrap();
+    #[cfg(windows)]
+    let expected_arguments = ["\"argument with spaces\"", "\"semi;colon\""];
+    #[cfg(not(windows))]
+    let expected_arguments = ["argument with spaces", "semi;colon"];
     assert_eq!(
         command
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
-        ["argument with spaces", "semi;colon"]
+        expected_arguments
     );
 
     let mut denied = serde_json::json!(source);

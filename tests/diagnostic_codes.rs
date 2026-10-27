@@ -79,7 +79,7 @@ fn published_codes_are_unique_and_grouped_by_known_families() {
     for info in CODES {
         assert!(codes.insert(info.code), "duplicate code {}", info.code);
         assert!(
-            ["parse", "resolve", "type", "policy", "validate"].contains(&info.family),
+            ["lint", "parse", "resolve", "type", "policy", "validate"].contains(&info.family),
             "{} has an unknown family {}",
             info.code,
             info.family

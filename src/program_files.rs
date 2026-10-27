@@ -50,7 +50,10 @@ impl SourceLoadSnapshot {
 }
 
 #[cfg(feature = "lsp")]
-fn canonicalize_called_path(path: &Path, scope: Option<&SourceScope<'_>>) -> std::io::Result<PathBuf> {
+fn canonicalize_called_path(
+    path: &Path,
+    scope: Option<&SourceScope<'_>>,
+) -> std::io::Result<PathBuf> {
     match fs::canonicalize(path) {
         Ok(canonical) => Ok(canonical),
         Err(error) => {
@@ -63,7 +66,10 @@ fn canonicalize_called_path(path: &Path, scope: Option<&SourceScope<'_>>) -> std
             let Some(name) = path.file_name() else {
                 return Err(error);
             };
-            let Some(parent) = path.parent().and_then(|parent| fs::canonicalize(parent).ok()) else {
+            let Some(parent) = path
+                .parent()
+                .and_then(|parent| fs::canonicalize(parent).ok())
+            else {
                 return Err(error);
             };
             let candidate = parent.join(name);
@@ -395,7 +401,8 @@ impl Loader<'_> {
         let overlay = {
             #[cfg(feature = "lsp")]
             {
-                self.scope.and_then(|scope| scope.open_documents.get(&canonical))
+                self.scope
+                    .and_then(|scope| scope.open_documents.get(&canonical))
             }
             #[cfg(not(feature = "lsp"))]
             {

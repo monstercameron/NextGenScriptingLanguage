@@ -173,6 +173,7 @@ jobs:
       - run: cargo clippy --locked --features full,test-fixtures --target ${{ matrix.target }} --all-targets -- -D warnings
       - run: cargo build --locked --target ${{ matrix.target }} --release --features full,test-fixtures --bins
       - name: Install manifest fixture beside the release test binaries
+        shell: pwsh
         run: |
           $fixture = "target/${{ matrix.target }}/manifests"
           if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force }

@@ -256,6 +256,21 @@ jobs:
       - run: rustfmt --edition 2021 --check src/runtime/shared.rs
       - run: cargo clippy --locked --features full,test-fixtures --target ${{ matrix.target }} --all-targets -- -D warnings
       - run: cargo build --locked --target ${{ matrix.target }} --release --features full,test-fixtures --bins
+      - name: Verify Git for Windows MSYS printf fixture
+        shell: pwsh
+        run: |
+          $candidates = @(
+            (Join-Path $env:ProgramFiles "Git/usr/bin/printf.exe")
+            (where.exe printf.exe 2>$null)
+          )
+          $fixture = $candidates | Where-Object {
+            (Test-Path -LiteralPath $_) -and
+            (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $_) "msys-2.0.dll"))
+          } | Select-Object -First 1
+          if (-not $fixture) {
+            throw "Git for Windows MSYS printf.exe and sibling msys-2.0.dll are required for the Windows argv regression."
+          }
+          Write-Host "Verified MSYS printf fixture: $fixture"
       - name: Install manifest fixture beside the release test binaries
         shell: pwsh
         run: |

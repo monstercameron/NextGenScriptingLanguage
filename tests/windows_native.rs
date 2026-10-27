@@ -92,7 +92,12 @@ fn native_argv_is_literal_unicode_and_round_trips_windows_quoting() {
 fn git_for_windows_printf_keeps_newline_inside_one_argument() {
     let git_printf = git_for_windows_printf();
     let Some(git_printf) = git_printf else {
-        eprintln!("skipping MSYS regression: Git for Windows printf.exe was not found");
+        if std::env::var_os("CI").is_some() {
+            panic!(
+                "CI requires Git for Windows MSYS printf.exe with sibling msys-2.0.dll; see the Windows workflow fixture-verification step"
+            );
+        }
+        eprintln!("skipping MSYS regression: Git for Windows printf.exe was not found outside CI");
         return;
     };
 

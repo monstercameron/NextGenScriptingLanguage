@@ -242,20 +242,64 @@ fn main() {
             }
         }
         "stream-probe" => {
-            // args: byte count written to stdout ('o') and to the inherited
-            // stderr ('e'). Exit 0 only when every byte lands; 42 when
-            // O_NONBLOCK is ever observed on the inherited stderr; 43 when a
-            // write fails (EAGAIN included). Both streams stay byte-pure so
-            // the parent can count what crossed the shared pipe.
+            // args: per-stream byte count, then a status-file path. Stdout
+            // frames carry `~526OUT~` headers, stderr frames `~526ERR~`, so
+            // the parent counts uniquely framed records instead of raw bytes
+            // that also occur in trace JSON. Exit 0 only when every byte
+            // lands; 42 when O_NONBLOCK is ever observed on the inherited
+            // stderr; 43 when a write fails (EAGAIN included). The status
+            // file repeats the outcome so the parent has exit/status proof
+            // independent of execute's status propagation.
             let total: usize = args[1].parse().unwrap();
-            stream_probe(total);
+            let status_file = args[2].clone();
+            stream_probe(total, &status_file);
         }
         _ => std::process::exit(64),
     }
 }
 
+/// Magic record headers for the issue #526 stream probe. Trace JSON and the
+/// `output-line` message never contain these markers, so the parent counts
+/// framed records instead of raw bytes that also occur in trace output.
 #[cfg(unix)]
-fn stream_probe(total: usize) {
+const STREAM_PROBE_OUT_MAGIC: &[u8] = b"~526OUT~";
+#[cfg(unix)]
+const STREAM_PROBE_ERR_MAGIC: &[u8] = b"~526ERR~";
+#[cfg(unix)]
+const STREAM_PROBE_FRAME_LEN: usize = 8192;
+
+#[cfg(unix)]
+#[derive(PartialEq, Eq)]
+enum StreamProbeOutcome {
+    Ok,
+    Nonblocking,
+    ShortWrite,
+}
+
+#[cfg(unix)]
+fn stream_probe(total: usize, status_file: &str) {
+    let outcome = stream_probe_inner(total);
+    // The status file is a regular file inside the test's tempdir, so this
+    // write is unaffected by the shared pipe under test. A missing or
+    // unexpected status line fails the parent even if exit-code propagation
+    // through execute ever changes.
+    let line = match outcome {
+        StreamProbeOutcome::Ok => "probe-526-ok\n",
+        StreamProbeOutcome::Nonblocking => "probe-526-nonblock\n",
+        StreamProbeOutcome::ShortWrite => "probe-526-short\n",
+    };
+    if std::fs::write(status_file, line).is_err() {
+        std::process::exit(43);
+    }
+    match outcome {
+        StreamProbeOutcome::Ok => {}
+        StreamProbeOutcome::Nonblocking => std::process::exit(42),
+        StreamProbeOutcome::ShortWrite => std::process::exit(43),
+    }
+}
+
+#[cfg(unix)]
+fn stream_probe_inner(total: usize) -> StreamProbeOutcome {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     let nonblocking_seen = std::sync::Arc::new(AtomicBool::new(false));
@@ -274,65 +318,89 @@ fn stream_probe(total: usize) {
         }
     });
     let writer_seen = std::sync::Arc::clone(&nonblocking_seen);
-    let stdout_writer =
-        std::thread::spawn(move || write_exact_raw(libc::STDOUT_FILENO, b'o', total, &writer_seen));
-    let stderr_ok = write_exact_raw(libc::STDERR_FILENO, b'e', total, &nonblocking_seen);
+    let stdout_writer = std::thread::spawn(move || {
+        write_framed_raw(
+            libc::STDOUT_FILENO,
+            STREAM_PROBE_OUT_MAGIC,
+            b'O',
+            total,
+            &writer_seen,
+        )
+    });
+    let stderr_ok = write_framed_raw(
+        libc::STDERR_FILENO,
+        STREAM_PROBE_ERR_MAGIC,
+        b'E',
+        total,
+        &nonblocking_seen,
+    );
     let stdout_ok = stdout_writer.join().unwrap();
     stop.store(true, Ordering::Release);
     monitor.join().unwrap();
     if nonblocking_seen.load(Ordering::Acquire) {
-        std::process::exit(42);
+        return StreamProbeOutcome::Nonblocking;
     }
     if !stderr_ok || !stdout_ok {
-        std::process::exit(43);
+        return StreamProbeOutcome::ShortWrite;
     }
+    StreamProbeOutcome::Ok
 }
 
-/// Write exactly `total` copies of `byte` to `fd` without changing any
-/// descriptor flags. Only EINTR retries; a WouldBlock (EAGAIN) return means a
-/// blocking shared descriptor was corrupted and fails the probe.
+/// Write exactly `total` bytes to `fd` as newline-terminated frames that each
+/// start with `magic`, without changing any descriptor flags. Newline
+/// termination keeps line-oriented forwarding flowing while the probe runs.
+/// Only EINTR retries; a WouldBlock (EAGAIN) return means a blocking shared
+/// descriptor was corrupted and fails the probe.
 #[cfg(unix)]
-fn write_exact_raw(
+fn write_framed_raw(
     fd: libc::c_int,
-    byte: u8,
+    magic: &[u8],
+    fill: u8,
     total: usize,
     nonblocking_seen: &std::sync::atomic::AtomicBool,
 ) -> bool {
-    let chunk = [byte; 8192];
+    let mut frame = [fill; STREAM_PROBE_FRAME_LEN];
+    frame[..magic.len()].copy_from_slice(magic);
+    frame[STREAM_PROBE_FRAME_LEN - 1] = b'\n';
     let mut remaining = total;
     while remaining > 0 {
         if fd == libc::STDERR_FILENO {
             // SAFETY: stderr is open for the whole probe; F_GETFL only reads
             // its status flags. The monitor thread can miss a brief window,
-            // so the writer re-checks before every chunk.
+            // so the writer re-checks before every frame.
             let flags = unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_GETFL) };
             if flags == -1 || flags & libc::O_NONBLOCK != 0 {
                 nonblocking_seen.store(true, std::sync::atomic::Ordering::Release);
                 return false;
             }
         }
-        let next = remaining.min(chunk.len());
-        // SAFETY: `chunk` is live for `next` bytes and `fd` is an open writer
-        // owned by this process (stdout or the inherited stderr). The call
-        // changes no status flags.
-        let count = unsafe { libc::write(fd, chunk.as_ptr().cast(), next) };
-        if count > 0 {
-            remaining -= count as usize;
-            continue;
-        }
-        if count == 0 {
+        let next = remaining.min(frame.len());
+        let mut offset = 0;
+        while offset < next {
+            // SAFETY: `offset < next <= frame.len()` and `fd` is an open
+            // writer owned by this process (stdout or the inherited stderr).
+            // The call changes no status flags.
+            let count =
+                unsafe { libc::write(fd, frame[offset..next].as_ptr().cast(), next - offset) };
+            if count > 0 {
+                offset += count as usize;
+                continue;
+            }
+            if count == 0 {
+                return false;
+            }
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
             return false;
         }
-        if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-            continue;
-        }
-        return false;
+        remaining -= next;
     }
     true
 }
 
 #[cfg(not(unix))]
-fn stream_probe(total: usize) {
+fn stream_probe(total: usize, _status_file: &str) {
     // The regression test driving this probe is Unix-only; keep other
     // platforms compiling with plain exact-count writes.
     std::io::stdout().write_all(&vec![b'o'; total]).unwrap();

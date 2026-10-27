@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 #[path = "support/private_answers.rs"]
-#[cfg(windows)]
+#[cfg(all(windows, feature = "tooling"))]
 mod private_answers;
 
 fn execute() -> Command {

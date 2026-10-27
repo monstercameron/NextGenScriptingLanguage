@@ -24,6 +24,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: crash-consistency
+      - name: Verify dm-flakey cleanup failures stay visible without privileges
+        if: runner.os == 'Linux'
+        run: bash tools/test_crash_consistency_dm_flakey_cleanup.sh
       - name: Random kills and injected checkpoint write failures
         env:
           CRASH_TRIALS: "40"

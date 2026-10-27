@@ -662,7 +662,7 @@ fn verify_decision_audit(run: &Json, seal_key: &SealKey) -> AuditVerification {
     if seal_key.is_malformed() {
         return AuditVerification::untrusted(
             decisions,
-            "the explicit audit seal key has the wrong length, so the seal was not checked",
+            "the explicit audit seal key has the wrong length, so the seal was not checked".into(),
         );
     }
     let Some(key) = seal_key.resolve() else {
@@ -682,7 +682,7 @@ fn verify_decision_audit(run: &Json, seal_key: &SealKey) -> AuditVerification {
             let Some(binding) = seal_binding(run, record_id) else {
                 return AuditVerification::untrusted(
                     decisions,
-                    "policy audit has no program or policy binding to check its seal against; the record may have been modified after the run",
+                    "policy audit has no program or policy binding to check its seal against; the record may have been modified after the run".into(),
                 );
             };
             audit_seal_hex(&key, &binding, total, truncated, head)

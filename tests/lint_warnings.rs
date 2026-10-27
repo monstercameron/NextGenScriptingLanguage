@@ -180,11 +180,11 @@ fn unused_bindings_and_inputs_warn_but_references_are_counted() {
     assert!(diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "lint.unused_input"
-            && diagnostic.message.contains("unused_input")));
+            && diagnostic.message.contains("input \"unused_input\"")));
     assert!(!diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "lint.unused_input"
-            && diagnostic.message.contains("used_input")));
+            && diagnostic.message.contains("input \"used_input\"")));
     assert!(diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "lint.unused_binding"

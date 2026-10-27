@@ -344,6 +344,14 @@ edits. Use `execute check --explain CODE` to print a registered code's meaning,
 example, and typical repair. The registry is documented in the
 [diagnostic code reference](language-server.md#diagnostic-codes).
 
+Warnings report common mistakes without changing a check's success status.
+They include literal shell-like expansion, shell metacharacters in quoted
+executable names, unused bindings and inputs, unreachable statements, empty
+loops, and model-flow safety issues. Some warnings provide machine-applicable
+fixes when the edit is safe in context. Add `# execute-allow: CODE` to a line to
+suppress one warning code there. `--deny-warnings` makes warnings fail `check`;
+the JSON response retains each diagnostic's warning severity.
+
 `--json` is accepted only by `check`. Malformed CLI arguments, duplicate options,
 help/version output and output-write failures retain normal CLI behavior;
 errors from a correctly parsed check use this protocol. Human-readable checks

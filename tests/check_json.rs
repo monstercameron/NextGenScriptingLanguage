@@ -55,6 +55,28 @@ fn valid_check_json_is_static_and_deterministic_with_missing_inputs_and_tools() 
 }
 
 #[test]
+fn deny_warnings_fails_check_and_keeps_warning_severity() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("job.program"), "run \"ls *.txt\"\n").unwrap();
+
+    let ordinary = report(
+        &invoke(root.path(), &["check", "job.program", "--json"]),
+        true,
+    );
+    assert_eq!(ordinary["diagnostics"][0]["code"], "lint.executable_name_whitespace");
+    assert_eq!(ordinary["diagnostics"][0]["severity"], "warning");
+
+    let denied = report(
+        &invoke(
+            root.path(),
+            &["check", "job.program", "--json", "--deny-warnings"],
+        ),
+        false,
+    );
+    assert_eq!(denied["diagnostics"], ordinary["diagnostics"]);
+}
+
+#[test]
 fn failures_in_all_execution_forms_are_structured_without_side_effects() {
     let root = tempfile::tempdir().unwrap();
     for (source, expected_code, expected_line) in [

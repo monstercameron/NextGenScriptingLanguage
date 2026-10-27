@@ -31,6 +31,8 @@ pub struct CodeInfo {
     /// The stage that finds the problem: parse, resolve, type, policy or validate.
     pub family: &'static str,
     pub meaning: &'static str,
+    /// Default severity emitted by static analysis for this code.
+    pub severity: DiagnosticSeverity,
     /// A minimal source fragment that commonly produces this diagnostic.
     pub example: &'static str,
     /// The usual repair, stated for humans rather than as an edit.
@@ -1043,7 +1045,7 @@ fn shell_expansion_argument_fix(
             });
         if !declarations
             .iter()
-            .any(|decl: &String| decl.contains(binding))
+            .any(|decl: &String| decl.contains(binding.as_str()))
         {
             declarations.push(format!(
                 "accept {binding} as text from environment {} with default \"\"\n",
@@ -1060,7 +1062,7 @@ fn shell_expansion_argument_fix(
     );
     let insertion = format!("{}{format_line}", declarations.concat());
     Some(SuggestedFix {
-        message: "read the environment value explicitly and format the argument",
+        message: "read the environment value explicitly and format the argument".into(),
         edits: vec![
             TextEdit {
                 span: argument_span,
@@ -1310,7 +1312,7 @@ fn shell_expansion_value_fix(
             });
         if !declarations
             .iter()
-            .any(|decl: &String| decl.contains(binding))
+            .any(|decl: &String| decl.contains(binding.as_str()))
         {
             declarations.push(format!(
                 "accept {binding} as text from environment {} with default \"\"\n",
@@ -1326,7 +1328,7 @@ fn shell_expansion_value_fix(
         serde_json::to_string(&template).ok()?
     );
     Some(SuggestedFix {
-        message: "read the environment value explicitly and format the path",
+        message: "read the environment value explicitly and format the path".into(),
         edits: vec![
             TextEdit {
                 span,
@@ -1513,8 +1515,8 @@ fn add_call_binding_rows(call: &Invocation, line: usize, bindings: &mut Vec<(Str
 }
 
 fn collect_step_reads(steps: &[Step], reads: &mut BTreeSet<String>) {
-    fn value(value: &Value, reads: &mut BTreeSet<String>) {
-        match value {
+    fn value(item_value: &Value, reads: &mut BTreeSet<String>) {
+        match item_value {
             Value::Reference(name) => {
                 reads.insert(name.clone());
             }
@@ -1658,9 +1660,10 @@ fn collect_unreachable_lints(
                 step.kind,
                 StepKind::EndLoop { .. }
                     | StepKind::EndIf
+                    | StepKind::Otherwise { .. }
                     | StepKind::EndCall
                     | StepKind::EndTry
-                    | StepKind::EndTempScope
+                    | StepKind::EndTempScope { .. }
             )
         {
             diagnostics.push(Diagnostic {

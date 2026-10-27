@@ -6,7 +6,11 @@ fn check_explain_prints_the_registered_diagnostic_entry() {
         .args(["check", "--explain", "check.range"])
         .output()
         .expect("execute check --explain");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 explanation");
     for expected in [
         "Diagnostic code: check.range",

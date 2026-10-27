@@ -545,8 +545,7 @@ fn classified_parse_error(
         || lower.contains("command condition takes only")
         || lower.contains("redirection and environment apply only")
         || lower.contains("stdin from` applies only")
-        || lower.contains("applies only to")
-            && !lower.contains("applies only to text inputs")
+        || lower.contains("applies only to") && !lower.contains("applies only to text inputs")
         || lower.contains("applies to one")
         || lower.contains("applies to a single")
         || lower.contains("cannot be combined")
@@ -2452,11 +2451,9 @@ mod tests {
     #[test]
     fn stray_word_does_not_choose_a_published_parse_code() {
         let diagnostics = analyze_source("run \"printf\" tabs\n", &Registry::default());
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "parse.syntax")
-        );
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "parse.syntax"));
     }
 
     #[test]

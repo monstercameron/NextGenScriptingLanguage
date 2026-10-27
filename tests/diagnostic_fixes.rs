@@ -2,6 +2,9 @@
 //! fixes. Each fix is applied to the source and the result is checked again, so a
 //! suggestion that does not actually repair the program fails the test.
 
+#[path = "common/diagnostic_corpus.rs"]
+mod diagnostic_corpus;
+
 use flow::diagnostics::{analyze_source, analyze_source_at, Diagnostic, SuggestedFix};
 use flow::manifest::Registry;
 use std::path::Path;
@@ -362,139 +365,43 @@ fn missing_program_file_is_distinct_and_points_at_path() {
 
 #[test]
 fn representative_invalid_sources_never_fall_back_to_check_failed() {
-    let registry = Registry::from_sources(&[
-        serde_json::json!({
-            "name": "fixture.reader",
-            "binary": "fixture-reader",
-            "accepts_stdin": false,
-            "cacheable": false,
-            "parameters": { "arguments": { "type": "string", "required": true } },
-            "arguments": [{ "parameter": "arguments" }]
-        })
-        .to_string(),
-        serde_json::json!({
-            "name": "fixture.count",
-            "binary": "fixture-count",
-            "accepts_stdin": false,
-            "cacheable": false,
-            "parameters": { "count": { "type": "integer", "required": true } },
-            "arguments": [{ "parameter": "count" }]
-        })
-        .to_string(),
-    ])
-    .unwrap();
-    let mut corpus = Vec::new();
-
-    // Keep this corpus broad: a hundred variants of one undefined-name error
-    // only test volume, not whether independent checker paths avoid check_failed.
-    for index in 0..10 {
-        let name = format!("missing_{index}");
-        corpus.push((format!("use value {name}\n"), "check.undefined_name", name));
-
-        let name = format!("job_{index}");
-        corpus.push((format!("await {name}\n"), "check.scope", name));
-
-        let value = 300 + index;
-        corpus.push((
-            format!("exit with status {value}\n"),
-            "check.range",
-            "status".to_owned(),
-        ));
-
-        let name = format!("result_{index}");
-        corpus.push((
-            format!("run \"true\" as {name}\nrun \"true\" as {name}\n"),
-            "check.duplicate_name",
-            name,
-        ));
-
-        let name = format!("input_{index}");
-        corpus.push((
-            format!("accept {name} as text\naccept {name} as text\n"),
-            "check.duplicate_name",
-            name,
-        ));
-
-        let name = format!("step_{index}");
-        corpus.push((
-            format!("{name}: run \"true\"\n{name}: run \"true\"\n"),
-            "check.duplicate_name",
-            name,
-        ));
-
-        let program = format!("worker_{index}");
-        let unknown = format!("workre_{index}");
-        corpus.push((
-            format!("define a program named {program}\n  run \"true\"\nrun program {unknown}\n"),
-            "check.program.unknown",
-            unknown,
-        ));
-
-        let program = format!("input_worker_{index}");
-        let unknown_input = format!("inpt_{index}");
-        corpus.push((
-            format!("define a program named {program}\n  accept input as text\n  use value input\nrun program {program} with {unknown_input} \"x\"\n"),
-            "check.program.input.unknown",
-            unknown_input,
-        ));
-
-        let program = format!("required_worker_{index}");
-        corpus.push((
-            format!("define a program named {program}\n  accept required_{index} as text\n  use value required_{index}\nrun program {program}\n"),
-            "check.program.input.required",
-            program,
-        ));
-
-        let parameter = format!("parameter_{index}");
-        corpus.push((
-            format!("run \"fixture-reader\" with {parameter} \"x\"\n"),
-            "check.parameter.direct",
-            parameter,
-        ));
-
-        let parameter = format!("unknown_{index}");
-        corpus.push((
-            format!("run fixture.count with {parameter} 1\n"),
-            "applet.parameter.unknown",
-            parameter,
-        ));
-
-        let value = format!("\"wrong_{index}\"");
-        corpus.push((
-            format!("run fixture.count with count {value}\n"),
-            "applet.parameter.type",
-            value,
-        ));
-    }
-
+    let registry = diagnostic_corpus::registry();
+    let corpus = diagnostic_corpus::representative_invalid_sources();
     assert!(corpus.len() >= 100);
-    for (source, expected_code, expected_token) in corpus {
-        let diagnostics = analyze_source(&source, &registry);
+    for case in corpus {
+        let diagnostics = analyze_source(&case.source, &registry);
         assert!(
             diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.code == expected_code),
-            "expected {expected_code} for {source:?}: {diagnostics:#?}"
+                .any(|diagnostic| diagnostic.code == case.expected_code),
+            "expected {} for {:?}: {diagnostics:#?}",
+            case.expected_code,
+            case.source
         );
         assert!(
             diagnostics
                 .iter()
                 .all(|diagnostic| diagnostic.code != "check_failed"),
-            "generic failure code for {source}: {diagnostics:#?}"
+            "generic failure code for {}: {diagnostics:#?}",
+            case.source
         );
         let diagnostic = diagnostics
             .iter()
-            .find(|diagnostic| diagnostic.code == expected_code)
+            .find(|diagnostic| diagnostic.code == case.expected_code)
             .unwrap();
         assert_eq!(
             diagnostic.span.precision,
             flow::diagnostics::SpanPrecision::Token,
-            "expected a token span for {expected_code} in {source:?}: {diagnostic:#?}"
+            "expected a token span for {} in {:?}: {diagnostic:#?}",
+            case.expected_code,
+            case.source
         );
         assert_eq!(
-            &source[diagnostic.span.start_byte..diagnostic.span.end_byte],
-            expected_token,
-            "unexpected {expected_code} span for {source:?}: {diagnostic:#?}"
+            &case.source[diagnostic.span.start_byte..diagnostic.span.end_byte],
+            case.expected_token,
+            "unexpected {} span for {:?}: {diagnostic:#?}",
+            case.expected_code,
+            case.source
         );
     }
 }

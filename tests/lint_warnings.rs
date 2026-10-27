@@ -33,6 +33,17 @@ fn shell_expansion_in_literal_arguments_warns_without_becoming_an_error() {
 }
 
 #[test]
+fn explicit_shell_command_script_is_not_mistaken_for_a_literal_argument() {
+    let diagnostics = analyze_source(
+        "run \"sh\" with arguments [\"-c\", \"echo $HOME\"]\n",
+        &Registry::default(),
+    );
+    assert!(!diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "lint.shell_expansion_literal"));
+}
+
+#[test]
 fn safe_first_command_expansion_fix_declares_environment_and_formats_value() {
     let source = "run \"echo\" with arguments [\"$HOME/x\"]\n";
     let registry = format_registry();
@@ -260,6 +271,35 @@ fn model_acceptance_guard_after_json_parse_suppresses_result_lint() {
     assert!(!diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "model.result_unchecked"));
+}
+
+#[test]
+fn unrelated_acceptance_guard_does_not_suppress_unchecked_result_lint() {
+    let source = "run jev.classify with question \"classify\" and labels [\"yes\", \"no\"] and minimum 80 as raw\nthen parse json as classification\ntake boolean at \"/accepted\" from classification as accepted\ntake text at \"/label\" from classification as label\nif accepted is true\n  run \"printf\" with arguments [\"accepted\"]\nrun \"printf\" with arguments [label]\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "model.result_unchecked" && diagnostic.message.contains("raw")
+    }));
+}
+
+#[test]
+fn rejected_acceptance_branch_does_not_guard_model_result_use() {
+    let source = "run jev.classify with question \"classify\" and labels [\"yes\", \"no\"] and minimum 80 as classification\ntake boolean at \"/accepted\" from classification as accepted\ntake text at \"/label\" from classification as label\nif accepted is false\n  run \"printf\" with arguments [label]\n";
+    let diagnostics = analyze_source(source, &Registry::default());
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "model.result_unchecked"));
+}
+
+#[test]
+fn unread_keep_status_does_not_warn_as_an_unused_binding() {
+    let diagnostics = analyze_source(
+        "run \"false\" and keep status as exit_code\n",
+        &Registry::default(),
+    );
+    assert!(!diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "lint.unused_binding" && diagnostic.message.contains("exit_code")
+    }));
 }
 
 #[test]

@@ -964,6 +964,9 @@ fn collect_lint_diagnostics(
         }
         if let Some(Value::List(arguments)) = call.parameters.get("arguments") {
             for (index, argument) in arguments.iter().enumerate() {
+                if is_explicit_shell_script_argument(call, arguments, index) {
+                    continue;
+                }
                 let Value::String(value) = argument else {
                     continue;
                 };
@@ -997,6 +1000,24 @@ fn collect_lint_diagnostics(
             }
         }
     }
+}
+
+fn is_explicit_shell_script_argument(
+    call: &Invocation,
+    arguments: &[Value],
+    argument_index: usize,
+) -> bool {
+    if !call.direct || argument_index == 0 {
+        return false;
+    }
+    let executable = std::path::Path::new(&call.operation)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&call.operation);
+    if !matches!(executable, "sh" | "bash" | "dash" | "zsh" | "ksh") {
+        return false;
+    }
+    matches!(arguments.get(argument_index - 1), Some(Value::String(flag)) if flag == "-c")
 }
 
 fn shell_expansion_argument_fix(
@@ -1480,18 +1501,8 @@ fn collect_step_bindings(steps: &[Step], bindings: &mut Vec<(String, usize)>) {
             | StepKind::ReadCallInput { binding } => {
                 bindings.extend(binding.iter().cloned().map(|name| (name, step.line)));
             }
-            StepKind::AwaitJob {
-                status_binding,
-                result_binding,
-                ..
-            } => {
-                bindings.extend(
-                    status_binding
-                        .iter()
-                        .chain(result_binding.iter())
-                        .cloned()
-                        .map(|name| (name, step.line)),
-                );
+            StepKind::AwaitJob { result_binding, .. } => {
+                bindings.extend(result_binding.iter().cloned().map(|name| (name, step.line)));
             }
             StepKind::Loop {
                 kind: crate::ast::LoopKind::ForEach { binding, .. },
@@ -1507,7 +1518,6 @@ fn add_call_binding_rows(call: &Invocation, line: usize, bindings: &mut Vec<(Str
     bindings.extend(
         call.binding
             .iter()
-            .chain(call.status_binding.iter())
             .chain(call.result_binding.iter())
             .cloned()
             .map(|name| (name, line)),
@@ -1790,7 +1800,7 @@ fn collect_model_lints(
             result_names.insert(parse_binding);
         }
         let mut accepted_bindings = BTreeMap::<String, usize>::new();
-        let mut inspected_result = false;
+        let mut inspected_result_bindings = BTreeSet::new();
         for step in steps {
             if let StepKind::TakeJson {
                 pointer,
@@ -1808,15 +1818,19 @@ fn collect_model_lints(
                 if matches!(pointer.as_str(), "/label" | "/decision" | "/score")
                     && reads.contains(binding)
                 {
-                    inspected_result = true;
+                    inspected_result_bindings.insert(binding.clone());
                 }
             }
         }
-        if !inspected_result {
+        if inspected_result_bindings.is_empty() {
             continue;
         }
-        let acceptance_checked = steps.iter().any(|step| matches!(&step.kind, StepKind::If { condition, .. }
-            if accepted_bindings.iter().any(|(accepted, accepted_line)| step.line > *accepted_line && (matches!(&condition.left, Value::Reference(name) if name == accepted) || matches!(&condition.right, Value::Reference(name) if name == accepted)))));
+        let acceptance_checked = !has_ungated_model_result_use(
+            steps,
+            &accepted_bindings,
+            &inspected_result_bindings,
+            *line,
+        );
         // A same-file helper may own the gate; without interprocedural analysis,
         // suppress this advisory when the value is routed through a program call.
         let mut forwarded_names = result_names.clone();
@@ -1975,6 +1989,123 @@ fn collect_model_lints(
             });
         }
     }
+}
+
+fn has_ungated_model_result_use(
+    steps: &[Step],
+    accepted_bindings: &BTreeMap<String, usize>,
+    result_bindings: &BTreeSet<String>,
+    model_line: usize,
+) -> bool {
+    fn positive_guard(
+        condition: &crate::ast::Condition,
+        accepted: &BTreeMap<String, usize>,
+        line: usize,
+        model_line: usize,
+    ) -> bool {
+        !condition.negated
+            && condition.operator == crate::ast::ConditionOperator::Equals
+            && accepted.iter().any(|(name, accepted_line)| {
+                *accepted_line > model_line
+                    && *accepted_line < line
+                    && ((matches!(&condition.left, Value::Reference(value) if value == name)
+                        && matches!(&condition.right, Value::Bool(true)))
+                        || (matches!(&condition.right, Value::Reference(value) if value == name)
+                            && matches!(&condition.left, Value::Bool(true))))
+            })
+    }
+
+    fn scan(
+        steps: &[Step],
+        accepted: &BTreeMap<String, usize>,
+        results: &BTreeSet<String>,
+        model_line: usize,
+    ) -> bool {
+        let mut index = 0;
+        while index < steps.len() {
+            let step = &steps[index];
+            let nested_end = match &step.kind {
+                StepKind::Loop { end, .. }
+                | StepKind::If { end, .. }
+                | StepKind::IfCommand { end, .. }
+                | StepKind::Try { end, .. }
+                | StepKind::OnInterrupt { end }
+                | StepKind::TempScope { end, .. } => Some(*end),
+                _ => None,
+            };
+            if let Some(end) = nested_end.filter(|end| *end > 1 && index + *end <= steps.len()) {
+                let mut header_reads = BTreeSet::new();
+                collect_step_reads(&steps[index..index + 1], &mut header_reads);
+                if header_reads.iter().any(|name| results.contains(name)) {
+                    return true;
+                }
+                if let StepKind::If {
+                    condition,
+                    otherwise,
+                    ..
+                } = &step.kind
+                {
+                    let then_end = if *otherwise < end {
+                        index + *otherwise
+                    } else {
+                        index + end - 1
+                    };
+                    let else_start = index + *otherwise + 1;
+                    let else_end = index + end - 1;
+                    if !(step.line > model_line
+                        && positive_guard(condition, accepted, step.line, model_line))
+                        && index + 1 < then_end
+                        && scan(&steps[index + 1..then_end], accepted, results, model_line)
+                    {
+                        return true;
+                    }
+                    if *otherwise < end
+                        && else_start < else_end
+                        && scan(&steps[else_start..else_end], accepted, results, model_line)
+                    {
+                        return true;
+                    }
+                } else if let StepKind::IfCommand { otherwise, .. } = &step.kind {
+                    let then_end = if *otherwise < end {
+                        index + *otherwise
+                    } else {
+                        index + end - 1
+                    };
+                    let else_start = index + *otherwise + 1;
+                    let else_end = index + end - 1;
+                    if index + 1 < then_end
+                        && scan(&steps[index + 1..then_end], accepted, results, model_line)
+                    {
+                        return true;
+                    }
+                    if *otherwise < end
+                        && else_start < else_end
+                        && scan(&steps[else_start..else_end], accepted, results, model_line)
+                    {
+                        return true;
+                    }
+                } else {
+                    let body_end = index + end - 1;
+                    if index + 1 < body_end
+                        && scan(&steps[index + 1..body_end], accepted, results, model_line)
+                    {
+                        return true;
+                    }
+                }
+                index += end;
+                continue;
+            }
+            let mut reads = BTreeSet::new();
+            collect_step_reads(&steps[index..index + 1], &mut reads);
+            if reads.iter().any(|name| results.contains(name)) {
+                return true;
+            }
+            index += 1;
+        }
+        false
+    }
+
+    scan(steps, accepted_bindings, result_bindings, model_line)
 }
 
 fn has_shell_expansion(value: &str) -> bool {

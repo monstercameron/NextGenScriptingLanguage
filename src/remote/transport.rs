@@ -26,11 +26,26 @@ pub(super) const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(20);
 #[derive(Clone)]
 pub(super) struct InterruptibleTcpConnector {
     cancelled: Arc<AtomicBool>,
+    stream_idle: Option<(Arc<AtomicBool>, Duration)>,
 }
 
 impl InterruptibleTcpConnector {
     pub(super) fn new(cancelled: Arc<AtomicBool>) -> Self {
-        Self { cancelled }
+        Self {
+            cancelled,
+            stream_idle: None,
+        }
+    }
+
+    pub(super) fn with_stream_idle(
+        cancelled: Arc<AtomicBool>,
+        enabled: Arc<AtomicBool>,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            cancelled,
+            stream_idle: Some((enabled, timeout)),
+        }
     }
 }
 
@@ -68,6 +83,7 @@ impl<In: Transport> Connector<In> for InterruptibleTcpConnector {
             stream: stream.stream,
             buffers,
             cancelled: Arc::clone(&self.cancelled),
+            stream_idle: self.stream_idle.clone(),
             open: true,
         })))
     }
@@ -154,7 +170,7 @@ fn connect_nonblocking(
             .register(&mut stream, SOCKET_TOKEN, Interest::WRITABLE)
             .map_err(Error::Io)?;
         let mut events = Events::with_capacity(16);
-        wait_ready(&mut poll, &mut events, timeout, started, &cancelled)?;
+        wait_ready(&mut poll, &mut events, timeout, started, &cancelled, None)?;
         if let Some(error) = stream.take_error().map_err(Error::Io)? {
             last_error = Some(error);
             continue;
@@ -191,6 +207,7 @@ fn wait_ready(
     timeout: NextTimeout,
     started: Instant,
     cancelled: &AtomicBool,
+    idle: Option<Duration>,
 ) -> Result<(), Error> {
     loop {
         check_cancel(cancelled)?;
@@ -203,6 +220,18 @@ fn wait_ready(
                 (*limit - elapsed).min(CANCEL_POLL_INTERVAL)
             }
             None => CANCEL_POLL_INTERVAL,
+        };
+        let wait = if let Some(idle) = idle {
+            let remaining = idle.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err(Error::Io(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "remote event stream idle timeout",
+                )));
+            }
+            wait.min(remaining)
+        } else {
+            wait
         };
         poll.poll(events, Some(wait)).map_err(Error::Io)?;
         if !events.is_empty() {
@@ -217,6 +246,7 @@ pub(super) struct InterruptibleTcpTransport {
     stream: TcpStream,
     buffers: LazyBuffers,
     cancelled: Arc<AtomicBool>,
+    stream_idle: Option<(Arc<AtomicBool>, Duration)>,
     open: bool,
 }
 
@@ -255,6 +285,7 @@ impl Transport for InterruptibleTcpTransport {
                     timeout,
                     started,
                     &self.cancelled,
+                    None,
                 )?,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                     check_cancel(&self.cancelled)?;
@@ -289,6 +320,9 @@ impl Transport for InterruptibleTcpTransport {
                     timeout,
                     started,
                     &self.cancelled,
+                    self.stream_idle.as_ref().and_then(|(enabled, timeout)| {
+                        enabled.load(Ordering::Relaxed).then_some(*timeout)
+                    }),
                 )?,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                     check_cancel(&self.cancelled)?;

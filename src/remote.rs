@@ -363,6 +363,7 @@ pub struct RemoteEventPort {
     pub resumable: bool,
     #[serde(default)]
     pub reconnect: bool,
+    /// Maximum consecutive reconnect attempts without a newly advanced cursor.
     #[serde(default)]
     pub max_reconnects: u8,
     /// This protocol adapter is pull-based. A consumer requests the next
@@ -1015,7 +1016,9 @@ impl RemoteClient {
     /// uses at-least-once cursor semantics, and never buffers an unbounded
     /// queue. Passing `resume_after` sends `Last-Event-ID` only when the port
     /// declares resumability. Reconnection is automatic only when that port
-    /// explicitly enables it and declares a finite retry limit.
+    /// explicitly enables it and declares a finite consecutive retry limit.
+    /// A valid event with a new cursor resets that budget; duplicates and
+    /// heartbeats do not count as recovery.
     pub fn open_events(
         &self,
         descriptor: &RemoteAppletDescriptor,
@@ -1044,14 +1047,6 @@ impl RemoteClient {
                 EffectCertainty::NotStarted,
             ));
         }
-        let deadline = Instant::now()
-            .checked_add(Duration::from_millis(self.config.timeout_ms))
-            .ok_or_else(|| {
-                RemoteError::new(
-                    RemoteErrorKind::InvalidConfiguration,
-                    EffectCertainty::NotStarted,
-                )
-            })?;
         let schema = descriptor
             .contract
             .ports
@@ -1077,7 +1072,6 @@ impl RemoteClient {
             schema,
             reader,
             cancelled,
-            deadline,
             cursor: resume_after.map(str::to_owned),
             reconnects_left,
         })
@@ -1098,7 +1092,16 @@ impl RemoteClient {
             RemoteEventFormat::Sse => "text/event-stream",
             RemoteEventFormat::JsonLines => "application/x-ndjson",
         };
-        let response = self.send_get(&url, cancelled, cursor, timeout_ms, accept)?;
+        let idle_enabled = Arc::new(AtomicBool::new(false));
+        let response = self.send_get_stream(
+            &url,
+            cancelled,
+            cursor,
+            timeout_ms,
+            accept,
+            Arc::clone(&idle_enabled),
+        )?;
+        idle_enabled.store(true, Ordering::Relaxed);
         validate_content_type(
             response.headers().get("content-type"),
             accept,
@@ -1245,6 +1248,72 @@ impl RemoteClient {
         )
     }
 
+    fn send_get_stream(
+        &self,
+        url: &Url,
+        cancelled: &Arc<AtomicBool>,
+        cursor: Option<&str>,
+        timeout_ms: u64,
+        accept: &str,
+        idle_enabled: Arc<AtomicBool>,
+    ) -> Result<ureq::http::Response<ureq::Body>, RemoteError> {
+        let timeout = Some(Duration::from_millis(timeout_ms));
+        let config = ureq::Agent::config_builder()
+            .timeout_resolve(timeout)
+            .timeout_connect(timeout)
+            .timeout_send_request(timeout)
+            .timeout_recv_response(timeout)
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .proxy(None)
+            .build();
+        let connector = ().chain(transport::InterruptibleTcpConnector::with_stream_idle(
+            Arc::clone(cancelled),
+            idle_enabled,
+            Duration::from_millis(timeout_ms),
+        ));
+        #[cfg(windows)]
+        let connector =
+            connector.chain(ureq::unversioned::transport::NativeTlsConnector::default());
+        #[cfg(unix)]
+        let connector = connector.chain(ureq::unversioned::transport::RustlsConnector::default());
+        let agent = ureq::Agent::with_parts(
+            config,
+            connector,
+            InterruptibleSystemResolver {
+                helper: self.resolver_helper.as_deref().cloned(),
+                cancelled: Arc::clone(cancelled),
+                process_observer: self.process_observer.clone(),
+            },
+        );
+        let mut request = agent.get(url.as_str()).header("Accept", accept);
+        let token = self.read_token()?;
+        let authorization = token.map(|token| SecretHeader(format!("Bearer {}", token.as_str())));
+        if let Some(authorization) = &authorization {
+            request = request.header("Authorization", authorization.as_str());
+        }
+        if let Some(cursor) = cursor {
+            if !valid_cursor(cursor) {
+                return Err(RemoteError::new(
+                    RemoteErrorKind::InvalidRequest,
+                    EffectCertainty::NotStarted,
+                ));
+            }
+            request = request.header("Last-Event-ID", cursor);
+        }
+        check_cancel(cancelled, EffectCertainty::NotStarted)?;
+        let response = request
+            .call()
+            .map_err(|error| map_ureq_error(error, EffectCertainty::NotStarted, cancelled))?;
+        if !response.status().is_success() {
+            return Err(RemoteError::new(
+                RemoteErrorKind::HttpStatus(response.status().as_u16()),
+                EffectCertainty::NotStarted,
+            ));
+        }
+        Ok(response)
+    }
+
     fn send_get(
         &self,
         url: &Url,
@@ -1320,15 +1389,15 @@ impl fmt::Debug for RemoteStreamEvent {
     }
 }
 
-/// Pull-based event reader with bounded frames, a session deadline and
-/// opt-in, finite reconnection. It reads only when `next_event` is called.
+/// Pull-based event reader with bounded frames, an idle timeout and
+/// opt-in reconnection with a finite consecutive retry budget. It reads only when
+/// `next_event` is called.
 pub struct RemoteEventStream {
     client: RemoteClient,
     port: RemoteEventPort,
     schema: ValueSchema,
     reader: BufReader<ureq::BodyReader<'static>>,
     cancelled: Arc<AtomicBool>,
-    deadline: Instant,
     cursor: Option<String>,
     reconnects_left: u8,
 }
@@ -1351,15 +1420,6 @@ impl RemoteEventStream {
     pub fn next_event(&mut self) -> Result<Option<RemoteStreamEvent>, RemoteError> {
         loop {
             check_cancel(&self.cancelled, EffectCertainty::NotStarted)?;
-            if Instant::now() >= self.deadline {
-                if self.try_reconnect()? {
-                    continue;
-                }
-                return Err(RemoteError::new(
-                    RemoteErrorKind::Timeout,
-                    EffectCertainty::NotStarted,
-                ));
-            }
             let result = match self.port.format {
                 RemoteEventFormat::Sse => self.read_sse_event(),
                 RemoteEventFormat::JsonLines => self.read_json_line_event(),
@@ -1379,6 +1439,11 @@ impl RemoteEventStream {
                     if let Some(cursor) = &event.cursor {
                         if !event.duplicate_cursor {
                             self.cursor = Some(cursor.clone());
+                            // A new validated cursor demonstrates forward progress;
+                            // duplicate events or heartbeats must not reset the budget.
+                            if self.port.reconnect {
+                                self.reconnects_left = self.port.max_reconnects;
+                            }
                         }
                     }
                     return Ok(Some(event));
@@ -1408,19 +1473,35 @@ impl RemoteEventStream {
             return Ok(false);
         }
         check_cancel(&self.cancelled, EffectCertainty::NotStarted)?;
-        let remaining = self.deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(false);
+        let mut last_error = None;
+        while self.reconnects_left > 0 {
+            let attempt = self.port.max_reconnects - self.reconnects_left;
+            self.reconnects_left -= 1;
+            let delay = Duration::from_millis((50_u64 << attempt.min(4)).min(800));
+            let start = Instant::now();
+            while start.elapsed() < delay {
+                check_cancel(&self.cancelled, EffectCertainty::NotStarted)?;
+                std::thread::sleep(
+                    delay
+                        .saturating_sub(start.elapsed())
+                        .min(Duration::from_millis(20)),
+                );
+            }
+            match self.client.open_event_reader(
+                &self.port,
+                self.cursor.as_deref(),
+                &self.cancelled,
+                self.client.config.timeout_ms,
+            ) {
+                Ok(reader) => {
+                    self.reader = reader;
+                    return Ok(true);
+                }
+                Err(error) if error.kind == RemoteErrorKind::Cancelled => return Err(error),
+                Err(error) => last_error = Some(error),
+            }
         }
-        self.reconnects_left -= 1;
-        let timeout_ms = remaining.as_millis().clamp(1, u128::from(u64::MAX)) as u64;
-        self.reader = self.client.open_event_reader(
-            &self.port,
-            self.cursor.as_deref(),
-            &self.cancelled,
-            timeout_ms,
-        )?;
-        Ok(true)
+        Err(last_error.expect("at least one reconnect was attempted"))
     }
 
     fn read_sse_event(&mut self) -> Result<Option<RemoteStreamEvent>, RemoteError> {
@@ -1457,6 +1538,7 @@ impl RemoteEventStream {
                 if data.is_empty() {
                     cursor = None;
                     event = "message".to_owned();
+                    frame_bytes = 0;
                     continue;
                 }
                 if data.last() == Some(&b'\n') {
@@ -1618,6 +1700,7 @@ fn read_limited_line<R: Read>(
                 }
             }
             Err(error) => {
+                check_cancel(cancelled, EffectCertainty::NotStarted)?;
                 return Err(RemoteError::new(
                     if is_timeout(&error) {
                         RemoteErrorKind::Timeout

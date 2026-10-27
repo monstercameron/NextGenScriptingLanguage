@@ -1093,3 +1093,362 @@ fn bearer_file_is_rejected_until_existing_file_dacl_can_be_verified() {
     assert_eq!(seen.load(Ordering::SeqCst), 0);
     server.join().unwrap();
 }
+
+fn stream_headers(socket: &mut TcpStream) {
+    socket
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+        )
+        .unwrap();
+    socket.flush().unwrap();
+}
+
+#[test]
+fn active_stream_outlives_multiple_timeout_intervals() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let _ = read_request(&mut socket);
+        stream_headers(&mut socket);
+        for i in 0..8 {
+            write!(socket, "id: {i}\ndata: {{\"n\":{i}}}\n\n").unwrap();
+            socket.flush().unwrap();
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+    let mut config = remote_config(url);
+    config.timeout_ms = 200;
+    let client = RemoteClient::new(config).unwrap();
+    let mut stream = client
+        .open_events(
+            &descriptor(),
+            "events",
+            None,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+    for i in 0..8 {
+        assert_eq!(stream.next_event().unwrap().unwrap().data, json!({"n":i}));
+    }
+    server.join().unwrap();
+}
+
+#[test]
+fn idle_stream_reconnects_with_cursor_after_its_timeout() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut first, _) = listener.accept().unwrap();
+        let _ = read_request(&mut first);
+        stream_headers(&mut first);
+        first
+            .write_all(b"id: cursor-1\ndata: {\"n\":1}\n\n")
+            .unwrap();
+        first.flush().unwrap();
+        let (mut second, _) = listener.accept().unwrap();
+        let request = read_request(&mut second);
+        stream_headers(&mut second);
+        second
+            .write_all(b"id: cursor-2\ndata: {\"n\":2}\n\n")
+            .unwrap();
+        second.flush().unwrap();
+        assert_eq!(
+            request.headers.get("last-event-id").map(String::as_str),
+            Some("cursor-1")
+        );
+    });
+    let mut desc = descriptor();
+    desc.events[0].reconnect = true;
+    desc.events[0].max_reconnects = 1;
+    let mut config = remote_config(url);
+    config.timeout_ms = 150;
+    let client = RemoteClient::new(config).unwrap();
+    let mut stream = client
+        .open_events(
+            &desc,
+            "events",
+            None,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+    assert_eq!(stream.next_event().unwrap().unwrap().data, json!({"n":1}));
+    assert_eq!(stream.next_event().unwrap().unwrap().data, json!({"n":2}));
+    server.join().unwrap();
+}
+
+#[test]
+fn sse_heartbeats_reset_idle_without_accumulating_frame_bytes() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let _ = read_request(&mut socket);
+        stream_headers(&mut socket);
+        for _ in 0..20 {
+            socket.write_all(b": heartbeat\n\n").unwrap();
+            socket.flush().unwrap();
+            thread::sleep(Duration::from_millis(30));
+        }
+        socket.write_all(b"id: 1\ndata: {\"ok\":true}\n\n").unwrap();
+    });
+    let mut desc = descriptor();
+    desc.events[0].max_event_bytes = 64;
+    let mut config = remote_config(url);
+    config.timeout_ms = 200;
+    let client = RemoteClient::new(config).unwrap();
+    let mut stream = client
+        .open_events(
+            &desc,
+            "events",
+            None,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+    assert_eq!(
+        stream.next_event().unwrap().unwrap().data,
+        json!({"ok":true})
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn idle_stream_without_resume_returns_timeout_and_cancellation_stays_prompt() {
+    for cancel in [false, true] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let _ = read_request(&mut socket);
+            stream_headers(&mut socket);
+            thread::sleep(Duration::from_millis(400));
+        });
+        let mut config = remote_config(url);
+        config.timeout_ms = if cancel { 3_000 } else { 100 };
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut stream = RemoteClient::new(config)
+            .unwrap()
+            .open_events(&descriptor(), "events", None, Arc::clone(&flag))
+            .unwrap();
+        let started = std::time::Instant::now();
+        let setter = cancel.then(|| {
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(50));
+                flag.store(true, Ordering::SeqCst);
+            })
+        });
+        let error = stream.next_event().unwrap_err();
+        assert_eq!(
+            error.kind,
+            if cancel {
+                RemoteErrorKind::Cancelled
+            } else {
+                RemoteErrorKind::Timeout
+            }
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        if let Some(setter) = setter {
+            setter.join().unwrap();
+        }
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn reconnect_retries_bounded_failed_handshakes_with_cursor() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        for attempt in 0..3 {
+            let (mut socket, _) = listener.accept().unwrap();
+            let request = read_request(&mut socket);
+            if attempt > 0 {
+                assert_eq!(
+                    request.headers.get("last-event-id").map(String::as_str),
+                    Some("one")
+                );
+            }
+            if attempt == 1 {
+                socket
+                    .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+                    .unwrap();
+            } else {
+                stream_headers(&mut socket);
+                socket
+                    .write_all(if attempt == 0 {
+                        b"id: one\ndata: {\"n\":1}\n\n"
+                    } else {
+                        b"id: two\ndata: {\"n\":2}\n\n"
+                    })
+                    .unwrap();
+            }
+        }
+    });
+    let mut desc = descriptor();
+    desc.events[0].reconnect = true;
+    desc.events[0].max_reconnects = 2;
+    let client = RemoteClient::new(remote_config(url)).unwrap();
+    let mut stream = client
+        .open_events(
+            &desc,
+            "events",
+            None,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+    assert_eq!(stream.next_event().unwrap().unwrap().data, json!({"n":1}));
+    assert_eq!(stream.next_event().unwrap().unwrap().data, json!({"n":2}));
+    server.join().unwrap();
+}
+
+#[test]
+#[ignore = "15-minute remote stream acceptance test"]
+fn active_stream_delivers_events_for_fifteen_minutes() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let _ = read_request(&mut socket);
+        stream_headers(&mut socket);
+        for i in 0..=90 {
+            if i > 0 {
+                thread::sleep(Duration::from_secs(10));
+            }
+            write!(socket, "id: {i}\ndata: {{\"n\":{i}}}\n\n").unwrap();
+            socket.flush().unwrap();
+        }
+    });
+    let mut config = remote_config(url);
+    config.timeout_ms = 30_000;
+    let mut stream = RemoteClient::new(config)
+        .unwrap()
+        .open_events(
+            &descriptor(),
+            "events",
+            None,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+    for i in 0..=90 {
+        assert_eq!(stream.next_event().unwrap().unwrap().data, json!({"n":i}));
+    }
+    server.join().unwrap();
+}
+
+#[test]
+fn advancing_cursors_restore_retry_budget_for_repeated_idle_disconnects() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let mut held = Vec::new();
+        for i in 0..4 {
+            let (mut socket, _) = listener.accept().unwrap();
+            let request = read_request(&mut socket);
+            if i > 0 {
+                assert_eq!(
+                    request.headers.get("last-event-id"),
+                    Some(&format!("cursor-{}", i - 1))
+                );
+            }
+            stream_headers(&mut socket);
+            write!(socket, "id: cursor-{i}\ndata: {{\"n\":{i}}}\n\n").unwrap();
+            socket.flush().unwrap();
+            // Keep each preceding connection open so only the idle timeout causes reconnect.
+            held.push(socket);
+        }
+    });
+    let mut desc = descriptor();
+    desc.events[0].reconnect = true;
+    desc.events[0].max_reconnects = 1;
+    let mut config = remote_config(url);
+    config.timeout_ms = 150;
+    let client = RemoteClient::new(config).unwrap();
+    let mut stream = client
+        .open_events(
+            &desc,
+            "events",
+            None,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+    for i in 0..4 {
+        assert_eq!(stream.next_event().unwrap().unwrap().data, json!({"n":i}));
+    }
+    server.join().unwrap();
+}
+
+#[test]
+fn duplicate_cursors_do_not_restore_retry_budget() {
+    let mut desc = descriptor();
+    desc.events[0].reconnect = true;
+    desc.events[0].max_reconnects = 2;
+    let (url, seen, _, server) = local_server(3, |_, _| Reply {
+        status: 200,
+        content_type: "text/event-stream",
+        body: b"id: same\ndata: {\"n\":1}\n\n".to_vec(),
+        delay: Duration::ZERO,
+        drop_connection: false,
+    });
+    let client = RemoteClient::new(remote_config(url)).unwrap();
+    let mut stream = client
+        .open_events(
+            &desc,
+            "events",
+            None,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+    assert!(!stream.next_event().unwrap().unwrap().duplicate_cursor);
+    assert!(stream.next_event().unwrap().unwrap().duplicate_cursor);
+    assert!(stream.next_event().unwrap().unwrap().duplicate_cursor);
+    assert!(stream.next_event().unwrap().is_none());
+    server.join().unwrap();
+    assert_eq!(seen.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn heartbeats_do_not_restore_an_exhausted_reconnect_budget() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut first, _) = listener.accept().unwrap();
+        let _ = read_request(&mut first);
+        stream_headers(&mut first);
+        first.write_all(b"id: same\ndata: {\"n\":1}\n\n").unwrap();
+        first.flush().unwrap();
+        drop(first);
+        let (mut second, _) = listener.accept().unwrap();
+        let request = read_request(&mut second);
+        assert_eq!(
+            request.headers.get("last-event-id").map(String::as_str),
+            Some("same")
+        );
+        stream_headers(&mut second);
+        for _ in 0..3 {
+            second.write_all(b": heartbeat\n\n").unwrap();
+            second.flush().unwrap();
+            thread::sleep(Duration::from_millis(30));
+        }
+        thread::sleep(Duration::from_millis(250));
+    });
+    let mut desc = descriptor();
+    desc.events[0].reconnect = true;
+    desc.events[0].max_reconnects = 1;
+    let mut config = remote_config(url);
+    config.timeout_ms = 150;
+    let client = RemoteClient::new(config).unwrap();
+    let mut stream = client
+        .open_events(
+            &desc,
+            "events",
+            None,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .unwrap();
+    assert_eq!(stream.next_event().unwrap().unwrap().data, json!({"n":1}));
+    assert_eq!(
+        stream.next_event().unwrap_err().kind,
+        RemoteErrorKind::Timeout
+    );
+    server.join().unwrap();
+}

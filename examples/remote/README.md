@@ -59,7 +59,7 @@ request-ID mismatch after sending is reported as an uncertain effect; it is
 never automatically replayed. A server may declare a narrow operation and
 scope for explicit idempotency keys. Event delivery is pull-based and
 at-least-once. Resumption requires a declared cursor; reconnect is opt-in and
-finite, sends Last-Event-ID, and may surface duplicate cursors to the caller.
+limited to `max_reconnects` attempts without a newly advanced cursor, sends Last-Event-ID, and may surface duplicate cursors to the caller. A validated event with a new cursor resets the retry budget; duplicate cursors and heartbeats do not.
 This transport does not claim to deduplicate remote effects.
 
 The no-automatic-retry rule follows [RFC 9110 section 9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2):
@@ -67,7 +67,7 @@ POST is not inherently idempotent. Cursor resumption uses the
 [WHATWG Server-Sent Events Last-Event-ID mechanism](https://html.spec.whatwg.org/multipage/server-sent-events.html#the-last-event-id-header).
 The transport uses nonblocking sockets and checks cancellation during DNS
 helper supervision and socket readiness polls at intervals up to 20 ms. The
-configured finite timeout remains the upper bound for each network phase.
+configured finite timeout bounds connection and response-header phases. Event bodies have no total lifetime deadline: the timeout instead bounds each period of socket inactivity while the consumer is reading. SSE comment heartbeats count as activity. When declared, reconnection uses the last cursor, bounded retries, and cancellation-aware backoff; the idle timer starts afresh for each connection.
 The execute CLI supervises its hidden DNS helper as a child process, clears
 its environment, and kills and reaps it on cancellation or timeout. Embedded
 library users that do not configure an explicit resolver helper may use

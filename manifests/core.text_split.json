@@ -85,5 +85,44 @@
   },
   "phrases": [
     "text split"
+  ],
+  "parameter_alternatives": [
+    {
+      "message": "text.split requires a nonempty separator or nul true, but not both",
+      "any_of": [
+        [
+          {
+            "test": "nonempty",
+            "parameter": "separator"
+          },
+          {
+            "test": "absent",
+            "parameter": "nul"
+          }
+        ],
+        [
+          {
+            "test": "nonempty",
+            "parameter": "separator"
+          },
+          {
+            "test": "boolean",
+            "parameter": "nul",
+            "value": false
+          }
+        ],
+        [
+          {
+            "test": "absent",
+            "parameter": "separator"
+          },
+          {
+            "test": "boolean",
+            "parameter": "nul",
+            "value": true
+          }
+        ]
+      ]
+    }
   ]
 }

@@ -53,6 +53,38 @@ declare `build_feature` (`remote` or `desktop`); in a lean build its inspected c
 shows `requires_full_build` and the applet refuses to run with a message that says to use
 the full build.
 
+## Alternative parameters
+
+A manifest may declare `parameter_alternatives` when an invocation accepts
+several combinations of inputs. Each rule has a single-line `message` and an
+`any_of` list of branches; each branch is a nonempty list of predicates that
+must all match. For example:
+
+```json
+{
+  "parameter_alternatives": [{
+  "message": "choose a literal or a file",
+  "any_of": [
+    [{"test": "present", "parameter": "literal"},
+     {"test": "absent", "parameter": "file"}],
+    [{"test": "absent", "parameter": "literal"},
+     {"test": "nonempty", "parameter": "file"}]
+  ]
+  }]
+}
+```
+
+Predicates are `present`, `absent`, `nonempty` (string or path),
+`negative_integer`, `boolean` (with a `value`), and `number_range` (with
+inclusive `minimum` and `maximum` integer bounds). Numeric bounds must fit
+within ±2^53 so integer-to-binary64 conversion is exact. A manifest is refused
+if a rule names an undeclared parameter, has the wrong parameter type, or has
+empty or oversized branches. Checking rejects a call only when every branch is
+known to fail; values supplied by references are checked after resolution before
+execution. Inspection exposes the rules and their JSON Schema equivalent.
+Helper invocations bypass manifests, so applet implementations must continue
+to validate their own inputs.
+
 ## A manifest with typed output
 
 A manifest can keep the ordinary named-applet parameter and argv mapping while

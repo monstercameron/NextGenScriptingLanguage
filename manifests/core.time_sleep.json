@@ -67,5 +67,44 @@
   },
   "phrases": [
     "time sleep"
+  ],
+  "parameter_alternatives": [
+    {
+      "message": "time.sleep requires a bounded nonnegative milliseconds or seconds value",
+      "any_of": [
+        [
+          {
+            "test": "number_range",
+            "parameter": "milliseconds",
+            "minimum": 0,
+            "maximum": 86400000
+          }
+        ],
+        [
+          {
+            "test": "absent",
+            "parameter": "milliseconds"
+          },
+          {
+            "test": "number_range",
+            "parameter": "seconds",
+            "minimum": 0,
+            "maximum": 86400
+          }
+        ],
+        [
+          {
+            "test": "negative_integer",
+            "parameter": "milliseconds"
+          },
+          {
+            "test": "number_range",
+            "parameter": "seconds",
+            "minimum": 0,
+            "maximum": 86400
+          }
+        ]
+      ]
+    }
   ]
 }

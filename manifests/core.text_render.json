@@ -76,5 +76,32 @@
     "text render",
     "render template",
     "fill template"
+  ],
+  "parameter_alternatives": [
+    {
+      "message": "text.render requires exactly one of template or template_path",
+      "any_of": [
+        [
+          {
+            "test": "present",
+            "parameter": "template"
+          },
+          {
+            "test": "absent",
+            "parameter": "template_path"
+          }
+        ],
+        [
+          {
+            "test": "absent",
+            "parameter": "template"
+          },
+          {
+            "test": "nonempty",
+            "parameter": "template_path"
+          }
+        ]
+      ]
+    }
   ]
 }

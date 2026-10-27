@@ -49,7 +49,116 @@ pub struct Manifest {
     origin: Option<PathBuf>,
     pub phrases: Vec<String>,
     parameters: BTreeMap<String, ParameterSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    parameter_alternatives: Vec<ParameterAlternatives>,
     arguments: Vec<ArgumentNode>,
+}
+
+/// An invocation is valid if at least one branch can match. References whose
+/// value is not known during checking remain possible until runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParameterAlternatives {
+    message: String,
+    any_of: Vec<Vec<ParameterPredicate>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "test", rename_all = "snake_case", deny_unknown_fields)]
+enum ParameterPredicate {
+    Present {
+        parameter: String,
+    },
+    Absent {
+        parameter: String,
+    },
+    Nonempty {
+        parameter: String,
+    },
+    NegativeInteger {
+        parameter: String,
+    },
+    Boolean {
+        parameter: String,
+        value: bool,
+    },
+    NumberRange {
+        parameter: String,
+        minimum: i64,
+        maximum: i64,
+    },
+}
+
+impl ParameterPredicate {
+    fn parameter(&self) -> &str {
+        match self {
+            Self::Present { parameter }
+            | Self::Absent { parameter }
+            | Self::Nonempty { parameter }
+            | Self::NegativeInteger { parameter }
+            | Self::Boolean { parameter, .. }
+            | Self::NumberRange { parameter, .. } => parameter,
+        }
+    }
+
+    fn json_schema(&self) -> serde_json::Value {
+        let parameter = self.parameter();
+        match self {
+            Self::Present { .. } => serde_json::json!({"required": [parameter]}),
+            Self::Absent { .. } => serde_json::json!({"not": {"required": [parameter]}}),
+            Self::Nonempty { .. } => {
+                serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "string", "minLength": 1}}})
+            }
+            Self::NegativeInteger { .. } => {
+                serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "integer", "exclusiveMaximum": 0}}})
+            }
+            Self::Boolean { value, .. } => {
+                serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "boolean", "const": value}}})
+            }
+            Self::NumberRange {
+                minimum, maximum, ..
+            } => {
+                serde_json::json!({"required": [parameter], "properties": {(parameter): {"type": "number", "minimum": minimum, "maximum": maximum}}})
+            }
+        }
+    }
+
+    /// None means that a reference makes the predicate undecidable statically.
+    fn matches<V: Borrow<Value>>(&self, values: &BTreeMap<String, V>) -> Option<bool> {
+        let value = values.get(self.parameter()).map(Borrow::borrow);
+        match self {
+            Self::Present { .. } => Some(value.is_some()),
+            Self::Absent { .. } => Some(value.is_none()),
+            _ if matches!(value, Some(Value::Reference(_))) => None,
+            Self::Nonempty { .. } => {
+                Some(matches!(value, Some(Value::String(text)) if !text.is_empty()))
+            }
+            Self::NegativeInteger { .. } => {
+                Some(matches!(value, Some(Value::Integer(number)) if *number < 0))
+            }
+            Self::Boolean {
+                value: expected, ..
+            } => Some(matches!(value, Some(Value::Bool(actual)) if actual == expected)),
+            Self::NumberRange {
+                minimum, maximum, ..
+            } => Some(match value {
+                Some(Value::Integer(value)) => value >= minimum && value <= maximum,
+                Some(Value::Number(value)) if value.is_i64() => value
+                    .as_i64()
+                    .is_some_and(|value| value >= *minimum && value <= *maximum),
+                Some(Value::Number(value)) if value.is_u64() => {
+                    value.as_u64().is_some_and(|value| {
+                        i128::from(value) >= i128::from(*minimum)
+                            && i128::from(value) <= i128::from(*maximum)
+                    })
+                }
+                Some(Value::Number(value)) => value.as_f64().is_some_and(|value| {
+                    value.is_finite() && value >= *minimum as f64 && value <= *maximum as f64
+                }),
+                _ => false,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -362,6 +471,7 @@ impl Registry {
                     fields: None,
                 },
             )]),
+            parameter_alternatives: Vec::new(),
             arguments: vec![ArgumentNode::WhenPresent {
                 when_present: "arguments".into(),
                 append: vec![ArgumentNode::Spread {
@@ -1153,6 +1263,18 @@ impl Manifest {
                 "effect": if self.builtin.is_some() { "working_directory" } else { "native_command" }
             }
         });
+        if !self.parameter_alternatives.is_empty() {
+            projection["parameter_alternatives"] =
+                serde_json::to_value(&self.parameter_alternatives)
+                    .expect("parameter alternatives serialize");
+            let rules: Vec<_> = self.parameter_alternatives.iter().map(|rule| {
+                let branches: Vec<_> = rule.any_of.iter().map(|branch| {
+                    serde_json::json!({"allOf": branch.iter().map(ParameterPredicate::json_schema).collect::<Vec<_>>()})
+                }).collect();
+                serde_json::json!({"anyOf": branches})
+            }).collect();
+            projection["parameters_schema"]["allOf"] = serde_json::json!(rules);
+        }
         if let Some(feature) = self.required_build_feature() {
             projection["execution"]["build_feature"] = feature.into();
         }
@@ -1326,6 +1448,28 @@ impl Manifest {
                         .validate_value(value)
                         .with_context(|| format!("validating input port {name:?}"))?;
                 }
+            }
+        }
+        self.validate_parameter_alternatives(&invocation.parameters, true)?;
+        Ok(())
+    }
+
+    fn validate_parameter_alternatives<V: Borrow<Value>>(
+        &self,
+        values: &BTreeMap<String, V>,
+        allow_unknown: bool,
+    ) -> Result<()> {
+        for rule in &self.parameter_alternatives {
+            let possible = rule.any_of.iter().any(|branch| {
+                branch
+                    .iter()
+                    .all(|predicate| match predicate.matches(values) {
+                        Some(result) => result,
+                        None => allow_unknown,
+                    })
+            });
+            if !possible {
+                bail!("applet {:?}: {}", self.name, rule.message);
             }
         }
         Ok(())
@@ -1595,6 +1739,7 @@ impl Manifest {
                 }
             }
         }
+        self.validate_parameter_alternatives(values, false)?;
         Ok(())
     }
 }
@@ -2322,6 +2467,8 @@ struct RawManifest {
     stdio: Option<StdioContract>,
     #[serde(default, deserialize_with = "deserialize_unique_map")]
     parameters: BTreeMap<String, ParameterSpec>,
+    #[serde(default)]
+    parameter_alternatives: Vec<ParameterAlternatives>,
     arguments: Vec<RawArgument>,
 }
 
@@ -2554,6 +2701,7 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         }
         validate_parameter_fields(spec.kind, spec.fields.as_ref(), name)?;
     }
+    validate_parameter_alternatives(&raw.parameter_alternatives, &parameters)?;
     if let Some(contract) = &raw.contract {
         contract.validate()?;
         if contract.backend == AppletBackend::InProcess && raw.binary != "@execute-applet" {
@@ -2604,6 +2752,7 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
         stdio: raw.stdio,
         origin: None,
         parameters,
+        parameter_alternatives: raw.parameter_alternatives,
         arguments,
     };
     validate_builtin(&manifest)?;
@@ -2613,6 +2762,65 @@ fn parse_manifest(raw: &str) -> Result<Manifest> {
     }
     validate_argument_usage(&manifest)?;
     Ok(manifest)
+}
+
+fn validate_parameter_alternatives(
+    rules: &[ParameterAlternatives],
+    parameters: &BTreeMap<String, ParameterSpec>,
+) -> Result<()> {
+    if rules.len() > 32 {
+        bail!("too many parameter alternative rules");
+    }
+    for rule in rules {
+        if rule.message.trim().is_empty()
+            || rule.message.len() > 512
+            || rule.message.contains(['\r', '\n'])
+        {
+            bail!(
+                "parameter alternative message must be a nonempty single line of at most 512 bytes"
+            );
+        }
+        if rule.any_of.is_empty() || rule.any_of.len() > 32 {
+            bail!("parameter alternatives require 1 through 32 branches");
+        }
+        for branch in &rule.any_of {
+            if branch.is_empty() || branch.len() > 32 {
+                bail!("parameter alternative branch requires 1 through 32 predicates");
+            }
+            for predicate in branch {
+                let name = predicate.parameter();
+                let spec = parameters.get(name).ok_or_else(|| {
+                    anyhow!("parameter alternative references unknown parameter {name:?}")
+                })?;
+                match predicate {
+                    ParameterPredicate::Nonempty { .. }
+                        if !matches!(spec.kind, ParameterType::String | ParameterType::Path) =>
+                    {
+                        bail!("nonempty predicate requires a string or path parameter")
+                    }
+                    ParameterPredicate::NegativeInteger { .. }
+                        if spec.kind != ParameterType::Integer =>
+                    {
+                        bail!("negative_integer predicate requires an integer parameter")
+                    }
+                    ParameterPredicate::Boolean { .. } if spec.kind != ParameterType::Boolean => {
+                        bail!("boolean predicate requires a boolean parameter")
+                    }
+                    ParameterPredicate::NumberRange {
+                        minimum, maximum, ..
+                    } if !matches!(spec.kind, ParameterType::Integer | ParameterType::Json)
+                        || minimum > maximum
+                        || *minimum < -9_007_199_254_740_992
+                        || *maximum > 9_007_199_254_740_992 =>
+                    {
+                        bail!("number_range predicate requires a numeric parameter and ordered integer bounds within binary64 exact range");
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_builtin(manifest: &Manifest) -> Result<()> {

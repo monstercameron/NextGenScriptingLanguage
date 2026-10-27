@@ -105,8 +105,7 @@ pub(crate) fn cancel_exit_code() -> Option<i32> {
 /// Serializes tests that touch the process-wide `CANCEL_SIGNAL` so a recorded
 /// probe signal cannot leak into a concurrent test's exit-status assertion.
 #[cfg(test)]
-pub(crate) static CANCEL_SIGNAL_TEST_LOCK: std::sync::Mutex<()> =
-    std::sync::Mutex::new(());
+pub(crate) static CANCEL_SIGNAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod cancel_signal_tests {
@@ -122,7 +121,9 @@ mod cancel_signal_tests {
 
     #[test]
     fn clearing_the_recorded_signal_removes_the_sticky_exit_code() {
-        let _serial = CANCEL_SIGNAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = CANCEL_SIGNAL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let previous = CANCEL_SIGNAL.load(std::sync::atomic::Ordering::SeqCst);
         record_cancel_signal(15);
         assert_eq!(cancel_exit_code(), Some(143));

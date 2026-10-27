@@ -514,47 +514,42 @@ fn silently_lost_atomic_and_append_writes_recover_or_refuse_clearly() {
 fn blob_gc_abort_preserves_checkpoint_recovery() {
     let (expected, _) = baseline(Mode::Sequential);
     // Blob collection is a remove boundary, not a byte-write boundary.
-    for action in ["abort"] {
-        let fixture = fixture(Mode::Sequential);
-        let interrupted = checkpointed_run(&fixture)
-            .env("EXECUTE_FAILPOINT", "checkpoint.append.write:1:abort")
-            .status()
-            .unwrap();
-        assert!(
-            !interrupted.success(),
-            "append failpoint did not interrupt the run"
-        );
-        let orphan = format!("{:x}", sha2::Sha256::digest(b"orphan blob"));
-        let blob_path = fixture.checkpoint.join("blobs").join(orphan);
-        fs::create_dir_all(blob_path.parent().unwrap()).unwrap();
-        fs::write(&blob_path, b"orphan blob").unwrap();
-
-        let output = execute(
-            &fixture,
-            &[
-                "resume".as_ref(),
-                fixture.program.as_os_str(),
-                "--checkpoint".as_ref(),
-                fixture.checkpoint.as_os_str(),
-            ],
-        )
-        .env(
-            "EXECUTE_FAILPOINT",
-            format!("checkpoint.blob_gc.remove:1:{action}"),
-        )
-        .output()
+    let fixture = fixture(Mode::Sequential);
+    let interrupted = checkpointed_run(&fixture)
+        .env("EXECUTE_FAILPOINT", "checkpoint.append.write:1:abort")
+        .status()
         .unwrap();
-        assert!(
-            !output.status.success(),
-            "blob GC failpoint {action} was not reached"
-        );
-        assert!(blob_path.is_file(), "aborted collection removed the orphan");
+    assert!(
+        !interrupted.success(),
+        "append failpoint did not interrupt the run"
+    );
+    let orphan = format!("{:x}", sha2::Sha256::digest(b"orphan blob"));
+    let blob_path = fixture.checkpoint.join("blobs").join(orphan);
+    fs::create_dir_all(blob_path.parent().unwrap()).unwrap();
+    fs::write(&blob_path, b"orphan blob").unwrap();
 
-        check_resume(&fixture, &expected, &format!("blob GC {action}"));
-        // Collection may not run again after recovery commits the final checkpoint state;
-        // leaving an orphan behind must not affect the recovered state.
-        assert!(blob_path.is_file());
-    }
+    let output = execute(
+        &fixture,
+        &[
+            "resume".as_ref(),
+            fixture.program.as_os_str(),
+            "--checkpoint".as_ref(),
+            fixture.checkpoint.as_os_str(),
+        ],
+    )
+    .env("EXECUTE_FAILPOINT", "checkpoint.blob_gc.remove:1:abort")
+    .output()
+    .unwrap();
+    assert!(
+        !output.status.success(),
+        "blob GC abort failpoint was not reached"
+    );
+    assert!(blob_path.is_file(), "aborted collection removed the orphan");
+
+    check_resume(&fixture, &expected, "blob GC abort");
+    // Collection may not run again after recovery commits the final checkpoint state;
+    // leaving an orphan behind must not affect the recovered state.
+    assert!(blob_path.is_file());
 }
 
 #[test]

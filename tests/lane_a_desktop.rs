@@ -83,10 +83,9 @@ fn stderr(output: &Output) -> String {
 
 /// The explain line `Start: "<tool>" argv=[...]` for one literal argv.
 fn start_line(tool: &str, argv: &[&str]) -> String {
-    format!(
-        "Start: \"{tool}\" argv={}",
-        serde_json::to_string(argv).unwrap()
-    )
+    // `explain` renders argv with Rust's Debug format, including spaces after
+    // commas. Keep this expectation aligned with the text protocol on every OS.
+    format!("Start: \"{tool}\" argv={argv:?}")
 }
 
 fn explain_source(source: &str, inputs: &[(&str, &str)]) -> String {

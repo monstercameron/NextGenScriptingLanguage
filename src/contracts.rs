@@ -1507,8 +1507,8 @@ impl OutputSchema {
                     &self.fields,
                     &self.required,
                     self.enum_values.as_deref(),
-                    None,
                     false,
+                    None,
                     false,
                     None,
                     &json,
@@ -3063,6 +3063,7 @@ mod numeric_minimum_tests {
             required: Vec::new(),
             enum_values: None,
             single_line: false,
+            pattern: None,
             minimum,
         }
     }

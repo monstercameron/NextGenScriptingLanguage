@@ -5310,6 +5310,7 @@ mod tests {
             enum_values: None,
             single_line: false,
             pattern,
+            minimum: None,
         };
         let record = |mode| ValueSchema {
             kind: OutputType::Record,
@@ -5325,6 +5326,7 @@ mod tests {
             enum_values: None,
             single_line: false,
             pattern: None,
+            minimum: None,
         };
         let list = |item| ValueSchema {
             kind: OutputType::List,
@@ -5340,6 +5342,7 @@ mod tests {
             enum_values: None,
             single_line: false,
             pattern: None,
+            minimum: None,
         };
 
         let unconstrained = list(record(text(None)));
@@ -5363,6 +5366,7 @@ mod tests {
             enum_values: Some(vec!["0644".into(), "0755".into()]),
             single_line: false,
             pattern: None,
+            minimum: None,
         }));
         assert!(schemas_compatible(&octal_enum, &octal));
         let invalid_octal_enum = list(record(ValueSchema {
@@ -5379,6 +5383,7 @@ mod tests {
             enum_values: Some(vec!["8888".into()]),
             single_line: false,
             pattern: None,
+            minimum: None,
         }));
         assert!(!schemas_compatible(&invalid_octal_enum, &octal));
         let broad_to_octal = schema_mismatch_reasons(&unconstrained, &octal, "source", "target");

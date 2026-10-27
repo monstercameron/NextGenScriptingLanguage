@@ -225,12 +225,23 @@ class WorkflowWiringTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("id: linux_binary_size", workflow)
+        self.assertIn("id: paired_binary_size", workflow)
         self.assertIn(
             "if: failure() && steps.linux_binary_size.outcome == 'failure'"
-            " && github.event_name == 'push'",
+            " && ((github.event_name == 'push'",
             workflow,
         )
-        self.assertIn("BASE_SHA: ${{ github.event.before }}", workflow)
+        self.assertIn("|| github.event_name == 'pull_request')", workflow)
+        self.assertIn(
+            "github.event.before != '0000000000000000000000000000000000000000'",
+            workflow,
+        )
+        self.assertIn("PUSH_BASE_SHA: ${{ github.event.before }}", workflow)
+        self.assertIn(
+            "PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}", workflow
+        )
+        self.assertIn('if [[ "$EVENT_NAME" == "pull_request" ]]; then', workflow)
+        self.assertNotIn("\n          BASE_SHA: ${{ github.event.before }}\n", workflow)
         self.assertIn("binary-size-parent-src", workflow)
         self.assertIn("tools/compare_binary_size.py", workflow)
         self.assertIn("--baseline \"$baseline_bin\"", workflow)
@@ -239,9 +250,20 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertIn("--candidate-revision \"$HEAD_SHA\"", workflow)
         self.assertIn("--json-out target/paired-binary-size.json", workflow)
         self.assertIn("continue-on-error: true", workflow)
-        self.assertIn("id: paired_binary_size", workflow)
         self.assertIn("path: target/paired-binary-size.json", workflow)
         self.assertIn("python3 tools/test_compare_binary_size.py", workflow)
+
+    def test_paired_diagnosis_stays_diagnostic_and_fail_closed(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        paired = workflow.split("id: paired_binary_size", 1)[1]
+        paired = paired.split("Save paired binary-size samples", 1)[0]
+        self.assertIn("invalid base revision", paired)
+        self.assertIn('=~ ^[0-9a-f]{40}$', paired)
+        self.assertNotIn("--max-delta-bytes", paired)
+        self.assertNotIn("--max-delta-pct", paired)
+        self.assertNotIn("linux-binary-budget.json", paired)
+        self.assertIn("if-no-files-found: warn", workflow)
 
 
 if __name__ == "__main__":

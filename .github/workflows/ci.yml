@@ -122,16 +122,23 @@ jobs:
       # comparison tells real growth apart from runner/toolchain noise without
       # moving the absolute ceiling. Remove once the gate is green and the
       # retained samples have justified a re-budget.
-      - name: Diagnose failed binary size with push parent on the same runner
+      - name: Diagnose failed binary size with same-runner paired comparison
         id: paired_binary_size
-        if: failure() && steps.linux_binary_size.outcome == 'failure' && github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        if: failure() && steps.linux_binary_size.outcome == 'failure' && ((github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000') || github.event_name == 'pull_request')
         continue-on-error: true
         env:
-          BASE_SHA: ${{ github.event.before }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE_SHA="$PR_BASE_SHA"
+          else
+            BASE_SHA="$PUSH_BASE_SHA"
+          fi
           if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "invalid base revision: $BASE_SHA" >&2
             exit 1
@@ -173,19 +180,26 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Compare Omarchy ports with their Bash originals
+        if: success() || failure()
         run: python3 tools/port_compare.py --binary target/release/execute
       - name: Test paired latency comparison tool
+        if: success() || failure()
         run: python3 tools/test_paired_latency.py
       - name: Test paired binary-size comparison tool
+        if: success() || failure()
         run: python3 tools/test_compare_binary_size.py
       - name: Test existing latency budget limits
+        if: success() || failure()
         run: python3 -m unittest tests/test_latency_budget_limits.py -v
       - name: Test latency budget regeneration contracts
+        if: success() || failure()
         run: python3 -m unittest tests/test_regenerate_latency_budget.py -v
       - name: Test benchmark manifest command selection
+        if: success() || failure()
         run: python3 -m unittest tests/test_bench_budget.py -v
       - name: Measure Linux latency budget
         id: linux_latency
+        if: success() || failure()
         run: python3 tools/check_latency.py target/release/execute tools/linux-latency-budget.json --manifest-dir manifests --require-rss --json-out target/linux-latency-samples.json
       - name: Save Linux latency samples
         if: always() && (steps.linux_latency.outcome == 'success' || steps.linux_latency.outcome == 'failure')
@@ -196,16 +210,23 @@ jobs:
           # warn, not error: a crash before --json-out must not mask the gate failure.
           if-no-files-found: warn
           retention-days: 14
-      - name: Compare failed latency budget with push parent on the same runner
+      - name: Compare failed latency budget with same-runner paired comparison
         id: paired_latency
-        if: failure() && steps.linux_latency.outcome == 'failure' && github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        if: failure() && steps.linux_latency.outcome == 'failure' && ((github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000') || github.event_name == 'pull_request')
         continue-on-error: true
         env:
-          BASE_SHA: ${{ github.event.before }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE_SHA="$PR_BASE_SHA"
+          else
+            BASE_SHA="$PUSH_BASE_SHA"
+          fi
           if ! [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "invalid base revision: $BASE_SHA" >&2
             exit 1
@@ -246,6 +267,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Measure hot-path benchmarks
+        if: success() || failure()
         shell: bash
         run: |
           set -euo pipefail
@@ -257,6 +279,7 @@ jobs:
           python3 tools/bench_budget.py target/release/execute tools/linux-bench-budget.json \
             --baseline-binary "$baseline_target/release/execute"
       - name: Check Linux minimal build size and tests
+        if: success() || failure()
         run: |
           cargo build --locked --release --bin execute --no-default-features
           python3 tools/check_binary_size.py target/release/execute tools/linux-minimal-binary-budget.json

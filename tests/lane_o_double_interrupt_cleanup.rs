@@ -7,10 +7,12 @@
 //! SIGINT to the foreground process group exactly like typed Ctrl-C keys. The
 //! second Ctrl-C is gated on marker files (no guessed delays decide when the
 //! run is interruptible) and the exit after it is bounded at 200 ms with
-//! status 130 and a `cleanup interrupted` diagnostic. The direct-`kill`
-//! variants below are supplementary regression cover for `finally` and
-//! first-interrupt semantics with the looser 4 s bound mirrored from
-//! `lane_b_drain_signals.rs`.
+//! status 130 and a `cleanup interrupted` diagnostic. Every wait also watches
+//! the run, and a fail-safe watchdog kills a stuck run, so the probes always
+//! end with diagnostics instead of hanging after their child is gone. The
+//! direct-`kill` variants below are supplementary regression cover for
+//! `finally` and first-interrupt semantics with the looser 4 s bound mirrored
+//! from `lane_b_drain_signals.rs`.
 //!
 //! The Windows signal path shares the same flag (`src/platform/windows.rs`)
 //! but still needs verification on Windows CI: no PTY or console Ctrl-C
@@ -20,9 +22,11 @@
 
 use std::fs;
 use std::io::Read;
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, AtomicBool, Mutex};
 use std::time::{Duration, Instant};
 
 /// `sh -c` body that records `marker` immediately before execing a 30-second
@@ -57,28 +61,170 @@ fn finally_program(started: &Path, entered: &Path, finished: &Path) -> String {
     )
 }
 
+/// Budgets that keep every acceptance wait fail-safe. Marker and exit waits
+/// only burn their full budget while the run is still alive: each wait also
+/// observes the child, and the watchdog kills a stuck run at `WATCHDOG_BUDGET`,
+/// so a test always ends with diagnostics instead of hanging after its child
+/// is gone.
+const MARKER_BUDGET: Duration = Duration::from_secs(30);
+const EXIT_BUDGET: Duration = Duration::from_secs(10);
+const REAP_BUDGET: Duration = Duration::from_secs(5);
+const OUTPUT_DRAIN_BUDGET: Duration = Duration::from_secs(2);
+const WATCHDOG_BUDGET: Duration = Duration::from_secs(50);
+
+/// Shared ownership of one acceptance child so a fail-safe watchdog can always
+/// terminate it. Every wait below observes the child through this guard, so a
+/// stuck run surfaces as an early exit with diagnostics instead of a hung
+/// test. The watchdog kills through the live handle under the same lock that
+/// records exits, so it can never signal a recycled pid.
+struct WatchedChild {
+    child: Mutex<Child>,
+    exited: AtomicBool,
+    done: AtomicBool,
+    watchdog_fired: AtomicBool,
+}
+
+impl WatchedChild {
+    fn spawn(child: Child) -> Arc<Self> {
+        let watched = Arc::new(Self {
+            child: Mutex::new(child),
+            exited: AtomicBool::new(false),
+            done: AtomicBool::new(false),
+            watchdog_fired: AtomicBool::new(false),
+        });
+        let watchdog = Arc::clone(&watched);
+        std::thread::spawn(move || {
+            std::thread::sleep(WATCHDOG_BUDGET);
+            if watchdog.done.load(Ordering::SeqCst) {
+                return;
+            }
+            watchdog.watchdog_fired.store(true, Ordering::SeqCst);
+            watchdog.kill();
+        });
+        watched
+    }
+
+    /// Nonblocking exit poll that records the exit under the same lock the
+    /// watchdog kills under, so the two can never race on the pid.
+    fn poll_exit(&self) -> Option<ExitStatus> {
+        let Ok(mut guard) = self.child.lock() else {
+            return None;
+        };
+        match guard.try_wait() {
+            Ok(Some(status)) => {
+                self.exited.store(true, Ordering::SeqCst);
+                Some(status)
+            }
+            Ok(None) => None,
+            Err(_) => {
+                self.exited.store(true, Ordering::SeqCst);
+                None
+            }
+        }
+    }
+
+    fn pid(&self) -> Option<u32> {
+        self.child.lock().ok().map(|child| child.id())
+    }
+
+    fn watchdog_killed(&self) -> bool {
+        self.watchdog_fired.load(Ordering::SeqCst)
+    }
+
+    /// Best-effort SIGKILL through the live handle. Safe by construction: the
+    /// handle owns the child while `exited` is unset, so its pid is still
+    /// reserved and cannot have been recycled.
+    fn kill(&self) {
+        let Ok(mut guard) = self.child.lock() else {
+            return;
+        };
+        if self.exited.load(Ordering::SeqCst) {
+            return;
+        }
+        let _ = guard.kill();
+    }
+
+    /// Bounded reap for failure paths: SIGKILL, then poll. Never blocks
+    /// forever; reports the status when the run exits in time.
+    fn reap_bounded(&self, limit: Duration) -> Option<ExitStatus> {
+        self.kill();
+        let deadline = Instant::now() + limit;
+        loop {
+            if let Some(status) = self.poll_exit() {
+                return Some(status);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn take_stderr(&self) -> Option<std::process::ChildStderr> {
+        let Ok(mut guard) = self.child.lock() else {
+            return None;
+        };
+        guard.stderr.take()
+    }
+
+    /// Mark the test finished so a late watchdog stands down.
+    fn finish(&self) {
+        self.done.store(true, Ordering::SeqCst);
+    }
+
+    fn exit_note(&self, status: ExitStatus) -> String {
+        if self.watchdog_killed() {
+            format!("{status} (fail-safe watchdog fired after {WATCHDOG_BUDGET:?})")
+        } else {
+            format!("{status}")
+        }
+    }
+}
+
 /// Wait until `path` exists. Markers are written immediately before the sleep
 /// they gate, so no guessed delay decides when the run is interruptible; the
-/// short settle only lets the `exec` after the marker take over.
-fn wait_for_marker(path: &Path, what: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+/// short settle only lets the `exec` after the marker take over. Unlike a bare
+/// file poll, this also watches the run: when the child exits first, the wait
+/// fails at once with its status and output instead of burning the budget
+/// after a dead run.
+fn wait_for_marker(
+    watched: &WatchedChild,
+    path: &Path,
+    what: &str,
+    diagnose: &dyn Fn() -> String,
+) {
+    let deadline = Instant::now() + MARKER_BUDGET;
     while !path.exists() {
-        assert!(Instant::now() < deadline, "the run never reached {what}");
+        if let Some(status) = watched.poll_exit() {
+            panic!(
+                "the run exited ({}) before reaching {what}; output:\n{}",
+                watched.exit_note(status),
+                diagnose()
+            );
+        }
+        if Instant::now() >= deadline {
+            let reaped = watched.reap_bounded(REAP_BUDGET);
+            panic!(
+                "the run never reached {what} (run exit after SIGKILL: {reaped:?}); output:\n{}",
+                diagnose()
+            );
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
     std::thread::sleep(Duration::from_millis(100));
 }
 
-fn interrupt(child: &Child) {
+fn interrupt(watched: &WatchedChild) {
+    let pid = watched.pid().expect("the acceptance run is already gone");
     // SAFETY: the pid belongs to a child this test spawned and has not yet reaped.
-    let result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) };
+    let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) };
     assert_eq!(result, 0);
 }
 
-fn wait_for_exit(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
+fn wait_for_exit(watched: &WatchedChild, limit: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + limit;
     loop {
-        if let Some(status) = child.try_wait().unwrap() {
+        if let Some(status) = watched.poll_exit() {
             return Some(status);
         }
         if Instant::now() >= deadline {
@@ -88,15 +234,59 @@ fn wait_for_exit(child: &mut Child, limit: Duration) -> Option<ExitStatus> {
     }
 }
 
-fn stderr_of(child: &mut Child) -> String {
-    let mut text = String::new();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut text)
-        .unwrap();
-    text
+/// Fail-safe end for a run that does not exit on time: SIGKILL it, reap it
+/// with a bound, then panic with its output. This never blocks forever, so a
+/// wedged run fails the test instead of hanging the harness.
+fn abort_stuck(watched: &WatchedChild, diagnose: &dyn Fn() -> String, why: &str) -> ! {
+    let reaped = watched.reap_bounded(REAP_BUDGET);
+    watched.finish();
+    panic!(
+        "{why} (run exit after SIGKILL: {reaped:?}); output:\n{}",
+        diagnose()
+    );
+}
+
+/// Bounded drain of a finished run's piped stderr. Unlike `read_to_string`,
+/// this never blocks to EOF: a surviving grandchild can hold the pipe open
+/// after the run exits, so reads stop at the first moment with no data or at
+/// the drain budget, whichever comes first.
+fn drain_stderr(watched: &WatchedChild) -> String {
+    let Some(mut stderr) = watched.take_stderr() else {
+        return String::new();
+    };
+    // SAFETY: the descriptor is the live read end of the run's stderr pipe.
+    unsafe {
+        let flags = libc::fcntl(stderr.as_raw_fd(), libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(stderr.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let deadline = Instant::now() + OUTPUT_DRAIN_BUDGET;
+    loop {
+        match stderr.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => {
+                bytes.extend_from_slice(&chunk[..count]);
+                if bytes.len() >= 1_000_000 {
+                    break;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => break,
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Drive the acceptance scenario: interrupt the main sleep so cleanup starts,
@@ -109,25 +299,30 @@ fn double_interrupt(
     entered: &Path,
 ) -> (ExitStatus, Duration, String) {
     fs::write(directory.join("cleanup.program"), program).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+    let child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .arg("run")
         .arg(directory.join("cleanup.program"))
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    wait_for_marker(started, "its main sleep");
-    interrupt(&child);
-    wait_for_marker(entered, "its cleanup sleep");
+    let watched = WatchedChild::spawn(child);
+    let diagnose = || drain_stderr(&watched);
+    wait_for_marker(&watched, started, "its main sleep", &diagnose);
+    interrupt(&watched);
+    wait_for_marker(&watched, entered, "its cleanup sleep", &diagnose);
     let second = Instant::now();
-    interrupt(&child);
-    let Some(status) = wait_for_exit(&mut child, Duration::from_secs(10)) else {
-        let _ = child.kill();
-        let _ = child.wait();
-        panic!("the second interrupt did not abort the cleanup sleep");
+    interrupt(&watched);
+    let Some(status) = wait_for_exit(&watched, EXIT_BUDGET) else {
+        abort_stuck(
+            &watched,
+            &diagnose,
+            "the second interrupt did not abort the cleanup sleep",
+        )
     };
     let elapsed = second.elapsed();
-    let stderr = stderr_of(&mut child);
+    let stderr = drain_stderr(&watched);
+    watched.finish();
     (status, elapsed, stderr)
 }
 
@@ -196,21 +391,22 @@ fn single_interrupt_still_runs_on_exit_cleanup() {
         started.display().to_string(),
     );
     fs::write(directory.path().join("cleanup.program"), program).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_execute"))
+    let child = Command::new(env!("CARGO_BIN_EXE_execute"))
         .arg("run")
         .arg(directory.path().join("cleanup.program"))
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    wait_for_marker(&started, "its main sleep");
-    interrupt(&child);
-    let Some(status) = wait_for_exit(&mut child, Duration::from_secs(10)) else {
-        let _ = child.kill();
-        let _ = child.wait();
-        panic!("a single interrupt never finished cleanup");
+    let watched = WatchedChild::spawn(child);
+    let diagnose = || drain_stderr(&watched);
+    wait_for_marker(&watched, &started, "its main sleep", &diagnose);
+    interrupt(&watched);
+    let Some(status) = wait_for_exit(&watched, EXIT_BUDGET) else {
+        abort_stuck(&watched, &diagnose, "a single interrupt never finished cleanup")
     };
-    let stderr = stderr_of(&mut child);
+    let stderr = drain_stderr(&watched);
+    watched.finish();
     assert_eq!(status.code(), Some(130), "stderr:\n{stderr}");
     assert!(
         cleaned.exists(),
@@ -307,9 +503,39 @@ fn pty_interrupt(master: RawFd) {
     assert_eq!(written, 1, "writing Ctrl-C to the pty failed");
 }
 
+/// Owns the parent side of the PTY so every test path — including panics —
+/// closes it exactly once instead of leaking the descriptor.
+struct MasterFd(Option<RawFd>);
+
+impl MasterFd {
+    fn new(master: RawFd) -> Self {
+        Self(Some(master))
+    }
+
+    fn get(&self) -> RawFd {
+        self.0.unwrap_or(-1)
+    }
+
+    fn close(&mut self) {
+        if let Some(master) = self.0.take() {
+            // SAFETY: the parent-side descriptor is owned by this test.
+            unsafe {
+                libc::close(master);
+            }
+        }
+    }
+}
+
+impl Drop for MasterFd {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 /// Drain whatever the run printed to the slave without blocking: the master
 /// is nonblocking, and after the child exits the slave is gone, so reads end
-/// with `EAGAIN`/`EIO` instead of hanging.
+/// with `EAGAIN`/`EIO` instead of hanging. The total is capped so a wedged
+/// writer cannot grow the drain without bound.
 fn pty_output(master: RawFd) -> String {
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -318,6 +544,9 @@ fn pty_output(master: RawFd) -> String {
         let read = unsafe { libc::read(master, chunk.as_mut_ptr().cast(), chunk.len()) };
         if read > 0 {
             bytes.extend_from_slice(&chunk[..read as usize]);
+            if bytes.len() >= 1_000_000 {
+                break;
+            }
         } else {
             break;
         }
@@ -335,40 +564,31 @@ fn pty_double_ctrl_c_during_on_exit_exits_within_200ms() {
     let started = directory.path().join("started.txt");
     let entered = directory.path().join("entered-cleanup.txt");
     let finished = directory.path().join("finished.txt");
-    let (mut child, master) = spawn_pty(
+    let (child, master) = spawn_pty(
         directory.path(),
         &on_exit_program(&started, &entered, &finished),
     );
-    let done = |child: &mut Child, master: RawFd, why: &str| {
-        let _ = child.kill();
-        let _ = child.wait();
-        // SAFETY: the parent-side descriptor is owned by this test.
-        unsafe {
-            libc::close(master);
-        }
-        panic!("{why}");
-    };
-    wait_for_marker(&started, "its main sleep");
-    pty_interrupt(master);
-    wait_for_marker(&entered, "its cleanup sleep");
+    let watched = WatchedChild::spawn(child);
+    let mut master = MasterFd::new(master);
+    let diagnose = || pty_output(master.get());
+    wait_for_marker(&watched, &started, "its main sleep", &diagnose);
+    pty_interrupt(master.get());
+    wait_for_marker(&watched, &entered, "its cleanup sleep", &diagnose);
     let second = Instant::now();
-    pty_interrupt(master);
-    let Some(status) = wait_for_exit(&mut child, Duration::from_secs(10)) else {
-        done(
-            &mut child,
-            master,
+    pty_interrupt(master.get());
+    let Some(status) = wait_for_exit(&watched, EXIT_BUDGET) else {
+        abort_stuck(
+            &watched,
+            &diagnose,
             "the second Ctrl-C did not abort the cleanup sleep",
-        );
-        unreachable!();
+        )
     };
     let elapsed = second.elapsed();
     // Drain after the exit so output collection cannot stretch the measured
     // second-interrupt-to-exit interval above.
-    let output = pty_output(master);
-    // SAFETY: the parent-side descriptor is owned by this test.
-    unsafe {
-        libc::close(master);
-    }
+    let output = pty_output(master.get());
+    master.close();
+    watched.finish();
     assert_eq!(status.code(), Some(130), "pty output:\n{output}");
     assert!(
         elapsed < Duration::from_millis(200),

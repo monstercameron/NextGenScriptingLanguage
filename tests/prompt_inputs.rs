@@ -36,9 +36,10 @@ fn stderr(output: &Output) -> String {
 
 const NAME_PROGRAM: &str =
     "accept name as text from prompt \"Your name?\"\nuse value name\nthen save to \"out.txt\"\n";
-// The program saves the secret to a file, then ends on a value of its own, so the
-// run's final output is not the secret: only the file holds it, as the program chose.
-const SECRET_PROGRAM: &str = "accept token as text from secret prompt \"Token?\"\nuse value token\nthen save to \"out.txt\"\nuse value \"done\"\n";
+// Feed the secret through a non-persistent applet so trace/record handling can prove it
+// is withheld without asking the workflow to save plaintext secret data.
+const SECRET_PROGRAM: &str = "accept token as text from secret prompt \"Token?\"\nuse value token\nthen text.trim\nuse value \"done\"\n";
+const SECRET_SAVE_PROGRAM: &str = "accept token as text from secret prompt \"Token?\"\nuse value token\nthen save to \"out.txt\"\n";
 
 #[test]
 fn a_missing_answer_is_refused_before_any_effect_and_the_prompt_is_named() {
@@ -168,17 +169,41 @@ fn a_secret_answer_never_reaches_inspect_explain_trace_or_record() {
             ],
         );
         assert!(recorded.status.success(), "{}", stderr(&recorded));
-        assert_eq!(
-            fs::read_to_string(root.path().join("out.txt")).unwrap(),
-            SECRET
-        );
+        assert!(!root.path().join("out.txt").exists());
         assert!(
             !stderr(&recorded).contains(SECRET),
             "trace leaked the secret"
         );
         assert!(!String::from_utf8_lossy(&recorded.stdout).contains(SECRET));
         assert_no_file_contains(&record, SECRET);
+
+        let trace = fs::read_to_string(record.join("trace.jsonl")).unwrap();
+        let secret_step: Value = trace
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .find(|step: &Value| step["applets"][0] == "text.trim")
+            .expect("the secret-bearing text.trim step");
+        assert!(secret_step["stdout"]["blob"].is_null(), "{secret_step}");
+        assert_eq!(secret_step["stdout"]["withheld"], "policy");
     }
+}
+
+#[test]
+fn a_secret_answer_cannot_be_saved_as_plaintext() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("job.program"), SECRET_SAVE_PROGRAM).unwrap();
+
+    let output = execute(
+        root.path(),
+        &["run", "job.program", "--input", &format!("token={SECRET}")],
+    );
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("secret data cannot be persisted without encryption"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!root.path().join("out.txt").exists());
 }
 
 #[test]

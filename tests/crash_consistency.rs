@@ -418,7 +418,13 @@ fn atomic_and_append_boundaries_survive_abort_and_torn_write_actions() {
         "checkpoint.append.sync",
     ];
     for point in points {
-        for action in ["abort", "partial:3"] {
+        // `partial:3` means a prefix write only for write failpoints; at sync,
+        // rename, and directory boundaries it is just an abort action.
+        let actions: &[&str] = match point {
+            "checkpoint.atomic.write" | "checkpoint.append.write" => &["abort", "partial:3"],
+            _ => &["abort"],
+        };
+        for &action in actions {
             let fixture = fixture(Mode::Sequential);
             let output = checkpointed_run(&fixture)
                 .env("EXECUTE_FAILPOINT", format!("{point}:1:{action}"))
@@ -449,7 +455,8 @@ fn silently_lost_atomic_and_append_writes_recover_or_refuse_clearly() {
 #[test]
 fn blob_gc_abort_preserves_checkpoint_recovery() {
     let (expected, _) = baseline(Mode::Sequential);
-    for action in ["abort", "partial:3"] {
+    // Blob collection is a remove boundary, not a byte-write boundary.
+    for action in ["abort"] {
         let fixture = fixture(Mode::Sequential);
         let interrupted = checkpointed_run(&fixture)
             .env("EXECUTE_FAILPOINT", "checkpoint.append.write:1:abort")
@@ -517,7 +524,14 @@ fn element_log_boundaries_survive_abort_and_torn_write_actions() {
         "checkpoint.elements.write",
         "checkpoint.elements.sync",
     ] {
-        for action in ["abort", "partial:3"] {
+        // Only the append site can inject an actual prefix write. Truncate and
+        // sync boundaries exercise abort recovery, not torn-write recovery.
+        let actions: &[&str] = if point == "checkpoint.elements.write" {
+            &["abort", "partial:3"]
+        } else {
+            &["abort"]
+        };
+        for &action in actions {
             let fixture = fixture(Mode::Elements);
             let output = checkpointed_run(&fixture)
                 .env("EXECUTE_FAILPOINT", format!("{point}:1:{action}"))

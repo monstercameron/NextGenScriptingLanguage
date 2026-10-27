@@ -87,6 +87,35 @@ fn explain(directory: &Path, program: &str, extra: &[&str]) -> Output {
     command.output().expect("start execute")
 }
 
+#[test]
+fn unresolved_direct_executable_is_false_in_json_plan() {
+    let directory = tempfile::tempdir().unwrap();
+    let manifests = write_manifests(directory.path());
+    std::fs::write(
+        directory.path().join("plan.program"),
+        "run \"execute-missing-510-fixture\"\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_execute"))
+        .args([
+            "explain",
+            "plan.program",
+            "--json",
+            "--manifest-dir",
+        ])
+        .arg(manifests)
+        .current_dir(directory.path())
+        .env("PATH", directory.path())
+        .env_remove("EXECUTE_MODELS_OFFLINE")
+        .stdin(Stdio::null())
+        .output()
+        .expect("start execute");
+    let object = plan(&output);
+    assert_eq!(object["steps"][0]["binary"], "execute-missing-510-fixture");
+    assert_eq!(object["steps"][0]["resolved"], false);
+    assert!(object["steps"][0]["resolved_path"].is_null());
+}
+
 fn plan(output: &Output) -> Value {
     assert!(
         output.status.success(),
